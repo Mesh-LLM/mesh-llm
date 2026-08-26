@@ -26,6 +26,8 @@ fn descending_page(cursor: Option<String>) -> RequestQuery {
         from: None,
         to: None,
         route: None,
+        exclude_route: None,
+        exclude_route_prefix: None,
         model: None,
         provider: None,
         engine: None,

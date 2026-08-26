@@ -44,6 +44,10 @@ async fn parsed_missing_model_error_persists_the_client_visible_response_artifac
     let mut client = tokio::net::TcpStream::connect(address)
         .await
         .expect("connect ingress client");
+    let caller_addr = client
+        .local_addr()
+        .expect("ingress caller address")
+        .to_string();
     client
         .write_all(request.as_bytes())
         .await
@@ -60,8 +64,25 @@ async fn parsed_missing_model_error_persists_the_client_visible_response_artifac
     );
 
     let state = crate::logging_runtime_state().expect("installed logging runtime");
+    let active = state
+        .service_for_test()
+        .expect("logging service")
+        .registry_ref()
+        .get_recent(&request_id.as_uuid().to_string())
+        .expect("active request summary");
+    assert_eq!(active.metadata.caller_addr(), Some(caller_addr.as_str()));
+    assert_eq!(active.metadata.caller_path_type(), Some("local_http"));
     state.pump_persistence_for_test().await;
     let request_key = request_id.as_uuid().to_string();
+    let durable = state
+        .store()
+        .expect("metadata store")
+        .query_request_with_caller(&request_key)
+        .expect("durable request query")
+        .expect("durable request summary");
+    assert_eq!(durable.caller_addr.as_deref(), Some(caller_addr.as_str()));
+    assert_eq!(durable.caller_path_type.as_deref(), Some("local_http"));
+    assert!(durable.caller_endpoint_id.is_none());
     let artifacts = state
         .store()
         .expect("metadata store")

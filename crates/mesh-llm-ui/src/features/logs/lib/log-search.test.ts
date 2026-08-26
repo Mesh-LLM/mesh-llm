@@ -11,7 +11,9 @@ import {
   toLogsRequestQuery,
   updateLogCategories,
   updateLogsFilter,
-  updateLogsTimeRange
+  updateLogsTimeRange,
+  updateLogsTimeWindow,
+  clearLogsTimeWindow
 } from './log-search'
 import { parseLogRequestDetailsSearch } from './log-request-details'
 
@@ -128,6 +130,30 @@ describe('logs ledger URL search', () => {
       from: expect.anything(),
       to: expect.anything()
     })
+  })
+
+  it('scopes the ledger to a clicked chart window and clears it without losing other filters', () => {
+    const windowed = updateLogsTimeWindow(
+      { model: 'Qwen3', timeRange: '6h', cursor: 'page-2' },
+      '2026-08-04T11:00:00.000Z',
+      '2026-08-04T11:05:00.000Z'
+    )
+    expect(windowed).toMatchObject({
+      model: 'Qwen3',
+      from: '2026-08-04T11:00:00.000Z',
+      to: '2026-08-04T11:05:00.000Z'
+    })
+    expect(windowed.timeRange).toBeUndefined()
+    expect(windowed.cursor).toBeUndefined()
+    expect(toLogsRequestQuery(windowed, NOW_MS)).toMatchObject({
+      from: '2026-08-04T11:00:00.000Z',
+      to: '2026-08-04T11:05:00.000Z'
+    })
+
+    const cleared = clearLogsTimeWindow(windowed)
+    expect(cleared.from).toBeUndefined()
+    expect(cleared.to).toBeUndefined()
+    expect(cleared.model).toBe('Qwen3')
   })
 
   it('parses typed inspector and multi-select category state while dropping invalid values', () => {

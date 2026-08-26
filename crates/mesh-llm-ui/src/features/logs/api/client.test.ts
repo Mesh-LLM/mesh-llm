@@ -103,7 +103,7 @@ describe('LogsApiClient', () => {
           error: {
             code: 'logging_schema_incompatible',
             message: 'the local log database schema is incompatible with this MeshLLM version',
-            details: { schema_version: 14, supported_schema_version: 11 }
+            details: { schema_version: 2, supported_schema_version: 1 }
           }
         },
         503
@@ -117,7 +117,7 @@ describe('LogsApiClient', () => {
       status: 503,
       code: 'logging_schema_incompatible',
       message: 'the local log database schema is incompatible with this MeshLLM version',
-      details: { schemaVersion: 14, supportedSchemaVersion: 11 }
+      details: { schemaVersion: 2, supportedSchemaVersion: 1 }
     })
   })
 
@@ -281,6 +281,20 @@ describe('LogsApiClient', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/logs/requests?cursor=opaque+cursor%2B%2F%3D')
   })
 
+  it('serializes exact and prefix route exclusions as singular request keys', async () => {
+    // Given
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], nextCursor: null }))
+
+    // When
+    await new LogsApiClient(fetchMock).listRequests({
+      excludeRoute: 'models',
+      excludeRoutePrefix: 'management_'
+    })
+
+    // Then
+    expect(fetchMock).toHaveBeenCalledWith('/api/logs/requests?exclude_route=models&exclude_route_prefix=management_')
+  })
+
   it('uses strict POST bodies for bounded export, cleanup, and request deletion', async () => {
     const operationId = LogOperationId.parse('00000000-0000-4000-8000-000000000002')
     const fetchMock = vi
@@ -307,6 +321,7 @@ describe('LogsApiClient', () => {
             from: '2026-08-01T00:00:00Z',
             to: TIMESTAMP,
             route: 'reserve',
+            excludeRoute: 'models',
             model: 'Qwen/Qwen3',
             provider: 'reserve-a',
             engine: 'skippy',
@@ -372,6 +387,7 @@ describe('LogsApiClient', () => {
       from: '2026-08-01T00:00:00Z',
       to: TIMESTAMP,
       route: 'reserve',
+      excludeRoute: 'models',
       model: 'Qwen/Qwen3',
       provider: 'reserve-a',
       engine: 'skippy',
@@ -384,7 +400,12 @@ describe('LogsApiClient', () => {
       reason: 'incident cleanup'
     })
     expect(preview.auditId.toString()).toBe(AUDIT_ID)
-    expect(preview.scope).toMatchObject({ source: 'durable', model: 'Qwen/Qwen3', outcome: 'completed' })
+    expect(preview.scope.excludeRoute).toBe('models')
+    expect(preview.scope).toMatchObject({
+      source: 'durable',
+      model: 'Qwen/Qwen3',
+      outcome: 'completed'
+    })
     expect(completed.auditId.toString()).toBe(AUDIT_ID)
     expect(completed.scope).toMatchObject({ source: 'durable', model: 'Qwen/Qwen3', outcome: 'completed' })
     expect(deleted.state).toBe('completed')
@@ -554,6 +575,28 @@ describe('LogsApiClient', () => {
     if (result.state === 'supported') {
       expect(result.value.items).toContainEqual(target)
       expect(result.value.items.every((item) => Date.parse(item.createdAt) === targetInstant)).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('filters harness route exclusions before applying the page limit', async () => {
+    // Given
+    const fetchMock = vi.fn()
+    const client = new LogsApiClient(fetchMock)
+
+    // When
+    const result = await client.listRequests(
+      { limit: 2, excludeRoute: 'models', excludeRoutePrefix: 'management_' },
+      'harness'
+    )
+
+    // Then
+    expect(result).toMatchObject({ state: 'supported', value: { items: expect.any(Array) } })
+    if (result.state === 'supported') {
+      expect(result.value.items).toHaveLength(2)
+      expect(
+        result.value.items.every((item) => item.route !== 'models' && !item.route?.startsWith('management_'))
+      ).toBe(true)
     }
     expect(fetchMock).not.toHaveBeenCalled()
   })

@@ -152,7 +152,9 @@ fn install_cli_operational_audit_bridge() {
     };
 
     let bridge: mesh_llm_commands::operational_logging::CliOperationalAuditBridge = Arc::new(
-        |family: mesh_llm_events::CliCommandFamily, outcome: mesh_llm_events::CliCommandOutcome| {
+        |family: mesh_llm_events::CliCommandFamily,
+         outcome: mesh_llm_events::CliCommandOutcome,
+         summary: Option<mesh_llm_events::CliCommandSummary>| {
             let Some(state) = mesh_llm_host_runtime::logging_runtime_state() else {
                 return;
             };
@@ -171,7 +173,8 @@ fn install_cli_operational_audit_bridge() {
                 .with_context(
                     OperationalAuditContext::new()
                         .subject(OperationalAuditSubjectKind::CliCommand, family.as_str())
-                        .outcome(outcome.as_str()),
+                        .outcome(outcome.as_str())
+                        .command_summary(summary.as_ref().map_or("", |summary| summary.as_str())),
                 );
             let _ = state.write_operational_audit(record);
         },

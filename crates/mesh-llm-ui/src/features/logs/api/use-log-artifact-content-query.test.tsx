@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LogArtifactId, LogRequestId } from '@/features/logs/api/ids'
@@ -38,37 +38,25 @@ afterEach(() => {
 })
 
 describe('useLogArtifactContentQuery', () => {
-  it('waits for an explicit refetch before using the audited artifact endpoint', async () => {
+  it('uses the audited artifact endpoint when the selected payload mounts', async () => {
     // Given
     api.getArtifact.mockResolvedValue({ ...ARTIFACT, contentBase64: btoa('{}') })
 
     // When
-    const { result } = renderHook(() => useLogArtifactContentQuery(ARTIFACT), { wrapper: createWrapper() })
-    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
+    renderHook(() => useLogArtifactContentQuery(ARTIFACT), { wrapper: createWrapper() })
 
     // Then
-    expect(api.getArtifact).not.toHaveBeenCalled()
-
-    // When
-    await act(async () => {
-      await result.current.refetch()
-    })
-
-    // Then
-    expect(api.getArtifact).toHaveBeenCalledOnce()
+    await waitFor(() => expect(api.getArtifact).toHaveBeenCalledOnce())
     expect(api.getArtifact).toHaveBeenCalledWith(ARTIFACT.artifactId, 'live')
   })
 
-  it('keeps explicit artifact reads in harness mode', async () => {
+  it('keeps automatic artifact reads in harness mode', async () => {
     api.getArtifact.mockResolvedValue({ ...ARTIFACT, contentBase64: btoa('{}') })
-    const { result } = renderHook(() => useLogArtifactContentQuery(ARTIFACT), {
+    renderHook(() => useLogArtifactContentQuery(ARTIFACT), {
       wrapper: createWrapper('harness')
     })
 
-    await act(async () => {
-      await result.current.refetch()
-    })
-
+    await waitFor(() => expect(api.getArtifact).toHaveBeenCalledOnce())
     expect(api.getArtifact).toHaveBeenCalledWith(ARTIFACT.artifactId, 'harness')
   })
 })

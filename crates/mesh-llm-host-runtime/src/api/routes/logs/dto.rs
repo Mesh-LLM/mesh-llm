@@ -2,11 +2,13 @@ use base64::Engine;
 use mesh_llm_events::logging::envelope::CanonicalEnvelope;
 use mesh_llm_events::logging::events::{LifecycleEvent, TokenUsage};
 use mesh_llm_log_store::{
-    ArtifactContent, ArtifactRecord, AuditEntryRow, AuditEntrySeverity, EventRecord, ProxyRecord,
-    RequestRecord,
+    ArtifactContent, ArtifactRecord, AuditEntryDetail, AuditEntrySeverity, EventRecord,
+    ProxyRecord, RequestRecordWithCaller,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+use mesh_llm_events::CliCommandSummary;
 
 use super::{LogsError, event_kind};
 use crate::logging::RequestSummaryEntry;
@@ -30,37 +32,75 @@ pub(crate) struct RequestDto {
     provider: Option<String>,
     engine: Option<String>,
     status_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_endpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_path_type: Option<String>,
     source: &'static str,
 }
 
 impl RequestDto {
-    pub(super) fn durable(record: RequestRecord) -> Self {
+    pub(super) fn durable(record: RequestRecordWithCaller) -> Self {
+        let request = record.request;
         Self {
-            request_id: record.request_id,
-            outcome: record.outcome,
-            created_at: record.created_at,
-            terminal_at: record.terminal_at,
-            route: record.route.as_deref().map(safe_metadata),
-            model: record.model.as_deref().map(safe_metadata),
-            provider: record.provider.as_deref().map(safe_metadata),
-            engine: record.engine.as_deref().map(safe_metadata),
-            status_code: record.status_code,
+            request_id: request.request_id,
+            outcome: request.outcome,
+            created_at: request.created_at,
+            terminal_at: request.terminal_at,
+            route: request.route.as_deref().map(safe_metadata),
+            model: request.model.as_deref().map(safe_metadata),
+            provider: request.provider.as_deref().map(safe_metadata),
+            engine: request.engine.as_deref().map(safe_metadata),
+            status_code: request.status_code,
+            caller_endpoint_id: record.caller_endpoint_id.as_deref().map(safe_metadata),
+            caller_addr: record.caller_addr.as_deref().map(safe_metadata),
+            caller_path_type: record.caller_path_type.as_deref().map(safe_metadata),
             source: "durable",
         }
     }
 
-    pub(super) fn active(entry: RequestSummaryEntry, metadata: Option<RequestRecord>) -> Self {
+    pub(super) fn active(
+        entry: RequestSummaryEntry,
+        metadata: Option<RequestRecordWithCaller>,
+    ) -> Self {
         let summary_metadata = entry.metadata.clone();
         let metadata = metadata.map(|record| {
             (
-                record.route.as_deref().map(safe_metadata),
-                record.model.as_deref().map(safe_metadata),
-                record.provider.as_deref().map(safe_metadata),
-                record.engine.as_deref().map(safe_metadata),
-                record.status_code,
+                record.request.route.as_deref().map(safe_metadata),
+                record.request.model.as_deref().map(safe_metadata),
+                record.request.provider.as_deref().map(safe_metadata),
+                record.request.engine.as_deref().map(safe_metadata),
+                record.request.status_code,
+                record.caller_endpoint_id.as_deref().map(safe_metadata),
+                record.caller_addr.as_deref().map(safe_metadata),
+                record.caller_path_type.as_deref().map(safe_metadata),
             )
         });
-        let (route, model, provider, engine, status_code) = metadata.unwrap_or_default();
+        let (
+            route,
+            model,
+            provider,
+            engine,
+            status_code,
+            caller_endpoint_id,
+            caller_addr,
+            caller_path_type,
+        ) = metadata.unwrap_or_default();
+        let active_caller = (
+            summary_metadata.caller_endpoint_id().map(safe_metadata),
+            summary_metadata.caller_addr().map(safe_metadata),
+            summary_metadata.caller_path_type().map(str::to_owned),
+        );
+        let caller = if active_caller.0.is_some()
+            || active_caller.1.is_some()
+            || active_caller.2.is_some()
+        {
+            active_caller
+        } else {
+            (caller_endpoint_id, caller_addr, caller_path_type)
+        };
         Self {
             request_id: entry.request_id,
             outcome: entry.state,
@@ -71,6 +111,9 @@ impl RequestDto {
             provider: summary_metadata.provider().map(safe_metadata).or(provider),
             engine: summary_metadata.engine().map(safe_metadata).or(engine),
             status_code,
+            caller_endpoint_id: caller.0,
+            caller_addr: caller.1,
+            caller_path_type: caller.2,
             source: "active",
         }
     }
@@ -314,6 +357,10 @@ pub(crate) struct AuditDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     subject_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    remote_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
@@ -322,13 +369,16 @@ pub(crate) struct AuditDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    command_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     numeric_summaries: BTreeMap<String, u64>,
 }
 
-impl From<AuditEntryRow> for AuditDto {
-    fn from(row: AuditEntryRow) -> Self {
+impl From<AuditEntryDetail> for AuditDto {
+    fn from(detail: AuditEntryDetail) -> Self {
+        let row = detail.entry;
         Self {
             sequence: row.sequence,
             entry_id: row.entry_id,
@@ -343,10 +393,16 @@ impl From<AuditEntryRow> for AuditDto {
             context_version: row.context_version,
             subject_kind: row.subject_kind,
             subject_id: row.subject_id.as_deref().map(safe_metadata),
+            remote_addr: detail.remote_addr,
+            path_type: detail.path_type,
             operation_id: row.operation_id.as_deref().map(safe_metadata),
             request_id: row.correlation_request_id.as_deref().map(safe_metadata),
             reason_code: row.reason_code,
             outcome: row.outcome,
+            command_summary: detail
+                .command_summary
+                .and_then(|summary| CliCommandSummary::sanitize(&summary))
+                .map(|summary| summary.as_str().to_owned()),
             duration_ms: row.duration_ms,
             numeric_summaries: row.numeric_summaries,
         }
@@ -426,7 +482,7 @@ mod usage_tests {
     }
 }
 
-fn safe_metadata(value: &str) -> String {
+pub(super) fn safe_metadata(value: &str) -> String {
     let trimmed = value.trim();
     let path_shaped = trimmed.starts_with('/')
         || trimmed.starts_with("~/")
@@ -445,6 +501,43 @@ mod tests {
         envelope::CanonicalEnvelope,
         identifiers::{EventId, RequestId},
     };
+    use mesh_llm_log_store::{LogStore, RealClock, RequestRecord};
+    use std::sync::Arc;
+
+    fn detailed_request(
+        request: RequestRecord,
+        caller: (Option<&str>, Option<&str>, Option<&str>),
+    ) -> RequestRecordWithCaller {
+        let root = tempfile::tempdir().expect("temporary detailed request store");
+        let store = LogStore::open(root.path(), Arc::new(RealClock)).expect("open request store");
+        let insert_result = match caller {
+            (None, None, None) => store.upsert_summary_metadata(
+                &request.request_id,
+                request.model.as_deref(),
+                request.route.as_deref(),
+                request.provider.as_deref(),
+                request.engine.as_deref(),
+                &request.created_at,
+            ),
+            (caller_endpoint_id, caller_addr, caller_path_type) => store
+                .upsert_summary_metadata_with_caller(
+                    &request.request_id,
+                    request.model.as_deref(),
+                    request.route.as_deref(),
+                    request.provider.as_deref(),
+                    request.engine.as_deref(),
+                    caller_endpoint_id,
+                    caller_addr,
+                    caller_path_type,
+                    &request.created_at,
+                ),
+        };
+        insert_result.expect("insert detailed request");
+        store
+            .query_request_with_caller(&request.request_id)
+            .expect("query detailed request")
+            .expect("detailed request")
+    }
 
     #[test]
     fn event_dto_projects_authoritative_usage_and_terminal_status() {
@@ -531,20 +624,27 @@ mod tests {
 
     #[test]
     fn metadata_and_proxy_dtos_do_not_leak_paths_or_credentials() {
-        let dto = RequestDto::durable(RequestRecord {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            outcome: "completed".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            terminal_at: None,
-            route: Some("/private/secret".into()),
-            model: Some("Bearer secret-token".into()),
-            provider: None,
-            engine: None,
-            status_code: None,
-        });
+        let dto = RequestDto::durable(detailed_request(
+            RequestRecord {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                outcome: "completed".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                terminal_at: None,
+                route: Some("/private/secret".into()),
+                model: Some("Bearer secret-token".into()),
+                provider: None,
+                engine: None,
+                status_code: None,
+            },
+            (None, None, None),
+        ));
         let json = serde_json::to_string(&dto).expect("serialize dto");
         assert!(!json.contains("secret-token"));
         assert!(!json.contains("/private/secret"));
+        let json: serde_json::Value = serde_json::from_str(&json).expect("request DTO JSON");
+        assert!(json.get("callerEndpointId").is_none());
+        assert!(json.get("callerAddr").is_none());
+        assert!(json.get("callerPathType").is_none());
 
         let proxy = ProxyDto::from(ProxyRecord {
             attempt_id: uuid::Uuid::new_v4().to_string(),
@@ -561,6 +661,130 @@ mod tests {
         assert!(json.contains("https://example.test"));
         assert!(!json.contains("password"));
         assert!(!json.contains("token=secret"));
+    }
+
+    #[test]
+    fn active_and_durable_request_dtos_expose_local_http_socket_addresses() {
+        for caller_addr in [
+            "127.0.0.1:40123",
+            "192.0.2.10:40123",
+            "[2001:db8::10]:40123",
+        ] {
+            let metadata = crate::logging::RequestSummaryMetadata::default().with_caller_identity(
+                None,
+                Some(caller_addr),
+                Some(crate::logging::CallerPathType::LocalHttp),
+            );
+            let active = RequestDto::active(
+                crate::logging::RequestSummaryEntry {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    state: "active".into(),
+                    created_at: "2026-01-01T00:00:00Z".into(),
+                    terminal_at: None,
+                    metadata,
+                },
+                None,
+            );
+            let durable = RequestDto::durable(detailed_request(
+                RequestRecord {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    outcome: "completed".into(),
+                    created_at: "2026-01-01T00:00:00Z".into(),
+                    terminal_at: Some("2026-01-01T00:00:01Z".into()),
+                    route: None,
+                    model: None,
+                    provider: None,
+                    engine: None,
+                    status_code: Some(200),
+                },
+                (None, Some(caller_addr), Some("local_http")),
+            ));
+
+            for json in [
+                serde_json::to_value(active).expect("active DTO"),
+                serde_json::to_value(durable).expect("durable DTO"),
+            ] {
+                assert_eq!(json["callerAddr"], caller_addr);
+                assert_eq!(json["callerPathType"], "local_http");
+                assert!(json.get("callerEndpointId").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn active_caller_tuple_is_selected_atomically_before_durable_fallback() {
+        let endpoint_id = "abababababababababababababababababababababababababababababababab";
+        let active_metadata = crate::logging::RequestSummaryMetadata::default()
+            .with_caller_identity(Some(endpoint_id), None, None);
+        let durable_local = detailed_request(
+            RequestRecord {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                outcome: "active".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                terminal_at: None,
+                route: None,
+                model: None,
+                provider: None,
+                engine: None,
+                status_code: None,
+            },
+            (None, Some("127.0.0.1:40123"), Some("local_http")),
+        );
+
+        let active = RequestDto::active(
+            crate::logging::RequestSummaryEntry {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                state: "active".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                terminal_at: None,
+                metadata: active_metadata,
+            },
+            Some(durable_local),
+        );
+        let json = serde_json::to_value(active).expect("active DTO");
+
+        assert_eq!(json["callerEndpointId"], endpoint_id);
+        assert!(json.get("callerAddr").is_none());
+        assert!(json.get("callerPathType").is_none());
+    }
+
+    #[test]
+    fn active_request_without_caller_uses_complete_durable_caller_tuple() {
+        let endpoint_id = "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac";
+        let durable = detailed_request(
+            RequestRecord {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                outcome: "active".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                terminal_at: None,
+                route: None,
+                model: None,
+                provider: None,
+                engine: None,
+                status_code: None,
+            },
+            (
+                Some(endpoint_id),
+                Some("192.0.2.44:11204"),
+                Some("remote_quic_http"),
+            ),
+        );
+
+        let active = RequestDto::active(
+            crate::logging::RequestSummaryEntry {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                state: "active".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                terminal_at: None,
+                metadata: crate::logging::RequestSummaryMetadata::default(),
+            },
+            Some(durable),
+        );
+        let json = serde_json::to_value(active).expect("active DTO");
+
+        assert_eq!(json["callerEndpointId"], endpoint_id);
+        assert_eq!(json["callerAddr"], "192.0.2.44:11204");
+        assert_eq!(json["callerPathType"], "remote_quic_http");
     }
 
     #[test]

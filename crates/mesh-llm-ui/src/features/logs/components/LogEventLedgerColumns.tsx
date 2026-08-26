@@ -4,11 +4,10 @@ import { DataTableColumnHeader } from '@/components/ui/data-table-column-header'
 import type { ColumnDef } from '@/components/ui/data-table'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import type { LogAuditEntry, LogAuditSeverity, LogOutcome } from '@/features/logs/api/schemas'
-import {
-  formatLogEventTimestamp,
-  type LogEventCategory,
-  type LogEventLedgerRow
-} from '@/features/logs/lib/log-event-ledger'
+import { LogEventCategoryBadge } from '@/features/logs/components/LogEventCategoryBadge'
+import { LogEventLedgerOrigin } from '@/features/logs/components/LogEventLedgerOrigin'
+import { formatLogEventTimestamp, type LogEventLedgerRow } from '@/features/logs/lib/log-event-ledger'
+import { logEventOriginLabel } from '@/features/logs/lib/log-event-origin'
 
 export const LOG_EVENT_LEDGER_COLUMN_LABELS = {
   occurredAt: 'Occurred',
@@ -35,7 +34,7 @@ export function buildLogEventLedgerColumns(): ColumnDef<LogEventLedgerRow>[] {
     {
       accessorKey: 'category',
       header: ({ column }) => <DataTableColumnHeader column={column} title={LOG_EVENT_LEDGER_COLUMN_LABELS.category} />,
-      cell: ({ row }) => <StatusBadge size="caption">{categoryLabel(row.original.category)}</StatusBadge>
+      cell: ({ row }) => <LogEventCategoryBadge category={row.original.category} />
     },
     {
       id: 'state',
@@ -45,9 +44,9 @@ export function buildLogEventLedgerColumns(): ColumnDef<LogEventLedgerRow>[] {
     },
     {
       id: 'origin',
-      accessorFn: originLabel,
+      accessorFn: logEventOriginLabel,
       header: ({ column }) => <DataTableColumnHeader column={column} title={LOG_EVENT_LEDGER_COLUMN_LABELS.origin} />,
-      cell: ({ row }) => originCell(row.original)
+      cell: ({ row }) => <LogEventLedgerOrigin row={row.original} />
     },
     {
       id: 'event',
@@ -101,23 +100,6 @@ function contextCell(row: LogEventLedgerRow): ReactNode {
             ]
       )
     }
-    default:
-      return assertNever(row)
-  }
-}
-
-function originCell(row: LogEventLedgerRow): ReactNode {
-  switch (row.type) {
-    case 'request':
-      return (
-        <div className="min-w-0 font-mono">
-          <div className="break-words text-fg-dim">{row.request.provider ?? '—'}</div>
-          <div className="mt-1 break-words text-fg-faint">{row.request.engine ?? '—'}</div>
-          <div className="mt-1 text-[length:var(--density-type-caption)] text-fg-faint">{row.request.source}</div>
-        </div>
-      )
-    case 'audit':
-      return <span className="font-mono text-fg-dim">{row.audit.source}</span>
     default:
       return assertNever(row)
   }
@@ -185,34 +167,15 @@ function subjectLabel(kind: LogAuditEntry['subjectKind']): string {
       return 'Command'
     case 'runtime':
       return 'Runtime'
+    case 'mesh_peer':
+      return 'Peer'
     default:
       return 'Subject'
   }
 }
 
-function originLabel(row: LogEventLedgerRow): string {
-  return row.type === 'request' ? `${row.request.provider ?? ''} ${row.request.engine ?? ''}` : row.audit.source
-}
-
 function stateLabel(row: LogEventLedgerRow): string {
   return row.type === 'request' ? row.request.outcome : (row.audit.severity ?? '')
-}
-
-function categoryLabel(category: LogEventCategory): string {
-  switch (category) {
-    case 'requests':
-      return 'Requests'
-    case 'system':
-      return 'System'
-    case 'quic':
-      return 'QUIC'
-    case 'gossip':
-      return 'Gossip'
-    case 'iroh':
-      return 'Iroh'
-    default:
-      return assertNever(category)
-  }
 }
 
 function requestTone(outcome: LogOutcome): StatusBadgeTone {
@@ -243,7 +206,7 @@ function outcomeIcon(outcome: LogOutcome): ReactNode {
     case 'cancelled':
       return <CircleSlash aria-hidden="true" className="size-3" />
     case 'active':
-      return <LoaderCircle aria-hidden="true" className="size-3" />
+      return <LoaderCircle aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />
     default:
       return assertNever(outcome)
   }

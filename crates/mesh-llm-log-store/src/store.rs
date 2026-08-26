@@ -59,7 +59,14 @@ impl LogStore {
         let conn = Connection::open(&db_path).map_err(|e| {
             LogStoreError::IoError(std::io::Error::other(format!("sqlite open: {}", e)))
         })?;
-        prepare_private_database_files(&db_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(30))
+            .map_err(LogStoreError::Sqlite)?;
+
+        if let Some((found, supported)) = crate::migrations::incompatible_schema(&conn)
+            .map_err(|error| LogStoreError::MigrationFailed(error.to_string()))?
+        {
+            return Err(LogStoreError::SchemaIncompatible { found, supported });
+        }
 
         if new_database {
             // This only takes effect before schema allocation. Existing stores
@@ -71,15 +78,9 @@ impl LogStore {
         let pragmas = "
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;
-            PRAGMA busy_timeout = 30000;
         ";
         conn.execute_batch(pragmas).map_err(LogStoreError::Sqlite)?;
 
-        if let Some((found, supported)) = crate::migrations::incompatible_schema(&conn)
-            .map_err(|error| LogStoreError::MigrationFailed(error.to_string()))?
-        {
-            return Err(LogStoreError::SchemaIncompatible { found, supported });
-        }
         crate::migrations::apply_migrations(&conn)
             .map_err(|e| LogStoreError::MigrationFailed(e.to_string()))?;
         prepare_private_database_files(&db_path)?;

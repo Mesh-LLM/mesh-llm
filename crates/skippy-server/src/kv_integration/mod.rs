@@ -400,11 +400,12 @@ impl KvStageIntegration {
     }
 
     pub fn attrs(&self) -> Vec<(&'static str, Value)> {
-        let radix = self
-            .radix
-            .lock()
-            .expect("radix cache lock poisoned")
-            .stats();
+        let radix_stats = match self.radix.try_lock() {
+            Ok(radix) => Some(radix.stats()),
+            Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner().stats()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        let radix = radix_stats.unwrap_or_default();
         let activations = self
             .activations
             .lock()
@@ -415,7 +416,7 @@ impl KvStageIntegration {
             .try_lock()
             .ok()
             .map(|blobs| (blobs.physical_bytes(), blobs.block_count()));
-        let exact_state_stats_busy = exact_blob_stats.is_none();
+        let exact_state_stats_busy = radix_stats.is_none() || exact_blob_stats.is_none();
         let (exact_physical_bytes, _) = exact_blob_stats.unwrap_or_default();
         vec![
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),

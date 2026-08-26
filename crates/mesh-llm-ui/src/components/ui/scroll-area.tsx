@@ -7,19 +7,21 @@ const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
     readonly horizontal?: boolean
+    readonly vertical?: boolean
+    readonly viewportClassName?: string
     readonly viewportLabel?: string
   }
->(({ className, children, horizontal = false, viewportLabel, ...props }, ref) => (
+>(({ className, children, horizontal = false, vertical = true, viewportClassName, viewportLabel, ...props }, ref) => (
   <ScrollAreaPrimitive.Root ref={ref} className={cn('relative overflow-hidden', className)} {...props}>
     <ScrollAreaPrimitive.Viewport
       aria-label={viewportLabel}
-      className={cn('max-h-[inherit] w-full rounded-[inherit]', !horizontal && 'overflow-x-hidden')}
+      className={cn('max-h-[inherit] w-full rounded-[inherit]', !horizontal && 'overflow-x-hidden', viewportClassName)}
       role={viewportLabel ? 'region' : undefined}
       tabIndex={viewportLabel ? 0 : undefined}
     >
       {children}
     </ScrollAreaPrimitive.Viewport>
-    <ScrollBar />
+    {vertical ? <ScrollBar /> : null}
     {horizontal ? <ScrollBar orientation="horizontal" /> : null}
     <ScrollAreaPrimitive.Corner />
   </ScrollAreaPrimitive.Root>

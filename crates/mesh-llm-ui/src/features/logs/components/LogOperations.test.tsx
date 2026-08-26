@@ -274,6 +274,8 @@ describe('LogOperations', () => {
           from: '2026-07-01T00:00:00Z',
           to: '2026-08-01T00:00:00Z',
           route: 'reserve',
+          excludeRoute: 'models',
+          excludeRoutePrefix: 'management_',
           model: 'Qwen/Qwen3',
           provider: 'reserve-a',
           engine: 'skippy',
@@ -300,6 +302,7 @@ describe('LogOperations', () => {
         from: '2026-07-01T00:00:00.000Z',
         to: '2026-08-01T00:00:00.001Z',
         route: 'reserve',
+        excludeRoute: 'models',
         model: 'Qwen/Qwen3',
         provider: 'reserve-a',
         engine: 'skippy',
@@ -312,6 +315,7 @@ describe('LogOperations', () => {
     expect(previewRequest).not.toHaveProperty('limit')
     expect(previewRequest).not.toHaveProperty('sort')
     expect(previewRequest).not.toHaveProperty('status')
+    expect(previewRequest).not.toHaveProperty('excludeRoutePrefix')
     expect(screen.getByText('Operation ID')).toBeInTheDocument()
     expect(screen.getByText(OPERATION_ID.toString())).toBeInTheDocument()
     expect(screen.getByText('Audit ID')).toBeInTheDocument()

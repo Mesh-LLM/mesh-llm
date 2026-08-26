@@ -3,12 +3,11 @@
 import '@testing-library/jest-dom/vitest'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LogArtifactId, LogRequestId } from '@/features/logs/api/ids'
 import type { LogArtifact } from '@/features/logs/api/schemas'
-import { LOG_PAYLOAD_RENDER_LIMIT_BYTES } from '@/features/logs/lib/log-payload-content'
 import { DataModeProvider } from '@/lib/data-mode'
 
 const api = vi.hoisted(() => ({ getArtifact: vi.fn() }))
@@ -46,17 +45,6 @@ function availableArtifact(
   }
 }
 
-function stateArtifact(
-  contentState: Exclude<LogArtifact['contentState'], 'available'>,
-  unavailableReason?: Extract<LogArtifact, { contentState: 'unavailable' }>['unavailableReason']
-): LogArtifact {
-  const base = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', undefined)
-  if (contentState === 'unavailable') {
-    return { ...base, contentState, unavailableReason, contentBase64: undefined }
-  }
-  return { ...base, contentState, contentBase64: undefined }
-}
-
 function renderPayloads(artifacts: readonly LogArtifact[], queryClient = createQueryClient()) {
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -72,228 +60,149 @@ function createQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
+function expectNaturalPayloadViewport() {
+  const viewport = screen.getByRole('region', { name: 'Request payload content' })
+  const scrollArea = viewport.parentElement
+  expect(viewport).toHaveAttribute('tabindex', '0')
+  expect(scrollArea).not.toHaveClass('h-80')
+  expect(scrollArea).not.toHaveClass('sm:h-[28rem]')
+  expect(scrollArea).not.toHaveClass('lg:h-[32rem]')
+  expect(scrollArea).not.toHaveClass('h-64')
+  expect(scrollArea?.querySelector('[data-orientation="horizontal"]')).toBeInTheDocument()
+  expect(scrollArea?.querySelector('[data-orientation="vertical"]')).not.toBeInTheDocument()
+  expect(viewport).not.toHaveClass('h-full')
+  expect(viewport).not.toHaveClass('min-h-0')
+  return viewport
+}
+
 afterEach(() => {
   api.getArtifact.mockReset()
 })
 
 describe('LogRequestPayloads', () => {
-  it('shows explicit actions without reading inline or remote body content on entry', async () => {
+  it('displays selected inline payload content immediately without an artifact read', () => {
     // Given
-    const user = userEvent.setup()
     const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('{"request":true}'))
     const response = availableArtifact(RESPONSE_ARTIFACT_ID, 'response_body', undefined)
-    const atobSpy = vi.spyOn(globalThis, 'atob')
 
     // When
     renderPayloads([request, response])
 
-    // Then — Request pane visible by default
-    expect(
-      within(screen.getByRole('region', { name: 'Request' })).getByRole('button', { name: 'View payload' })
-    ).toBeInTheDocument()
+    // Then
+    const pane = within(screen.getByRole('region', { name: 'Request' }))
+    const paneHeader = pane.getByRole('banner')
+    const payloadControl = within(paneHeader).getByRole('radiogroup', { name: 'Payload' })
+    const displayToolbar = pane.getByRole('toolbar', { name: 'Display' })
+    const displayLabel = within(displayToolbar).getByText('Display')
+    const formatControl = within(displayToolbar).getByRole('radiogroup', { name: 'Display' })
+    const jsonPayload = pane.getByRole('region', { name: 'Request JSON payload' })
+    expect(within(payloadControl).getByRole('radio', { name: 'Request' })).toBeChecked()
+    expect(payloadControl.parentElement).toHaveClass('min-w-0', 'w-full', 'sm:w-auto')
+    expect(within(paneHeader).queryByRole('radio', { name: 'Pretty' })).not.toBeInTheDocument()
+    expect(within(displayToolbar).queryByRole('radio', { name: 'Request' })).not.toBeInTheDocument()
+    expect(displayToolbar).toHaveClass(
+      'min-w-0',
+      'flex-col',
+      'items-stretch',
+      'sm:flex-row',
+      'sm:items-center',
+      'sm:justify-between'
+    )
+    expect(displayLabel).toHaveClass('shrink-0')
+    expect(formatControl).toHaveAttribute('aria-labelledby', displayLabel.id)
+    expect(formatControl).toHaveClass('flex', 'flex-wrap', 'gap-1.5')
+    expect(within(formatControl).getByRole('radio', { name: 'Pretty' })).toHaveClass('ui-control')
+    expect(screen.getAllByRole('radiogroup', { name: 'Display' })).toHaveLength(1)
+    expect(within(jsonPayload).queryByRole('radiogroup', { name: 'Display' })).not.toBeInTheDocument()
+    expect(pane.queryByRole('button', { name: /^(?:View|Load) payload$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Response' })).not.toBeInTheDocument()
-
-    // When — toggle to Response
-    await user.click(screen.getByRole('radio', { name: 'Response' }))
-
-    // Then — Response pane visible, Request unmounted
-    expect(
-      within(screen.getByRole('region', { name: 'Response' })).getByRole('button', { name: 'Load payload' })
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'Request' })).not.toBeInTheDocument()
-
-    // No content decoded or fetched on entry to either pane
     expect(api.getArtifact).not.toHaveBeenCalled()
-    expect(atobSpy).not.toHaveBeenCalled()
   })
 
-  it('reveals inline content locally and fetches only the selected remote artifact once', async () => {
+  it('keeps raw content inside the sole natural payload viewport', async () => {
     // Given
     const user = userEvent.setup()
-    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('{"request":true}'))
-    const response = availableArtifact(RESPONSE_ARTIFACT_ID, 'response_body', undefined)
-    api.getArtifact.mockResolvedValue({ ...response, contentBase64: btoa('{"response":true}') })
-    renderPayloads([request, response])
+    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa(`{"unbroken":"${'x'.repeat(512)}"}`))
 
-    // When — Request pane visible by default; click its "View payload"
-    await user.click(
-      within(screen.getByRole('region', { name: 'Request' })).getByRole('button', { name: 'View payload' })
-    )
+    // When
+    renderPayloads([request])
+    const viewport = expectNaturalPayloadViewport()
+    await user.click(screen.getByRole('radio', { name: 'Raw' }))
 
-    // Then — inline content revealed, no fetch
-    expect(api.getArtifact).not.toHaveBeenCalled()
-    expect(
-      within(screen.getByRole('region', { name: 'Request' })).getByRole('radio', { name: 'Pretty' })
-    ).toBeInTheDocument()
-
-    // When — toggle to Response; click "Load payload"
-    await user.click(screen.getByRole('radio', { name: 'Response' }))
-    await user.click(
-      within(screen.getByRole('region', { name: 'Response' })).getByRole('button', { name: 'Load payload' })
-    )
-
-    // Then — single fetch for response artifact
-    await waitFor(() => expect(api.getArtifact).toHaveBeenCalledOnce())
-    expect(api.getArtifact).toHaveBeenCalledWith(RESPONSE_ARTIFACT_ID, 'live')
-    expect(
-      within(screen.getByRole('region', { name: 'Response' })).getByRole('radio', { name: 'Pretty' })
-    ).toBeInTheDocument()
+    // Then
+    expect(within(viewport).getByRole('region', { name: 'Request JSON payload' })).toHaveTextContent('x'.repeat(512))
+    expect(viewport.querySelector('[data-radix-scroll-area-viewport]')).toBeNull()
   })
 
-  it('requires a fresh local reveal after remount without refetching cached content', async () => {
+  it('keeps hostile plaintext inert inside the natural payload viewport', () => {
     // Given
-    const user = userEvent.setup()
-    const queryClient = createQueryClient()
-    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', undefined)
-    api.getArtifact.mockResolvedValue({ ...request, contentBase64: btoa('{"request":true}') })
-    const firstVisit = renderPayloads([request], queryClient)
+    const hostileText = '<img src=x onerror=alert(1)><script>alert(2)</script>'
+    const request = {
+      ...availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa(hostileText)),
+      mediaKind: 'text/plain'
+    }
 
     // When
-    await user.click(screen.getByRole('button', { name: 'Load payload' }))
-
-    // Then
-    await waitFor(() => expect(api.getArtifact).toHaveBeenCalledOnce())
-    expect(screen.getByRole('radio', { name: 'Pretty' })).toBeInTheDocument()
-
-    // When
-    firstVisit.unmount()
-    renderPayloads([request], queryClient)
-
-    // Then
-    expect(screen.queryByRole('radio', { name: 'Pretty' })).not.toBeInTheDocument()
-
-    // When
-    await user.click(screen.getByRole('button', { name: 'View payload' }))
-
-    // Then
-    expect(screen.getByRole('radio', { name: 'Pretty' })).toBeInTheDocument()
-    expect(api.getArtifact).toHaveBeenCalledOnce()
-  })
-
-  it('renders malformed hostile JSON as inert text only after explicit viewing', async () => {
-    // Given
-    const user = userEvent.setup()
-    const malformed = '{"markup":<img src=x onerror=alert(1)>}'
-    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa(malformed))
     const { container } = renderPayloads([request])
 
-    // When
-    await user.click(screen.getByRole('button', { name: 'View payload' }))
-
     // Then
-    expect(screen.getByText('Malformed JSON. Showing inert plaintext; no markup is interpreted.')).toBeInTheDocument()
-    expect(screen.getByText(malformed)).toBeInTheDocument()
+    const viewport = expectNaturalPayloadViewport()
+    expect(within(viewport).getByRole('region', { name: 'Request plaintext payload' })).toHaveTextContent(hostileText)
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('script')).toBeNull()
   })
 
-  it.each([
-    {
-      name: 'binary content',
-      artifact: {
-        ...availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('binary')),
-        mediaKind: 'application/octet-stream'
-      },
-      title: 'Binary or unknown content is not rendered'
-    },
-    {
-      name: 'oversized content',
-      artifact: {
-        ...availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('{}')),
-        bytes: LOG_PAYLOAD_RENDER_LIMIT_BYTES + 1
-      },
-      title: 'Payload is too large to render'
-    },
-    {
-      name: 'invalid base64',
-      artifact: availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', 'not base64!'),
-      title: 'Content could not be decoded safely'
-    }
-  ])('renders $name safely only after explicit viewing', async ({ artifact, title }) => {
+  it('preserves one inspector-owned format selection across request and normal JSON response panes', async () => {
     // Given
     const user = userEvent.setup()
-    renderPayloads([artifact])
+    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('{"request":true}'))
+    const response = availableArtifact(RESPONSE_ARTIFACT_ID, 'response_body', btoa('{"response":true}'))
+    renderPayloads([request, response])
+    const formatControl = screen.getByRole('radiogroup', { name: 'Display' })
 
     // When
-    await user.click(screen.getByRole('button', { name: 'View payload' }))
-
-    // Then
-    expect(screen.getByText(title)).toBeInTheDocument()
-  })
-
-  it('shows a remote read failure and recovers through the explicit retry action', async () => {
-    // Given
-    const user = userEvent.setup()
-    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', undefined)
-    api.getArtifact.mockRejectedValueOnce(new Error('read failed'))
-    api.getArtifact.mockResolvedValueOnce({ ...request, contentBase64: btoa('{"request":true}') })
-    renderPayloads([request])
-
-    // When
-    await user.click(screen.getByRole('button', { name: 'Load payload' }))
-
-    // Then
-    expect(await screen.findByRole('alert')).toHaveTextContent('Payload load failed')
-    expect(screen.queryByText('read failed')).not.toBeInTheDocument()
-
-    // When
-    await user.click(screen.getByRole('button', { name: 'Retry load' }))
-
-    // Then
-    await waitFor(() => expect(api.getArtifact).toHaveBeenCalledTimes(2))
-    expect(screen.getByRole('radio', { name: 'Pretty' })).toBeInTheDocument()
-  })
-
-  it('renders an explicit state when an audited read returns metadata without a body', async () => {
-    // Given
-    const user = userEvent.setup()
-    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', undefined)
-    api.getArtifact.mockResolvedValue(request)
-    renderPayloads([request])
-
-    // When
-    await user.click(screen.getByRole('button', { name: 'Load payload' }))
-
-    // Then
-    expect(await screen.findByText('Content not loaded')).toBeInTheDocument()
-  })
-
-  it('announces when payload capture retained no request or response body', async () => {
-    // Given
-    const user = userEvent.setup()
-    renderPayloads([])
-
-    // Then — Request empty state visible by default
-    expect(
-      screen.getByText('No request-body artifact is in this ledger entry.', { exact: false }).closest('[role="status"]')
-    ).toBeInTheDocument()
-
-    // When — toggle to Response
+    await user.click(within(formatControl).getByRole('radio', { name: 'Raw' }))
     await user.click(screen.getByRole('radio', { name: 'Response' }))
 
-    // Then — Response empty state visible
+    // Then
+    const responseJson = screen.getByRole('region', { name: 'Response JSON payload' })
+    expect(within(formatControl).getByRole('radio', { name: 'Raw' })).toBeChecked()
+    expect(responseJson.querySelectorAll('[data-json-line]')).toHaveLength(1)
+    expect(within(responseJson).queryByRole('radiogroup', { name: 'Display' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('radiogroup', { name: 'Display' })).toHaveLength(1)
+
+    // When
+    await user.click(screen.getByRole('radio', { name: 'Request' }))
+
+    // Then
+    expect(screen.getByRole('radio', { name: 'Raw' })).toBeChecked()
+    expect(
+      screen.getByRole('region', { name: 'Request JSON payload' }).querySelectorAll('[data-json-line]')
+    ).toHaveLength(1)
+  })
+
+  it('preserves raw format when the response is an event stream', async () => {
+    // Given
+    const user = userEvent.setup()
+    const request = availableArtifact(REQUEST_ARTIFACT_ID, 'request_body', btoa('{"request":true}'))
+    const response = {
+      ...availableArtifact(RESPONSE_ARTIFACT_ID, 'response_body', btoa('data: {"response":true}\n\ndata: [DONE]\n\n')),
+      mediaKind: 'text/event-stream'
+    }
+    renderPayloads([request, response])
+
+    // When
+    await user.click(screen.getByRole('radio', { name: 'Raw' }))
+    await user.click(screen.getByRole('radio', { name: 'Response' }))
+
+    // Then
+    expect(screen.getByRole('radio', { name: 'Raw' })).toBeChecked()
+    expect(screen.getByRole('region', { name: 'Response event stream frame 1' })).toBeInTheDocument()
     expect(
       screen
-        .getByText('No response-body artifact is in this ledger entry.', { exact: false })
-        .closest('[role="status"]')
-    ).toBeInTheDocument()
-  })
-
-  it.each([
-    ['unavailable', 'Capture unavailable'],
-    ['missing', 'Body not retained'],
-    ['corrupt', 'Corrupt']
-  ] as const)('renders the explicit %s body state', (contentState, title) => {
-    renderPayloads([stateArtifact(contentState)])
-
-    expect(screen.getByText(title)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^(?:View|Load) payload$/ })).not.toBeInTheDocument()
-  })
-
-  it('explains an allowlisted unavailable capture reason without exposing arbitrary detail', () => {
-    renderPayloads([stateArtifact('unavailable', 'capture_memory_budget_exceeded')])
-
-    expect(screen.getByText('Capture unavailable')).toBeInTheDocument()
-    expect(screen.getByText('The body exceeded the aggregate in-memory artifact capture budget.')).toBeInTheDocument()
+        .getByRole('region', { name: 'Response event stream frame 1 JSON data' })
+        .querySelectorAll('[data-json-line]')
+    ).toHaveLength(1)
+    expect(screen.getAllByRole('radiogroup', { name: 'Display' })).toHaveLength(1)
   })
 })

@@ -1,13 +1,13 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { cn } from '@/lib/cn'
 
-type AccentIconFrameTone = 'accent' | 'subtle'
+type AccentIconFrameTone = 'accent' | 'subtle' | 'bad'
 
 type AccentIconFrameProps = {
-  children: ReactNode
-  className?: string
-  style?: CSSProperties
-  tone?: AccentIconFrameTone
+  readonly children: ReactNode
+  readonly className?: string
+  readonly style?: CSSProperties
+  readonly tone?: AccentIconFrameTone
 }
 
 const frameStyleByTone: Record<AccentIconFrameTone, CSSProperties> = {
@@ -19,6 +19,11 @@ const frameStyleByTone: Record<AccentIconFrameTone, CSSProperties> = {
     background: 'color-mix(in oklab, var(--color-accent-soft) 42%, var(--color-panel-strong))',
     border: '1px solid color-mix(in oklab, var(--color-accent) 18%, var(--color-border))',
     color: 'color-mix(in oklab, var(--color-accent) 48%, var(--color-fg-dim))'
+  },
+  bad: {
+    background: 'color-mix(in oklab, var(--color-bad) 18%, transparent)',
+    border: '1px solid color-mix(in oklab, var(--color-bad) 30%, var(--color-border))',
+    color: 'var(--color-bad-text)'
   }
 }
 

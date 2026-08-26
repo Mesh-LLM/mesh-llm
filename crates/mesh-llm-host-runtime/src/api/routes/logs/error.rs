@@ -123,7 +123,7 @@ impl LogsError {
             Self::SchemaIncompatible { .. } => (
                 503,
                 "logging_schema_incompatible",
-                "the local log database schema is incompatible with this MeshLLM version",
+                "the local log database schema is unknown or incompatible",
             ),
         };
         let details = match self {
@@ -223,12 +223,12 @@ mod tests {
     fn schema_incompatibility_preserves_only_the_version_pair() {
         assert_eq!(
             LogsError::from(mesh_llm_log_store::LogStoreError::SchemaIncompatible {
-                found: 14,
-                supported: 11,
+                found: 2,
+                supported: 1,
             }),
             LogsError::SchemaIncompatible {
-                found: 14,
-                supported: 11,
+                found: 2,
+                supported: 1,
             }
         );
     }

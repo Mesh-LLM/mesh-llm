@@ -1,15 +1,20 @@
 //! Metadata-only lifecycle ownership for one management API request.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use mesh_llm_events::logging::{
     events::LifecycleEvent, identifiers::RequestId, replay::ReplayChannel,
 };
 
-use super::{LifecycleGuard, LoggingService, RequestSummaryMetadata, TerminalOutcome};
+use super::{
+    CallerPathType, LifecycleGuard, LoggingService, RequestSummaryMetadata, TerminalOutcome,
+};
 
 pub(crate) struct ManagementRequestLifecycle {
     request_id: RequestId,
@@ -24,6 +29,25 @@ impl ManagementRequestLifecycle {
         request_id: RequestId,
         method_route: &'static str,
     ) -> Self {
+        Self::register_with_caller_addr(service, request_id, method_route, None)
+    }
+
+    pub(crate) fn register_with_source_addr(
+        service: Arc<LoggingService>,
+        request_id: RequestId,
+        method_route: &'static str,
+        source_addr: SocketAddr,
+    ) -> Self {
+        Self::register_with_caller_addr(service, request_id, method_route, Some(source_addr))
+    }
+
+    fn register_with_caller_addr(
+        service: Arc<LoggingService>,
+        request_id: RequestId,
+        method_route: &'static str,
+        source_addr: Option<SocketAddr>,
+    ) -> Self {
+        let caller_addr = source_addr.map(|addr| addr.to_string());
         let metadata = RequestSummaryMetadata::from_parts(
             Some(method_route),
             None,
@@ -31,7 +55,12 @@ impl ManagementRequestLifecycle {
             Some(method_route),
         )
         .with_source(Some("direct_http"))
-        .with_method(Some(management_method_label(method_route)));
+        .with_method(Some(management_method_label(method_route)))
+        .with_caller_identity(
+            None,
+            caller_addr.as_deref(),
+            caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+        );
         let (guard, _) = service.register_request_with_metadata(request_id, metadata.clone());
         if let Ok(payload) = serde_json::to_string(&LifecycleEvent::RouteSelected {
             model: None,
@@ -90,6 +119,8 @@ fn management_method_label(method_route: &str) -> &'static str {
         "POST"
     } else if method_route == "management_put" {
         "PUT"
+    } else if method_route == "management_patch" {
+        "PATCH"
     } else if method_route == "management_delete" {
         "DELETE"
     } else {
@@ -135,6 +166,52 @@ mod tests {
         assert!(summary.metadata.model().is_none());
         assert_eq!(summary.metadata.provider(), Some("management_api"));
         assert_eq!(summary.metadata.engine(), Some("management_get_status"));
+        assert!(summary.metadata.caller_endpoint_id().is_none());
+        assert!(summary.metadata.caller_addr().is_none());
+        assert!(summary.metadata.caller_path_type().is_none());
+    }
+
+    #[test]
+    fn management_registration_captures_truthful_local_http_caller() {
+        let service = Arc::new(LoggingService::new_disabled(Default::default()));
+        let request_id = RequestId::new();
+        let source_addr = "[::1]:40123".parse().expect("IPv6 source address");
+        let lifecycle = ManagementRequestLifecycle::register_with_source_addr(
+            Arc::clone(&service),
+            request_id,
+            "management_post",
+            source_addr,
+        );
+
+        lifecycle.finish_status(200);
+
+        let summary = service
+            .registry_ref()
+            .get_recent(&request_id.as_uuid().to_string())
+            .expect("terminal request summary");
+        assert_eq!(summary.metadata.caller_addr(), Some("[::1]:40123"));
+        assert_eq!(summary.metadata.caller_path_type(), Some("local_http"));
+        assert!(summary.metadata.caller_endpoint_id().is_none());
+    }
+
+    #[test]
+    fn patch_management_registration_preserves_the_http_method() {
+        let service = Arc::new(LoggingService::new_disabled(Default::default()));
+        let request_id = RequestId::new();
+        let lifecycle = ManagementRequestLifecycle::register(
+            Arc::clone(&service),
+            request_id,
+            "management_patch",
+        );
+
+        lifecycle.finish_status(200);
+
+        let summary = service
+            .registry_ref()
+            .get_recent(&request_id.as_uuid().to_string())
+            .expect("terminal PATCH request summary");
+        assert_eq!(summary.metadata.route(), Some("management_patch"));
+        assert_eq!(summary.metadata.method(), Some("PATCH"));
     }
 
     #[test]

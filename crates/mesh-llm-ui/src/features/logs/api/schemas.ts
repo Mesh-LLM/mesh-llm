@@ -1,4 +1,5 @@
 import * as v from 'valibot'
+import { commandSummarySchema } from './command-summary'
 import {
   LogArtifactId,
   LogAuditId,
@@ -22,6 +23,7 @@ import type {
   LogRequest,
   LogsPage
 } from './schemas/types'
+
 type LogArtifactBase = {
   readonly artifactId: LogArtifactId
   readonly requestId: LogRequestId
@@ -34,6 +36,7 @@ type LogArtifactBase = {
   readonly redacted: boolean
   readonly truncated: boolean
 }
+
 export { LogsDtoError } from './schemas/types'
 export type {
   LogArtifact,
@@ -46,6 +49,7 @@ export type {
   LogCleanupOutcome,
   LogCleanupReceipt,
   LogCleanupScope,
+  LogCallerPathType,
   LogDeleteReceipt,
   LogEventKind,
   LogExport,
@@ -53,6 +57,7 @@ export type {
   LogLifecycleEvent,
   LogMaintenanceCounts,
   LogOutcome,
+  LogPeerPathType,
   LogProxyAttempt,
   LogRequest,
   LogSource,
@@ -84,6 +89,8 @@ const eventKindSchema = v.picklist([
 const channelSchema = v.picklist(['requests', 'operations', 'system'])
 const auditSourceSchema = v.picklist(['logging_service', 'logs_api', 'runtime', 'mesh', 'cli'])
 const auditSeveritySchema = v.picklist(['info', 'warning', 'error'])
+const peerPathTypeSchema = v.picklist(['direct', 'relay'])
+const callerPathTypeSchema = v.picklist(['local_http', 'remote_quic_http', 'relay'])
 const artifactUnavailableReasonSchema = v.picklist([
   'streaming_response_not_assembled',
   'response_body_not_bounded',
@@ -151,7 +158,10 @@ const requestSchema = v.object({
   provider: v.nullable(v.string()),
   engine: v.nullable(v.string()),
   statusCode: v.nullable(statusCodeSchema),
-  source: sourceSchema
+  source: sourceSchema,
+  callerEndpointId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  callerAddr: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  callerPathType: v.optional(callerPathTypeSchema)
 })
 
 const lifecycleEventSchema = v.object({
@@ -219,6 +229,7 @@ const cleanupScopeSchema = v.strictObject({
   from: v.optional(timestampSchema),
   to: v.optional(timestampSchema),
   route: v.optional(cleanupScopeFilterSchema),
+  excludeRoute: v.optional(cleanupScopeFilterSchema),
   model: v.optional(cleanupScopeFilterSchema),
   provider: v.optional(cleanupScopeFilterSchema),
   engine: v.optional(cleanupScopeFilterSchema),
@@ -290,15 +301,24 @@ const auditEntrySchema = v.object({
   sequence: v.pipe(nonNegativeIntegerSchema, v.minValue(1)),
   contextVersion: v.optional(v.literal(1)),
   subjectKind: v.optional(
-    v.union([v.literal('runtime'), v.literal('model'), v.literal('runtime_instance'), v.literal('cli_command')])
+    v.union([
+      v.literal('runtime'),
+      v.literal('model'),
+      v.literal('runtime_instance'),
+      v.literal('cli_command'),
+      v.literal('mesh_peer')
+    ])
   ),
   subjectId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  remoteAddr: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  pathType: v.optional(peerPathTypeSchema),
   operationId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
   requestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
   reasonCode: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
   outcome: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
   durationMs: v.optional(nonNegativeIntegerSchema),
-  numericSummaries: v.optional(v.record(v.string(), nonNegativeIntegerSchema))
+  numericSummaries: v.optional(v.record(v.string(), nonNegativeIntegerSchema)),
+  commandSummary: v.optional(commandSummarySchema)
 })
 
 const auditGapSchema = v.object({

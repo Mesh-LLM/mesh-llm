@@ -1,6 +1,9 @@
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+mod inbound;
+mod tunnel;
+
 pub(crate) struct NodeHardwareSnapshot {
     /// Accelerator-resident capacity advertised for mesh stage placement.
     pub(crate) vram_bytes: u64,
@@ -26,6 +29,7 @@ pub(crate) struct DetectedVramLog {
 }
 
 pub(crate) struct AcceptedMeshStream {
+    pub(crate) remote: EndpointId,
     pub(crate) send: iroh::endpoint::SendStream,
     pub(crate) recv: iroh::endpoint::RecvStream,
     pub(crate) stream_type: u8,
@@ -631,7 +635,8 @@ impl Node {
                 "Tunnel to {} failed, broadcasting death",
                 peer_id.fmt_short()
             );
-            self.handle_peer_death(peer_id).await;
+            self.handle_peer_death_with_reason(peer_id, MeshPeerRemovalReason::TunnelOpenFailed)
+                .await;
         }
 
         result
@@ -655,7 +660,6 @@ impl Node {
             let node = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = node.handle_incoming(incoming).await {
-                    record_mesh_operational_event(MeshOperationalEvent::QuicHandlerFailed);
                     tracing::warn!("Incoming connection error: {e}");
                 }
             });
@@ -681,7 +685,6 @@ impl Node {
                     let node = self.clone();
                     tokio::spawn(Box::pin(async move {
                         if let Err(error) = node.handle_control_incoming(incoming).await {
-                            record_mesh_operational_event(MeshOperationalEvent::ControlHandlerFailed);
                             tracing::debug!("Control-plane incoming connection error: {error}");
                         }
                     }));
@@ -744,187 +747,8 @@ impl Node {
             }
         });
     }
-
-    pub(crate) async fn handle_incoming(&self, incoming: iroh::endpoint::Incoming) -> Result<()> {
-        let mut accepting = incoming.accept()?;
-        let alpn = accepting.alpn().await?;
-        let conn = accepting.await?;
-        let remote = conn.remote_id();
-        if self.handle_stage_alpn(&alpn, conn.clone(), remote).await {
-            return Ok(());
-        }
-        record_mesh_operational_event(MeshOperationalEvent::QuicInboundAccepted);
-        tracing::info!("Inbound connection from {}", remote.fmt_short());
-
-        // Store connection for stream dispatch (tunneling, route requests, etc.)
-        // Don't add to peer list yet — only gossip exchange promotes to peer.
-        let (was_dead, admitted) = self.remember_incoming_connection(remote, &conn).await;
-        self.capture_connection_event(ConnectionCaptureEvent {
-            event: "peer_connection_accepted",
-            remote,
-            direction: "inbound",
-            phase: "accept",
-            protocol: Some(connection_protocol(&conn)),
-            path_type: None,
-            rtt_ms: None,
-            admitted_peer: Some(admitted),
-            reason: was_dead.then_some("previously_dead"),
-        });
-        self.capture_selected_connection_path(remote, &conn, "inbound_connection_accept_path");
-
-        // If this peer was previously dead, immediately gossip to restore their
-        // assigned/routable state in our peer list. Without this, models served by the
-        // reconnecting peer stay invisible until the next heartbeat (up to 60s).
-        if was_dead {
-            self.spawn_reconnect_gossip(conn.clone(), remote);
-        }
-
-        self.dispatch_streams(conn, remote).await;
-        Ok(())
-    }
-
-    pub(crate) async fn handle_stage_alpn(
-        &self,
-        alpn: &[u8],
-        conn: Connection,
-        remote: EndpointId,
-    ) -> bool {
-        if alpn != skippy_protocol::STAGE_ALPN_V2 {
-            return false;
-        }
-        tracing::info!(
-            "Inbound skippy stage connection from {}",
-            remote.fmt_short()
-        );
-        self.dispatch_stage_streams(conn, remote).await;
-        true
-    }
-
-    pub(crate) async fn handle_control_incoming(
-        &self,
-        incoming: iroh::endpoint::Incoming,
-    ) -> Result<()> {
-        let mut accepting = incoming.accept()?;
-        let alpn = accepting.alpn().await?;
-        if alpn.as_slice() != ALPN_CONTROL_V1 {
-            record_mesh_operational_event(MeshOperationalEvent::ControlAlpnRejected);
-            anyhow::bail!(
-                "unexpected control-plane ALPN {:?}",
-                String::from_utf8_lossy(&alpn)
-            );
-        }
-        let conn = accepting.await?;
-        let remote = conn.remote_id();
-        record_mesh_operational_event(MeshOperationalEvent::ControlConnectionAccepted);
-        let permits = control_stream_semaphore();
-        loop {
-            let permit = match permits.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => break,
-            };
-            let (mut send, mut recv) = match conn.accept_bi().await {
-                Ok(streams) => streams,
-                Err(error) => {
-                    tracing::debug!(
-                        "Control-plane connection from {} closed: {error}",
-                        remote.fmt_short()
-                    );
-                    break;
-                }
-            };
-            let node = self.clone();
-            tokio::spawn(Box::pin(async move {
-                let _permit = permit;
-                if let Err(error) = node
-                    .handle_control_stream(remote, &mut send, &mut recv)
-                    .await
-                {
-                    tracing::debug!(
-                        "Control-plane stream from {} failed: {error}",
-                        remote.fmt_short()
-                    );
-                }
-            }));
-        }
-        Ok(())
-    }
 }
 impl Node {
-    pub(crate) async fn accept_mesh_stream(
-        &self,
-        conn: &Connection,
-        remote: EndpointId,
-        protocol: ControlProtocol,
-    ) -> Result<AcceptedMeshStream, ()> {
-        let (send, mut recv) = conn.accept_bi().await.map_err(|error| {
-            tracing::info!("Connection to {} closed: {error}", remote.fmt_short());
-            self.capture_connection_event(ConnectionCaptureEvent {
-                event: "peer_connection_closed",
-                remote,
-                direction: "unknown",
-                phase: "accept_bi",
-                protocol: Some(protocol),
-                path_type: None,
-                rtt_ms: None,
-                admitted_peer: None,
-                reason: Some("accept_bi_error"),
-            });
-        })?;
-        let mut type_buf = [0u8; 1];
-        if !matches!(
-            tokio::time::timeout(
-                MESH_STREAM_TYPE_READ_TIMEOUT,
-                recv.read_exact(&mut type_buf),
-            )
-            .await,
-            Ok(Ok(_))
-        ) {
-            let _ = recv.stop(0u32.into());
-            return Err(());
-        }
-        Ok(AcceptedMeshStream {
-            send,
-            recv,
-            stream_type: type_buf[0],
-        })
-    }
-
-    pub(crate) async fn admitted_mesh_stream(
-        &self,
-        remote: EndpointId,
-        protocol: ControlProtocol,
-        stream_type: u8,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
-    ) -> Option<MeshBiStream> {
-        let capture_streams = self.swarm_capture_enabled();
-        if stream_allowed_before_admission(stream_type, self.trust_policy) {
-            if capture_streams {
-                self.capture_stream_observation(remote, stream_type, protocol, true);
-            }
-            return Some((send, recv));
-        }
-        let admitted = {
-            let state = self.state.lock().await;
-            state.peers.get(&remote).is_some_and(PeerInfo::is_admitted)
-        };
-        if capture_streams {
-            self.capture_stream_observation(remote, stream_type, protocol, admitted);
-        }
-        if admitted {
-            Some((send, recv))
-        } else {
-            self.capture_stream_rejected(remote, stream_type, protocol, "unadmitted_peer");
-            tracing::warn!(
-                "Quarantine: stream {:#04x} from unadmitted peer {} rejected — peer must complete gossip first",
-                stream_type,
-                remote.fmt_short()
-            );
-            drop((send, recv));
-            None
-        }
-    }
-
     pub(crate) async fn recover_closed_connection(
         &self,
         remote: EndpointId,
@@ -939,7 +763,8 @@ impl Node {
                     .await;
             }
             ClosedConnectionRecovery::RemovePeer => {
-                self.remove_peer(remote).await;
+                self.remove_peer(remote, MeshPeerRemovalReason::ClosedConnectionNoAddress)
+                    .await;
             }
             ClosedConnectionRecovery::AlreadyReplaced => {}
         }
@@ -957,7 +782,8 @@ impl Node {
             }
             _ => {
                 tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
-                self.remove_peer(remote).await;
+                self.remove_peer(remote, MeshPeerRemovalReason::ReconnectFailed)
+                    .await;
             }
         }
     }
@@ -1059,7 +885,8 @@ impl Node {
             "Reconnect gossip to {} failed — peer is dead, removing",
             remote.fmt_short()
         );
-        self.remove_peer(remote).await;
+        self.remove_peer(remote, MeshPeerRemovalReason::RecoveredGossipFailed)
+            .await;
     }
 
     pub(crate) async fn recovered_connection_gossip_ok(
@@ -1074,15 +901,6 @@ impl Node {
         .await
         .map(|result| result.is_ok())
         .unwrap_or(false)
-    }
-
-    /// Dispatch bi-streams on a connection by type byte
-    pub(crate) fn dispatch_streams(
-        &self,
-        conn: Connection,
-        remote: EndpointId,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(self._dispatch_streams(conn, remote))
     }
 
     pub(crate) fn spawn_gossip_stream(
@@ -1281,49 +1099,6 @@ impl Node {
     }
 }
 impl Node {
-    pub(crate) async fn dispatch_mesh_stream(
-        &self,
-        remote: EndpointId,
-        protocol: ControlProtocol,
-        stream_type: u8,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
-    ) -> bool {
-        if stream_type == STREAM_TUNNEL {
-            return self.forward_tunnel_stream(send, recv).await;
-        }
-        if stream_type == STREAM_TUNNEL_HTTP {
-            return self.forward_tunnel_http_stream(send, recv).await;
-        }
-
-        self.spawn_non_tunnel_mesh_stream(remote, protocol, stream_type, send, recv);
-        true
-    }
-
-    pub(crate) async fn forward_tunnel_stream(
-        &self,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
-    ) -> bool {
-        if self.tunnel_tx.send((send, recv)).await.is_err() {
-            tracing::warn!("Tunnel receiver dropped");
-            return false;
-        }
-        true
-    }
-
-    pub(crate) async fn forward_tunnel_http_stream(
-        &self,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
-    ) -> bool {
-        if self.tunnel_http_tx.send((send, recv)).await.is_err() {
-            tracing::warn!("HTTP tunnel receiver dropped");
-            return false;
-        }
-        true
-    }
-
     pub(crate) fn spawn_non_tunnel_mesh_stream(
         &self,
         remote: EndpointId,
@@ -1380,7 +1155,8 @@ impl Node {
             .insert(leaving_id, std::time::Instant::now());
         state.connections.remove(&leaving_id);
         drop(state);
-        self.remove_peer(leaving_id).await;
+        self.remove_peer(leaving_id, MeshPeerRemovalReason::CleanShutdown)
+            .await;
     }
 
     pub(crate) async fn decode_peer_leaving(
@@ -1437,59 +1213,8 @@ impl Node {
             }
         }
     }
-
-    pub(crate) async fn _dispatch_streams(&self, conn: Connection, remote: EndpointId) {
-        let protocol = connection_protocol(&conn);
-        let dispatcher_stable_id = conn.stable_id();
-        loop {
-            let accepted = match self.accept_mesh_stream(&conn, remote, protocol).await {
-                Ok(accepted) => accepted,
-                Err(()) => {
-                    self.recover_closed_connection(remote, dispatcher_stable_id)
-                        .await;
-                    break;
-                }
-            };
-            let Some((send, recv)) = self
-                .admitted_mesh_stream(
-                    remote,
-                    protocol,
-                    accepted.stream_type,
-                    accepted.send,
-                    accepted.recv,
-                )
-                .await
-            else {
-                continue;
-            };
-            if !self
-                .dispatch_mesh_stream(remote, protocol, accepted.stream_type, send, recv)
-                .await
-            {
-                break;
-            }
-        }
-    }
 }
 impl Node {
-    pub(crate) async fn remove_connection_if_stable_id(
-        &self,
-        peer_id: EndpointId,
-        conn: &Connection,
-    ) -> Option<Connection> {
-        let stable_id = conn.stable_id();
-        let mut state = self.state.lock().await;
-        if state
-            .connections
-            .get(&peer_id)
-            .is_some_and(|current| current.stable_id() == stable_id)
-        {
-            state.connections.remove(&peer_id)
-        } else {
-            None
-        }
-    }
-
     pub(crate) async fn reserve_pending_connection(
         &self,
         peer_id: EndpointId,

@@ -5,9 +5,10 @@
 //! PeerDown messages are broadcast to the mesh when a peer is confirmed dead.
 
 use super::{
-    ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, ModelRuntimeDescriptor, Node,
-    PEER_DOWN_REPORTER_COOLDOWN_SECS, PEER_STALE_SECS, PeerInfo, PeerLifecycleCaptureEvent,
-    ServedModelDescriptor, connect_mesh, connection_protocol, endpoint_id_hex,
+    ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, MeshPeerRemovalReason,
+    ModelRuntimeDescriptor, Node, PEER_DOWN_REPORTER_COOLDOWN_SECS, PEER_STALE_SECS, PeerInfo,
+    PeerLifecycleCaptureEvent, ServedModelDescriptor, connect_mesh, connection_protocol,
+    endpoint_id_hex,
 };
 use crate::protocol::{
     NODE_PROTOCOL_GENERATION, STREAM_PEER_DOWN, STREAM_PEER_LEAVING, write_len_prefixed,
@@ -960,7 +961,8 @@ impl Node {
                 None,
             )
             .await;
-            self.remove_peer(stale_id).await;
+            self.remove_peer(stale_id, MeshPeerRemovalReason::StaleDirectAndTransitive)
+                .await;
             self.state.lock().await.connections.remove(&stale_id);
         }
     }
@@ -1014,6 +1016,15 @@ impl Node {
 
     /// Handle a peer death: remove from state, broadcast to all other peers.
     pub async fn handle_peer_death(&self, dead_id: EndpointId) {
+        self.handle_peer_death_with_reason(dead_id, MeshPeerRemovalReason::HeartbeatUnreachable)
+            .await;
+    }
+
+    pub(crate) async fn handle_peer_death_with_reason(
+        &self,
+        dead_id: EndpointId,
+        reason: MeshPeerRemovalReason,
+    ) {
         super::emit_mesh_warning(format!(
             "⚠️  Peer {} died — removing and broadcasting",
             dead_id.fmt_short()
@@ -1029,11 +1040,11 @@ impl Node {
         self.capture_peer_lifecycle_snapshot(
             "peer_dead_marked",
             dead_id,
-            "handle_peer_death",
+            reason.reason_code(),
             None,
         )
         .await;
-        self.remove_peer(dead_id).await;
+        self.remove_peer(dead_id, reason).await;
         self.broadcast_peer_down(dead_id).await;
     }
 

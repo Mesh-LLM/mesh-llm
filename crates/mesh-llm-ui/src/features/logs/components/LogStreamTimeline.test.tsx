@@ -67,8 +67,8 @@ describe('LogStreamTimeline', () => {
     const entries = within(timeline).getAllByRole('listitem')
     expect(entries).toHaveLength(3)
     expect(within(entries[0]!).queryByText(/^\+/)).not.toBeInTheDocument()
-    expect(within(entries[1]!).getByText('+84 ms')).toBeInTheDocument()
-    expect(within(entries[2]!).getByText('+27 ms')).toBeInTheDocument()
+    expect(within(entries[1]!).getByText('+84ms')).toBeInTheDocument()
+    expect(within(entries[2]!).getByText('+27ms')).toBeInTheDocument()
   })
 
   it('labels legacy tokens as completion tokens beneath the timestamp', () => {

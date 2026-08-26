@@ -17,6 +17,7 @@ pub enum CommandKind {
     SplitScan(SplitScanArgs),
     DtypeMatrix(DtypeMatrixArgs),
     StateHandoff(StateHandoffArgs),
+    SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
     StageFaParity(StageFaParityArgs),
@@ -216,6 +217,43 @@ pub struct StateHandoffArgs {
     pub synthetic_input_activation: bool,
     #[arg(long)]
     pub binary_control: bool,
+    #[arg(long)]
+    pub allow_mismatch: bool,
+}
+
+#[derive(Args)]
+pub struct SplitPrefixHitArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub server: ServerArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(
+        long,
+        default_value_t = 24,
+        help = "Layer split between stage 0 (embeddings..split) and stage 1 (split..layer_end)"
+    )]
+    pub split_layer: u32,
+    #[arg(long, default_value = "127.0.0.1:19290")]
+    pub openai_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19291")]
+    pub stage0_bind_addr: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:19292")]
+    pub stage1_bind_addr: SocketAddr,
+    #[arg(long, default_value_t = 2048)]
+    pub activation_width: i32,
+    #[arg(
+        long,
+        default_value = " The expedition continued beyond the ridge where the maps ended."
+    )]
+    pub prompt_extension: String,
+    #[arg(long, default_value_t = 12)]
+    pub max_tokens: u32,
+    #[arg(long, default_value_t = 120)]
+    pub request_timeout_secs: u64,
+    #[arg(long)]
+    pub case_root: Option<PathBuf>,
     #[arg(long)]
     pub allow_mismatch: bool,
 }

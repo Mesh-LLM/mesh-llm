@@ -54,7 +54,7 @@ describe('LogRequestOverview instant ordering', () => {
     expect(
       within(lifecycle)
         .getAllByRole('listitem')
-        .map((item) => item.querySelector('code')?.textContent)
+        .map((item) => item.getAttribute('data-event-kind'))
     ).toEqual(['admitted', 'attempt_started', 'route_selected', 'completed'])
     expect(compareLogInstantsMock).toHaveBeenCalled()
   })
