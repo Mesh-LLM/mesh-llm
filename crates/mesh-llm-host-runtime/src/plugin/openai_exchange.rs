@@ -42,6 +42,20 @@ pub enum OpenAiExchangePhase {
     Terminal,
 }
 
+/// Which side actually contributed a terminal event's `nonce` — the
+/// authoritative signal for the same tri-state `capsule-emit-mesh`'s own
+/// sidecar tracks as `client_nonce_source` (`client_supplied` /
+/// `sidecar_generated_fallback`; the implicit third state is "no marker was
+/// minted at all," carried by `nonce_source` itself being `None`). A
+/// downstream plugin (M3) must use this field rather than sniffing the
+/// `nonce`'s `fallback-` prefix, which stays only for human-readability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientNonceSource {
+    ClientSupplied,
+    SidecarGeneratedFallback,
+}
+
 /// The wire shape both dispatch paths publish on [`OPENAI_EXCHANGE_CHANNEL`].
 /// Deliberately independent of `openai_frontend`'s typed request/response —
 /// the raw-proxy path never has one — so one shape covers both paths without
@@ -68,6 +82,10 @@ pub struct OpenAiExchangeEnvelope {
     /// this event knows what a later client ack must sign over.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
+    /// Which side contributed `nonce` — see [`ClientNonceSource`]. `None`
+    /// exactly when `nonce` is `None` (no marker minted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce_source: Option<ClientNonceSource>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -84,6 +102,7 @@ impl OpenAiExchangeEnvelope {
             status: None,
             capsule_id: None,
             nonce: None,
+            nonce_source: None,
         }
     }
 
@@ -93,6 +112,7 @@ impl OpenAiExchangeEnvelope {
         model: impl Into<String>,
         status: Option<u16>,
         marker: Option<CapsuleMarker>,
+        nonce_source: Option<ClientNonceSource>,
     ) -> Self {
         Self {
             exchange_id: exchange_id.into(),
@@ -102,6 +122,7 @@ impl OpenAiExchangeEnvelope {
             status,
             capsule_id: marker.as_ref().map(|marker| marker.capsule_id.clone()),
             nonce: marker.as_ref().map(|marker| marker.nonce.clone()),
+            nonce_source,
         }
     }
 }
@@ -178,18 +199,31 @@ impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
         exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
-        let (status, marker) = match outcome {
-            ChatCompletionOutcome::Success { response } => (200, response.capsule_marker.clone()),
-            ChatCompletionOutcome::Error { status, .. } => (*status, None),
-            ChatCompletionOutcome::Denied { status, .. } => (*status, None),
+        let (status, marker): (Option<u16>, Option<CapsuleMarker>) = match outcome {
+            ChatCompletionOutcome::Success { response } => {
+                (Some(200), response.capsule_marker.clone())
+            }
+            ChatCompletionOutcome::Error { status, .. } => (Some(*status), None),
+            ChatCompletionOutcome::Denied { status, .. } => (Some(*status), None),
+            // `ChatCompletionOutcome::Cancelled` and any future variant:
+            // no HTTP response was produced, so there's nothing to report
+            // beyond a status-free terminal event.
+            _ => (None, None),
         };
+        // Recomputed from `request` rather than threaded through
+        // `CapsuleMarker` (an `openai-frontend` public type this crate
+        // doesn't own): both this and `capsule_marker_for_response` below
+        // read the same `client_nonce` field, so they always agree on which
+        // branch was taken.
+        let nonce_source = marker.as_ref().map(|_| client_nonce_source(request));
         self.channel
             .publish(&OpenAiExchangeEnvelope::terminal(
                 exchange_id,
                 OpenAiExchangeDispatchPath::TypedFrontend,
                 request.model.clone(),
-                Some(status),
+                status,
                 marker,
+                nonce_source,
             ))
             .await;
     }
@@ -200,22 +234,45 @@ impl OpenAiHookPolicy for OpenAiExchangeHookBridge {
     /// `mesh_hooks` already uses) wins; absent that, mint a fallback rather
     /// than silently mislabeling it as client-supplied — mirroring
     /// `capsule-emit-mesh`'s own `client_nonce_source` tri-state
-    /// (`client_supplied` / `sidecar_generated_fallback`).
+    /// (`client_supplied` / `sidecar_generated_fallback`). The `fallback-`
+    /// prefix stays for readability, but [`ClientNonceSource`] (see
+    /// `on_chat_completion_terminal`) is the authoritative signal — a plugin
+    /// must not infer sourcing by sniffing this string.
     async fn capsule_marker_for_response(
         &self,
         request: &ChatCompletionRequest,
         response: &ChatCompletionResponse,
     ) -> Option<CapsuleMarker> {
-        let nonce = request
-            .extra
-            .get("client_nonce")
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("fallback-{}", response.id));
+        let nonce = match client_nonce_source(request) {
+            ClientNonceSource::ClientSupplied => request
+                .extra
+                .get("client_nonce")
+                .and_then(|value| value.as_str())
+                .expect("client_nonce_source() confirmed a client_nonce string is present")
+                .to_string(),
+            ClientNonceSource::SidecarGeneratedFallback => format!("fallback-{}", response.id),
+        };
         Some(CapsuleMarker {
             capsule_id: format!("capsule-{}", response.id),
             nonce,
         })
+    }
+}
+
+/// The single place that decides client-supplied vs. sidecar-minted, used by
+/// both [`OpenAiExchangeHookBridge::capsule_marker_for_response`] (to choose
+/// the nonce value) and [`OpenAiExchangeHookBridge::on_chat_completion_terminal`]
+/// (to label it on the envelope) so the two can never disagree.
+fn client_nonce_source(request: &ChatCompletionRequest) -> ClientNonceSource {
+    if request
+        .extra
+        .get("client_nonce")
+        .and_then(|value| value.as_str())
+        .is_some()
+    {
+        ClientNonceSource::ClientSupplied
+    } else {
+        ClientNonceSource::SidecarGeneratedFallback
     }
 }
 
@@ -338,6 +395,38 @@ mod tests {
 
         let events = channel.events.lock().unwrap();
         assert_eq!(events[1].nonce.as_deref(), Some("abc123"));
+        assert_eq!(
+            events[1].nonce_source,
+            Some(ClientNonceSource::ClientSupplied),
+            "a plugin must be able to trust nonce_source over sniffing the nonce string"
+        );
+    }
+
+    /// When the client contributes no nonce, the mint still labels it
+    /// `sidecar_generated_fallback` via `nonce_source` — not just the
+    /// human-readable `fallback-` prefix on the nonce string itself.
+    #[tokio::test]
+    async fn absent_client_nonce_is_labeled_sidecar_generated_fallback() {
+        let channel = Arc::new(RecordingChannel::default());
+        let bridge = Arc::new(OpenAiExchangeHookBridge::new(channel.clone()));
+        let hooked = HookedOpenAiBackend::new(Arc::new(EchoBackend), bridge);
+
+        hooked
+            .chat_completion(chat_request("gpt-mesh"))
+            .await
+            .expect("backend call succeeds");
+
+        let events = channel.events.lock().unwrap();
+        assert!(
+            events[1]
+                .nonce
+                .as_deref()
+                .is_some_and(|n| n.starts_with("fallback-"))
+        );
+        assert_eq!(
+            events[1].nonce_source,
+            Some(ClientNonceSource::SidecarGeneratedFallback)
+        );
     }
 
     /// A denial never reaches the backend, so there is no response to mint a
@@ -363,6 +452,31 @@ mod tests {
         assert_eq!(events[0].status, Some(400));
         assert!(events[0].capsule_id.is_none());
         assert!(events[0].nonce.is_none());
+        assert!(events[0].nonce_source.is_none());
+    }
+
+    /// The exact scenario `TerminalGuard` (in `openai-frontend`) exists to
+    /// close: the backend future never returns, so `HookedOpenAiBackend`
+    /// reports `ChatCompletionOutcome::Cancelled` instead of nothing — this
+    /// bridge must still publish a terminal event for it, with no status,
+    /// capsule id, nonce, or nonce_source to report.
+    #[tokio::test]
+    async fn cancelled_outcome_publishes_a_status_free_terminal_event() {
+        let channel = Arc::new(RecordingChannel::default());
+        let bridge = OpenAiExchangeHookBridge::new(channel.clone());
+        let request = chat_request("gpt-mesh");
+
+        bridge
+            .on_chat_completion_terminal(&request, "exchange-1", &ChatCompletionOutcome::Cancelled)
+            .await;
+
+        let events = channel.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].phase, OpenAiExchangePhase::Terminal);
+        assert!(events[0].status.is_none());
+        assert!(events[0].capsule_id.is_none());
+        assert!(events[0].nonce.is_none());
+        assert!(events[0].nonce_source.is_none());
     }
 
     struct DelayedBackend {

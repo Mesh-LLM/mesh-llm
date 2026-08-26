@@ -266,7 +266,13 @@ pub fn message_content_to_text(content: &MessageContent) -> Option<String> {
     }
 }
 
+/// `#[non_exhaustive]`: a downstream crate that builds this via struct
+/// literal (rather than [`Self::new`]/[`Self::new_with_reason`]/
+/// [`Self::from_parts`]) would otherwise break every time this crate adds a
+/// field — as `capsule_marker` itself just did. New fields default through
+/// the constructors instead of requiring every caller to be updated.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChatCompletionResponse {
     pub id: String,
     pub object: &'static str,
@@ -298,6 +304,18 @@ pub struct CapsuleMarker {
     pub nonce: String,
 }
 
+/// Whether `id` is safe to publish as both an `X-Capsule-Id` response header
+/// (set by `frontend_lifecycle_middleware` in `router.rs`) and a mesh
+/// plugin's terminal-event `capsule_id` — the single check that keeps those
+/// two views of the same exchange from disagreeing. The router already
+/// silently drops the header on a value `HeaderValue::from_str` rejects; a
+/// hook-minted marker that fails this same check must not be attached to the
+/// response at all, so a plugin observing the terminal event never sees a
+/// capsule id the client's response never carried.
+pub fn capsule_id_is_valid(id: &str) -> bool {
+    !id.is_empty() && axum::http::HeaderValue::from_str(id).is_ok()
+}
+
 impl ChatCompletionResponse {
     pub fn new(model: impl Into<String>, content: impl Into<String>, usage: Usage) -> Self {
         Self::new_with_reason(model, content, usage, FinishReason::Stop)
@@ -327,6 +345,34 @@ impl ChatCompletionResponse {
             }],
             usage,
             timings: None,
+            capsule_marker: None,
+        }
+    }
+
+    /// Construct a response with an explicit id/creation time/choice set —
+    /// for callers (e.g. a backend reconstructing a parsed generation) that
+    /// need full control over those fields, unlike [`Self::new`]/
+    /// [`Self::new_with_reason`], which always mint a fresh id and a single
+    /// choice. `capsule_marker` always starts `None`; it is attached later,
+    /// by [`crate::hooks::HookedOpenAiBackend`]. Exists so a downstream
+    /// crate that previously built this via struct literal has a
+    /// `#[non_exhaustive]`-safe replacement.
+    pub fn from_parts(
+        id: impl Into<String>,
+        created: u64,
+        model: impl Into<String>,
+        choices: Vec<ChatCompletionChoice>,
+        usage: Usage,
+        timings: Option<BTreeMap<String, Value>>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            object: "chat.completion",
+            created,
+            model: model.into(),
+            choices,
+            usage,
+            timings,
             capsule_marker: None,
         }
     }

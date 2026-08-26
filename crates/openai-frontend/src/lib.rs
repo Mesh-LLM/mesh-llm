@@ -21,8 +21,8 @@ pub use backend::{
 pub use chat::{
     AssistantMessage, CapsuleMarker, ChatCompletionChoice, ChatCompletionChunk,
     ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse,
-    ChatMessage, MessageContent, MessageContentPart, ensure_tool_call_ids, message_content_to_text,
-    messages_to_plain_prompt,
+    ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid, ensure_tool_call_ids,
+    message_content_to_text, messages_to_plain_prompt,
 };
 pub use common::{
     AgentSessionIdentity, AgentSessionSource, FinishReason, PromptCacheRetention, ReasoningConfig,

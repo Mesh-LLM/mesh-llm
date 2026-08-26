@@ -213,12 +213,11 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
         } else {
             output.finish_reason
         };
-        return ChatCompletionResponse {
-            id: openai_frontend::completion_id("chatcmpl"),
-            object: "chat.completion",
-            created: openai_frontend::now_unix_secs(),
+        return ChatCompletionResponse::from_parts(
+            openai_frontend::completion_id("chatcmpl"),
+            openai_frontend::now_unix_secs(),
             model,
-            choices: vec![openai_frontend::ChatCompletionChoice {
+            vec![openai_frontend::ChatCompletionChoice {
                 index: 0,
                 message: openai_frontend::AssistantMessage {
                     role: "assistant",
@@ -229,10 +228,9 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
                 logprobs: None,
                 finish_reason: Some(finish_reason),
             }],
-            usage: output.usage(),
-            timings: output.timings(),
-            capsule_marker: None,
-        };
+            output.usage(),
+            output.timings(),
+        );
     }
 
     ChatCompletionResponse::new_with_reason(

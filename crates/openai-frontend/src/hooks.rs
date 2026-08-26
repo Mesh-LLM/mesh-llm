@@ -9,7 +9,7 @@ use crate::{
     },
     chat::{
         CapsuleMarker, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
-        MessageContentPart,
+        MessageContentPart, capsule_id_is_valid,
     },
     completions::{CompletionRequest, CompletionResponse},
     models::ModelObject,
@@ -206,7 +206,12 @@ impl ChatExchangeRoute {
 
 /// The terminal outcome of a non-streaming chat completion, as seen by
 /// [`OpenAiHookPolicy::on_chat_completion_terminal`].
+///
+/// `#[non_exhaustive]`: [`Self::Cancelled`] was added after this type
+/// shipped, precisely so a downstream `match` without a wildcard arm fails
+/// loudly instead of silently missing the case it needs to handle.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum ChatCompletionOutcome<'a> {
     /// The backend returned a response.
     Success {
@@ -217,6 +222,72 @@ pub enum ChatCompletionOutcome<'a> {
     /// An earlier hook (`before_chat_completion`) denied the request before
     /// it reached the backend.
     Denied { status: u16, reason: &'a str },
+    /// The exchange's future was dropped (an outer timeout, or the client
+    /// disconnecting) before the backend call returned — see
+    /// [`TerminalGuard`]. There is no HTTP status or response to report;
+    /// this variant exists so every admitted exchange still gets exactly
+    /// one terminal callback instead of none.
+    Cancelled,
+}
+
+/// Guarantees exactly one [`OpenAiHookPolicy::on_chat_completion_terminal`]
+/// call per admitted exchange, even if the future driving the backend call
+/// is dropped mid-flight (an outer request timeout, or the client
+/// disconnecting) before it can report success/error itself.
+///
+/// [`Self::fire`] is the normal path: it marks the guard fired *before*
+/// awaiting the hook, then calls it. If the caller instead drops the guard
+/// without calling `fire` — because the enclosing future was cancelled —
+/// [`Drop::drop`] spawns the terminal call with
+/// [`ChatCompletionOutcome::Cancelled`] so it still happens, just detached
+/// from (and unable to block) whatever cancelled the original future.
+struct TerminalGuard {
+    hooks: Arc<dyn OpenAiHookPolicy>,
+    request: ChatCompletionRequest,
+    exchange_id: String,
+    fired: bool,
+}
+
+impl TerminalGuard {
+    fn new(
+        hooks: Arc<dyn OpenAiHookPolicy>,
+        request: ChatCompletionRequest,
+        exchange_id: String,
+    ) -> Self {
+        Self {
+            hooks,
+            request,
+            exchange_id,
+            fired: false,
+        }
+    }
+
+    async fn fire(mut self, outcome: &ChatCompletionOutcome<'_>) {
+        self.fired = true;
+        self.hooks
+            .on_chat_completion_terminal(&self.request, &self.exchange_id, outcome)
+            .await;
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if self.fired {
+            return;
+        }
+        let hooks = self.hooks.clone();
+        let request = std::mem::take(&mut self.request);
+        let exchange_id = std::mem::take(&mut self.exchange_id);
+        tokio::spawn(async move {
+            hooks
+                .on_chat_completion_terminal(
+                    &request,
+                    &exchange_id,
+                    &ChatCompletionOutcome::Cancelled,
+                )
+                .await;
+        });
+    }
 }
 
 pub struct HookedOpenAiBackend {
@@ -278,6 +349,15 @@ impl OpenAiBackend for HookedOpenAiBackend {
         } else {
             ChatCompletionRequest::default()
         };
+        // Armed here, right before the backend call: if this future is
+        // dropped while `backend.await` below is pending (an outer timeout
+        // or client disconnect), the guard's `Drop` still fires exactly one
+        // terminal callback instead of this exchange getting none.
+        let guard = TerminalGuard::new(
+            self.hooks.clone(),
+            dispatched_request.clone(),
+            exchange_id.clone(),
+        );
         let mut result = self
             .backend
             .chat_completion_with_context(request, context)
@@ -288,7 +368,18 @@ impl OpenAiBackend for HookedOpenAiBackend {
                 .capsule_marker_for_response(&dispatched_request, &*response)
                 .await
         {
-            response.capsule_marker = Some(marker);
+            // A marker whose capsule id can't become a valid `X-Capsule-Id`
+            // header must not be attached at all — otherwise a plugin
+            // observing the terminal event below would see a capsule id the
+            // client's own response never carried.
+            if capsule_id_is_valid(&marker.capsule_id) {
+                response.capsule_marker = Some(marker);
+            } else {
+                tracing::warn!(
+                    capsule_id = %marker.capsule_id,
+                    "dropping capsule marker: invalid capsule id"
+                );
+            }
         }
         let error_message;
         let terminal = match &result {
@@ -301,9 +392,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
                 }
             }
         };
-        self.hooks
-            .on_chat_completion_terminal(&dispatched_request, &exchange_id, &terminal)
-            .await;
+        guard.fire(&terminal).await;
         result
     }
 
@@ -660,6 +749,7 @@ mod tests {
         Success { model: String },
         Error { status: u16, message: String },
         Denied { status: u16, reason: String },
+        Cancelled,
     }
 
     #[derive(Default)]
@@ -712,6 +802,7 @@ mod tests {
                     status: *status,
                     reason: (*reason).to_string(),
                 },
+                ChatCompletionOutcome::Cancelled => TerminalRecord::Cancelled,
             };
             self.terminals.lock().unwrap().push(record);
         }
@@ -1050,6 +1141,70 @@ mod tests {
             TerminalRecord::Error { status: 502, message }
                 if message.contains("upstream exploded")
         ));
+    }
+
+    struct HangingBackend;
+
+    #[async_trait]
+    impl OpenAiBackend for HangingBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            std::future::pending::<()>().await;
+            unreachable!("this backend never returns")
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            Ok(Box::pin(futures_util::stream::empty()))
+        }
+    }
+
+    /// Reproduces the bug this guards against: an outer timeout or client
+    /// disconnect drops the future driving `backend.await` before it can
+    /// return, so without `TerminalGuard` the exchange would never get a
+    /// terminal event at all.
+    #[tokio::test]
+    async fn dropping_the_backend_future_still_fires_exactly_one_terminal_event() {
+        let backend = Arc::new(HangingBackend);
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+
+        let hooked_for_task = hooked.clone();
+        let handle = tokio::spawn(async move {
+            hooked_for_task
+                .chat_completion(request_for("gpt-mesh"))
+                .await
+        });
+
+        // Let the task run until it's parked on `backend.await`, then cancel
+        // it the way an outer timeout or client disconnect would.
+        tokio::task::yield_now().await;
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !policy.terminals.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "terminal event never fired after the backend future was dropped"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::Cancelled]);
     }
 
     struct CapsuleMintingPolicy;

@@ -652,6 +652,8 @@ async fn try_route_plugin_model(
                     // through `openai-frontend`'s `OpenAiHookPolicy`, the
                     // only place a marker is minted (see the design note).
                     None,
+                    // No marker means no nonce, so no nonce_source either.
+                    None,
                 ))
                 .await;
             final_outcome
