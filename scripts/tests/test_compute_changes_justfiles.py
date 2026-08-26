@@ -97,6 +97,22 @@ class ComputeChangesJustfileTests(unittest.TestCase):
                 )
             )
 
+            website.write_text(
+                "import 'nested/runtime.just'\n\nwebsite-build:\n    true\n",
+                encoding="utf-8",
+            )
+            import_head = commit(repository, "nested import")
+            self.assertTrue(
+                classify(
+                    RevisionDiff(
+                        repository,
+                        nested_head,
+                        import_head,
+                        "just/website-ui.just",
+                    )
+                )
+            )
+
             added = recipes / "release-extra.just"
             added.write_text("release-build-extra:\n    true\n", encoding="utf-8")
             added_head = commit(repository, "added recipe source")

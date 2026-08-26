@@ -266,6 +266,19 @@ runs:
           '
         }
 
+        justfile_changed_import() {
+          awk '
+            /^@@ / { in_hunk = 1; next }
+            in_hunk && /^[+-]/ {
+              line = substr($0, 2)
+              if (line ~ /^import[?]?[[:space:]]+/) {
+                found = 1
+              }
+            }
+            END { exit found ? 0 : 1 }
+          '
+        }
+
         changed_range_touches_backend_recipe() {
           local backend_lines_file="$1"
           local changed_lines_file="$2"
@@ -354,6 +367,10 @@ runs:
             break
           fi
           if ! JUSTFILE_SOURCE_DIFF=$(git diff -U0 "${JUSTFILE_DIFF_RANGE[@]}" -- "$JUSTFILE_SOURCE"); then
+            BACKEND_RECIPE_CHANGED="true"
+            break
+          fi
+          if printf '%s\n' "$JUSTFILE_SOURCE_DIFF" | justfile_changed_import; then
             BACKEND_RECIPE_CHANGED="true"
             break
           fi
