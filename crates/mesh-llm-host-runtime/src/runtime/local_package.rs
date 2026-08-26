@@ -254,7 +254,17 @@ pub(super) struct SplitParticipantBlockerSummary {
     recommendation: &'static str,
 }
 
-type SplitParticipantSignature = Vec<(String, u64, u64, u64, Option<u32>, bool, u32)>;
+type SplitParticipantSignature = Vec<(
+    String,
+    u64,
+    u64,
+    u64,
+    Option<u32>,
+    bool,
+    u32,
+    Option<u32>,
+    Option<u32>,
+)>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SplitParticipant {
@@ -266,6 +276,11 @@ pub(super) struct SplitParticipant {
     pub(super) rtt_ms: Option<u32>,
     pub(super) artifact_transfer_supported: bool,
     availability_score: u32,
+    /// Sustained memory bandwidth in MiB/s, summed across GPUs (gpu-bench,
+    /// gossip). `None` until measured and advertised.
+    pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    /// Sustained fp16 compute in GFLOP/s, summed across GPUs.
+    pub(super) sustained_compute_gflop_per_s: Option<u32>,
 }
 
 impl SplitParticipant {
@@ -283,6 +298,8 @@ impl SplitParticipant {
             rtt_ms: None,
             artifact_transfer_supported: false,
             availability_score: 0,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
         }
     }
 
@@ -304,12 +321,22 @@ impl SplitParticipant {
         signal: SplitParticipantPackageSignal,
         rtt_ms: Option<u32>,
         artifact_transfer_supported: bool,
+        perf: SplitParticipantPerf,
     ) -> Self {
         self.cached_slice_bytes = signal.cached_slice_bytes;
         self.missing_artifact_bytes = signal.missing_artifact_bytes;
         self.availability_score = signal.availability_score;
         self.rtt_ms = rtt_ms;
         self.artifact_transfer_supported = artifact_transfer_supported;
+        self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
+        self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
+        self
+    }
+
+    /// Attach measured performance signals to the local node's participant.
+    pub(super) fn with_local_perf(mut self, perf: SplitParticipantPerf) -> Self {
+        self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
+        self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
         self
     }
 
@@ -332,6 +359,60 @@ pub(super) struct SplitParticipantPackageSignal {
     pub(super) cached_slice_bytes: u64,
     pub(super) missing_artifact_bytes: u64,
     pub(super) availability_score: u32,
+}
+
+/// Measured node performance signals carried into split planning.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct SplitParticipantPerf {
+    /// Sustained memory bandwidth in MiB/s, summed across GPUs.
+    pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    /// Sustained fp16 compute in GFLOP/s, summed across GPUs.
+    pub(super) sustained_compute_gflop_per_s: Option<u32>,
+}
+
+impl SplitParticipantPerf {
+    /// Parse the gossiped CSV metric fields (`"1948.7,2100.1"`) into summed
+    /// integer MiB/s and GFLOP/s. Gossip reports GB/s and TFLOP/s; bandwidth
+    /// is converted to MiB/s (1 GB/s = 953.674 MiB/s) and compute to GFLOP/s.
+    /// `None` when unreported or unparsable — the planner treats missing
+    /// signals as capacity-only.
+    pub(super) fn from_gossip_csvs(
+        mem_bandwidth_gbps: Option<&str>,
+        compute_tflops_fp16: Option<&str>,
+    ) -> Self {
+        let bandwidth_mib_per_s = parse_metric_csv_sum(mem_bandwidth_gbps)
+            .map(|gbps| gbps * 1_000_000_000.0 / 1_048_576.0)
+            .and_then(|mib| u32::try_from(mib.trunc() as u64).ok());
+        let compute_gflop_per_s = parse_metric_csv_sum(compute_tflops_fp16)
+            .map(|tflops| tflops * 1_000.0)
+            .and_then(|gflops| u32::try_from(gflops.trunc() as u64).ok());
+        Self {
+            sustained_mem_bandwidth_mib_per_s: bandwidth_mib_per_s,
+            sustained_compute_gflop_per_s: compute_gflop_per_s,
+        }
+    }
+}
+
+/// Sum a comma-separated float list ("1948.7,2100.1"). Tolerates empty/blank
+/// entries. `None` when the field is absent, empty, or any entry is
+/// non-finite/negative/unparsable.
+fn parse_metric_csv_sum(field: Option<&str>) -> Option<f64> {
+    let field = field?;
+    let mut total = 0.0f64;
+    let mut saw_value = false;
+    for entry in field.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let value: f64 = entry.parse().ok()?;
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        total += value;
+        saw_value = true;
+    }
+    saw_value.then_some(total)
 }
 
 impl SplitParticipantPackageSignal {
@@ -461,11 +542,18 @@ pub(super) async fn collect_split_participant_membership(
     model_ref: &str,
     local_source_required: bool,
 ) -> SplitParticipantSnapshot {
-    let mut participants = vec![SplitParticipant::new(
-        node.id(),
-        node.vram_bytes(),
-        Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
-    )];
+    let local_perf = node.sustained_perf_signals().await;
+    let mut participants = vec![
+        SplitParticipant::new(
+            node.id(),
+            node.vram_bytes(),
+            Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
+        )
+        .with_local_perf(SplitParticipantPerf {
+            sustained_mem_bandwidth_mib_per_s: local_perf.0,
+            sustained_compute_gflop_per_s: local_perf.1,
+        }),
+    ];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
         if let Some(reason) = split_peer_preflight_exclusion_reason(
@@ -504,12 +592,19 @@ pub(super) async fn collect_split_participants(
     local_vram_override: Option<u64>,
     local_source_required: bool,
 ) -> SplitParticipantSnapshot {
-    let mut participants = vec![SplitParticipant::local_package(
-        node.id(),
-        local_vram_override.unwrap_or_else(|| node.vram_bytes()),
-        Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
-        package,
-    )];
+    let local_perf = node.sustained_perf_signals().await;
+    let mut participants = vec![
+        SplitParticipant::local_package(
+            node.id(),
+            local_vram_override.unwrap_or_else(|| node.vram_bytes()),
+            Some(node.first_joined_mesh_ts().await.unwrap_or(0)),
+            package,
+        )
+        .with_local_perf(SplitParticipantPerf {
+            sustained_mem_bandwidth_mib_per_s: local_perf.0,
+            sustained_compute_gflop_per_s: local_perf.1,
+        }),
+    ];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
         if let Some(reason) = split_peer_preflight_exclusion_reason(
@@ -538,12 +633,17 @@ pub(super) async fn collect_split_participants(
         .await
         {
             Ok(package_signal) => {
+                let perf = SplitParticipantPerf::from_gossip_csvs(
+                    peer.gpu_mem_bandwidth_gbps.as_deref(),
+                    peer.gpu_compute_tflops_fp16.as_deref(),
+                );
                 participants.push(
                     SplitParticipant::new(peer.id, peer.vram_bytes, peer.first_joined_mesh_ts)
                         .with_package_signals(
                             package_signal,
                             peer.rtt_ms,
                             artifact_transfer_allowed,
+                            perf,
                         ),
                 );
             }
@@ -813,6 +913,8 @@ pub(super) fn split_participant_signature(
                 participant.rtt_ms,
                 participant.artifact_transfer_supported,
                 participant.availability_score,
+                participant.sustained_mem_bandwidth_mib_per_s,
+                participant.sustained_compute_gflop_per_s,
             )
         })
         .collect()

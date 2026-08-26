@@ -188,6 +188,8 @@ mod tests {
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
         }
     }
 

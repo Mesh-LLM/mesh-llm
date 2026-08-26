@@ -63,6 +63,8 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
     pub(super) stage_transfer_latency_ms: Option<u32>,
+    pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    pub(super) sustained_compute_gflop_per_s: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,6 +148,8 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
             })
             .collect(),
         context_length_override: input.context_length_override,
@@ -372,6 +376,8 @@ fn runtime_slice_plan_input(
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
                 stage_transfer_latency_ms: participant.rtt_ms,
+                sustained_mem_bandwidth_mib_per_s: participant.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: participant.sustained_compute_gflop_per_s,
             })
             .collect(),
     }

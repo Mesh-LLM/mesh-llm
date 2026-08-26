@@ -270,6 +270,7 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
                 },
                 Some(u32::from(seed) * 40),
                 true,
+                SplitParticipantPerf::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -285,6 +286,7 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
                 },
                 Some(u32::from(4 - seed)),
                 false,
+                SplitParticipantPerf::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -352,6 +354,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(200),
         true,
+        SplitParticipantPerf::default(),
     );
     let fast_a = SplitParticipant::new(make_id(2), 32_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -361,6 +364,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(1),
         true,
+        SplitParticipantPerf::default(),
     );
     let fast_b = SplitParticipant::new(make_id(3), 32_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -370,6 +374,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(1),
         true,
+        SplitParticipantPerf::default(),
     );
     let participants = [canonical, fast_a, fast_b];
     let package = package(40);
@@ -404,6 +409,7 @@ fn split_topology_planner_prefers_cached_participant_in_runtime_path() {
         },
         Some(80),
         true,
+        SplitParticipantPerf::default(),
     );
     let warm = SplitParticipant::new(make_id(2), 24_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -413,6 +419,7 @@ fn split_topology_planner_prefers_cached_participant_in_runtime_path() {
         },
         Some(5),
         true,
+        SplitParticipantPerf::default(),
     );
 
     let stages = plan_runtime_slice_topology(
@@ -1109,6 +1116,7 @@ fn split_participant_signature_includes_package_signals_for_claim_identity() {
             },
             Some(20),
             true,
+            SplitParticipantPerf::default(),
         ),
     ];
 

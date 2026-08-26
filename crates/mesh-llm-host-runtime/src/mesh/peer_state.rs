@@ -887,6 +887,28 @@ impl Node {
         self.vram_bytes
     }
 
+    /// Measured sustained node performance for split planning: summed
+    /// memory bandwidth in MiB/s and fp16 compute in GFLOP/s across GPUs.
+    /// `(None, None)` until gpu-bench measurements populate the metrics —
+    /// the planner treats unreported nodes as capacity-only.
+    pub async fn sustained_perf_signals(&self) -> (Option<u32>, Option<u32>) {
+        let bandwidth = {
+            let metrics = self.gpu_mem_bandwidth_gbps.lock().await;
+            metrics.as_ref().map(|values| values.iter().sum::<f64>())
+        };
+        let compute = {
+            let metrics = self.gpu_compute_tflops_fp16.lock().await;
+            metrics.as_ref().map(|values| values.iter().sum::<f64>())
+        };
+        let bandwidth_mib = bandwidth
+            .map(|gbps| gbps * 1_000_000_000.0 / 1_048_576.0)
+            .and_then(|mib| u32::try_from(mib.max(0.0) as u64).ok());
+        let compute_gflops = compute
+            .map(|tflops| tflops * 1_000.0)
+            .and_then(|gflops| u32::try_from(gflops.max(0.0) as u64).ok());
+        (bandwidth_mib, compute_gflops)
+    }
+
     /// Local model-fit budget, including supported CPU offload memory.
     pub fn local_runtime_capacity_bytes(&self) -> u64 {
         self.local_runtime_capacity_bytes

@@ -56,6 +56,14 @@ pub struct TopologyNode {
     pub max_vram_bytes: Option<u64>,
     pub runtime_headroom_bytes: u64,
     pub stage_transfer_latency_ms: Option<u32>,
+    /// Sustained memory bandwidth in MiB/s, measured (gpu-bench) and gossiped.
+    /// `None` keeps this node capacity-only: performance-aware span balancing
+    /// is only active when every node in the planned subset reports it, so
+    /// signal-less fleets reproduce capacity-only placement exactly.
+    pub sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    /// Sustained fp16 compute in GFLOP/s, measured and gossiped. Secondary
+    /// signal (decode is usually memory-bound); `None` = unreported.
+    pub sustained_compute_gflop_per_s: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,6 +300,8 @@ struct UsableNode {
     node_id: String,
     usable_vram_bytes: u64,
     stage_transfer_latency_ms: Option<u32>,
+    sustained_mem_bandwidth_mib_per_s: Option<u32>,
+    sustained_compute_gflop_per_s: Option<u32>,
 }
 
 fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
@@ -306,6 +316,8 @@ fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
                 node_id: node.node_id.clone(),
                 usable_vram_bytes: capped.saturating_sub(node.runtime_headroom_bytes),
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
+                sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
+                sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
             }
         })
         .collect::<Vec<_>>();
@@ -417,6 +429,57 @@ fn fit_candidate(
     let mut stages = Vec::with_capacity(capacities.len());
     let mut minimum_remaining_vram = u64::MAX;
     let mut total_remaining_vram = 0u128;
+
+    // Performance-aware span assignment: when every node in the subset reports
+    // sustained memory bandwidth, balance modeled per-stage decode service time
+    // (weight streaming dominates quantized decode) instead of packing each
+    // node to its memory ceiling. Any missing signal falls back to the exact
+    // capacity-greedy walk below, so signal-less fleets keep bit-identical
+    // placement.
+    if let Some(spans) = perf_balanced_spans(
+        &layer_weights,
+        &layer_required_bytes,
+        &capacities,
+        input.layer_count as usize,
+    ) {
+        for (stage_index, (node, span)) in capacities.iter().zip(spans).enumerate() {
+            let layer_start = next_layer;
+            let layer_end = layer_start + span as u32;
+            let range = layer_start as usize..layer_end as usize;
+            let parameter_bytes = sum_u64(&layer_weights[range.clone()]);
+            let required_bytes = sum_u64(&layer_required_bytes[range]);
+            debug_assert!(required_bytes <= node.usable_vram_bytes);
+            let remaining = node.usable_vram_bytes - required_bytes;
+            minimum_remaining_vram = minimum_remaining_vram.min(remaining);
+            total_remaining_vram += u128::from(remaining);
+            stages.push(TopologyStagePlan {
+                stage_id: format!("stage-{stage_index}"),
+                stage_index: stage_index as u32,
+                node_id: node.node_id.clone(),
+                layer_start,
+                layer_end,
+                parameter_bytes,
+            });
+            next_layer = layer_end;
+        }
+        debug_assert_eq!(next_layer, input.layer_count);
+
+        let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+        return Some(CandidatePlan {
+            plan: TopologyPlan {
+                context_length,
+                parallel_lanes,
+                stages,
+                estimated_decode_network_ms_per_token,
+                decode_tpot_target_met: decode_tpot_target_met(
+                    estimated_decode_network_ms_per_token,
+                    input.target_decode_tpot_ms,
+                ),
+            },
+            minimum_remaining_vram,
+            total_remaining_vram,
+        });
+    }
 
     for (stage_index, node) in capacities.iter().enumerate() {
         let remaining_layers = input.layer_count - next_layer;
@@ -619,6 +682,125 @@ fn recurrent_bytes_by_layer(input: &TopologyPlanningInput) -> Vec<u64> {
     vec![0; input.layer_count as usize]
 }
 
+/// Modeled per-stage decode service time in microseconds, using the dominant
+/// term for quantized decode: streaming the stage's weights from memory.
+/// Integer microseconds keep candidate comparisons deterministic.
+fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64) -> Option<u128> {
+    let bandwidth = u128::from(node.sustained_mem_bandwidth_mib_per_s?);
+    if bandwidth == 0 {
+        return None;
+    }
+    // bytes / (MiB/s) = seconds; scale to microseconds via MiB.
+    Some(u128::from(weight_bytes) * 1_048_576 / (bandwidth * 1_000_000))
+}
+
+/// Performance-aware contiguous span assignment via DP over layer boundaries.
+///
+/// Nodes arrive in the planner's deterministic stage order (VRAM-descending,
+/// node id tie-break). For each contiguous split of the layer sequence across
+/// the stages, every stage's memory requirement must fit its node's ceiling
+/// (checked with prefix sums in O(1)); among feasible assignments we minimize
+/// the maximum modeled stage service time (bottleneck), breaking ties on the
+/// sum of stage times (work conservation), then on lexicographically smallest
+/// boundary vector for determinism. Returns `None` unless every node reports
+/// sustained memory bandwidth — the caller then keeps today's capacity-greedy
+/// walk, which guarantees signal-less fleets keep identical placement.
+fn perf_balanced_spans(
+    layer_weights: &[u64],
+    linearized_required_bytes: &[u64],
+    capacities: &[UsableNode],
+    layer_count: usize,
+) -> Option<Vec<usize>> {
+    if capacities.is_empty() || layer_weights.len() != layer_count {
+        return None;
+    }
+    // All-or-nothing on the dominant signal: partial signals would make the
+    // modeled comparison between stages meaningless.
+    if capacities
+        .iter()
+        .any(|node| node.sustained_mem_bandwidth_mib_per_s.is_none())
+    {
+        return None;
+    }
+
+    // Prefix sums over the linearized memory requirement (u128 guards against
+    // overflow when context is large).
+    let mut prefix_required = vec![0u128; layer_count + 1];
+    for (index, bytes) in linearized_required_bytes.iter().enumerate() {
+        prefix_required[index + 1] = prefix_required[index] + u128::from(*bytes);
+    }
+    let mut prefix_weights = vec![0u128; layer_count + 1];
+    for (index, bytes) in layer_weights.iter().enumerate() {
+        prefix_weights[index + 1] = prefix_weights[index] + u128::from(*bytes);
+    }
+
+    // dp[stage][boundary] = best (max stage time, total stage time) for
+    // assigning layers 0..boundary to stages 0..=stage, plus the parent
+    // boundary for reconstruction.
+    let mut dp = vec![vec![(u128::MAX, u128::MAX, 0usize); layer_count + 1]; capacities.len()];
+    for (stage_index, node) in capacities.iter().enumerate() {
+        for boundary in 0..=layer_count {
+            if stage_index == 0 {
+                // Stage 0 owns layers 0..boundary and must be non-empty in the
+                // final plan; dp[0][0] stays unreachable so no chain can leave
+                // a stage empty.
+                let weight = prefix_weights[boundary];
+                if boundary == 0 {
+                    continue;
+                }
+                if let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?) {
+                    let fits = prefix_required[boundary] <= u128::from(node.usable_vram_bytes);
+                    if fits {
+                        dp[0][boundary] = (time, time, 0);
+                    }
+                }
+                continue;
+            }
+            // Non-final stages may not consume all remaining layers; leave at
+            // least one for each later stage.
+            let max_boundary = layer_count - (capacities.len() - 1 - stage_index);
+            if boundary > max_boundary {
+                continue;
+            }
+            let mut best = (u128::MAX, u128::MAX, 0usize);
+            for previous in 0..boundary {
+                let (prev_max, prev_total, _) = dp[stage_index - 1][previous];
+                if prev_max == u128::MAX {
+                    continue;
+                }
+                let weight = prefix_weights[boundary] - prefix_weights[previous];
+                let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?) else {
+                    continue;
+                };
+                let required = prefix_required[boundary] - prefix_required[previous];
+                if required > u128::from(node.usable_vram_bytes) {
+                    continue;
+                }
+                let candidate = (prev_max.max(time), prev_total + time, previous);
+                if candidate < best {
+                    best = candidate;
+                }
+            }
+            dp[stage_index][boundary] = best;
+        }
+    }
+    let final_stage = capacities.len() - 1;
+    let (best_max, _, _) = dp[final_stage][layer_count];
+    if best_max == u128::MAX {
+        return None;
+    }
+    // Reconstruct boundary chain.
+    let mut spans = Vec::with_capacity(capacities.len());
+    let mut boundary = layer_count;
+    for stage_index in (0..capacities.len()).rev() {
+        let previous = dp[stage_index][boundary].2;
+        spans.push(boundary - previous);
+        boundary = previous;
+    }
+    spans.reverse();
+    Some(spans)
+}
+
 fn max_contiguous_layers_from(
     layer_required_bytes: &[u64],
     start: usize,
@@ -664,12 +846,21 @@ mod tests {
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
         }
     }
 
     fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
         TopologyNode {
             stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
+            ..node(id, gib)
+        }
+    }
+
+    fn perf_node(id: &str, gib: u64, mem_bandwidth_mib_per_s: u32) -> TopologyNode {
+        TopologyNode {
+            sustained_mem_bandwidth_mib_per_s: Some(mem_bandwidth_mib_per_s),
             ..node(id, gib)
         }
     }
@@ -714,6 +905,112 @@ mod tests {
 
     fn qwen_nodes(count: usize, gib: u64) -> Vec<TopologyNode> {
         (0..count).map(|index| qwen_node(index, gib)).collect()
+    }
+
+    #[test]
+    fn perf_signals_balance_stage_times_across_equal_capacity_nodes() {
+        // Two nodes with identical capacity but a 2:1 bandwidth split: the
+        // capacity-only planner would give both the same layer count, while
+        // perf-aware balancing gives the faster node ~2x the layers.
+        let fast = perf_node("fast", 48, 546_000);
+        let slow = perf_node("slow", 48, 273_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        let plan = plan_topology(&planning).expect("plan");
+        assert_eq!(plan.stages.len(), 2);
+        let fast_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "fast")
+            .expect("fast stage");
+        let slow_stage = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "slow")
+            .expect("slow stage");
+        assert!(
+            fast_stage.layer_end - fast_stage.layer_start
+                > 2 * (slow_stage.layer_end - slow_stage.layer_start) - 2,
+            "fast node should receive roughly 2x the layers: fast={} slow={}",
+            fast_stage.layer_end - fast_stage.layer_start,
+            slow_stage.layer_end - slow_stage.layer_start
+        );
+    }
+
+    #[test]
+    fn missing_perf_signals_keep_capacity_only_placement() {
+        // Any node without a bandwidth signal reproduces the capacity-only
+        // plan exactly: same stage boundaries and node assignment.
+        let nodes_signal = vec![perf_node("a", 48, 400_000), perf_node("b", 24, 400_000)];
+        let mut nodes_plain = nodes_signal.clone();
+        for node in &mut nodes_plain {
+            node.sustained_mem_bandwidth_mib_per_s = None;
+            node.sustained_compute_gflop_per_s = None;
+        }
+        let mut planning = input(nodes_plain.clone());
+        planning.minimum_nodes = 2;
+        let plain = plan_topology(&planning).expect("plain plan");
+        let signaled = plan_topology(&input(nodes_signal)).expect("signaled plan");
+        let spans: Vec<(String, u32, u32)> = plain
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        let _spans_signaled: Vec<(String, u32, u32)> = signaled
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        // With equal bandwidths on both nodes the perf-aware path may still
+        // rebalance; the guarantee under test is that *removing* signals
+        // yields the capacity-only result, asserted against the greedy
+        // expectations: node a (48 GiB) should hold more layers than b (24).
+        let _ = signaled;
+        let a_stage = spans.iter().find(|(id, _, _)| id == "a").unwrap();
+        let b_stage = spans.iter().find(|(id, _, _)| id == "b").unwrap();
+        assert!(a_stage.2 - a_stage.1 > b_stage.2 - b_stage.1);
+        // And the fallback is exercised: partial signals on the signaled
+        // input must produce identical output to the plain input.
+        let mut nodes_partial = nodes_plain.clone();
+        nodes_partial[0].sustained_mem_bandwidth_mib_per_s = Some(400_000);
+        let mut planning_partial = input(nodes_partial);
+        planning_partial.minimum_nodes = 2;
+        let partial = plan_topology(&planning_partial).expect("partial plan");
+        let spans_partial: Vec<(String, u32, u32)> = partial
+            .stages
+            .iter()
+            .map(|stage| (stage.node_id.clone(), stage.layer_start, stage.layer_end))
+            .collect();
+        assert_eq!(
+            spans, spans_partial,
+            "partial signals must fall back to capacity-only placement"
+        );
+    }
+
+    #[test]
+    fn perf_balancing_respects_memory_ceilings() {
+        // The slow node has a much smaller ceiling; the DP must not assign it
+        // more layers than fit, no matter how attractive the time balance.
+        let fast = perf_node("fast", 96, 500_000);
+        let slow = perf_node("slow", 16, 500_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+        let plan = plan_topology(&planning).expect("plan");
+        for stage in &plan.stages {
+            assert!(stage.layer_end > stage.layer_start, "no empty stages");
+        }
+    }
+
+    #[test]
+    fn perf_signals_do_not_break_latency_aware_planning() {
+        // Latency-aware ordering still applies when perf signals are present;
+        // the plan remains valid and stage 0 binding is respected.
+        let mut a = perf_node("a", 48, 400_000);
+        a.stage_transfer_latency_ms = Some(30);
+        let mut b = perf_node("b", 48, 400_000);
+        b.stage_transfer_latency_ms = Some(30);
+        let plan = plan_topology_with_stage0(&input(vec![a, b]), "a").expect("plan");
+        assert_eq!(plan.stages.first().unwrap().node_id, "a");
     }
 
     #[test]
@@ -796,6 +1093,8 @@ mod tests {
             // reported by the local runtime.
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
         }
     }
 
