@@ -142,15 +142,21 @@ unchanged.
 **As-built (PR #1454):** decode is modeled as weight-streaming only
 (`weight_bytes / sustained_mem_bw`, integer microseconds); the compute term
 and KV-touch term are plumbed-but-unused pending calibration against
-BENCHMARKS.md. Missing signals are **all-or-nothing per candidate**: a
-subset missing any node's bandwidth keeps the exact capacity-greedy span
-assignment and the legacy `hop_count × max-RTT` estimate; a missing edge
-bandwidth contributes zero transfer time (latency-only hop); an unmatched
-hop falls back to node RTT. Canonical units: sustained bandwidth MiB/s
-(1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all modeled times integer
-microseconds; conversions happen once at parse (GB/s → MiB/s, TFLOP/s →
-GFLOP/s). Metric-age/confidence decay is designed (below) but **not yet
-implemented** — current signals are un-aged measurements.
+BENCHMARKS.md. The coordinator's modeled decode TPOT is
+`max_i(stage_time) + Σ_hops(edge_time)` — bottleneck stage plus **total**
+network time across all hops including the prediction return (for >2 stages
+this differs from the per-stage-max formula above; the implemented form is
+authoritative). Missing node bandwidth is **all-or-nothing per candidate**:
+a subset missing any node's bandwidth keeps the exact capacity-greedy span
+assignment — note the network estimate still uses edge-aware per-hop
+estimation whenever edge data exists, and only falls back to the legacy
+`hop_count × max-RTT` estimate when edges are empty or disabled. A missing
+edge bandwidth contributes zero transfer time (latency-only hop); an
+unmatched hop falls back to node RTT. Canonical units: sustained bandwidth
+MiB/s (1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all modeled times
+integer microseconds; conversions happen once at parse (GB/s → MiB/s,
+TFLOP/s → GFLOP/s). Metric-age/confidence decay is designed (below) but
+**not yet implemented** — current signals are un-aged measurements.
 
 ## Search algorithm
 
