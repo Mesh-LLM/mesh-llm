@@ -662,7 +662,7 @@ impl StageReplyStats {
             self.prefill_edge_activation_bytes_max = other.prefill_edge_activation_bytes_max;
         }
         self.prefill_edge_observation_count += other.prefill_edge_observation_count;
-        if slower_prefill_compute_rate(
+        if better_prefill_calibration_sample(
             other.prefill_compute_us_at_slowest_rate,
             other.prefill_compute_token_count_at_slowest_rate,
             self.prefill_compute_us_at_slowest_rate,
@@ -705,7 +705,7 @@ impl StageReplyStats {
     ) {
         let compute_us = compute_us.max(0);
         let token_count = i64::try_from(token_count).unwrap_or(i64::MAX).max(1);
-        if slower_prefill_compute_rate(
+        if better_prefill_calibration_sample(
             compute_us,
             token_count,
             self.prefill_compute_us_at_slowest_rate,
@@ -742,7 +742,7 @@ impl StageReplyStats {
     }
 }
 
-fn slower_prefill_compute_rate(
+fn better_prefill_calibration_sample(
     candidate_us: i64,
     candidate_tokens: i64,
     current_us: i64,
@@ -753,6 +753,12 @@ fn slower_prefill_compute_rate(
     }
     if current_us <= 0 || current_tokens <= 0 {
         return true;
+    }
+    // Compare stages at the largest representative chunk size. A short final
+    // remainder pays fixed launch overhead and can look much slower per token
+    // than the full chunks that the calibration is intended to bound.
+    if candidate_tokens != current_tokens {
+        return candidate_tokens > current_tokens;
     }
     i128::from(candidate_us) * i128::from(current_tokens)
         > i128::from(current_us) * i128::from(candidate_tokens)

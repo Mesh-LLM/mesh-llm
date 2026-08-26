@@ -162,10 +162,22 @@ mod tests {
         assert_eq!(reply.stats.prefill_edge_stage_index, 1);
         assert_eq!(reply.stats.prefill_edge_activation_bytes_max, 524_288);
         assert_eq!(reply.stats.prefill_edge_observation_count, 2);
-        assert_eq!(reply.stats.prefill_compute_us_at_slowest_rate, 25_000);
-        assert_eq!(reply.stats.prefill_compute_stage_index, 3);
-        assert_eq!(reply.stats.prefill_compute_token_count_at_slowest_rate, 64);
+        assert_eq!(reply.stats.prefill_compute_us_at_slowest_rate, 42_000);
+        assert_eq!(reply.stats.prefill_compute_stage_index, 1);
+        assert_eq!(reply.stats.prefill_compute_token_count_at_slowest_rate, 128);
         assert_eq!(reply.stats.prefill_compute_observation_count, 3);
+    }
+
+    #[test]
+    fn prefill_compute_calibration_ignores_short_tail_overhead() {
+        let mut stats = StageReplyStats::default();
+        stats.observe_prefill_compute(1, 48_000, 128);
+        stats.observe_prefill_compute(1, 30_000, 9);
+
+        assert_eq!(stats.prefill_compute_us_at_slowest_rate, 48_000);
+        assert_eq!(stats.prefill_compute_stage_index, 1);
+        assert_eq!(stats.prefill_compute_token_count_at_slowest_rate, 128);
+        assert_eq!(stats.prefill_compute_observation_count, 2);
     }
 
     #[test]
