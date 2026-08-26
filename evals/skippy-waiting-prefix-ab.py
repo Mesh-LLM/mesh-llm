@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""Benchmark waiting-request prefix grouping against an exact OLD/NEW pair.
+
+The workload holds one runtime lane with the first request while two prompt
+families arrive in alternating order. With a one-entry prefix cache, FCFS
+repeatedly evicts the useful family; prefix-aware waiting order should finish
+one family before switching to the other. The runner alternates binary launch
+order, retains raw requests and telemetry, and emits JSON plus a PR-ready
+Mermaid chart and Markdown table.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import hashlib
+import http.client
+import importlib.util
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+REPO = Path(__file__).resolve().parents[1]
+SUMMARY_EVENT = "stage.openai_generation_summary"
+
+
+def load_module(name: str, path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stable_prefix(family: str, blocks: int) -> str:
+    rows = [
+        f"{family}-context-{index:04d}: src/{family}/module_{index % 37}.rs "
+        f"owns invariant {index}; preserve it exactly."
+        for index in range(blocks)
+    ]
+    return (
+        f"You are working in repository family {family}. Follow its fixed rules.\n"
+        + "\n".join(rows)
+    )
+
+
+def interleaved_prompts(families: int, requests_per_family: int, blocks: int) -> list[dict[str, str]]:
+    prefixes = [stable_prefix(f"family-{index}", blocks) for index in range(families)]
+    prompts = []
+    for request_index in range(requests_per_family):
+        for family_index, prefix in enumerate(prefixes):
+            prompts.append(
+                {
+                    "family": f"family-{family_index}",
+                    "prompt": (
+                        f"{prefix}\nUnique task {request_index}: inspect module_"
+                        f"{request_index % 37}.rs and return its invariant only."
+                    ),
+                }
+            )
+    return prompts
+
+
+def percentile(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(round((len(ordered) - 1) * quantile), len(ordered) - 1)
+    return ordered[index]
+
+
+def run_requests(
+    prompts: list[dict[str, str]],
+    model_id: str,
+    output_tokens: int,
+    port: int,
+    timeout: float,
+    stagger_ms: float,
+) -> tuple[list[dict[str, Any]], float]:
+    workload_started = time.monotonic()
+
+    def make_request(request_id: int, item: dict[str, str]) -> dict[str, Any]:
+        target_start = workload_started + request_id * stagger_ms / 1000.0
+        remaining = target_start - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+        submitted_at = time.monotonic()
+        payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": item["prompt"]}],
+            "max_tokens": output_tokens,
+            "temperature": 0,
+            "seed": 0,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        first_token_at = None
+        completion_tokens = 0
+        content_events = 0
+        cached_tokens = 0
+        content_parts: list[str] = []
+        connection = None
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                json.dumps(payload),
+                {"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            if response.status != 200:
+                body = response.read(4096).decode("utf-8", errors="replace")
+                return {
+                    "request_id": request_id,
+                    "family": item["family"],
+                    "error": f"HTTP {response.status}: {body}",
+                }
+            for raw_line in response:
+                line = raw_line.strip()
+                if not line.startswith(b"data: "):
+                    continue
+                event_bytes = line[6:]
+                if event_bytes == b"[DONE]":
+                    break
+                try:
+                    event = json.loads(event_bytes)
+                except json.JSONDecodeError:
+                    continue
+                usage = event.get("usage")
+                if isinstance(usage, dict):
+                    if isinstance(usage.get("completion_tokens"), int):
+                        completion_tokens = usage["completion_tokens"]
+                    details = usage.get("prompt_tokens_details")
+                    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+                        cached_tokens = details["cached_tokens"]
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                delta = choices[0].get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                content = delta.get("content") or delta.get("reasoning_content")
+                if content:
+                    if first_token_at is None:
+                        first_token_at = time.monotonic()
+                    content_events += 1
+                    content_parts.append(content)
+            completed_at = time.monotonic()
+            if first_token_at is None:
+                return {
+                    "request_id": request_id,
+                    "family": item["family"],
+                    "error": "stream completed without generated content",
+                }
+            predicted = completion_tokens or content_events
+            return {
+                "request_id": request_id,
+                "family": item["family"],
+                "prompt_sha256": hashlib.sha256(item["prompt"].encode()).hexdigest(),
+                "submitted_ms": (submitted_at - workload_started) * 1000,
+                "first_token_ms": (first_token_at - workload_started) * 1000,
+                "completed_ms": (completed_at - workload_started) * 1000,
+                "ttft_ms": (first_token_at - submitted_at) * 1000,
+                "elapsed_ms": (completed_at - submitted_at) * 1000,
+                "tpot_ms": (completed_at - first_token_at)
+                * 1000
+                / max(predicted - 1, 1),
+                "tokens_predicted": predicted,
+                "cached_tokens": cached_tokens,
+                "content": "".join(content_parts),
+            }
+        except Exception as error:  # noqa: BLE001 - errors belong in the artifact.
+            return {
+                "request_id": request_id,
+                "family": item["family"],
+                "error": str(error),
+            }
+        finally:
+            if connection is not None:
+                connection.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(prompts)) as executor:
+        futures = [
+            executor.submit(make_request, request_id, item)
+            for request_id, item in enumerate(prompts)
+        ]
+        results = [future.result() for future in concurrent.futures.as_completed(futures)]
+    makespan_ms = (time.monotonic() - workload_started) * 1000
+    results.sort(key=lambda row: row["request_id"])
+    return results, makespan_ms
+
+
+def attributes(event: dict[str, Any]) -> dict[str, Any]:
+    value = event.get("attributes")
+    return value if isinstance(value, dict) else {}
+
+
+def summarize(requests: list[dict[str, Any]], events: list[dict[str, Any]], makespan_ms: float) -> dict[str, Any]:
+    successful = [row for row in requests if "error" not in row]
+    attrs = [attributes(event) for event in events]
+    statuses = [str(row.get("skippy.kv.status", "unknown")) for row in attrs]
+
+    def numeric(key: str) -> list[float]:
+        return [float(row[key]) for row in attrs if isinstance(row.get(key), (int, float))]
+
+    ttft = [float(row["ttft_ms"]) for row in successful]
+    matched = numeric("skippy.kv.matched_prefix_tokens")
+    suffix = numeric("skippy.kv.suffix_prefill_tokens")
+    service_order = sorted(successful, key=lambda row: row["first_token_ms"])
+    family_order = [str(row["family"]) for row in service_order]
+    switches = sum(left != right for left, right in zip(family_order, family_order[1:]))
+    output_tokens = sum(int(row["tokens_predicted"]) for row in successful)
+    return {
+        "requests": len(requests),
+        "successful": len(successful),
+        "errors": [row for row in requests if "error" in row],
+        "cache_hits": statuses.count("hit"),
+        "cache_misses": statuses.count("miss"),
+        "usage_cached_requests": sum(int(row.get("cached_tokens", 0)) > 0 for row in successful),
+        "matched_prefix_tokens_total": sum(matched),
+        "suffix_prefill_tokens_total": sum(suffix),
+        "ttft_ms_p50": percentile(ttft, 0.50),
+        "ttft_ms_p95": percentile(ttft, 0.95),
+        "makespan_ms": makespan_ms,
+        "output_tokens_per_second": output_tokens / (makespan_ms / 1000.0),
+        "family_switches": switches,
+        "family_service_order": family_order,
+    }
+
+
+def run_cell(
+    radix: Any,
+    harness: Any,
+    version: str,
+    binary: Path,
+    case: Any,
+    round_index: int,
+    args: argparse.Namespace,
+    prompts: list[dict[str, str]],
+) -> dict[str, Any]:
+    cell_dir = args.output_dir / f"round-{round_index + 1}-{version}"
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    config_path = cell_dir / "stage.json"
+    log_path = cell_dir / "server.log"
+    radix.write_config(
+        harness,
+        config_path,
+        case,
+        True,
+        args.ctx_size,
+        args.lanes,
+        args.n_gpu_layers,
+    )
+    config = json.loads(config_path.read_text())
+    config["kv_cache"]["max_entries"] = args.cache_entries
+    config["kv_cache"]["shared_prefix_record_limit"] = 1
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    port = harness.free_port()
+    cmd = [
+        str(binary),
+        "serve-openai",
+        "--config",
+        str(config_path),
+        "--bind-addr",
+        f"127.0.0.1:{port}",
+        "--generation-concurrency",
+        str(args.lanes),
+        "--telemetry-level",
+        "debug",
+    ]
+    env = os.environ.copy()
+    env["LLAMA_STAGE_BUILD_DIR"] = str(args.native_build.resolve())
+    env["SKIPPY_TELEMETRY_STDERR"] = "1"
+    env["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            cmd,
+            cwd=REPO,
+            env=env,
+            text=True,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            harness.wait_ready(port, process, 900, path="/v1/models", server_name=version)
+            event_start = len(radix.json_events(log_path, SUMMARY_EVENT))
+            requests, makespan_ms = run_requests(
+                prompts,
+                case.model_id,
+                args.output_tokens,
+                port,
+                args.request_timeout_secs,
+                args.stagger_ms,
+            )
+            expected = sum("error" not in row for row in requests)
+            events = radix.wait_for_json_events(
+                log_path,
+                SUMMARY_EVENT,
+                event_start + expected,
+                process,
+            )[event_start:]
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+    return {
+        "round": round_index + 1,
+        "version": version,
+        "binary": str(binary),
+        "config": str(config_path),
+        "log": str(log_path),
+        "requests": requests,
+        "summary": summarize(requests, events, makespan_ms),
+    }
+
+
+def aggregate(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for version in ("old", "new"):
+        summaries = [cell["summary"] for cell in cells if cell["version"] == version]
+        median = lambda key: statistics.median(float(row[key]) for row in summaries)
+        rows.append(
+            {
+                "version": version,
+                "rounds": len(summaries),
+                "requests": sum(int(row["requests"]) for row in summaries),
+                "successful": sum(int(row["successful"]) for row in summaries),
+                "cache_hits_median": median("cache_hits"),
+                "suffix_prefill_tokens_median": median("suffix_prefill_tokens_total"),
+                "ttft_ms_p50_median": median("ttft_ms_p50"),
+                "ttft_ms_p95_median": median("ttft_ms_p95"),
+                "makespan_ms_median": median("makespan_ms"),
+                "output_tokens_per_second_median": median("output_tokens_per_second"),
+                "family_switches_median": median("family_switches"),
+            }
+        )
+    return rows
+
+
+def delta(old: float, new: float) -> float:
+    return (new - old) / old * 100.0 if old else 0.0
+
+
+def report(rows: list[dict[str, Any]]) -> str:
+    indexed = {row["version"]: row for row in rows}
+    old, new = indexed["old"], indexed["new"]
+    suffix_ceiling = max(old["suffix_prefill_tokens_median"], new["suffix_prefill_tokens_median"], 1)
+    lines = [
+        "```mermaid",
+        "xychart-beta",
+        '    title "Waiting-prefix A/B: suffix tokens prefetched (lower is better)"',
+        '    x-axis ["Before", "After"]',
+        f"    y-axis \"tokens\" 0 --> {int(suffix_ceiling * 1.1)}",
+        f"    bar [{old['suffix_prefill_tokens_median']:.0f}, {new['suffix_prefill_tokens_median']:.0f}]",
+        "```",
+        "",
+        "| Metric | Before | After | Delta |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    metrics = (
+        ("Cache hits / round", "cache_hits_median", False),
+        ("Suffix prefill tokens / round", "suffix_prefill_tokens_median", True),
+        ("Family switches / round", "family_switches_median", True),
+        ("TTFT p50 ms", "ttft_ms_p50_median", True),
+        ("TTFT p95 ms", "ttft_ms_p95_median", True),
+        ("Makespan ms", "makespan_ms_median", True),
+        ("Output tok/s", "output_tokens_per_second_median", False),
+    )
+    for label, key, _lower_is_better in metrics:
+        before, after = float(old[key]), float(new[key])
+        lines.append(f"| {label} | {before:.1f} | {after:.1f} | {delta(before, after):+.1f}% |")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case-file", type=Path, required=True)
+    parser.add_argument("--old-bin", type=Path, required=True)
+    parser.add_argument("--new-bin", type=Path, required=True)
+    parser.add_argument("--old-commit", required=True)
+    parser.add_argument("--new-commit", required=True)
+    parser.add_argument("--native-build", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--rounds", type=int, default=4)
+    parser.add_argument("--families", type=int, default=2)
+    parser.add_argument("--requests-per-family", type=int, default=6)
+    parser.add_argument("--prefix-blocks", type=int, default=192)
+    parser.add_argument("--output-tokens", type=int, default=64)
+    parser.add_argument("--ctx-size", type=int, default=32768)
+    parser.add_argument("--lanes", type=int, default=1)
+    parser.add_argument("--cache-entries", type=int, default=1)
+    parser.add_argument("--stagger-ms", type=float, default=5.0)
+    parser.add_argument("--request-timeout-secs", type=float, default=900.0)
+    parser.add_argument("--n-gpu-layers", type=int, default=999)
+    args = parser.parse_args()
+    if min(args.rounds, args.families, args.requests_per_family, args.lanes, args.cache_entries) <= 0:
+        parser.error("rounds, families, requests, lanes, and cache entries must be positive")
+    if args.stagger_ms < 0:
+        parser.error("stagger must be non-negative")
+    binaries = {"old": args.old_bin.resolve(), "new": args.new_bin.resolve()}
+    for name, binary in binaries.items():
+        if not binary.is_file():
+            parser.error(f"{name} binary not found: {binary}")
+    radix = load_module("skippy_radix_cache_ab", REPO / "evals/skippy-radix-cache-ab.py")
+    harness = radix.load_production_harness()
+    cases = radix.read_cases(args.case_file)
+    if len(cases) != 1:
+        parser.error("case file must contain exactly one model")
+    case = cases[0]
+    prompts = interleaved_prompts(args.families, args.requests_per_family, args.prefix_blocks)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    cells = []
+    for round_index in range(args.rounds):
+        versions = ("old", "new") if round_index % 2 == 0 else ("new", "old")
+        for version in versions:
+            print(f"==> round={round_index + 1} version={version}", flush=True)
+            cells.append(
+                run_cell(
+                    radix,
+                    harness,
+                    version,
+                    binaries[version],
+                    case,
+                    round_index,
+                    args,
+                    prompts,
+                )
+            )
+    rows = aggregate(cells)
+    result = {
+        "metadata": {
+            "old": {"commit": args.old_commit, "binary": str(binaries["old"]), "sha256": sha256(binaries["old"])},
+            "new": {"commit": args.new_commit, "binary": str(binaries["new"]), "sha256": sha256(binaries["new"])},
+            "model_id": case.model_id,
+            "model_path": str(case.model_path),
+            "model_sha256": harness.model_sha256(case.model_path),
+            "rounds": args.rounds,
+            "families": args.families,
+            "requests_per_family": args.requests_per_family,
+            "prefix_blocks": args.prefix_blocks,
+            "output_tokens": args.output_tokens,
+            "lanes": args.lanes,
+            "cache_entries": args.cache_entries,
+            "stagger_ms": args.stagger_ms,
+        },
+        "cells": cells,
+        "aggregate": rows,
+    }
+    (args.output_dir / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")
+    (args.output_dir / "report.md").write_text(report(rows))
+    print(args.output_dir / "comparison.json")
+    return 0 if all(cell["summary"]["successful"] == cell["summary"]["requests"] for cell in cells) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
