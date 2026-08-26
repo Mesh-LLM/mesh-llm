@@ -233,6 +233,7 @@ pub(crate) struct LocalAnnouncementData {
     owner_attestation: Option<SignedNodeOwnership>,
     artifact_transfer_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
+    cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
     gpu_compute_tflops_fp16: Option<String>,
@@ -282,6 +283,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
+        || old.cache_affinity != new.cache_affinity
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
@@ -363,6 +365,7 @@ pub(super) fn apply_transitive_ann(
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    existing.cache_affinity = ann.cache_affinity.clone();
     if ann.inference_admission_state.is_some() {
         existing.inference_admission_state = ann.inference_admission_state;
     }
@@ -807,6 +810,7 @@ impl Node {
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        existing.cache_affinity = ann.cache_affinity.clone();
         existing.inference_admission_state = ann.inference_admission_state;
         if ann.version.is_some() {
             existing.version = ann.version.clone();
@@ -1049,6 +1053,16 @@ impl Node {
         let advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
+        let now_unix_ms = current_time_unix_ms();
+        let salt = mesh_llm_routing::cache_inventory::rotating_salt(
+            self.endpoint.id().as_bytes(),
+            now_unix_ms,
+        );
+        let cache_affinity = self
+            .cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .advertisement(salt, now_unix_ms);
         let release_attestation = self.release_attestation.lock().await.clone();
         let (mesh_id, mesh_policy_hash, signed_genesis_policy) =
             if let Some(state) = self.requirement_mesh_state.lock().await.clone() {
@@ -1096,6 +1110,7 @@ impl Node {
             artifact_transfer_supported:
                 crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
             advertised_model_throughput,
+            cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
                 &self.gpu_mem_bandwidth_gbps,
             )
@@ -1165,6 +1180,7 @@ impl Node {
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
+            cache_affinity: peer.cache_affinity.clone(),
             latency_ms: latency.latency_ms,
             latency_source: Some(match latency.source {
                 DisplayLatencySource::Direct => crate::proto::node::LatencySource::Direct,
@@ -1230,6 +1246,7 @@ impl Node {
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
+            cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,
             latency_age_ms: None,

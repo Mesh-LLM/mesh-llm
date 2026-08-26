@@ -194,7 +194,6 @@ enum MeshTargetResolution {
 struct MeshRequestPlan {
     effective_model: Option<String>,
     auto_session_key: Option<u64>,
-    prepared: PreparedTargets,
     target_hosts: Vec<iroh::EndpointId>,
 }
 
@@ -225,10 +224,6 @@ enum MeshRouteResult {
 pub(crate) struct RouteSelectionMetadata<'a> {
     pub(crate) provider: Option<&'a str>,
     pub(crate) engine: Option<&'a str>,
-}
-
-fn should_learn_affinity(status_code: u16) -> bool {
-    (200..400).contains(&status_code)
 }
 
 fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
@@ -518,7 +513,7 @@ async fn build_mesh_request_plan(
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
 
-    let prepared = prepare_mesh_targets(
+    let mut prepared = prepare_mesh_targets(
         request,
         effective_model.as_deref(),
         &resolved_hosts,
@@ -528,14 +523,13 @@ async fn build_mesh_request_plan(
         node,
         effective_model.as_deref(),
         required_tokens,
-        &prepared,
+        &mut prepared,
         affinity,
     )
     .await;
     Ok(MeshRequestPlan {
         effective_model,
         auto_session_key,
-        prepared,
         target_hosts,
     })
 }
@@ -572,8 +566,8 @@ fn prepare_mesh_targets(
                 .copied()
                 .map(election::InferenceTarget::Remote)
                 .collect(),
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: None,
+            cache_target: None,
         })
 }
 
@@ -581,7 +575,7 @@ async fn order_mesh_target_hosts(
     node: &mesh::Node,
     effective_model: Option<&str>,
     required_tokens: Option<u32>,
-    prepared: &PreparedTargets,
+    prepared: &mut PreparedTargets,
     affinity: &AffinityRouter,
 ) -> Vec<iroh::EndpointId> {
     let target_hosts: Vec<iroh::EndpointId> = prepared
@@ -597,19 +591,28 @@ async fn order_mesh_target_hosts(
     };
     let mut ordered =
         order_remote_hosts_by_context(node, name, required_tokens, &target_hosts).await;
-    if let (Some(prefix_hash), Some(election::InferenceTarget::Remote(cached_host))) =
-        (prepared.learn_prefix_hash, prepared.cached_target.as_ref())
-    {
-        let cached_context = node.peer_model_context_length(*cached_host, name).await;
-        if matches!((required_tokens, cached_context), (Some(required), Some(context)) if context < required)
+    if let Some(prefix_hash) = prepared.prefix_hash {
+        let candidates: Vec<_> = ordered
+            .iter()
+            .copied()
+            .map(election::InferenceTarget::Remote)
+            .collect();
+        prepared.cache_target = match affinity.lookup_cache_lease(name, prefix_hash, &candidates) {
+            Some(target) => Some(target),
+            None => {
+                let selected = node
+                    .select_cache_target(name, prefix_hash, &candidates)
+                    .await;
+                if let Some(target) = selected.as_ref() {
+                    affinity.remember_cache_lease(name, prefix_hash, target);
+                }
+                selected
+            }
+        };
+        affinity.record_cache_probe(prepared.cache_target.is_some());
+        if let Some(election::InferenceTarget::Remote(cache_host)) = prepared.cache_target.as_ref()
         {
-            affinity.forget_target(
-                name,
-                prefix_hash,
-                &election::InferenceTarget::Remote(*cached_host),
-            );
-        } else {
-            move_target_first(&mut ordered, cached_host);
+            move_target_first(&mut ordered, cache_host);
         }
     }
     ordered
@@ -678,7 +681,6 @@ async fn route_mesh_request_attempts(
 ) -> MeshRouteResult {
     let effective_model = plan.effective_model.as_deref();
     let auto_session_key = plan.auto_session_key;
-    let prepared = &plan.prepared;
     let target_hosts = &plan.target_hosts;
     let total_targets = target_hosts.len();
     let mut state = MeshAttemptState {
@@ -722,8 +724,6 @@ async fn route_mesh_request_attempts(
             node,
             effective_model,
             auto_session_key,
-            prepared,
-            attempt_target: &attempt_target,
             target_host: *target_host,
             state: &mut state,
             affinity,
@@ -833,8 +833,6 @@ struct MeshAttemptResultContext<'a> {
     node: &'a mesh::Node,
     effective_model: Option<&'a str>,
     auto_session_key: Option<u64>,
-    prepared: &'a PreparedTargets,
-    attempt_target: &'a election::InferenceTarget,
     target_host: iroh::EndpointId,
     state: &'a mut MeshAttemptState,
     affinity: &'a AffinityRouter,
@@ -869,15 +867,7 @@ fn handle_mesh_attempt_result(
 }
 
 fn handle_delivered_mesh_attempt(context: &MeshAttemptResultContext<'_>, status_code: u16) {
-    if should_learn_affinity(status_code) {
-        if let (Some(name), Some(prefix_hash)) =
-            (context.effective_model, context.prepared.learn_prefix_hash)
-        {
-            context
-                .affinity
-                .learn_target(name, prefix_hash, context.attempt_target);
-        }
-    } else if let Some(key) = context
+    if let Some(key) = context
         .auto_session_key
         .filter(|_| (500..600).contains(&status_code))
     {
@@ -955,12 +945,6 @@ fn terminal_outcome_for_mesh_request_failure(
 fn handle_retryable_context_overflow(
     context: &mut MeshAttemptResultContext<'_>,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         "Host {} rejected request with context overflow-style 400, trying next",
         context.target_host.fmt_short()
@@ -973,12 +957,6 @@ fn handle_retryable_mesh_response_quality(
     context: &mut MeshAttemptResultContext<'_>,
     failure: ResponseQualityFailure,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         reason = failure.label(),
         "Host {} returned low-quality success response, trying next",
@@ -1003,12 +981,6 @@ fn handle_retryable_mesh_timeout(
 fn handle_retryable_mesh_unavailable(
     context: &mut MeshAttemptResultContext<'_>,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         "Failed to tunnel to host {}, trying next",
         context.target_host.fmt_short()
@@ -1016,22 +988,6 @@ fn handle_retryable_mesh_unavailable(
     context.state.last_retryable = true;
     spawn_mesh_refresh_once(context.node, &mut context.state.refreshed);
     MeshAttemptDisposition::Continue
-}
-
-fn forget_mesh_cached_target(
-    effective_model: Option<&str>,
-    prepared: &PreparedTargets,
-    failed_target: &election::InferenceTarget,
-    affinity: &AffinityRouter,
-) {
-    if let (Some(name), Some(prefix_hash), Some(cached_target)) = (
-        effective_model,
-        prepared.learn_prefix_hash,
-        prepared.cached_target.as_ref(),
-    ) && cached_target == failed_target
-    {
-        affinity.forget_target(name, prefix_hash, failed_target);
-    }
 }
 
 fn spawn_mesh_refresh_once(node: &mesh::Node, refreshed: &mut bool) {

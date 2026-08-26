@@ -587,6 +587,9 @@ impl OpenAiLifecycleLoggingAdapter {
                         Some(u64::from(value.completion_tokens)),
                         Some(u64::from(value.total_tokens)),
                     )
+                    .map(|usage| {
+                        usage.with_cached_prompt_tokens(Some(u64::from(value.cached_tokens)))
+                    })
                 });
                 self.enqueue_operation_event(
                     request_id,
@@ -1074,6 +1077,7 @@ mod tests {
                     tokens: Some(8),
                     usage: Some(TokenUsage {
                         prompt_tokens: Some(21),
+                        cached_prompt_tokens: Some(13),
                         completion_tokens: Some(8),
                         total_tokens: Some(29),
                     }),

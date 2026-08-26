@@ -212,6 +212,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(mesh_llm_events::logging::events::TokenUsage {
                     prompt_tokens: Some(2),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),
@@ -276,6 +277,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(mesh_llm_events::logging::events::TokenUsage {
                     prompt_tokens: Some(2),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),

@@ -130,6 +130,7 @@ pub(super) fn split_test_peer(
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,

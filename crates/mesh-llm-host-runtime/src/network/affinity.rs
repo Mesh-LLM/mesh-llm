@@ -4,9 +4,6 @@ use crate::inference::election;
 use crate::network::target_health::{TargetHealth, TargetHealthOutcome, TargetReputationStats};
 use iroh::EndpointId;
 use mesh_llm_routing::affinity as shared_affinity;
-#[cfg(test)]
-use mesh_llm_routing::prefix_affinity::PREFIX_AFFINITY_MAX_ENTRIES;
-use mesh_llm_routing::prefix_affinity::PREFIX_AFFINITY_TTL;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -16,10 +13,12 @@ use std::time::{Duration, Instant};
 /// How long a remembered auto-routed model stays valid for a given session
 /// key. Matches the prefix affinity TTL so sticky chats and sticky routing
 /// expire in lockstep.
-const AUTO_MODEL_TTL: Duration = PREFIX_AFFINITY_TTL;
+const AUTO_MODEL_TTL: Duration = Duration::from_secs(20 * 60);
 /// Upper bound on the auto-model cache. Each entry is small (session hash +
 /// model name + timestamp) so this is generous.
 const AUTO_MODEL_MAX_ENTRIES: usize = 1024;
+const CACHE_LEASE_TTL: Duration = Duration::from_secs(2);
+const CACHE_LEASE_MAX_ENTRIES: usize = 1024;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct AffinityStatsSnapshot {
@@ -38,7 +37,7 @@ pub struct AffinityStatsSnapshot {
     pub target_reputation: TargetReputationStats,
 }
 
-mesh_llm_routing::impl_prefix_affinity_stats_snapshot!(AffinityStatsSnapshot {
+mesh_llm_routing::impl_affinity_stats_snapshot!(AffinityStatsSnapshot {
     target_reputation: TargetReputationStats::default(),
 });
 
@@ -48,10 +47,24 @@ struct AutoModelEntry {
     last_used: Instant,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct CacheLeaseKey {
+    model: String,
+    prefix_hash: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CacheLeaseEntry {
+    target: election::InferenceTarget,
+    expires_at: Instant,
+}
+
 #[derive(Default)]
 struct AffinityState {
     auto_models: HashMap<u64, AutoModelEntry>,
     auto_lru: VecDeque<u64>,
+    cache_leases: HashMap<CacheLeaseKey, CacheLeaseEntry>,
+    cache_lease_lru: VecDeque<CacheLeaseKey>,
 }
 
 #[derive(Clone)]
@@ -83,7 +96,7 @@ impl AffinityRouter {
     }
 
     pub fn stats_snapshot(&self) -> AffinityStatsSnapshot {
-        let mut stats = AffinityStatsSnapshot::from_prefix_affinity_stats(
+        let mut stats = AffinityStatsSnapshot::from_affinity_stats(
             self.prefix.stats_snapshot(),
             self.prefix.prefix_enabled(),
             self.prefix.sticky_enabled(),
@@ -116,24 +129,6 @@ impl AffinityRouter {
         outcome: TargetHealthOutcome,
     ) {
         self.target_health.record_outcome(model, target, outcome);
-    }
-
-    #[cfg(test)]
-    pub fn lookup_target(
-        &self,
-        model: &str,
-        prefix_hash: u64,
-        candidates: &[election::InferenceTarget],
-    ) -> Option<election::InferenceTarget> {
-        self.prefix.lookup_target(model, prefix_hash, candidates)
-    }
-
-    pub fn learn_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
-        self.prefix.learn_target(model, prefix_hash, target);
-    }
-
-    pub fn forget_target(&self, model: &str, prefix_hash: u64, target: &election::InferenceTarget) {
-        self.prefix.forget_target(model, prefix_hash, target);
     }
 
     /// Look up a previously-classified model name for an auto-routed session.
@@ -184,6 +179,56 @@ impl AffinityRouter {
     pub fn forget_auto_model(&self, session_key: u64) {
         let mut state = self.inner.lock().unwrap();
         state.remove_auto_key(session_key);
+    }
+
+    pub(crate) fn lookup_cache_lease(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        candidates: &[election::InferenceTarget],
+    ) -> Option<election::InferenceTarget> {
+        let mut state = self.inner.lock().unwrap();
+        state.prune_cache_leases();
+        let key = CacheLeaseKey {
+            model: model.to_string(),
+            prefix_hash,
+        };
+        let target = state.cache_leases.get(&key)?.target.clone();
+        candidates.contains(&target).then_some(target)
+    }
+
+    pub(crate) fn remember_cache_lease(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        target: &election::InferenceTarget,
+    ) {
+        let mut state = self.inner.lock().unwrap();
+        state.prune_cache_leases();
+        let key = CacheLeaseKey {
+            model: model.to_string(),
+            prefix_hash,
+        };
+        state.cache_leases.insert(
+            key.clone(),
+            CacheLeaseEntry {
+                target: target.clone(),
+                expires_at: Instant::now() + CACHE_LEASE_TTL,
+            },
+        );
+        if let Some(position) = state.cache_lease_lru.iter().position(|item| item == &key) {
+            state.cache_lease_lru.remove(position);
+        }
+        state.cache_lease_lru.push_back(key);
+        while state.cache_leases.len() > CACHE_LEASE_MAX_ENTRIES {
+            if let Some(oldest) = state.cache_lease_lru.pop_front() {
+                state.cache_leases.remove(&oldest);
+            }
+        }
+    }
+
+    pub(crate) fn record_cache_probe(&self, hit: bool) {
+        self.prefix.record_cache_probe(hit);
     }
 }
 
@@ -236,6 +281,13 @@ impl AffinityState {
             self.auto_lru.remove(pos);
         }
     }
+
+    fn prune_cache_leases(&mut self) {
+        let now = Instant::now();
+        self.cache_leases.retain(|_, entry| entry.expires_at > now);
+        self.cache_lease_lru
+            .retain(|key| self.cache_leases.contains_key(key));
+    }
 }
 
 type RoutingKeys = shared_affinity::RoutingKeys;
@@ -262,6 +314,90 @@ fn routing_keys(parsed_body: Option<&Value>) -> RoutingKeys {
     )
 }
 
+pub(crate) fn cache_prefix_hash(parsed_body: Option<&Value>) -> Option<u64> {
+    routing_keys(parsed_body).prefix_hash
+}
+
+impl crate::mesh::Node {
+    /// Record only provider-confirmed local L1 reuse. A successful request with
+    /// zero cached tokens is intentionally not evidence of residency.
+    pub(crate) fn record_local_cache_hit(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        cached_tokens: u32,
+        suffix_prefill_tokens: u32,
+        queue_delay_micros: u64,
+    ) {
+        self.cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record_l1_hit(
+                model,
+                prefix_hash,
+                cached_tokens,
+                suffix_prefill_tokens,
+                queue_delay_micros,
+            );
+    }
+
+    /// Probe bounded local and peer advertisements for the exact request
+    /// prefix. Missing, expired, or malformed evidence simply preserves normal
+    /// candidate order.
+    pub(crate) async fn select_cache_target(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        candidates: &[election::InferenceTarget],
+    ) -> Option<election::InferenceTarget> {
+        let now_unix_ms = crate::mesh::current_time_unix_ms();
+        let local_salt = mesh_llm_routing::cache_inventory::rotating_salt(
+            self.endpoint.id().as_bytes(),
+            now_unix_ms,
+        );
+        let local_advertisement = self
+            .cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .advertisement(local_salt, now_unix_ms);
+        let state = self.state.lock().await;
+        let evidence: Vec<_> = candidates
+            .iter()
+            .filter_map(|target| {
+                let entry = match target {
+                    election::InferenceTarget::Local(_) => {
+                        local_advertisement.probe(model, prefix_hash, now_unix_ms)
+                    }
+                    election::InferenceTarget::Remote(peer_id) => state
+                        .peers
+                        .get(peer_id)
+                        .and_then(|peer| peer.cache_affinity.as_ref())
+                        .and_then(|advertisement| {
+                            advertisement.probe(model, prefix_hash, now_unix_ms)
+                        }),
+                    election::InferenceTarget::None => None,
+                }?;
+                Some(mesh_llm_routing::cache_aware::TargetCacheEvidence {
+                    target: target.clone(),
+                    entry,
+                })
+            })
+            .collect();
+        drop(state);
+        let mut spread_candidates = candidates.to_vec();
+        if !spread_candidates.is_empty() {
+            let offset = prefix_hash as usize % spread_candidates.len();
+            spread_candidates.rotate_left(offset);
+        }
+        let selected = mesh_llm_routing::cache_aware::select_cache_target(
+            &spread_candidates,
+            &evidence,
+            mesh_llm_routing::cache_aware::CacheAwareConfig::default(),
+        );
+        selected.map(|evidence| evidence.target)
+    }
+}
+
 /// Select an inference target for a model request from a caller-supplied candidate
 /// list instead of pulling it from `targets`. This avoids cloning the entire
 /// `ModelTargets` when the caller has already reordered the candidates (e.g. by
@@ -272,15 +408,16 @@ pub fn select_model_target_from_candidates(
     model: &str,
     parsed_body: Option<&Value>,
     affinity: &AffinityRouter,
+    cache_target: Option<election::InferenceTarget>,
 ) -> TargetSelection {
     let eligible_candidates = affinity.route_eligible_candidates(model, candidates);
     let routing = routing_keys(parsed_body);
     shared_affinity::select_model_target_from_keys(
         targets,
         &eligible_candidates,
-        model,
         &routing,
         &affinity.prefix,
+        cache_target,
     )
 }
 
@@ -292,17 +429,10 @@ pub fn prepare_remote_targets_for_request(
 ) -> PreparedTargets {
     let routing = routing_keys(parsed_body);
     let mut prepared =
-        shared_affinity::prepare_remote_targets_from_keys(model, hosts, &routing, &affinity.prefix);
+        shared_affinity::prepare_remote_targets_from_keys(hosts, &routing, &affinity.prefix, None);
 
     let eligible = affinity.route_eligible_candidates(model, &prepared.ordered);
     if eligible.len() != prepared.ordered.len() {
-        if let (Some(prefix_hash), Some(target)) =
-            (prepared.learn_prefix_hash, prepared.cached_target.as_ref())
-            && !eligible.contains(target)
-        {
-            affinity.forget_target(model, prefix_hash, target);
-            prepared.cached_target = None;
-        }
         prepared.ordered = eligible;
     }
 
@@ -336,13 +466,13 @@ mod tests {
         let target = remote(1);
         let selection: TargetSelection = TargetSelection {
             target: target.clone(),
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: None,
+            cache_target: None,
         };
         let prepared: PreparedTargets = PreparedTargets {
             ordered: vec![target],
-            learn_prefix_hash: selection.learn_prefix_hash,
-            cached_target: selection.cached_target,
+            prefix_hash: selection.prefix_hash,
+            cache_target: selection.cache_target,
         };
         assert_eq!(prepared.ordered.len(), 1);
     }
@@ -383,78 +513,23 @@ mod tests {
     }
 
     #[test]
-    fn prefix_cache_tracks_hits_misses_and_stale_candidates() {
+    fn short_cache_lease_never_returns_an_ineligible_target() {
         let affinity = AffinityRouter::with_config(true, true);
-        let cached = remote(1);
-        let available = [cached.clone()];
-
-        assert_eq!(affinity.lookup_target("qwen", 7, &available), None);
-        affinity.learn_target("qwen", 7, &cached);
-        assert_eq!(affinity.lookup_target("qwen", 7, &available), Some(cached));
-        assert_eq!(affinity.lookup_target("qwen", 7, &[remote(2)]), None);
-
-        let stats = affinity.stats_snapshot();
-        assert_eq!(stats.prefix_entries, 0);
-        assert_eq!(stats.prefix_lookups, 3);
-        assert_eq!(stats.prefix_hits, 1);
-        assert_eq!(stats.prefix_misses, 2);
-        assert_eq!(stats.prefix_stale, 1);
-        assert_eq!(stats.prefix_routes, 1);
-        assert_eq!(stats.learned, 1);
-    }
-
-    #[test]
-    fn prefix_capacity_evicts_the_least_recently_used_entry() {
-        let affinity = AffinityRouter::with_config(true, true);
-        let target = remote(1);
-        for prefix_hash in 0..=PREFIX_AFFINITY_MAX_ENTRIES as u64 {
-            affinity.learn_target("qwen", prefix_hash, &target);
-        }
-
-        let stats = affinity.stats_snapshot();
-
-        assert_eq!(stats.prefix_entries, PREFIX_AFFINITY_MAX_ENTRIES);
-        assert_eq!(stats.evicted, 1);
-        assert_eq!(affinity.lookup_target("qwen", 0, &[target]), None);
-    }
-
-    #[test]
-    fn forgetting_a_different_target_preserves_the_entry() {
-        let affinity = AffinityRouter::with_config(true, true);
-        let cached = remote(1);
-        affinity.learn_target("qwen", 13, &cached);
-
-        affinity.forget_target("qwen", 13, &remote(2));
+        let leased = remote(1);
+        affinity.remember_cache_lease(TEST_MODEL, 7, &leased);
 
         assert_eq!(
-            affinity.lookup_target("qwen", 13, std::slice::from_ref(&cached)),
-            Some(cached)
+            affinity.lookup_cache_lease(TEST_MODEL, 7, std::slice::from_ref(&leased)),
+            Some(leased)
         );
-        assert_eq!(affinity.stats_snapshot().prefix_stale, 0);
-    }
-
-    #[test]
-    fn disabled_prefix_affinity_is_side_effect_free() {
-        let affinity = AffinityRouter::with_config(false, true);
-        let target = remote(1);
-
-        affinity.learn_target("qwen", 17, &target);
         assert_eq!(
-            affinity.lookup_target("qwen", 17, std::slice::from_ref(&target)),
+            affinity.lookup_cache_lease(TEST_MODEL, 7, &[remote(2)]),
             None
         );
-        affinity.forget_target("qwen", 17, &target);
-
-        let stats = affinity.stats_snapshot();
-        assert!(!stats.prefix_enabled);
-        assert_eq!(stats.prefix_entries, 0);
-        assert_eq!(stats.prefix_lookups, 0);
-        assert_eq!(stats.prefix_stale, 0);
-        assert_eq!(stats.learned, 0);
     }
 
     #[test]
-    fn test_routing_keys_prefix_shared_across_first_user_changes() {
+    fn test_routing_keys_prefix_is_namespaced_by_first_user() {
         let req_a = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
         );
@@ -465,7 +540,7 @@ mod tests {
         let keys_a = routing_keys(Some(&req_a));
         let keys_b = routing_keys(Some(&req_b));
 
-        assert_eq!(keys_a.prefix_hash, keys_b.prefix_hash);
+        assert_ne!(keys_a.prefix_hash, keys_b.prefix_hash);
         assert_ne!(keys_a.sticky_hash, keys_b.sticky_hash);
     }
 
@@ -475,14 +550,14 @@ mod tests {
             r#"{"tools":[{"type":"function","function":{"name":"run","description":"Run a command","parameters":{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"}},"required":["path","mode"]}}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
         );
         let req_b = parse_body(
-            r#"{"tools":[{"function":{"parameters":{"required":["path","mode"],"properties":{"mode":{"type":"string"},"path":{"type":"string"}},"type":"object"},"description":"Run a command","name":"run"},"type":"function"}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug B"}]}"#,
+            r#"{"tools":[{"function":{"parameters":{"required":["path","mode"],"properties":{"mode":{"type":"string"},"path":{"type":"string"}},"type":"object"},"description":"Run a command","name":"run"},"type":"function"}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
         );
 
         let keys_a = routing_keys(Some(&req_a));
         let keys_b = routing_keys(Some(&req_b));
 
         assert_eq!(keys_a.prefix_hash, keys_b.prefix_hash);
-        assert_ne!(keys_a.sticky_hash, keys_b.sticky_hash);
+        assert_eq!(keys_a.sticky_hash, keys_b.sticky_hash);
     }
 
     #[test]
@@ -502,34 +577,22 @@ mod tests {
         let req_a = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"task A"}]}"#,
         );
-        let req_b = parse_body(
-            r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"task B"}]}"#,
-        );
-
         let candidates = targets.candidates("qwen");
-        let first = select_model_target_from_candidates(
+        let cached = election::InferenceTarget::Remote(id_b);
+        let selection = select_model_target_from_candidates(
             &targets,
             &candidates,
             "qwen",
             Some(&req_a),
             &affinity,
+            Some(cached.clone()),
         );
-        let prefix_hash = first.learn_prefix_hash.unwrap();
-        affinity.learn_target("qwen", prefix_hash, &first.target);
-
-        let second = select_model_target_from_candidates(
-            &targets,
-            &candidates,
-            "qwen",
-            Some(&req_b),
-            &affinity,
-        );
-        assert_eq!(Some(second.target.clone()), second.cached_target);
-        assert_eq!(first.target, second.target);
+        assert_eq!(selection.target, cached);
+        assert_eq!(selection.cache_target, Some(cached));
     }
 
     #[test]
-    fn test_prepare_remote_targets_prefers_cached_host() {
+    fn test_prepare_remote_targets_has_no_unverified_cache_target() {
         let id_a = make_id(1);
         let id_b = make_id(2);
         let hosts = vec![id_a, id_b];
@@ -538,22 +601,8 @@ mod tests {
             r#"{"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"task A"}]}"#,
         );
 
-        let prefix_hash = routing_keys(Some(&req)).prefix_hash.unwrap();
-        affinity.learn_target(
-            "qwen",
-            prefix_hash,
-            &election::InferenceTarget::Remote(id_b),
-        );
-
         let prepared = prepare_remote_targets_for_request("qwen", &hosts, Some(&req), &affinity);
-        assert_eq!(
-            prepared.ordered.first(),
-            Some(&election::InferenceTarget::Remote(id_b))
-        );
-        assert_eq!(
-            prepared.cached_target,
-            Some(election::InferenceTarget::Remote(id_b))
-        );
+        assert_eq!(prepared.cache_target, None);
         affinity.record_target_outcome(
             Some("qwen"),
             &election::InferenceTarget::Remote(id_b),
@@ -564,7 +613,7 @@ mod tests {
             prepared.ordered,
             vec![election::InferenceTarget::Remote(id_a)]
         );
-        assert_eq!(prepared.cached_target, None);
+        assert_eq!(prepared.cache_target, None);
     }
 
     #[test]
@@ -589,8 +638,25 @@ mod tests {
         let prepared = prepare_remote_targets_for_request("qwen", &hosts, Some(&req), &affinity);
         assert!(!prepared.ordered.contains(&cooling_target));
         assert_eq!(prepared.ordered.len(), 1);
-        assert_eq!(prepared.learn_prefix_hash, None);
-        assert_eq!(prepared.cached_target, None);
+        assert_eq!(prepared.prefix_hash, cache_prefix_hash(Some(&req)));
+        assert_eq!(prepared.cache_target, None);
+    }
+
+    #[tokio::test]
+    async fn provider_confirmed_local_hit_is_selectable() {
+        let node =
+            crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Host { http_port: 9337 })
+                .await
+                .expect("test node");
+        let candidates = vec![remote(1), election::InferenceTarget::Local(9337)];
+
+        node.record_local_cache_hit("qwen", 0xfeed_beef, 512, 24, 0);
+
+        assert_eq!(
+            node.select_cache_target("qwen", 0xfeed_beef, &candidates)
+                .await,
+            Some(election::InferenceTarget::Local(9337))
+        );
     }
 
     #[test]
@@ -749,14 +815,9 @@ mod tests {
     }
 
     #[test]
-    fn auto_model_cache_survives_forget_target_calls() {
-        // forget_target operates on prefix affinity, not the auto-model
-        // memo. A transient per-host prefix miss shouldn't flush the
-        // session's model choice.
+    fn auto_model_cache_is_independent_of_cache_evidence() {
         let affinity = AffinityRouter::new();
         affinity.remember_auto_model(7, "chat-model");
-        let target = election::InferenceTarget::Remote(make_id(5));
-        affinity.forget_target("chat-model", 0xdead_beef, &target);
         assert_eq!(
             affinity.lookup_auto_model(7),
             Some("chat-model".to_string())

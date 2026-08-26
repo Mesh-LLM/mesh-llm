@@ -454,7 +454,14 @@ fn update_translated_responses_usage(
             usage.completion_tokens,
             usage.total_tokens,
         ) {
-            state.observed_usage = Some(authoritative);
+            state.observed_usage = Some(
+                authoritative.with_cached_prompt_tokens(
+                    usage
+                        .prompt_tokens_details
+                        .as_ref()
+                        .and_then(|details| details.cached_tokens),
+                ),
+            );
         }
     }
 }
@@ -665,6 +672,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(TokenUsage {
                     prompt_tokens: Some(5),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(13),
                     total_tokens: Some(18),
                 }),
@@ -738,6 +746,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(TokenUsage {
                     prompt_tokens: Some(2),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(7),
                     total_tokens: Some(9),
                 }),

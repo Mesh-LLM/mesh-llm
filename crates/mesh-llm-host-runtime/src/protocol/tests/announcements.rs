@@ -56,6 +56,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -139,6 +140,8 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         avg_tokens_per_second_milli: 42_000,
         throughput_samples: 7,
     }];
+    let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
+    let prefix_hash = 0xfeed_beef;
     let ann = super::super::PeerAnnouncement {
         addr: iroh::EndpointAddr {
             id: peer_id,
@@ -186,6 +189,38 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 throughput_samples: 99,
             },
         ],
+        cache_affinity: Some(
+            mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+                salt,
+                epoch: 7,
+                generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+                ttl_ms: 10_000,
+                entries: vec![
+                    mesh_llm_routing::cache_inventory::CacheAffinityEntry {
+                        model: "qwen".to_string(),
+                        prefix_digest: mesh_llm_routing::cache_inventory::prefix_digest(
+                            &salt,
+                            "qwen",
+                            prefix_hash,
+                        ),
+                        matched_tokens: 512,
+                        suffix_prefill_tokens: 24,
+                        tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
+                        restore_micros: 0,
+                        queue_delay_micros: 50,
+                    },
+                    mesh_llm_routing::cache_inventory::CacheAffinityEntry {
+                        model: "ghost".to_string(),
+                        prefix_digest: [0xEE; 16],
+                        matched_tokens: 999,
+                        suffix_prefill_tokens: 0,
+                        tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
+                        restore_micros: 0,
+                        queue_delay_micros: 0,
+                    },
+                ],
+            },
+        ),
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -195,6 +230,16 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let mut proto_pa = local_ann_to_proto_ann(&ann);
     assert_eq!(proto_pa.advertised_model_throughput.len(), 1);
+    assert_eq!(
+        proto_pa
+            .cache_affinity
+            .as_ref()
+            .expect("cache evidence")
+            .entries
+            .len(),
+        1,
+        "evidence for non-routable models must be removed"
+    );
     assert_eq!(proto_pa.advertised_model_throughput[0].model_name, "qwen");
     assert_eq!(
         proto_pa.advertised_model_throughput[0].avg_tokens_per_second_milli,
@@ -214,6 +259,43 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
     assert_eq!(roundtripped.advertised_model_throughput, expected_hints);
+    assert_eq!(
+        roundtripped
+            .cache_affinity
+            .as_ref()
+            .and_then(|advertisement| advertisement.probe(
+                "qwen",
+                prefix_hash,
+                crate::mesh::current_time_unix_ms(),
+            ))
+            .map(|entry| entry.matched_tokens),
+        Some(512)
+    );
+}
+
+#[test]
+fn malformed_cache_affinity_is_dropped_at_the_gossip_boundary() {
+    let proto = crate::proto::node::PeerAnnouncement {
+        endpoint_id: SecretKey::from_bytes(&[0xAE; 32])
+            .public()
+            .as_bytes()
+            .to_vec(),
+        role: crate::proto::node::NodeRole::Host as i32,
+        serving_models: vec!["qwen".to_string()],
+        hosted_models: vec!["qwen".to_string()],
+        hosted_models_known: Some(true),
+        cache_affinity: Some(crate::proto::node::CacheAffinityAdvertisement {
+            salt: vec![1; 31],
+            epoch: 1,
+            generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+            ttl_ms: 10_000,
+            entries: Vec::new(),
+        }),
+        ..Default::default()
+    };
+
+    let (_, announcement) = proto_ann_to_local(&proto).expect("peer announcement");
+    assert!(announcement.cache_affinity.is_none());
 }
 
 #[test]
@@ -260,6 +342,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -364,6 +447,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,

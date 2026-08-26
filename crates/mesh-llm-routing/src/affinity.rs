@@ -1,14 +1,59 @@
-//! Policy-neutral prefix-affinity state and request-key routing primitives.
+//! Request-key extraction and sticky-routing primitives.
 //!
 //! Host and client runtimes intentionally keep their policy-specific wrappers
 //! in their existing `network::affinity` modules.  This module owns only the
-//! state machine and deterministic request ordering that both consumers share.
+//! deterministic fallback ordering that both consumers share. Cache-aware
+//! target selection consumes explicit evidence from [`crate::cache_aware`]; it
+//! never learns a target merely because a request succeeded.
 
-use crate::prefix_affinity::{PrefixAffinity, PrefixAffinityStats};
 use crate::{InferenceTarget, ModelTargets};
 use iroh::EndpointId;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AffinityStats {
+    pub entries: usize,
+    pub lookups: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub stale: u64,
+    pub routes: u64,
+    pub sticky_routes: u64,
+    pub session_routes: u64,
+    pub learned: u64,
+    pub evicted: u64,
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! impl_affinity_stats_snapshot {
+    ($snapshot:ty $({ $($field:ident: $value:expr),+ $(,)? })?) => {
+        impl $snapshot {
+            fn from_affinity_stats(
+                stats: $crate::affinity::AffinityStats,
+                cache_enabled: bool,
+                sticky_enabled: bool,
+            ) -> Self {
+                Self {
+                    prefix_enabled: cache_enabled,
+                    sticky_enabled,
+                    prefix_entries: stats.entries,
+                    prefix_lookups: stats.lookups,
+                    prefix_hits: stats.hits,
+                    prefix_misses: stats.misses,
+                    prefix_stale: stats.stale,
+                    prefix_routes: stats.routes,
+                    sticky_routes: stats.sticky_routes,
+                    session_routes: stats.session_routes,
+                    learned: stats.learned,
+                    evicted: stats.evicted,
+                    $($($field: $value),+)?
+                }
+            }
+        }
+    };
+}
 
 /// Request-derived hashes used by prefix and sticky routing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,10 +66,10 @@ pub struct RoutingKeys {
     pub sticky_hash: Option<u64>,
 }
 
-/// Shared prefix-affinity state used by host and client wrappers.
+/// Shared cache-affinity counters and sticky-routing configuration.
 #[derive(Clone)]
 pub struct AffinityRouter {
-    inner: Arc<Mutex<PrefixAffinity<InferenceTarget>>>,
+    inner: Arc<Mutex<AffinityStats>>,
     config: Arc<AffinityConfig>,
 }
 
@@ -47,7 +92,7 @@ impl AffinityRouter {
     #[doc(hidden)]
     pub fn with_config(prefix_enabled: bool, sticky_enabled: bool) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(PrefixAffinity::default())),
+            inner: Arc::new(Mutex::new(AffinityStats::default())),
             config: Arc::new(AffinityConfig {
                 prefix_enabled,
                 sticky_enabled,
@@ -56,8 +101,8 @@ impl AffinityRouter {
     }
 
     /// Return the current prefix-affinity counters and resident-entry count.
-    pub fn stats_snapshot(&self) -> PrefixAffinityStats {
-        self.inner.lock().unwrap().snapshot()
+    pub fn stats_snapshot(&self) -> AffinityStats {
+        self.inner.lock().unwrap().clone()
     }
 
     /// Whether prefix affinity is enabled for this state.
@@ -72,47 +117,26 @@ impl AffinityRouter {
 
     /// Record a deterministic sticky route.
     pub fn record_sticky_route(&self) {
-        self.inner.lock().unwrap().record_sticky_route();
+        self.inner.lock().unwrap().sticky_routes += 1;
     }
 
     /// Record a session-hint route.
     pub fn record_session_route(&self) {
-        self.inner.lock().unwrap().record_session_route();
+        self.inner.lock().unwrap().session_routes += 1;
     }
 
-    /// Look up a cached target when it is still among the caller's candidates.
-    pub fn lookup_target(
-        &self,
-        model: &str,
-        prefix_hash: u64,
-        candidates: &[InferenceTarget],
-    ) -> Option<InferenceTarget> {
-        if !self.config.prefix_enabled {
-            return None;
-        }
-        self.inner
-            .lock()
-            .unwrap()
-            .lookup(model, prefix_hash, candidates)
-    }
-
-    /// Learn a target for a prompt scaffold.
-    pub fn learn_target(&self, model: &str, prefix_hash: u64, target: &InferenceTarget) {
-        if !self.config.prefix_enabled || matches!(target, InferenceTarget::None) {
-            return;
-        }
-        self.inner.lock().unwrap().learn(model, prefix_hash, target);
-    }
-
-    /// Forget a target only when it is the target currently cached for a key.
-    pub fn forget_target(&self, model: &str, prefix_hash: u64, target: &InferenceTarget) {
+    pub fn record_cache_probe(&self, hit: bool) {
         if !self.config.prefix_enabled {
             return;
         }
-        self.inner
-            .lock()
-            .unwrap()
-            .forget(model, prefix_hash, target);
+        let mut stats = self.inner.lock().unwrap();
+        stats.lookups += 1;
+        if hit {
+            stats.hits += 1;
+            stats.routes += 1;
+        } else {
+            stats.misses += 1;
+        }
     }
 }
 
@@ -126,20 +150,20 @@ impl Default for AffinityRouter {
 pub struct TargetSelection {
     /// Target selected for this request.
     pub target: InferenceTarget,
-    /// Prefix key to learn after a successful request.
-    pub learn_prefix_hash: Option<u64>,
-    /// Cached target used for this request, when one was available.
-    pub cached_target: Option<InferenceTarget>,
+    /// Request prefix key used to query cache evidence.
+    pub prefix_hash: Option<u64>,
+    /// Cache-evidence target used for this request, when one was available.
+    pub cache_target: Option<InferenceTarget>,
 }
 
-/// Remote-target ordering and prefix-learning metadata.
+/// Remote-target ordering and cache-evidence metadata.
 pub struct PreparedTargets {
     /// Targets in request order.
     pub ordered: Vec<InferenceTarget>,
-    /// Prefix key to learn after a successful request.
-    pub learn_prefix_hash: Option<u64>,
-    /// Cached target used for this request, when one was available.
-    pub cached_target: Option<InferenceTarget>,
+    /// Request prefix key used to query cache evidence.
+    pub prefix_hash: Option<u64>,
+    /// Cache-evidence target moved first, when one was available.
+    pub cache_target: Option<InferenceTarget>,
 }
 
 /// Whether prefix-only routing has been requested by the process.
@@ -167,20 +191,25 @@ pub fn routing_keys(
 
     let session_hash = extract_session_hint_from_body(body, session_hint_keys)
         .map(|hint| hash_bytes(hint.as_bytes()));
-    let prefix_hash = scaffold_prefix_hash_from_body(body, prefix_fallback_to_first_user);
-    let sticky_hash = session_hash.or_else(|| {
+    let scaffold_hash = scaffold_prefix_hash_from_body(body, prefix_fallback_to_first_user);
+    let first_user_hash = first_user_hash_from_body(body);
+    // Namespace evidence by an explicit session hint when present. Otherwise
+    // combine scaffold and first-user hashes so unrelated requests with the
+    // same tools cannot claim one another's cache receipt.
+    let prefix_hash = session_hash.or_else(|| {
         let mut hash = 0u64;
         let mut found = false;
-        if let Some(prefix_hash) = prefix_hash {
-            hash = hash_combine(hash, prefix_hash);
+        if let Some(scaffold_hash) = scaffold_hash {
+            hash = hash_combine(hash, scaffold_hash);
             found = true;
         }
-        if let Some(user_hash) = first_user_hash_from_body(body) {
+        if let Some(user_hash) = first_user_hash {
             hash = hash_combine(hash, user_hash);
             found = true;
         }
         found.then_some(hash)
     });
+    let sticky_hash = session_hash.or(prefix_hash);
 
     RoutingKeys {
         session_hash,
@@ -256,33 +285,38 @@ pub fn first_user_hash_from_body(body: &Value) -> Option<u64> {
 pub fn select_model_target_from_keys(
     targets: &ModelTargets,
     candidates: &[InferenceTarget],
-    model: &str,
     routing: &RoutingKeys,
     affinity: &AffinityRouter,
+    cache_target: Option<InferenceTarget>,
 ) -> TargetSelection {
+    if affinity.prefix_enabled()
+        && let Some(target) = cache_target.filter(|target| candidates.contains(target))
+    {
+        affinity.record_cache_probe(true);
+        return TargetSelection {
+            target: target.clone(),
+            prefix_hash: routing.prefix_hash,
+            cache_target: Some(target),
+        };
+    }
+    if routing.prefix_hash.is_some() {
+        affinity.record_cache_probe(false);
+    }
     if let Some(session_hash) = routing.session_hash.filter(|_| affinity.sticky_enabled()) {
         affinity.record_session_route();
         return TargetSelection {
             target: ModelTargets::pick_sticky_from(candidates, session_hash),
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: routing.prefix_hash,
+            cache_target: None,
         };
     }
 
     if let Some(prefix_hash) = routing.prefix_hash {
-        if let Some(target) = affinity.lookup_target(model, prefix_hash, candidates) {
-            return TargetSelection {
-                target: target.clone(),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: Some(target),
-            };
-        }
-
         if prefix_only_enabled() {
             return TargetSelection {
                 target: ModelTargets::pick_sticky_from(candidates, prefix_hash),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: None,
+                prefix_hash: Some(prefix_hash),
+                cache_target: None,
             };
         }
 
@@ -290,15 +324,15 @@ pub fn select_model_target_from_keys(
             affinity.record_sticky_route();
             return TargetSelection {
                 target: ModelTargets::pick_sticky_from(candidates, sticky_hash),
-                learn_prefix_hash: Some(prefix_hash),
-                cached_target: None,
+                prefix_hash: Some(prefix_hash),
+                cache_target: None,
             };
         }
 
         return TargetSelection {
             target: targets.pick_from(candidates),
-            learn_prefix_hash: Some(prefix_hash),
-            cached_target: None,
+            prefix_hash: Some(prefix_hash),
+            cache_target: None,
         };
     }
 
@@ -306,46 +340,52 @@ pub fn select_model_target_from_keys(
         affinity.record_sticky_route();
         return TargetSelection {
             target: ModelTargets::pick_sticky_from(candidates, sticky_hash),
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: None,
+            cache_target: None,
         };
     }
 
     TargetSelection {
         target: targets.pick_from(candidates),
-        learn_prefix_hash: None,
-        cached_target: None,
+        prefix_hash: None,
+        cache_target: None,
     }
 }
 
 /// Prepare remote targets after the consumer has derived request keys.
 pub fn prepare_remote_targets_from_keys(
-    model: &str,
     hosts: &[EndpointId],
     routing: &RoutingKeys,
     affinity: &AffinityRouter,
+    cache_target: Option<InferenceTarget>,
 ) -> PreparedTargets {
     let mut ordered: Vec<InferenceTarget> =
         hosts.iter().copied().map(InferenceTarget::Remote).collect();
-    let mut cached_target = None;
-    let mut learn_prefix_hash = None;
+    let mut cache_target = cache_target.filter(|target| ordered.contains(target));
 
+    if affinity.prefix_enabled()
+        && let Some(target) = cache_target.as_ref()
+    {
+        affinity.record_cache_probe(true);
+        move_target_first(&mut ordered, target);
+        return PreparedTargets {
+            ordered,
+            prefix_hash: routing.prefix_hash,
+            cache_target,
+        };
+    }
     if let Some(session_hash) = routing.session_hash.filter(|_| affinity.sticky_enabled()) {
         affinity.record_session_route();
         rotate_targets_by_hash(&mut ordered, session_hash);
         return PreparedTargets {
             ordered,
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: routing.prefix_hash,
+            cache_target: None,
         };
     }
 
     if let Some(prefix_hash) = routing.prefix_hash {
-        learn_prefix_hash = Some(prefix_hash);
-        if let Some(target) = affinity.lookup_target(model, prefix_hash, &ordered) {
-            move_target_first(&mut ordered, &target);
-            cached_target = Some(target);
-        } else if prefix_only_enabled() {
+        if prefix_only_enabled() {
             rotate_targets_by_hash(&mut ordered, prefix_hash);
         } else if let Some(sticky_hash) = routing.sticky_hash.filter(|_| affinity.sticky_enabled())
         {
@@ -359,8 +399,8 @@ pub fn prepare_remote_targets_from_keys(
 
     PreparedTargets {
         ordered,
-        learn_prefix_hash,
-        cached_target,
+        prefix_hash: routing.prefix_hash,
+        cache_target: cache_target.take(),
     }
 }
 
@@ -504,10 +544,11 @@ mod tests {
             .prefix_hash
             .is_some()
         );
-        assert_eq!(
-            routing_keys(Some(&user_only), &["user", "session_id"], false).prefix_hash,
-            None,
-            "client keeps its user-only scaffold compatibility"
+        assert!(
+            routing_keys(Some(&user_only), &["user", "session_id"], false)
+                .prefix_hash
+                .is_some(),
+            "the cache namespace includes the first user turn even when the raw scaffold is empty"
         );
     }
 
@@ -527,11 +568,17 @@ mod tests {
         );
         let affinity = AffinityRouter::with_config(true, true);
         let candidates = targets.candidates("qwen");
-        let first = select_model_target_from_keys(&targets, &candidates, "qwen", &keys, &affinity);
-        affinity.learn_target("qwen", keys.prefix_hash.unwrap(), &first.target);
-        let second = select_model_target_from_keys(&targets, &candidates, "qwen", &keys, &affinity);
+        let cached = remote(2);
+        let selection = select_model_target_from_keys(
+            &targets,
+            &candidates,
+            &keys,
+            &affinity,
+            Some(cached.clone()),
+        );
 
-        assert_eq!(second.cached_target, Some(first.target));
+        assert_eq!(selection.target, cached);
+        assert_eq!(selection.cache_target, Some(cached));
     }
 
     #[test]
@@ -547,11 +594,11 @@ mod tests {
         );
         let affinity = AffinityRouter::with_config(true, true);
         let cached = remote(2);
-        affinity.learn_target("qwen", keys.prefix_hash.unwrap(), &cached);
 
-        let prepared = prepare_remote_targets_from_keys("qwen", &hosts, &keys, &affinity);
+        let prepared =
+            prepare_remote_targets_from_keys(&hosts, &keys, &affinity, Some(cached.clone()));
 
         assert_eq!(prepared.ordered.first(), Some(&cached));
-        assert_eq!(prepared.cached_target, Some(cached));
+        assert_eq!(prepared.cache_target, Some(cached));
     }
 }

@@ -10,6 +10,8 @@ use super::identifiers::AttemptId;
 pub struct TokenUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,9 +37,15 @@ impl TokenUsage {
         }
         Some(Self {
             prompt_tokens: Some(prompt_tokens),
+            cached_prompt_tokens: None,
             completion_tokens: Some(completion_tokens),
             total_tokens: Some(total_tokens),
         })
+    }
+
+    pub fn with_cached_prompt_tokens(mut self, cached_prompt_tokens: Option<u64>) -> Self {
+        self.cached_prompt_tokens = cached_prompt_tokens;
+        self
     }
 }
 

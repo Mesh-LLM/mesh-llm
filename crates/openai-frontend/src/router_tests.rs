@@ -195,6 +195,7 @@ fn assert_stream_terminal_usage(
                 status_code: 200,
                 usage: TokenUsage {
                     prompt_tokens: Some(prompt),
+                    cached_prompt_tokens: _,
                     completion_tokens: Some(completion),
                     total_tokens: Some(total),
                 },
@@ -938,6 +939,7 @@ async fn chat_completion_lifecycle_reports_authoritative_usage() {
                 status_code: 200,
                 usage: TokenUsage {
                     prompt_tokens: Some(3),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(2),
                     total_tokens: Some(5),
                 },

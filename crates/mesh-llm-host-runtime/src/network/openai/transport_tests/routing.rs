@@ -45,6 +45,7 @@ fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::Peer
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         display_rtt: None,
         selected_path: None,
         propagated_latency: None,

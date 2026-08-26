@@ -648,6 +648,7 @@ fn make_test_peer(
         stage_status_list_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,

@@ -47,6 +47,7 @@ async fn export_is_deterministic_capped_metadata_only_and_audited() {
             duration_ms: Some(9),
             usage: Some(mesh_llm_events::logging::events::TokenUsage {
                 prompt_tokens: Some(8),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(3),
                 total_tokens: Some(11),
             }),

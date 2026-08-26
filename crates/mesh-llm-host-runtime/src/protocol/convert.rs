@@ -476,7 +476,31 @@ pub(crate) fn sanitize_gossip_announcement_for_wire(ann: &PeerAnnouncement) -> P
     sanitized.available_model_metadata.clear();
     sanitized.available_model_sizes.clear();
     sanitized.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&sanitized);
+    sanitized.cache_affinity = sanitize_cache_affinity_for_ann(&sanitized);
     sanitized
+}
+
+fn sanitize_cache_affinity_for_ann(
+    ann: &PeerAnnouncement,
+) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
+    let routable = routable_model_names(ann);
+    let mut advertisement = ann.cache_affinity.clone()?;
+    if advertisement.ttl_ms == 0
+        || advertisement.ttl_ms
+            > u32::try_from(mesh_llm_routing::cache_inventory::CACHE_AFFINITY_TTL.as_millis())
+                .unwrap_or(u32::MAX)
+    {
+        return None;
+    }
+    advertisement.entries.retain(|entry| {
+        entry.matched_tokens > 0
+            && entry.tier == mesh_llm_routing::cache_inventory::CacheTier::L1
+            && routable.contains(&entry.model)
+    });
+    advertisement
+        .entries
+        .truncate(mesh_llm_routing::cache_inventory::CACHE_AFFINITY_MAX_ENTRIES);
+    Some(advertisement)
 }
 
 fn routable_model_names(ann: &PeerAnnouncement) -> HashSet<String> {
@@ -555,6 +579,87 @@ fn proto_throughput_hint_to_local(
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
     }
+}
+
+fn local_cache_affinity_to_proto(
+    advertisement: &mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement,
+) -> crate::proto::node::CacheAffinityAdvertisement {
+    crate::proto::node::CacheAffinityAdvertisement {
+        salt: advertisement.salt.to_vec(),
+        epoch: advertisement.epoch,
+        generated_at_unix_ms: advertisement.generated_at_unix_ms,
+        ttl_ms: advertisement.ttl_ms,
+        entries: advertisement
+            .entries
+            .iter()
+            .map(|entry| crate::proto::node::CacheAffinityEntry {
+                model_name: entry.model.clone(),
+                prefix_digest: entry.prefix_digest.to_vec(),
+                matched_tokens: entry.matched_tokens,
+                suffix_prefill_tokens: entry.suffix_prefill_tokens,
+                tier: match entry.tier {
+                    mesh_llm_routing::cache_inventory::CacheTier::L1 => {
+                        crate::proto::node::CacheTier::L1 as i32
+                    }
+                    mesh_llm_routing::cache_inventory::CacheTier::L3 => {
+                        crate::proto::node::CacheTier::L3 as i32
+                    }
+                },
+                restore_micros: entry.restore_micros,
+                queue_delay_micros: entry.queue_delay_micros,
+            })
+            .collect(),
+    }
+}
+
+fn proto_cache_affinity_to_local(
+    advertisement: &crate::proto::node::CacheAffinityAdvertisement,
+) -> Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement> {
+    use mesh_llm_routing::cache_inventory::{
+        CACHE_AFFINITY_DIGEST_BYTES, CACHE_AFFINITY_MAX_ENTRIES, CACHE_AFFINITY_SALT_BYTES,
+        CACHE_AFFINITY_TTL, CacheAffinityAdvertisement, CacheAffinityEntry, CacheTier,
+    };
+
+    let salt: [u8; CACHE_AFFINITY_SALT_BYTES] = advertisement.salt.as_slice().try_into().ok()?;
+    let max_ttl_ms = u32::try_from(CACHE_AFFINITY_TTL.as_millis()).unwrap_or(u32::MAX);
+    if advertisement.ttl_ms == 0
+        || advertisement.ttl_ms > max_ttl_ms
+        || advertisement.entries.len() > CACHE_AFFINITY_MAX_ENTRIES
+    {
+        return None;
+    }
+    let entries = advertisement
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            if entry.model_name.is_empty()
+                || entry.model_name.len() > MAX_REMOTE_MODEL_NAME_BYTES
+                || entry.matched_tokens == 0
+                || crate::proto::node::CacheTier::try_from(entry.tier).ok()?
+                    != crate::proto::node::CacheTier::L1
+            {
+                return None;
+            }
+            let prefix_digest: [u8; CACHE_AFFINITY_DIGEST_BYTES] =
+                entry.prefix_digest.as_slice().try_into().ok()?;
+            Some(CacheAffinityEntry {
+                model: entry.model_name.clone(),
+                prefix_digest,
+                matched_tokens: entry.matched_tokens,
+                suffix_prefill_tokens: entry.suffix_prefill_tokens,
+                tier: CacheTier::L1,
+                restore_micros: 0,
+                queue_delay_micros: entry.queue_delay_micros,
+            })
+        })
+        .collect();
+    Some(CacheAffinityAdvertisement {
+        salt,
+        epoch: advertisement.epoch,
+        generated_at_unix_ms: advertisement.generated_at_unix_ms,
+        ttl_ms: advertisement.ttl_ms,
+        entries,
+    })
 }
 
 pub(crate) fn local_ann_to_proto_ann(
@@ -699,6 +804,10 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.stage_status_list_supported,
         ),
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
+        cache_affinity: ann
+            .cache_affinity
+            .as_ref()
+            .map(local_cache_affinity_to_proto),
     }
 }
 
@@ -930,9 +1039,14 @@ pub(crate) fn proto_ann_to_local(
         inference_admission_state: pa
             .inference_admission_state
             .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
+        cache_affinity: pa
+            .cache_affinity
+            .as_ref()
+            .and_then(proto_cache_affinity_to_local),
     };
     crate::mesh::backfill_legacy_descriptors(&mut ann);
     ann.advertised_model_throughput = sanitize_model_throughput_hints_for_ann(&ann);
+    ann.cache_affinity = sanitize_cache_affinity_for_ann(&ann);
     Some((addr, ann))
 }
 
