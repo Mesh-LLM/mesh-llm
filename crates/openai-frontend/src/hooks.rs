@@ -235,10 +235,14 @@ pub enum ChatCompletionOutcome<'a> {
 /// is dropped mid-flight (an outer request timeout, or the client
 /// disconnecting) before it can report success/error itself.
 ///
-/// [`Self::fire`] is the normal path: it marks the guard fired *before*
-/// awaiting the hook, then calls it. If the caller instead drops the guard
-/// without calling `fire` — because the enclosing future was cancelled —
-/// [`Drop::drop`] spawns the terminal call with
+/// [`Self::fire`] is the normal path: it awaits the hook, then marks the
+/// guard fired. If `fire`'s future is itself dropped mid-await (the
+/// enclosing future was cancelled while the hook call was in flight) the
+/// guard is still unfired, so [`Drop::drop`] below still fires the terminal
+/// callback — exactly one call either way. If the caller instead drops the
+/// guard without calling `fire` at all — because the enclosing future was
+/// cancelled before `fire` was even invoked — [`Drop::drop`] spawns the
+/// terminal call with
 /// [`ChatCompletionOutcome::Cancelled`] so it still happens, just detached
 /// from (and unable to block) whatever cancelled the original future.
 struct TerminalGuard {
@@ -263,10 +267,10 @@ impl TerminalGuard {
     }
 
     async fn fire(mut self, outcome: &ChatCompletionOutcome<'_>) {
-        self.fired = true;
         self.hooks
             .on_chat_completion_terminal(&self.request, &self.exchange_id, outcome)
             .await;
+        self.fired = true;
     }
 }
 
@@ -275,10 +279,19 @@ impl Drop for TerminalGuard {
         if self.fired {
             return;
         }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No runtime to spawn onto — this only happens at process/runtime
+            // teardown, where a detached terminal callback would be moot anyway.
+            tracing::debug!(
+                exchange_id = %self.exchange_id,
+                "TerminalGuard dropped outside a Tokio runtime; skipping terminal callback"
+            );
+            return;
+        };
         let hooks = self.hooks.clone();
         let request = std::mem::take(&mut self.request);
         let exchange_id = std::mem::take(&mut self.exchange_id);
-        tokio::spawn(async move {
+        handle.spawn(async move {
             hooks
                 .on_chat_completion_terminal(
                     &request,
@@ -1199,6 +1212,86 @@ mod tests {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "terminal event never fired after the backend future was dropped"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::Cancelled]);
+    }
+
+    /// A policy whose terminal hook hangs forever on a `Success` outcome
+    /// (after signalling `started`), but records `Cancelled` immediately.
+    /// This lets a test park the exchange future *inside* `TerminalGuard::fire`'s
+    /// await — the window Finding A's fix targets — rather than only before
+    /// `fire` is ever called.
+    #[derive(Default)]
+    struct HangOnTerminalPolicy {
+        started: tokio::sync::Notify,
+        terminals: Mutex<Vec<TerminalRecord>>,
+    }
+
+    #[async_trait]
+    impl OpenAiHookPolicy for HangOnTerminalPolicy {
+        async fn on_chat_completion_terminal(
+            &self,
+            _request: &ChatCompletionRequest,
+            _exchange_id: &str,
+            outcome: &ChatCompletionOutcome<'_>,
+        ) {
+            match outcome {
+                ChatCompletionOutcome::Success { .. } => {
+                    self.started.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                ChatCompletionOutcome::Cancelled => {
+                    self.terminals.lock().unwrap().push(TerminalRecord::Cancelled);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Reproduces Finding A: `TerminalGuard::fire` used to set `fired = true`
+    /// *before* awaiting the terminal hook. If the exchange future is
+    /// dropped while that await is still pending (client disconnects right
+    /// as the backend returns), the in-flight `fire` call is interrupted
+    /// *and* `fired` was already `true`, so `Drop` no-ops too — the exchange
+    /// gets zero terminal events. With `fired` set only after the await
+    /// completes, `Drop` still sees `fired == false` in this window and
+    /// fires the `Cancelled` fallback, so the exchange still gets exactly
+    /// one.
+    #[tokio::test]
+    async fn cancelling_during_the_terminal_hook_await_still_fires_exactly_one_terminal_event() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let policy = Arc::new(HangOnTerminalPolicy::default());
+        let hooked = Arc::new(HookedOpenAiBackend::new(backend, policy.clone()));
+
+        let hooked_for_task = hooked.clone();
+        let handle = tokio::spawn(async move {
+            hooked_for_task
+                .chat_completion(request_for("gpt-mesh"))
+                .await
+        });
+
+        // Wait until the backend has returned and `fire()` has started
+        // awaiting the terminal hook (which then hangs), then cancel the
+        // exchange the way an outer timeout or client disconnect would —
+        // this is the mid-`fire`-await drop Finding A is about.
+        policy.started.notified().await;
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !policy.terminals.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "terminal event never fired after cancelling mid-terminal-hook-await"
             );
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
