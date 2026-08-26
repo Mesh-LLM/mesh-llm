@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import http.client
 import json
+import math
 import os
 import socket
 import statistics
@@ -352,9 +353,11 @@ def launch_cell(
         "128",
         "--openai-prefill-adaptive-max",
         "384",
-        "--openai-prefill-adaptive-target-ms",
-        "100",
     ]
+    if version == "new":
+        stage0_command.extend(
+            ["--openai-prefill-adaptive-target-ms", str(args.adaptive_target_ms)]
+        )
     stage0 = None
     stage1 = None
     with stage0_log_path.open("w") as stage0_log, stage1_log_path.open("w") as stage1_log:
@@ -538,11 +541,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--activation-width", type=int, default=2048)
     parser.add_argument("--activation-wire-dtype", default="f16")
     parser.add_argument("--n-gpu-layers", type=int, default=999)
+    parser.add_argument("--adaptive-target-ms", type=float, default=100.0)
     parser.add_argument("--startup-timeout-secs", type=float, default=900)
     parser.add_argument("--request-timeout-secs", type=float, default=900)
     args = parser.parse_args()
-    if args.rounds <= 0 or args.requests <= 0 or args.prompt_blocks <= 0:
-        parser.error("rounds, requests, and prompt-blocks must be positive")
+    if (
+        args.rounds <= 0
+        or args.requests <= 0
+        or args.prompt_blocks <= 0
+        or not math.isfinite(args.adaptive_target_ms)
+        or args.adaptive_target_ms <= 0
+    ):
+        parser.error(
+            "rounds, requests, prompt-blocks, and adaptive-target-ms must be positive"
+        )
     if args.split_layer <= 0 or args.split_layer >= args.layer_end:
         parser.error("split-layer must be within the model layer range")
     for name in ("old_binary", "new_binary", "model"):
@@ -592,7 +604,13 @@ def main() -> int:
             "ctx_size": args.ctx_size,
             "split": [0, args.split_layer, args.layer_end],
             "cache": "disabled",
-            "prefill_policy": "adaptive-ramp: start=128, step=128, max=384, target_ms=100",
+            "prefill_policy": {
+                "old": "adaptive-ramp: start=128, step=128, max=384",
+                "new": (
+                    "adaptive-ramp: start=128, step=128, max=384, "
+                    f"target_ms={args.adaptive_target_ms:g}"
+                ),
+            },
         },
         "cells": cells,
         "aggregate": {
