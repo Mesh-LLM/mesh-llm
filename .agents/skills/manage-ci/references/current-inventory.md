@@ -418,9 +418,16 @@ permission.
 ## Providers and variables
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
-`windows-2022`. Central policy also exposes the Xcode 27-capable `macos27`
+`windows-2022`. Central policy also exposes the GitHub-hosted `xcode-27`
 label as `runner_macos_apple` for the follow-on Apple-provider platform row;
-this prerequisite does not route an existing row to it. Depot labels are
+this prerequisite does not route an existing row to it. That image is an
+Xcode 27 toolchain lane: today it runs a macOS 26.5 host with the macOS 27
+SDK (actions/runner-images#14404), so the output names the Xcode capability,
+not a macOS 27 host OS. Rows that need an actual macOS 27 host must wait for
+a host image (GitHub or Depot) that provides one — Depot's current
+`depot-macos-26` tops out at macOS 26/Xcode 26.6. #1444 must assert
+`sw_vers`, `xcodebuild -version`, and the selected SDK before doing work, and
+decide compile-only vs test accordingly. Depot labels are
 selected only by `select-ci-runners`; no workflow accepts a raw provider label.
 Trusted main Linux requires
 `DEPOT_RUNNERS_ENABLED=true`. An exact same-repository PR revision may use the

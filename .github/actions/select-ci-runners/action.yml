@@ -291,7 +291,7 @@ runs:
           runner_macos=macos-15
           runner_windows=windows-2022
         fi
-        runner_macos_apple=macos27
+        runner_macos_apple=xcode-27
 
         {
           echo "depot_enabled=$depot_enabled"
