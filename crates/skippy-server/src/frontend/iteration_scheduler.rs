@@ -837,7 +837,9 @@ impl SchedulerWorker {
             return;
         }
 
+        let execution_started = Instant::now();
         let result = self.execute_plan(&plan);
+        let execution_elapsed = execution_started.elapsed();
         let predicted = match result {
             Ok(predicted) => predicted,
             Err(error) => {
@@ -845,6 +847,8 @@ impl SchedulerWorker {
                 return;
             }
         };
+        self.scheduler
+            .observe_iteration_duration(&plan, execution_elapsed);
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
         self.emit_step_telemetry(&step, iteration_started.elapsed());
