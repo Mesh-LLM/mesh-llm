@@ -109,6 +109,10 @@ pub struct TopologyNode {
     /// Sustained fp16 compute in GFLOP/s, measured and gossiped. Secondary
     /// signal (decode is usually memory-bound); `None` = unreported.
     pub sustained_compute_gflop_per_s: Option<u32>,
+    /// Observed steady-decode runtime work, normalized per loaded layer.
+    /// When present, the planner uses it as a measured floor on the
+    /// analytical weight-streaming service-time estimate.
+    pub observed_decode_us_per_layer: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -358,6 +362,7 @@ struct UsableNode {
     stage_transfer_latency_ms: Option<u32>,
     sustained_mem_bandwidth_mib_per_s: Option<u32>,
     sustained_compute_gflop_per_s: Option<u32>,
+    observed_decode_us_per_layer: Option<u64>,
 }
 
 fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
@@ -374,6 +379,7 @@ fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
                 sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
                 sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: node.observed_decode_us_per_layer,
             }
         })
         .collect::<Vec<_>>();
@@ -841,20 +847,23 @@ fn modeled_serial_decode_tpot_us(
     // used (scaled by the active weight fraction for MoE models); `None`
     // if any node lacks a bandwidth signal.
     let layer_weights = streamed_layer_weight_bytes(input);
-    let node_bandwidth = |node_id: &str| -> Option<u32> {
-        input
-            .nodes
-            .iter()
-            .find(|node| node.node_id == node_id)
-            .and_then(|node| node.sustained_mem_bandwidth_mib_per_s)
-            .filter(|bw| *bw > 0)
-    };
     let mut total_us = 0u128;
     for stage in stages {
-        let bandwidth = node_bandwidth(&stage.node_id)?;
+        let node = input
+            .nodes
+            .iter()
+            .find(|node| node.node_id == stage.node_id)?;
+        let bandwidth = node
+            .sustained_mem_bandwidth_mib_per_s
+            .filter(|bw| *bw > 0)?;
         let range = stage.layer_start as usize..stage.layer_end as usize;
         let weight_bytes: u64 = layer_weights.get(range.clone()).map_or(0, sum_u64);
-        total_us += modeled_stage_time_us_from(bandwidth, weight_bytes);
+        total_us += modeled_stage_time_us_from(
+            bandwidth,
+            weight_bytes,
+            node.observed_decode_us_per_layer,
+            u64::from(stage.layer_end.saturating_sub(stage.layer_start)),
+        );
         total_us += CALIBRATED_PER_STAGE_OVERHEAD_US;
     }
     // Hop times: reuse the edge model's per-hop accounting (RTT +
@@ -932,8 +941,17 @@ fn modeled_serial_decode_tpot_us(
 
 /// Weight-streaming time in microseconds for `weight_bytes` at
 /// `bandwidth_mib_per_s` (bytes × 1e6 / (MiB/s × 2^20)).
-fn modeled_stage_time_us_from(bandwidth_mib_per_s: u32, weight_bytes: u64) -> u128 {
-    u128::from(weight_bytes) * 1_000_000 / (u128::from(bandwidth_mib_per_s) * 1_048_576)
+fn modeled_stage_time_us_from(
+    bandwidth_mib_per_s: u32,
+    weight_bytes: u64,
+    observed_us_per_layer: Option<u64>,
+    layer_count: u64,
+) -> u128 {
+    let analytical =
+        u128::from(weight_bytes) * 1_000_000 / (u128::from(bandwidth_mib_per_s) * 1_048_576);
+    let observed = u128::from(observed_us_per_layer.unwrap_or_default())
+        .saturating_mul(u128::from(layer_count));
+    analytical.max(observed)
 }
 
 fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
@@ -1013,14 +1031,17 @@ fn recurrent_bytes_by_layer(input: &TopologyPlanningInput) -> Vec<u64> {
 /// Modeled per-stage decode service time in microseconds, using the dominant
 /// term for quantized decode: streaming the stage's weights from memory.
 /// Integer microseconds keep candidate comparisons deterministic.
-fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64) -> Option<u128> {
-    let bandwidth = u128::from(node.sustained_mem_bandwidth_mib_per_s?);
+fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64, layer_count: usize) -> Option<u128> {
+    let bandwidth = node.sustained_mem_bandwidth_mib_per_s?;
     if bandwidth == 0 {
         return None;
     }
-    // bytes / (MiB/s) = seconds: convert MiB→bytes in the denominator and
-    // scale seconds→microseconds in the numerator.
-    Some(u128::from(weight_bytes) * 1_000_000 / (bandwidth * 1_048_576))
+    Some(modeled_stage_time_us_from(
+        bandwidth,
+        weight_bytes,
+        node.observed_decode_us_per_layer,
+        layer_count as u64,
+    ))
 }
 
 /// Performance-aware contiguous span assignment via DP over layer boundaries.
@@ -1077,7 +1098,7 @@ fn perf_balanced_spans(
                 if boundary == 0 {
                     continue;
                 }
-                if let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?) {
+                if let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?, boundary) {
                     let fits = prefix_required[boundary] <= u128::from(node.usable_vram_bytes);
                     if fits {
                         dp[0][boundary] = (time, time, 0);
@@ -1098,7 +1119,9 @@ fn perf_balanced_spans(
                     continue;
                 }
                 let weight = prefix_weights[boundary] - prefix_weights[previous];
-                let Some(time) = modeled_stage_time_us(node, weight.try_into().ok()?) else {
+                let Some(time) =
+                    modeled_stage_time_us(node, weight.try_into().ok()?, boundary - previous)
+                else {
                     continue;
                 };
                 let required = prefix_required[boundary] - prefix_required[previous];
@@ -1177,6 +1200,7 @@ mod tests {
             stage_transfer_latency_ms: None,
             sustained_mem_bandwidth_mib_per_s: None,
             sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
         }
     }
 
@@ -1363,6 +1387,36 @@ mod tests {
             "fast node should receive roughly 2x the layers: fast={} slow={}",
             fast_stage.layer_end - fast_stage.layer_start,
             slow_stage.layer_end - slow_stage.layer_start
+        );
+    }
+
+    #[test]
+    fn observed_stage_timing_corrects_analytical_span_balance() {
+        let fast = perf_node("fast", 48, 400_000);
+        let mut slow = perf_node("slow", 48, 400_000);
+        // Both nodes advertise identical bandwidth, but live decode shows
+        // that the second runtime takes substantially longer per layer.
+        slow.observed_decode_us_per_layer = Some(10_000);
+        let mut planning = input(vec![fast, slow]);
+        planning.minimum_nodes = 2;
+
+        let plan = plan_topology(&planning).expect("plan");
+        let fast_layers = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "fast")
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .expect("fast stage");
+        let slow_layers = plan
+            .stages
+            .iter()
+            .find(|stage| stage.node_id == "slow")
+            .map(|stage| stage.layer_end - stage.layer_start)
+            .expect("slow stage");
+
+        assert!(
+            fast_layers > slow_layers,
+            "measured slow stage must receive fewer layers: fast={fast_layers} slow={slow_layers}"
         );
     }
 
@@ -1649,6 +1703,7 @@ mod tests {
             stage_transfer_latency_ms: None,
             sustained_mem_bandwidth_mib_per_s: None,
             sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
         }
     }
 

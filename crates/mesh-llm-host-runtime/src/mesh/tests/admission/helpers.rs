@@ -13,6 +13,7 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
         models: vec![],
         vram_bytes: vram_gb * 1024 * 1024 * 1024,
         rtt_ms,
+        rtt_observation_window: None,
         model_source: None,
         admitted: true,
         serving_models: vec![],

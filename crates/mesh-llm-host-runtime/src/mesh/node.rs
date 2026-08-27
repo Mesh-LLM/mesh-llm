@@ -1503,6 +1503,21 @@ impl Node {
         let updated_peer = {
             let mut state = self.state.lock().await;
             if let Some(peer) = state.peers.get_mut(&id) {
+                let observed_at = std::time::Instant::now();
+                match peer.rtt_observation_window.as_mut() {
+                    Some(window) => {
+                        window.sample_count = window.sample_count.saturating_add(1);
+                        window.last_observed_at = observed_at;
+                    }
+                    None => {
+                        peer.rtt_observation_window =
+                            Some(crate::mesh::peer_state::RttObservationWindow {
+                                sample_count: 1,
+                                first_observed_at: observed_at,
+                                last_observed_at: observed_at,
+                            });
+                    }
+                }
                 let prev = peer.rtt_ms;
                 // Only accept equal-or-lower RTT for planner preference and display.
                 // Gossip round-trip timing can inflate the value when routed via
@@ -1512,14 +1527,14 @@ impl Node {
                     // Store display_rtt regardless (for UI refresh), but don't update best RTT.
                     peer.display_rtt = Some(DirectLatencyObservation {
                         rtt_ms,
-                        observed_at: std::time::Instant::now(),
+                        observed_at,
                     });
                     return;
                 }
                 peer.rtt_ms = Some(rtt_ms);
                 peer.display_rtt = Some(DirectLatencyObservation {
                     rtt_ms,
-                    observed_at: std::time::Instant::now(),
+                    observed_at,
                 });
                 Some(peer.clone())
             } else {

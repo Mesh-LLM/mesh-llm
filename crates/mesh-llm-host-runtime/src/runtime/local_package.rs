@@ -265,7 +265,13 @@ type SplitParticipantSignature = Vec<(
     u32,
     Option<u32>,
     Option<u32>,
+    Option<u64>,
+    bool,
 )>;
+
+const SPLIT_RTT_CORROBORATION_MIN_SAMPLES: u32 = 2;
+const SPLIT_RTT_CORROBORATION_MIN_SPAN_MS: u64 = 5_000;
+const SPLIT_RTT_CORROBORATION_MAX_LAST_AGE_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SplitParticipant {
@@ -275,6 +281,10 @@ pub(super) struct SplitParticipant {
     pub(super) cached_slice_bytes: u64,
     pub(super) missing_artifact_bytes: u64,
     pub(super) rtt_ms: Option<u32>,
+    pub(super) rtt_sample_count: u32,
+    pub(super) rtt_first_sample_age_ms: Option<u64>,
+    pub(super) rtt_last_sample_age_ms: Option<u64>,
+    pub(super) rtt_corroborated: bool,
     /// Sustained large-frame throughput to this peer, MiB/s, from passive
     /// artifact-transfer observation. `None` until measured (or aged out) —
     /// edges to this peer stay latency-only.
@@ -286,6 +296,9 @@ pub(super) struct SplitParticipant {
     pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
     /// Sustained fp16 compute in GFLOP/s, summed across GPUs.
     pub(super) sustained_compute_gflop_per_s: Option<u32>,
+    /// Observed steady-decode runtime work normalized per loaded layer.
+    /// This is a measured floor for the analytical weight-streaming model.
+    pub(super) observed_decode_us_per_layer: Option<u64>,
 }
 
 impl SplitParticipant {
@@ -301,11 +314,16 @@ impl SplitParticipant {
             cached_slice_bytes: 0,
             missing_artifact_bytes: 0,
             rtt_ms: None,
+            rtt_sample_count: 0,
+            rtt_first_sample_age_ms: None,
+            rtt_last_sample_age_ms: None,
+            rtt_corroborated: false,
             large_frame_mib_per_s: None,
             artifact_transfer_supported: false,
             availability_score: 0,
             sustained_mem_bandwidth_mib_per_s: None,
             sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
         }
     }
 
@@ -336,6 +354,7 @@ impl SplitParticipant {
         self.artifact_transfer_supported = artifact_transfer_supported;
         self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
         self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
+        self.observed_decode_us_per_layer = perf.observed_decode_us_per_layer;
         self
     }
 
@@ -346,10 +365,42 @@ impl SplitParticipant {
         self
     }
 
+    /// Attach settle-time confidence for the best-seen RTT floor.
+    ///
+    /// Two observations must span the post-connect direct-path recheck window,
+    /// and the latest one must still be recent. Until then, this remote node's
+    /// performance signals are withheld so the planner reuses its existing
+    /// capacity-only candidate fallback.
+    pub(super) fn with_rtt_observation(
+        mut self,
+        observation: Option<crate::mesh::RttObservationAges>,
+    ) -> Self {
+        if let Some(observation) = observation {
+            self.rtt_sample_count = observation.sample_count;
+            self.rtt_first_sample_age_ms = Some(observation.first_sample_age_ms);
+            self.rtt_last_sample_age_ms = Some(observation.last_sample_age_ms);
+            let observed_span_ms = observation
+                .first_sample_age_ms
+                .saturating_sub(observation.last_sample_age_ms);
+            self.rtt_corroborated = observation.sample_count >= SPLIT_RTT_CORROBORATION_MIN_SAMPLES
+                && observed_span_ms >= SPLIT_RTT_CORROBORATION_MIN_SPAN_MS
+                && observation.last_sample_age_ms <= SPLIT_RTT_CORROBORATION_MAX_LAST_AGE_MS;
+        }
+        if !self.rtt_corroborated {
+            self.rtt_ms = None;
+            self.large_frame_mib_per_s = None;
+            self.sustained_mem_bandwidth_mib_per_s = None;
+            self.sustained_compute_gflop_per_s = None;
+            self.observed_decode_us_per_layer = None;
+        }
+        self
+    }
+
     /// Attach measured performance signals to the local node's participant.
     pub(super) fn with_local_perf(mut self, perf: SplitParticipantPerf) -> Self {
         self.sustained_mem_bandwidth_mib_per_s = perf.sustained_mem_bandwidth_mib_per_s;
         self.sustained_compute_gflop_per_s = perf.sustained_compute_gflop_per_s;
+        self.observed_decode_us_per_layer = perf.observed_decode_us_per_layer;
         self
     }
 
@@ -381,6 +432,8 @@ pub(super) struct SplitParticipantPerf {
     pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
     /// Sustained fp16 compute in GFLOP/s, summed across GPUs.
     pub(super) sustained_compute_gflop_per_s: Option<u32>,
+    /// Observed steady-decode runtime work in microseconds per loaded layer.
+    pub(super) observed_decode_us_per_layer: Option<u64>,
 }
 
 impl SplitParticipantPerf {
@@ -402,7 +455,16 @@ impl SplitParticipantPerf {
         Self {
             sustained_mem_bandwidth_mib_per_s: bandwidth_mib_per_s,
             sustained_compute_gflop_per_s: compute_gflop_per_s,
+            observed_decode_us_per_layer: None,
         }
+    }
+
+    fn with_stage_timing(
+        mut self,
+        hint: Option<&crate::network::metrics::ModelThroughputHint>,
+    ) -> Self {
+        self.observed_decode_us_per_layer = hint.and_then(|hint| hint.observed_stage_us_per_layer);
+        self
     }
 }
 
@@ -565,6 +627,7 @@ pub(super) async fn collect_split_participant_membership(
         .with_local_perf(SplitParticipantPerf {
             sustained_mem_bandwidth_mib_per_s: local_perf.0,
             sustained_compute_gflop_per_s: local_perf.1,
+            observed_decode_us_per_layer: None,
         }),
     ];
     let mut excluded = Vec::new();
@@ -606,6 +669,9 @@ pub(super) async fn collect_split_participants(
     local_source_required: bool,
 ) -> SplitParticipantSnapshot {
     let local_perf = node.sustained_perf_signals().await;
+    let local_stage_timing = skippy_server::stage_decode_timing_hints()
+        .into_iter()
+        .find(|hint| hint.model_id == model_ref || hint.model_id == model_name);
     let mut participants = vec![
         SplitParticipant::local_package(
             node.id(),
@@ -616,6 +682,9 @@ pub(super) async fn collect_split_participants(
         .with_local_perf(SplitParticipantPerf {
             sustained_mem_bandwidth_mib_per_s: local_perf.0,
             sustained_compute_gflop_per_s: local_perf.1,
+            observed_decode_us_per_layer: local_stage_timing
+                .as_ref()
+                .map(|hint| hint.observed_us_per_layer),
         }),
     ];
     let mut excluded = Vec::new();
@@ -646,10 +715,15 @@ pub(super) async fn collect_split_participants(
         .await
         {
             Ok(package_signal) => {
+                let stage_timing = peer
+                    .advertised_model_throughput
+                    .iter()
+                    .find(|hint| hint.model_name == model_ref || hint.model_name == model_name);
                 let perf = SplitParticipantPerf::from_gossip_csvs(
                     peer.gpu_mem_bandwidth_gbps.as_deref(),
                     peer.gpu_compute_tflops_fp16.as_deref(),
-                );
+                )
+                .with_stage_timing(stage_timing);
                 participants.push(
                     SplitParticipant::new(peer.id, peer.vram_bytes, peer.first_joined_mesh_ts)
                         .with_package_signals(
@@ -658,7 +732,8 @@ pub(super) async fn collect_split_participants(
                             artifact_transfer_allowed,
                             perf,
                         )
-                        .with_edge_bandwidth(peer.large_frame_mib_per_s()),
+                        .with_edge_bandwidth(peer.large_frame_mib_per_s())
+                        .with_rtt_observation(peer.rtt_observation_ages()),
                 );
             }
             Err(reason) => {
@@ -930,6 +1005,8 @@ pub(super) fn split_participant_signature(
                 participant.availability_score,
                 participant.sustained_mem_bandwidth_mib_per_s,
                 participant.sustained_compute_gflop_per_s,
+                participant.observed_decode_us_per_layer,
+                participant.rtt_corroborated,
             )
         })
         .collect()
@@ -948,6 +1025,8 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update(participant.7.to_le_bytes());
         hasher.update(participant.8.unwrap_or_default().to_le_bytes());
         hasher.update(participant.9.unwrap_or_default().to_le_bytes());
+        hasher.update(participant.10.unwrap_or_default().to_le_bytes());
+        hasher.update([u8::from(participant.11)]);
     }
     hex::encode(hasher.finalize())
 }

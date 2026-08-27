@@ -1065,9 +1065,33 @@ impl Node {
             serving_models.clear();
             hosted_models.clear();
         }
-        let advertised_model_throughput = self
+        let mut advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
+        for timing in skippy_server::stage_decode_timing_hints() {
+            if !hosted_models.iter().any(|model| model == &timing.model_id) {
+                continue;
+            }
+            if let Some(existing) = advertised_model_throughput
+                .iter_mut()
+                .find(|hint| hint.model_name == timing.model_id)
+            {
+                existing.observed_stage_us_per_layer = Some(timing.observed_us_per_layer);
+                existing.stage_timing_samples = Some(timing.sample_count);
+                existing.stage_timing_age_ms = Some(timing.sample_age_ms);
+            } else {
+                advertised_model_throughput.push(crate::network::metrics::ModelThroughputHint {
+                    model_name: timing.model_id,
+                    avg_tokens_per_second_milli: 0,
+                    throughput_samples: 0,
+                    observed_stage_us_per_layer: Some(timing.observed_us_per_layer),
+                    stage_timing_samples: Some(timing.sample_count),
+                    stage_timing_age_ms: Some(timing.sample_age_ms),
+                });
+            }
+        }
+        let advertised_model_throughput =
+            crate::network::metrics::sanitize_model_throughput_hints(advertised_model_throughput);
         let now_unix_ms = current_time_unix_ms();
         let cache_affinity = cache_affinity_gossip::local_advertisement(
             &self.cache_affinity_inventory,

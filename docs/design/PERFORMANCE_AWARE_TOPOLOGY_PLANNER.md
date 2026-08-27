@@ -1,16 +1,17 @@
 # Performance-Aware Topology Planner and Placement Simulator
 
-## Status: Phases 0-2 implemented; 3-5 planned
+## Status: Phases 0-3 implemented; 4-5 planned
 
 - Date: 2026-08-26
 - Owner: TBD
 - Origin: skippy-topology channel discussion (2026-08-26); requested by James.
 - Implementation: PR #1454 (branch `docs/perf-aware-topology-planner`).
-  Phases 0-2 (metric plumbing, perf-aware span assignment, directed-edge
+  Phases 0-3 (metric plumbing, perf-aware span assignment, directed-edge
   network model, modeled-TPOT candidate selection, placement simulator +
-  scenario corpus) are implemented and tested there. As-built notes are
-  inline below. Phases 3-5 (execution sim + calibration, default-on A/B,
-  adaptive replanning) remain planned.
+  scenario corpus, execution sim calibration, passive link measurement,
+  live per-stage timing feedback, and RTT-floor confidence) are implemented
+  and tested there. As-built notes are inline below. Phases 4-5 (reference-
+  hardware A/B and adaptive replanning) remain planned.
 
 ## Problem
 
@@ -54,8 +55,9 @@ calibratable, and regression-guarded.
 
 ## Non-goals
 
-- No change to the stage runtime, wire protocol, or llama.cpp integration.
-  This work re-plans *placement*; execution is untouched.
+- No change to stage execution semantics, the activation wire protocol, or
+  llama.cpp integration. Runtime work is limited to passive timing
+  instrumentation; this work still re-plans *placement*.
 - No speculative/exotic parallelism (tensor/pipeline-parallel hybrid graphs).
   Contiguous layer pipelines only, as today.
 - No live adaptive replanning in the first phases (see rollout — hysteresis
@@ -69,9 +71,11 @@ calibratable, and regression-guarded.
 | Candidate search (context ↓, node count ↑, lanes ↓, all subsets), stage-0 binding, 33 ms decode TPOT target, 64K shared-context floor | `skippy-coordinator/src/topology.rs`, `mesh-llm-host-runtime/src/runtime/split_planning.rs` | Yes |
 | Latency estimate `stage_count × max RTT` | `estimate_decode_network_ms_per_token` | Superseded when edge data is present (modeled per-hop estimate); legacy estimate otherwise |
 | GPU benchmarking (mem bw, fp16/fp32 TFLOPS) | `mesh-llm-gpu-bench`, `mesh-llm-system/src/benchmark.rs` | Metrics gossiped; **flow into the planner as of PR #1454** (auto-runs at node startup on non-client nodes) |
-| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes measured directed RTT edges as of PR #1454; edge-bandwidth probing and bandwidth aging are planned (phase 3), not yet implemented |
+| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes directed RTT and passively measured artifact-transfer bandwidth as of PR #1454; bandwidth observations age out after 30 minutes |
 | Perf-aware span assignment (DP over layer boundaries minimizing max modeled stage time) | `skippy-coordinator/src/topology.rs` (`perf_balanced_spans`) | Yes, when every node in a subset reports sustained bandwidth; exact legacy greedy otherwise |
-| Modeled decode TPOT (bottleneck stage + network) for candidate selection | `skippy-coordinator/src/topology.rs` (`modeled_decode_tpot_us`) | Yes, when both compared candidates carry complete bandwidth signals; legacy ordering otherwise |
+| Modeled single-stream decode TPOT (Σ stages + Σ hops) for candidate selection | `skippy-coordinator/src/topology.rs` (`modeled_decode_tpot_us`) | Yes, when both compared candidates carry complete bandwidth signals; legacy ordering otherwise |
+| Observed steady-decode timing (µs/layer, sample count, age) | `skippy-server/src/stage_performance.rs`, additive gossip fields in `AdvertisedModelThroughput` | Yes; a fresh observation is a measured floor on the analytical stage estimate in both span DP and serial TPOT scoring |
+| RTT-floor confidence (sample count + first/latest sample age) | `mesh/peer_state.rs`, `runtime/local_package.rs` | Yes; remote perf signals are withheld until the minimum RTT is corroborated across the 5-second settle window |
 | Placement simulator + scenario corpus | `skippy-topology-sim` crate | CI surface for planner behavior; corpus in `crates/skippy-topology-sim/scenarios/` |
 | Model-family cut rules, state affinity, shared-KV cut bans, wire dtype, sidebands | `skippy-topology/src/planning.rs`, `validation.rs` | **No** (explicit-split validation only) — folding legality inputs into automatic planning is future work |
 
@@ -89,18 +93,22 @@ first commit.
 | `sustained_mem_bw_gbps` | gossip (`gpu_mem_bandwidth_gbps`), gpu-bench | measured, not spec |
 | `sustained_compute_tflops` | gossip (`gpu_compute_tflops_fp16` preferred) | fallback signal only; decode is usually memory-bound |
 | `host_ram_bytes` | node status | workspace/scratch headroom |
-| `load_ewma`, `metric_age_ms` | new probe | stale signals decay to neutral |
+| `observed_decode_us_per_layer`, `sample_count`, `sample_age_ms` | staged runtime observation, additive gossip hint | steady decode after warmup; observations older than 30 minutes are omitted |
+| `load_ewma`, `metric_age_ms` | future probe | stale load signals decay to neutral |
 
 ### 2. Directed link performance (per ordered node pair)
 
 | Field | Source |
 |---|---|
-| `p50_latency_ms`, `p95_latency_ms` | extended `StageEdgeSignal` |
+| `min_rtt_ms` | existing direct peer RTT floor |
 | `large_frame_bytes_per_sec` | existing `StageEdgeSignal` field |
-| `jitter_ms`, `sample_age_ms` | new probe |
+| `sample_count`, `first_sample_age_ms`, `last_sample_age_ms` | RTT observation window behind the minimum |
 | `direct_prediction_return_supported` | existing `StageEdgeSignal` field |
 
 Unknown edges get the existing pessimistic default (`UNKNOWN_EDGE_RTT_MS`).
+The planner deliberately does not estimate distribution tails or variance here:
+iroh owns path selection, while placement only needs to distinguish a one-off
+early minimum from a floor corroborated after the direct-path settle recheck.
 
 ### 3. Model-side legality (per family)
 
@@ -127,17 +135,19 @@ Per stage `i` with layer span `L_i` on node `n(i)` and egress edge `e(i)`:
 
 ```text
 stage_time_ms(L_i) = max( Σ_{l∈L_i} weight_bytes(l) / mem_bw(n(i)),          # weight streaming
-                         flops(L_i) / sustained_compute(n(i)) )              # compute-bound regimes
+                         flops(L_i) / sustained_compute(n(i)),                # compute-bound regimes
+                         observed_us_per_layer(n(i)) × |L_i| )                # live measured floor
                    + kv_touch_ms(L_i)                                        # resident KV scan per token
-edge_time_ms(i)    = act_bytes(L_i) / large_frame_bw(e(i)) + p50_latency(e(i))
-pipeline_tpot_ms   = max_i ( stage_time_ms(i) + edge_time_ms(i) )            # steady-state decode
+edge_time_ms(i)    = act_bytes(L_i) / large_frame_bw(e(i)) + min_rtt(e(i))
+single_stream_tpot_ms = Σ_i ( stage_time_ms(i) + edge_time_ms(i) )           # measured decode regime
+pipelined_period_ms   = max_i ( stage_time_ms(i) + edge_time_ms(i) )         # lanes > 1
 prefill_ms         = Σ_i ( stage_time_ms(i) + edge_time_ms(i) )              # sequential fill
 ```
 
-Pipeline TPOT is the max, not the sum: stages process consecutive tokens
-concurrently in steady state. `pipeline_tpot` replaces
-`estimated_decode_network_ms_per_token`; the 33 ms target check carries over
-unchanged.
+The BENCHMARKS.md anchors established that today's single-stream decode is
+serial through the complete pipeline, while multiple in-flight lanes can
+approach the pipelined period. The planner scores the measured single-stream
+regime against the existing 33 ms target.
 
 **As-built (PR #1454):** decode is modeled as weight-streaming
 (`streamed weight bytes / sustained_mem_bw`, integer microseconds, scaled
@@ -151,8 +161,12 @@ including the prediction return — every token traverses every stage, the
 regime the BENCHMARKS.md anchors prove for single-stream decode. The
 planner's number is locked to the calibrated execution sim by the
 `planner_model_matches_execution_sim` test (≤1% divergence on the anchor
-scenario). The compute term and KV-touch term from the formula above
-remain plumbed-but-unused pending calibration against measured data.
+scenario). Live steady-decode observations are normalized to µs/layer after
+warmup, bounded to an initial 256-sample arithmetic mean and then a 1/8 EWMA,
+gossiped with count and age, and applied as a measured floor in both the span
+DP and serial TPOT score. The compute term and KV-touch term from the formula
+above remain plumbed-but-unused pending calibration against broader measured
+data.
 Missing node bandwidth is **all-or-nothing per candidate**:
 a subset missing any node's bandwidth keeps the exact capacity-greedy span
 assignment and carries `modeled_decode_tpot_us = None` — note the network
@@ -164,9 +178,11 @@ RTT, and a hop with no RTT signal anywhere declines to model TPOT
 (`None`) rather than treating the hop as free. Canonical units: sustained
 bandwidth MiB/s (1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all
 modeled times integer microseconds; conversions happen once at parse
-(GB/s → MiB/s, TFLOP/s → GFLOP/s). Metric-age/confidence decay is
-designed (below) but **not yet implemented** — current signals are
-un-aged measurements.
+(GB/s → MiB/s, TFLOP/s → GFLOP/s). Stage observations older than 30 minutes
+are omitted. For remote candidates, the RTT/edge signal and all node-
+performance signals are withheld until at least two valid RTT observations
+span 5 seconds and the latest is no older than 30 seconds; this reuses the
+capacity-only fallback instead of trusting an early post-connect minimum.
 
 **Scope of the fallback guarantee:** the all-or-nothing signal check and
 the fallback span assignment are **per candidate subset**, not fleet-wide.
@@ -216,6 +232,7 @@ Two layers, sharing one scenario format (`toml`) — see the as-built corpus in
 vram_bytes = 68719476736              # 64 GiB
 sustained_mem_bandwidth_mib_per_s = 546000   # measured
 sustained_compute_gflop_per_s = 34000
+observed_decode_us_per_layer = 2400           # optional live measured floor
 
 [nodes.mini]
 vram_bytes = 17179869184              # 16 GiB
@@ -245,7 +262,7 @@ minimum_nodes = 2
 2. **Execution sim** (discrete-event): pipeline of stages with service times
    from the cost model + edge models; replays synthetic workload traces;
    emits TTFT/TPOT/throughput curves per candidate topology. Covers
-   degenerate conditions: straggler node, jittery link, cold-start after
+   degenerate conditions: straggler node, degrading link, cold-start after
    failure, mixed prompt lengths at concurrency.
 
 **Calibration bar:** the execution sim must reproduce the measured ratios in
@@ -296,7 +313,7 @@ backend and quant (Q4_K_M, Q8_0, f16). Corpus entries therefore carry
 
 ### Link tiers
 
-| Tier | Example | p50 latency | Large-frame throughput (prior) |
+| Tier | Example | Typical RTT | Large-frame throughput (prior) |
 |---|---|---|---|
 | Loopback / same host | localhost | 0.05-0.2 ms | 20-60 GB/s |
 | Direct cable | Thunderbolt/2.5-10GbE point-to-point | 0.1-0.5 ms | 1-20 GB/s |
@@ -364,6 +381,16 @@ anti-churn protection so a transient dip does not cause a topology stampede.
   frames between idle stage peers) remains future work.
 - Edge data is directed and measured from the coordinator's vantage, so a
   degrading A→B link is visible independently of B→A.
+- The best-seen RTT remains a minimum, but its observation count and first/
+  latest sample ages are retained. Remote performance-aware placement waits
+  for two samples spanning the 5-second direct-path recheck; a lone 200 ms-old
+  sample falls back to capacity-only placement. Distribution tails are not
+  planner inputs.
+- Embedded stages record steady-decode compute time after warmup, normalize it
+  per loaded layer, gossip the bounded timing hint, and use it as a measured
+  floor on analytical stage service time. The participant signature includes
+  the observation so a fresh planning round cannot silently reuse a stale
+  claim.
 - `MESH_TOPOLOGY_PERF_AWARE=0/false/off/no` is an operator kill-switch that
   strips perf signals + edges and reproduces capacity-only placement exactly
   (checked per planning attempt, no restart needed).
@@ -389,22 +416,22 @@ when the modeled improvement exceeds the migration cost. Until then the
 system degrades to today's behavior: the plan made at startup holds until
 membership or a signature change forces a re-plan.
 
-**Open question (phase 3+):** how to age/degrade edge bandwidth measurements
-between probes. Candidates: EWMA of probe samples, confidence intervals that
-widen with sample age, or pessimistic floor (assume the p95 of recent
-history). The execution sim's calibration against BENCHMARKS.md anchors will
-be the testbed for choosing between these.
+**Open question (phase 5):** how to age/degrade edge bandwidth measurements
+between probes. Candidates are an EWMA of sustained transfer samples or a
+conservative age-based floor. The execution sim's calibration against
+BENCHMARKS.md anchors is the testbed for choosing between these; planner-side
+distribution-tail estimation is intentionally out of scope.
 
 ## Phased rollout
 
 | Phase | Deliverable | Gate | Status |
 |---|---|---|---|
-| 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode`; instrumentation of observed stage timings | no behavior change (signals recorded, unused) | **Done** (PR #1454) — metrics flowed through and joined the replan signature |
+| 0 | Thread gossiped perf metrics through `SplitTopologyPlanInput → TopologyNode` | no behavior change (signals recorded, unused) | **Done** (PR #1454) — metrics flowed through and joined the replan signature |
 | 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs | **Done** (PR #1454) — `perf_balanced_spans` DP + parity tests |
 | 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green | **Done** (PR #1454) — `skippy-topology-sim` + 3 corpus scenarios |
-| 3 | Per-edge bandwidth probing; execution sim validated against measured data | calibration tolerance met | **Mostly landed** — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge, replan signature); execution sim + BENCHMARKS.md calibration tests in `skippy-topology-sim::execution` (±15% tolerance, currently within ~10% on all three anchors). Active probing remains |
+| 3 | Passive edge measurement; execution sim calibration; observed stage-timing feedback; settle-time RTT confidence | calibration tolerance met; uncorroborated remote signals fall back safely | **Done** (PR #1454) — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge, replan signature); execution sim + BENCHMARKS.md calibration tests (±15% tolerance, currently within ~10% on all three anchors); live steady-decode µs/layer feeds span DP and serial TPOT as a measured floor; min RTT carries sample count + first/latest age and requires corroboration across the settle window. Active synthetic probing remains optional future corpus work, not a phase-4 prerequisite |
 | 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
-| 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter | Planned |
+| 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic perturbations | Planned |
 
 Phase 1's fallback property is the safety story: with no signals *and no
 edge data anywhere in the fleet*, the merged planner is bit-identical to
@@ -427,8 +454,9 @@ today's (per-subset scope above). Each phase is independently mergeable.
 
 - **Cost model error → worse placements.** Mitigated by the fallback
   property, calibration gates, and phase 4 A/B before default-on.
-- **Stale/lying gossip.** Mitigated by metric age decay toward neutral and
-  pessimistic unknown-edge defaults.
+- **Stale/lying gossip.** Mitigated by age-gated stage timing, RTT-floor
+  corroboration, per-candidate absent-signal fallback, and pessimistic
+  unknown-edge defaults. Static gpu-bench claims remain soft hints.
 - **Search blowup on large fleets.** Node subsets are already bounded;
   DP span assignment is `O(layers × nodes)` per candidate. Beyond ~8 nodes
   the greedy edge ordering path applies as today.

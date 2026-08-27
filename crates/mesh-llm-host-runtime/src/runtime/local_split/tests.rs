@@ -297,6 +297,61 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
 }
 
 #[test]
+fn rtt_floor_requires_settle_window_corroboration_for_remote_perf() {
+    let signal = SplitParticipantPackageSignal {
+        cached_slice_bytes: 100_000,
+        missing_artifact_bytes: 0,
+        availability_score: 4,
+    };
+    let perf = SplitParticipantPerf {
+        sustained_mem_bandwidth_mib_per_s: Some(400_000),
+        sustained_compute_gflop_per_s: Some(15_000),
+        observed_decode_us_per_layer: Some(2_500),
+    };
+
+    let uncorroborated = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(Some(crate::mesh::RttObservationAges {
+            sample_count: 1,
+            first_sample_age_ms: 200,
+            last_sample_age_ms: 200,
+        }));
+    assert!(!uncorroborated.rtt_corroborated);
+    assert_eq!(uncorroborated.rtt_ms, None);
+    assert_eq!(uncorroborated.sustained_mem_bandwidth_mib_per_s, None);
+    assert_eq!(uncorroborated.sustained_compute_gflop_per_s, None);
+    assert_eq!(uncorroborated.observed_decode_us_per_layer, None);
+
+    let corroborated = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(Some(crate::mesh::RttObservationAges {
+            sample_count: 2,
+            first_sample_age_ms: 5_500,
+            last_sample_age_ms: 200,
+        }));
+    assert!(corroborated.rtt_corroborated);
+    assert_eq!(
+        corroborated.sustained_mem_bandwidth_mib_per_s,
+        perf.sustained_mem_bandwidth_mib_per_s
+    );
+    assert_eq!(
+        corroborated.observed_decode_us_per_layer,
+        perf.observed_decode_us_per_layer
+    );
+
+    let missing_confidence = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(None);
+    assert_eq!(missing_confidence.rtt_ms, None);
+    assert_eq!(missing_confidence.sustained_mem_bandwidth_mib_per_s, None);
+    assert_ne!(
+        split_participant_set_hash(&[uncorroborated]),
+        split_participant_set_hash(&[corroborated]),
+        "settle confidence transition must invalidate the placement signature"
+    );
+}
+
+#[test]
 fn noncanonical_gate_returns_standby_without_invoking_package_planning() {
     let local = SplitParticipant::new(make_id(1), 24_000_000_000, None);
     let coordinator = SplitParticipant::new(make_id(2), 48_000_000_000, None);

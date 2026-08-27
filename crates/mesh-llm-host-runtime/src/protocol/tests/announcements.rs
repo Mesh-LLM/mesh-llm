@@ -140,6 +140,9 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 42_000,
         throughput_samples: 7,
+        observed_stage_us_per_layer: Some(1_250),
+        stage_timing_samples: Some(11),
+        stage_timing_age_ms: Some(250),
     }];
     let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
     let prefix_hash = 0xfeed_beef;
@@ -189,6 +192,9 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 model_name: "ghost".to_string(),
                 avg_tokens_per_second_milli: 250_000,
                 throughput_samples: 99,
+                observed_stage_us_per_layer: None,
+                stage_timing_samples: None,
+                stage_timing_age_ms: None,
             },
         ],
         cache_affinity: Some(
@@ -253,12 +259,27 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         proto_pa.advertised_model_throughput[0].throughput_samples,
         7
     );
+    assert_eq!(
+        proto_pa.advertised_model_throughput[0].observed_stage_us_per_layer,
+        Some(1_250)
+    );
+    assert_eq!(
+        proto_pa.advertised_model_throughput[0].stage_timing_samples,
+        Some(11)
+    );
+    assert_eq!(
+        proto_pa.advertised_model_throughput[0].stage_timing_age_ms,
+        Some(250)
+    );
     proto_pa
         .advertised_model_throughput
         .push(crate::proto::node::AdvertisedModelThroughput {
             model_name: "ghost".to_string(),
             avg_tokens_per_second_milli: 250_000,
             throughput_samples: 99,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         });
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");

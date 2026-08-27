@@ -30,6 +30,9 @@ pub struct ScenarioNode {
     /// Sustained fp16 compute in GFLOP/s (`None` = unreported signal).
     #[serde(default)]
     pub sustained_compute_gflop_per_s: Option<u32>,
+    /// Observed steady-decode runtime work in microseconds per loaded layer.
+    #[serde(default)]
+    pub observed_decode_us_per_layer: Option<u64>,
 }
 
 /// One directed link between scenario nodes. Keys are `"<source> -> <target>"`.
@@ -124,6 +127,7 @@ impl Scenario {
                 stage_transfer_latency_ms: self.node_latency_ms(id),
                 sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
                 sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: node.observed_decode_us_per_layer,
             })
             .collect::<Vec<_>>();
         let edges = self
