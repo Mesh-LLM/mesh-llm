@@ -213,7 +213,10 @@ runs:
         # Shared Just recipe classification for the backend-input checks below.
         JUSTFILE_RECIPE_AWK='
           function recipe_name(line, parts) {
-            if (line ~ /^[[:alnum:]_-]/ && line !~ /^[[:alnum:]_-]+[[:space:]]*:=/ && line ~ /:/) {
+            if (line ~ /^[[:alnum:]_-]/ &&
+                line !~ /^(export|set)[[:space:]]/ &&
+                line !~ /^[[:alnum:]_-]+[[:space:]]*:=/ &&
+                line ~ /:/) {
               split(line, parts, /[[:space:]:]/)
               return parts[1]
             }
@@ -231,6 +234,7 @@ runs:
           local justfile_path="$1"
           awk "$JUSTFILE_RECIPE_AWK"'
             /^\[/ {
+              backend = 0
               pending_attribute_lines[++pending_attribute_count] = NR
               next
             }
@@ -243,6 +247,10 @@ runs:
                     print pending_attribute_lines[pending_index]
                   }
                 }
+                delete pending_attribute_lines
+                pending_attribute_count = 0
+              } else if ($0 !~ /^[[:space:]]/) {
+                backend = 0
                 delete pending_attribute_lines
                 pending_attribute_count = 0
               }
@@ -277,6 +285,8 @@ runs:
               name = recipe_name($0)
               if (name != "") {
                 backend = is_backend_recipe(name)
+              } else if ($0 !~ /^[[:space:]]/) {
+                backend = 0
               }
               if (!backend) {
                 next
@@ -312,10 +322,8 @@ runs:
 
         justfile_has_recipe() {
           local justfile_path="$1"
-          awk '
-            /^[[:alnum:]_-]/ &&
-              $0 !~ /^[[:alnum:]_-]+[[:space:]]*:=/ &&
-              $0 ~ /:/ { found = 1 }
+          awk "$JUSTFILE_RECIPE_AWK"'
+            recipe_name($0) != "" { found = 1 }
             END { exit found ? 0 : 1 }
           ' "$justfile_path"
         }

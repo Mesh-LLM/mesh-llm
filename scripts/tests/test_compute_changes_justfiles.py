@@ -55,6 +55,52 @@ def classify(diff: RevisionDiff) -> bool:
 
 
 class ComputeChangesJustfileTests(unittest.TestCase):
+    def test_top_level_lines_after_backend_recipe_are_not_backend_relevant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            justfile = repository / "Justfile"
+            justfile.write_text(
+                "bundle:\n"
+                "    printf backend\n\n"
+                'light_setting := "base"\n\n'
+                "website-build:\n"
+                "    printf light\n",
+                encoding="utf-8",
+            )
+            base = commit(repository, "base")
+
+            justfile.write_text(
+                justfile.read_text(encoding="utf-8").replace(
+                    'light_setting := "base"', 'light_setting := "changed"'
+                ),
+                encoding="utf-8",
+            )
+            head = commit(repository, "light top-level assignment")
+
+            self.assertFalse(classify(RevisionDiff(repository, base, head, "Justfile")))
+
+    def test_recipe_free_sources_fail_open(self) -> None:
+        sources = (
+            'set shell := ["bash", "-uc"]\n',
+            'export mesh_bin := "target/release/mesh-llm"\n',
+        )
+        for source in sources:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                repository = Path(directory)
+                subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+                (repository / "Justfile").write_text("build:\n    true\n", encoding="utf-8")
+                base = commit(repository, "base")
+
+                recipes = repository / "just"
+                recipes.mkdir()
+                (recipes / "settings.just").write_text(source, encoding="utf-8")
+                head = commit(repository, "recipe-free source")
+
+                self.assertTrue(
+                    classify(RevisionDiff(repository, base, head, "just/settings.just"))
+                )
+
     def test_backend_recipe_attribute_changes_are_backend_relevant(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
