@@ -851,7 +851,7 @@ impl SchedulerWorker {
             .observe_iteration_duration(&plan, execution_elapsed);
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
-        self.emit_step_telemetry(&step, iteration_started.elapsed());
+        self.emit_step_telemetry(&step, iteration_started.elapsed(), execution_elapsed);
     }
 
     fn run_direct_iteration_batch(&mut self) {
@@ -1074,6 +1074,7 @@ impl SchedulerWorker {
         &mut self,
         step: &skippy_scheduler::IterationTelemetry,
         elapsed: Duration,
+        execution_elapsed: Duration,
     ) {
         if self.telemetry.is_none() {
             return;
@@ -1136,6 +1137,14 @@ impl SchedulerWorker {
             (
                 "skippy.scheduler.step_ms".to_string(),
                 json!(elapsed.as_secs_f64() * 1_000.0),
+            ),
+            (
+                "skippy.scheduler.execution_ms".to_string(),
+                json!(execution_elapsed.as_secs_f64() * 1_000.0),
+            ),
+            (
+                "skippy.scheduler.overhead_ms".to_string(),
+                json!(elapsed.saturating_sub(execution_elapsed).as_secs_f64() * 1_000.0),
             ),
         ]);
         if lifecycle_changed {
