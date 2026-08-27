@@ -9,6 +9,8 @@ mod validate;
 mod validation_support;
 #[cfg(test)]
 mod website_docs_parity;
+mod wiring_status;
+mod wiring_validation;
 
 #[cfg(test)]
 mod validate_schema_contract;
@@ -38,6 +40,10 @@ pub use validate::{
     validate_config_diagnostics, validate_config_diagnostics_with_plugin_schemas,
     validate_config_with_plugin_schemas,
 };
+pub use wiring_status::{
+    WIRING_MANIFEST, WiringBehavior, WiringEntry, WiringStatus, wiring_entry_for_path,
+};
+pub use wiring_validation::wiring_manifest_diagnostics;
 
 #[cfg(test)]
 mod tests {

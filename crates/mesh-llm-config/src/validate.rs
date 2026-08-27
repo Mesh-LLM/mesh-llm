@@ -129,6 +129,21 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
 
     validate_duplicate_model_entries(&config.models, &mut diagnostics);
 
+    let existing_paths: std::collections::BTreeSet<String> = diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
+        .collect();
+    diagnostics.extend(
+        crate::wiring_validation::wiring_manifest_diagnostics(config)
+            .into_iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .path
+                    .as_ref()
+                    .is_none_or(|path| !existing_paths.contains(&path.render()))
+            }),
+    );
+
     diagnostics
 }
 

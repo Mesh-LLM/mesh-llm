@@ -18,9 +18,7 @@ release_signer_keys = [
 ctx_size = 8192
 batch = 512
 ubatch = 256
-keep_tokens = 256
 prompt_cache = true
-cache_idle_slots = 2
 
 [defaults.model_fit.prefix_cache]
 enabled = true
@@ -37,7 +35,6 @@ hf_file = "model.gguf"
 stage_layer_start = 8
 stage_layer_end = 24
 mmproj = "defaults-projector.gguf"
-mmproj_offload = "auto"
 
 [defaults.skippy]
 prefill_chunking = "schedule"
@@ -47,16 +44,8 @@ prefill_chunk_schedule = "128,256"
 ngram_min = 2
 ngram_max = 4
 
-[defaults.request_defaults]
-mirostat_mode = 2
-mirostat_entropy = 5.0
-mirostat_learning_rate = 0.1
-
 [defaults.multimodal]
 mmproj = "defaults-projector.gguf"
-mmproj_offload = "auto"
-image_min_tokens = 128
-image_max_tokens = 512
 
 [[models]]
 model = "Qwen/Qwen3-0.6B:Q4_K_M"
@@ -65,9 +54,7 @@ model = "Qwen/Qwen3-0.6B:Q4_K_M"
 ctx_size = 16384
 batch = 1024
 ubatch = 512
-keep_tokens = 1024
 prompt_cache = true
-cache_idle_slots = 4
 
 [models.model_fit.prefix_cache]
 enabled = true
@@ -83,23 +70,14 @@ hf_file = "qwen.gguf"
 stage_layer_start = 16
 stage_layer_end = 32
 mmproj = "model-projector.gguf"
-mmproj_offload = "auto"
 
 [models.skippy]
 prefill_chunking = "fixed"
 prefill_chunk_size = 256
 
 [models.speculative]
-mode = "draft"
-draft_hf_repo = "meshllm/draft"
-draft_hf_file = "draft.gguf"
-draft_selection_policy = "manual"
 draft_min_tokens = 4
 draft_max_tokens = 8
 
-[models.request_defaults]
-mirostat_mode = "disabled"
-
 [models.multimodal]
 mmproj = "model-projector.gguf"
-mmproj_offload = "auto"
