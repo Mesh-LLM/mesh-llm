@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-ACTION: Final = ROOT / ".github/actions/compute-changes/action.yml"
+DERIVE_SCRIPT: Final = ROOT / ".github/actions/compute-changes/derive-outputs.sh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,14 +35,13 @@ def commit(repository: Path, message: str) -> str:
 
 
 def classify(diff: RevisionDiff) -> bool:
-    action = ACTION.read_text(encoding="utf-8")
-    start = action.index("        JUSTFILE_RECIPE_AWK='")
-    end = action.index("        # Backend/platform lanes rebuild", start)
+    action = DERIVE_SCRIPT.read_text(encoding="utf-8")
+    start = action.index("JUSTFILE_RECIPE_AWK='")
+    end = action.index("# Backend/platform lanes rebuild", start)
     script = action[start:end]
-    script = script.replace("        ", "", 1)
-    script = script.replace("${{ inputs.event_name }}", diff.event_name)
-    script = script.replace("${{ inputs.base_sha }}", diff.base)
-    script = script.replace("${{ inputs.head_sha }}", diff.head)
+    script = script.replace("$EVENT_NAME", diff.event_name)
+    script = script.replace("$BASE_SHA", diff.base)
+    script = script.replace("$HEAD_SHA", diff.head)
     script = f"CHANGED_FILES={diff.changed_files!r}\n{script}\nprintf '%s\\n' \"$BACKEND_RECIPE_CHANGED\"\n"
     result = subprocess.run(
         ["bash", "-c", script],
