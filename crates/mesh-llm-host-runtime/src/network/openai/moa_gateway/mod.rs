@@ -430,3 +430,7 @@ mod usage_tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "fleet_sim_tests.rs"]
+mod fleet_sim_tests;
