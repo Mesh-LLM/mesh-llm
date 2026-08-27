@@ -6,12 +6,12 @@ use std::mem::size_of;
 /// The provider used for process-default rustls clients after configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HfTlsProvider {
-    /// Leave rustls' normal provider selection unchanged.
-    Automatic,
     /// Keep a provider that another application component installed first.
     Existing,
     /// Install rustls' runtime-dispatched ring provider.
     Ring,
+    /// Install rustls' AWS-LC provider.
+    AwsLc,
 }
 
 /// Configure a CPU-safe process default before constructing Hugging Face clients.
@@ -21,8 +21,8 @@ pub enum HfTlsProvider {
 /// AWS-LC provider. AWS-LC's AArch64 SHA-512 path has caused illegal
 /// instructions on CPUs that do not advertise FEAT_SHA512. On those CPUs we
 /// install ring, whose SHA-512 implementation performs its own runtime
-/// capability check. All other targets retain the existing automatic choice,
-/// and an already-installed provider is never replaced.
+/// capability check. All other targets use the AWS-LC provider, and an
+/// already-installed provider is never replaced.
 pub fn configure_hf_tls_provider() -> HfTlsProvider {
     let action = provider_action(
         arm_sha512_available(),
@@ -30,10 +30,14 @@ pub fn configure_hf_tls_provider() -> HfTlsProvider {
     );
 
     match action {
-        HfTlsProvider::Automatic | HfTlsProvider::Existing => action,
+        HfTlsProvider::Existing => action,
         HfTlsProvider::Ring => rustls::crypto::ring::default_provider()
             .install_default()
             .map(|()| HfTlsProvider::Ring)
+            .unwrap_or(HfTlsProvider::Existing),
+        HfTlsProvider::AwsLc => rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .map(|()| HfTlsProvider::AwsLc)
             .unwrap_or(HfTlsProvider::Existing),
     }
 }
@@ -42,7 +46,7 @@ fn provider_action(has_arm_sha512: bool, has_existing_provider: bool) -> HfTlsPr
     if has_existing_provider {
         HfTlsProvider::Existing
     } else if has_arm_sha512 {
-        HfTlsProvider::Automatic
+        HfTlsProvider::AwsLc
     } else {
         HfTlsProvider::Ring
     }
@@ -96,11 +100,13 @@ fn arm_sha512_available() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{HfTlsProvider, provider_action};
+    use hf_hub::HFClientBuilder;
+
+    use super::{HfTlsProvider, configure_hf_tls_provider, provider_action};
 
     #[test]
-    fn keeps_automatic_provider_when_sha512_is_supported() {
-        assert_eq!(provider_action(true, false), HfTlsProvider::Automatic);
+    fn selects_aws_lc_when_sha512_is_supported() {
+        assert_eq!(provider_action(true, false), HfTlsProvider::AwsLc);
     }
 
     #[test]
@@ -116,5 +122,24 @@ mod tests {
     #[test]
     fn selects_ring_when_unsupported_arm_has_no_provider() {
         assert_eq!(provider_action(false, false), HfTlsProvider::Ring);
+    }
+
+    #[test]
+    fn real_hf_client_builds_after_provider_initialization() {
+        let selected = configure_hf_tls_provider();
+        assert!(matches!(
+            selected,
+            HfTlsProvider::Existing | HfTlsProvider::Ring | HfTlsProvider::AwsLc
+        ));
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+
+        let client = HFClientBuilder::new()
+            .endpoint("https://huggingface.co")
+            .cache_enabled(false)
+            .build();
+        assert!(
+            client.is_ok(),
+            "HFClientBuilder failed after selecting {selected:?}: {client:?}"
+        );
     }
 }

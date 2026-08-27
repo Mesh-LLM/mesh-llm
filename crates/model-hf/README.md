@@ -55,12 +55,11 @@ token explicitly in tests and embedding applications.
 
 Before constructing a Hub or Xet client, this crate checks the native AArch64
 SHA-512 capability. On Linux/Android it reads `AT_HWCAP`; on Apple platforms it
-uses the ARM SHA-512 sysctl. If that capability is absent and no application
-provider has already been installed, it installs rustls' `ring` provider, whose
-SHA-512 implementation performs its own runtime dispatch. Other platforms keep
-rustls' normal provider selection, and an explicitly installed provider is
-never replaced. Xet remains enabled and TLS certificate/hostname verification
-is unchanged.
+uses the ARM SHA-512 sysctl. If an application provider is already installed,
+it keeps that provider. Otherwise, it installs rustls' `ring` provider on
+AArch64 without SHA-512 and the AWS-LC provider everywhere else. This explicit
+choice avoids rustls' ambiguity when both provider features are present. Xet
+remains enabled and TLS certificate/hostname verification is unchanged.
 
 ## Responsibilities
 

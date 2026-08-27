@@ -43,7 +43,8 @@ command=("$binary" --log-format json models download --direct --json "$fixture_r
 if command -v timeout >/dev/null 2>&1; then
   timeout 180 "${command[@]}" >"$output_file"
 else
-  "${command[@]}" >"$output_file"
+  echo "timeout command is required for the bounded Hugging Face/Xet smoke" >&2
+  exit 2
 fi
 
 python3 - "$output_file" "$smoke_root" <<'PY'
