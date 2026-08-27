@@ -1464,6 +1464,35 @@ parallel = 11
 }
 
 #[test]
+fn continuous_batching_reaches_embedded_scheduler_boundary() {
+    let enabled = parse_config(
+        r#"
+[defaults.throughput]
+continuous_batching = true
+"#,
+    );
+    let disabled = parse_config(
+        r#"
+[defaults.throughput]
+continuous_batching = false
+"#,
+    );
+
+    let enabled_args = resolve_with_config(&enabled)
+        .to_embedded_openai_args(4096, true)
+        .expect("enabled OpenAI args");
+    let disabled_args = resolve_with_config(&disabled)
+        .to_embedded_openai_args(4096, true)
+        .expect("disabled OpenAI args");
+
+    assert_ne!(
+        format!("{enabled_args:?}"),
+        format!("{disabled_args:?}"),
+        "the embedded scheduler boundary must retain continuous_batching"
+    );
+}
+
+#[test]
 fn request_overrides_change_request_time_defaults_without_mutating_load_time_stage_config() {
     let mesh_config = parse_config(
         r#"

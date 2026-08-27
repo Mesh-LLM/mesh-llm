@@ -9,13 +9,194 @@ use crate::plugin;
 use crate::runtime::local::*;
 use crate::runtime::local_package::*;
 use crate::runtime::split_planning::{
-    RuntimeSliceStagePlan, format_aggregate_split_capacity_error,
+    RuntimeSliceStagePlan, SplitTopologyResourceInputs, format_aggregate_split_capacity_error,
+    plan_locked_runtime_slice_topology_with_resources,
+};
+use crate::runtime::split_topology_lock::{
+    ConfiguredTopologyResolutionInput, ParticipantIdentity, resolve_configured_topology_assignments,
 };
 use crate::runtime::survey;
 use skippy_protocol::{FlashAttentionType, LoadMode};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
+
+fn lifecycle_config() -> plugin::MeshConfig {
+    toml::from_str(
+        r#"
+[defaults.skippy]
+lifecycle_startup_timeout_ms = 25
+lifecycle_readiness_interval_ms = 40
+lifecycle_health_interval_ms = 70
+
+[[models]]
+model = "test/model"
+
+[models.skippy]
+lifecycle_startup_timeout_ms = 75
+lifecycle_readiness_interval_ms = 125
+lifecycle_health_interval_ms = 5000
+"#,
+    )
+    .expect("lifecycle config")
+}
+
+#[tokio::test(start_paused = true)]
+async fn configured_startup_timeout_drives_real_timeout_deadline() {
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let started = tokio::time::Instant::now();
+
+    let result = await_stage_startup(intervals.startup_timeout, std::future::pending::<()>()).await;
+
+    assert!(result.is_err());
+    assert_eq!(started.elapsed(), Duration::from_millis(75));
+}
+
+#[tokio::test(start_paused = true)]
+async fn configured_readiness_interval_drives_real_poll_sleep() {
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let started = tokio::time::Instant::now();
+
+    wait_for_stage_readiness_poll(intervals.readiness_interval).await;
+
+    assert_eq!(started.elapsed(), Duration::from_millis(125));
+}
+
+#[tokio::test(start_paused = true)]
+async fn configured_health_interval_drives_real_periodic_tick() {
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let mut ticks = stage_health_ticks(intervals.health_interval);
+    ticks.tick().await;
+    let started = tokio::time::Instant::now();
+
+    ticks.tick().await;
+
+    assert_eq!(started.elapsed(), Duration::from_secs(5));
+}
+
+#[test]
+fn configured_topology_reaches_fail_closed_locked_planner() {
+    let mut package = package(40);
+    package.manifest_sha256 =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    let participants = vec![participant(1), participant(2)];
+    let identities = vec![
+        ParticipantIdentity {
+            node_id: make_id(1),
+            hostname: Some("model-a.local".to_string()),
+        },
+        ParticipantIdentity {
+            node_id: make_id(2),
+            hostname: Some("model-b.local".to_string()),
+        },
+    ];
+    let config: plugin::MeshConfig = toml::from_str(
+        r#"
+[defaults.topology]
+mode = "locked"
+manifest_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[defaults.topology.stages]]
+node = { hostname = "default-a.local" }
+layer_start = 0
+layer_end = 20
+
+[[defaults.topology.stages]]
+node = { hostname = "default-b.local" }
+layer_start = 20
+layer_end = 40
+
+[[models]]
+model = "test/model"
+
+[models.topology]
+manifest_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+[[models.topology.stages]]
+node = { hostname = "model-a.local" }
+layer_start = 0
+layer_end = 16
+
+[[models.topology.stages]]
+node = { hostname = "model-b.local" }
+layer_start = 16
+layer_end = 40
+"#,
+    )
+    .expect("configured topology");
+
+    let assignments = resolve_configured_topology_assignments(ConfiguredTopologyResolutionInput {
+        config: &config,
+        model_ref: Some("test/model"),
+        package: &package,
+        identities: &identities,
+    })
+    .expect("configured topology should resolve")
+    .expect("configured topology should select locked planning");
+    let plan = plan_locked_runtime_slice_topology_with_resources(
+        "topology-test",
+        "test/model",
+        &package,
+        &participants,
+        &[],
+        SplitTopologyResourceInputs {
+            native_context_length: 4096,
+            kv_bytes_per_token: 1,
+            recurrent_bytes_per_sequence_by_layer: vec![0; 40],
+            ctx_size_override: Some(1024),
+            parallel_override: Some(1),
+        },
+        &assignments,
+    )
+    .expect("configured topology should pass the existing locked planner");
+
+    assert_eq!(plan.stages[0].node_id, make_id(1));
+    assert_eq!(
+        (plan.stages[0].layer_start, plan.stages[0].layer_end),
+        (0, 16)
+    );
+    assert_eq!(plan.stages[1].node_id, make_id(2));
+    assert_eq!(
+        (plan.stages[1].layer_start, plan.stages[1].layer_end),
+        (16, 40)
+    );
+}
+
+#[test]
+fn explicit_cli_model_identity_bypasses_configured_topology() {
+    let package = package(40);
+    let config: plugin::MeshConfig = toml::from_str(
+        r#"
+[[models]]
+model = "test/model"
+
+[models.topology]
+mode = "locked"
+manifest_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[models.topology.stages]]
+node = { hostname = "worker-a.local" }
+layer_start = 0
+layer_end = 20
+
+[[models.topology.stages]]
+node = { hostname = "worker-b.local" }
+layer_start = 20
+layer_end = 40
+"#,
+    )
+    .expect("configured topology");
+
+    let assignments = resolve_configured_topology_assignments(ConfiguredTopologyResolutionInput {
+        config: &config,
+        model_ref: None,
+        package: &package,
+        identities: &[],
+    })
+    .expect("explicit CLI bypass should not fail");
+
+    assert!(assignments.is_none());
+}
 
 #[test]
 fn runtime_local_targets_keep_duplicate_same_model_ports() {

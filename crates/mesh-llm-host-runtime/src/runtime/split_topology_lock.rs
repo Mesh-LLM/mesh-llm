@@ -34,9 +34,28 @@ struct SplitTopologyLockStage {
 }
 
 #[derive(Clone, Debug)]
-struct ParticipantIdentity {
-    node_id: iroh::EndpointId,
-    hostname: Option<String>,
+pub(super) struct ParticipantIdentity {
+    pub(super) node_id: iroh::EndpointId,
+    pub(super) hostname: Option<String>,
+}
+
+pub(super) struct ConfiguredTopologyResolutionInput<'a> {
+    pub(super) config: &'a mesh_llm_config::MeshConfig,
+    pub(super) model_ref: Option<&'a str>,
+    pub(super) package: &'a skippy::SkippyPackageIdentity,
+    pub(super) identities: &'a [ParticipantIdentity],
+}
+
+pub(super) fn resolve_configured_topology_assignments(
+    input: ConfiguredTopologyResolutionInput<'_>,
+) -> Result<Option<Vec<LockedSplitStageAssignment>>> {
+    let _ = (
+        input.config,
+        input.model_ref,
+        input.package,
+        input.identities,
+    );
+    Ok(None)
 }
 
 pub(super) async fn load_locked_split_assignments(

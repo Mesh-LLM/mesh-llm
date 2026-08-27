@@ -18,12 +18,52 @@ use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(super) const MIN_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STAGE_SOURCE_PREPARE_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
 const STAGE_SOURCE_MIN_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
+const DEFAULT_STAGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_STAGE_READINESS_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const DEFAULT_STAGE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StageLifecycleIntervals {
+    pub(super) startup_timeout: Duration,
+    pub(super) readiness_interval: Duration,
+    pub(super) health_interval: Duration,
+}
+
+pub(super) fn configured_stage_lifecycle_intervals(
+    _mesh_config: &plugin::MeshConfig,
+    _model_ref: &str,
+) -> StageLifecycleIntervals {
+    StageLifecycleIntervals {
+        startup_timeout: DEFAULT_STAGE_STARTUP_TIMEOUT,
+        readiness_interval: DEFAULT_STAGE_READINESS_INTERVAL,
+        health_interval: DEFAULT_STAGE_HEALTH_INTERVAL,
+    }
+}
+
+pub(super) async fn await_stage_startup<F, T>(
+    timeout: Duration,
+    future: F,
+) -> std::result::Result<T, tokio::time::error::Elapsed>
+where
+    F: Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future).await
+}
+
+pub(super) async fn wait_for_stage_readiness_poll(interval: Duration) {
+    tokio::time::sleep(interval).await;
+}
+
+pub(super) fn stage_health_ticks(interval: Duration) -> tokio::time::Interval {
+    tokio::time::interval(interval)
+}
 
 pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) node: &'a mesh::Node,
