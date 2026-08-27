@@ -139,24 +139,34 @@ concurrently in steady state. `pipeline_tpot` replaces
 `estimated_decode_network_ms_per_token`; the 33 ms target check carries over
 unchanged.
 
-**As-built (PR #1454):** decode is modeled as weight-streaming only
-(`weight_bytes / sustained_mem_bw`, integer microseconds); the compute term
-and KV-touch term are plumbed-but-unused pending calibration against
-BENCHMARKS.md. The coordinator's modeled decode TPOT is
-`max_i(stage_time) + Σ_hops(edge_time)` — bottleneck stage plus **total**
-network time across all hops including the prediction return (for >2 stages
-this differs from the per-stage-max formula above; the implemented form is
-authoritative). Missing node bandwidth is **all-or-nothing per candidate**:
+**As-built (PR #1454):** decode is modeled as weight-streaming
+(`streamed weight bytes / sustained_mem_bw`, integer microseconds, scaled
+by `active_weight_fraction_permil` for MoE models) **plus both calibrated
+overhead terms** — `per_stage_overhead` (1.3 ms) and `per_hop_overhead`
+(13 ms) — inherited from the execution sim's BENCHMARKS.md calibration
+(`CALIBRATED_PER_STAGE_OVERHEAD_US` / `CALIBRATED_PER_HOP_OVERHEAD_US` in
+`skippy-coordinator`). The coordinator's modeled decode TPOT is the
+**serial form**: Σ stage service times + Σ hop times across all hops
+including the prediction return — every token traverses every stage, the
+regime the BENCHMARKS.md anchors prove for single-stream decode. The
+planner's number is locked to the calibrated execution sim by the
+`planner_model_matches_execution_sim` test (≤1% divergence on the anchor
+scenario). The compute term and KV-touch term from the formula above
+remain plumbed-but-unused pending calibration against measured data.
+Missing node bandwidth is **all-or-nothing per candidate**:
 a subset missing any node's bandwidth keeps the exact capacity-greedy span
-assignment — note the network estimate still uses edge-aware per-hop
-estimation whenever edge data exists, and only falls back to the legacy
-`hop_count × max-RTT` estimate when edges are empty or disabled. A missing
-edge bandwidth contributes zero transfer time (latency-only hop); an
-unmatched hop falls back to node RTT. Canonical units: sustained bandwidth
-MiB/s (1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all modeled times
-integer microseconds; conversions happen once at parse (GB/s → MiB/s,
-TFLOP/s → GFLOP/s). Metric-age/confidence decay is designed (below) but
-**not yet implemented** — current signals are un-aged measurements.
+assignment and carries `modeled_decode_tpot_us = None` — note the network
+estimate still uses edge-aware per-hop estimation whenever edge data
+exists, and only falls back to the legacy `hop_count × max-RTT` estimate
+when edges are empty or disabled. A missing edge bandwidth contributes
+zero transfer time (latency-only hop); an unmatched hop falls back to node
+RTT, and a hop with no RTT signal anywhere declines to model TPOT
+(`None`) rather than treating the hop as free. Canonical units: sustained
+bandwidth MiB/s (1 MiB = 1_048_576 bytes), edge bandwidth MiB/s, all
+modeled times integer microseconds; conversions happen once at parse
+(GB/s → MiB/s, TFLOP/s → GFLOP/s). Metric-age/confidence decay is
+designed (below) but **not yet implemented** — current signals are
+un-aged measurements.
 
 **Scope of the fallback guarantee:** the all-or-nothing signal check and
 the fallback span assignment are **per candidate subset**, not fleet-wide.

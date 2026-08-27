@@ -166,6 +166,9 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
         target_decode_tpot_ms: input.target_decode_tpot_ms,
+        // MoE active-fraction metadata is not yet plumbed from the package
+        // identity; dense (1000 permil) is the conservative default.
+        active_weight_fraction_permil: 1000,
         edges: input
             .edges
             .into_iter()

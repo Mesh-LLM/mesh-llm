@@ -7,6 +7,11 @@
 //! calibration coefficients in the anchor scenario need updating — and a
 //! model that cannot reproduce the anchors must not drive placement
 //! decisions.
+//!
+//! `planner_model_matches_execution_sim` additionally locks the
+//! *coordinator planner's* modeled decode TPOT to the calibrated execution
+//! sim on the same scenario: the two cost models must agree, or the
+//! planner will rank candidates against numbers nobody has validated.
 
 use skippy_topology_sim::Scenario;
 
@@ -69,4 +74,36 @@ fn monotonically_worse_with_more_hops() {
         .unwrap();
     assert!(solo.serial_tok_s > two.serial_tok_s);
     assert!(two.serial_tok_s > three.serial_tok_s);
+}
+
+#[test]
+fn planner_model_matches_execution_sim() {
+    // The coordinator planner's modeled decode TPOT must equal the
+    // calibrated execution sim's serial estimate for the same stage
+    // assignment. The planner previously used a different formula
+    // (bottleneck-stage + network) with no calibrated overhead terms and
+    // no calibration test at all — this locks the two cost models together
+    // on the anchor scenario so a future divergence fails CI instead of
+    // silently mis-ranking candidates.
+    let scenario = load("benchmarks_anchor_pair.toml");
+    let plan = scenario.plan().expect("planner plan");
+    let chosen: Vec<(&str, u32)> = plan
+        .stages
+        .iter()
+        .map(|stage| (stage.node_id.as_str(), stage.layer_end - stage.layer_start))
+        .collect();
+    let sim = scenario
+        .estimate_execution(&chosen)
+        .expect("sim estimate for the planner-chosen assignment");
+    let planner_us = plan
+        .modeled_decode_tpot_us
+        .expect("planner models TPOT for the anchor scenario (all nodes signaled)");
+    let sim_us = u128::from(sim.serial_token_us);
+    // Both models must agree within 1% — they use the same terms; any
+    // larger gap is a formula divergence, not calibration noise.
+    let tolerance = sim_us / 100;
+    assert!(
+        planner_us.abs_diff(sim_us) <= tolerance,
+        "planner TPOT {planner_us} µs vs sim {sim_us} µs for {chosen:?} (divergence beyond 1%)"
+    );
 }
