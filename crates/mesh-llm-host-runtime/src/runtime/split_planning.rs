@@ -441,8 +441,8 @@ fn strip_perf_aware_signals(plan_input: &mut SplitTopologyPlanInput) {
 /// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Any of `0`, `false`, `off`, or
 /// `no` (case-insensitive) forces capacity-only placement and the legacy
 /// network estimate; unset or any other value keeps performance-aware
-/// behavior. The value is read from the process environment and requires a
-/// process restart to change.
+/// behavior. The value is read afresh on every planning attempt; changing the
+/// process environment affects the next attempt without an internal cache.
 fn perf_aware_placement_disabled() -> bool {
     perf_aware_disabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
 }

@@ -71,7 +71,7 @@ calibratable, and regression-guarded.
 | Candidate search (context ↓, node count ↑, lanes ↓, all subsets), stage-0 binding, 33 ms decode TPOT target, 64K shared-context floor | `skippy-coordinator/src/topology.rs`, `mesh-llm-host-runtime/src/runtime/split_planning.rs` | Yes |
 | Latency estimate `stage_count × max RTT` | `estimate_decode_network_ms_per_token` | Superseded when edge data is present (modeled per-hop estimate); legacy estimate otherwise |
 | GPU benchmarking (mem bw, fp16/fp32 TFLOPS) | `mesh-llm-gpu-bench`, `mesh-llm-system/src/benchmark.rs` | Metrics gossiped; **flow into the planner as of PR #1454** (auto-runs at node startup on non-client nodes) |
-| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | Planner consumes directed RTT and passively measured artifact-transfer bandwidth as of PR #1454; bandwidth observations age out after 30 minutes |
+| Directed edge signals (RTT + large-frame bandwidth per edge, prediction-return support) | `skippy-topology/src/edge_order.rs` (exhaustive ordering ≤ 8 stages, greedy beyond) | The automatic planner consumes `TopologyEdge` RTT/bandwidth for scoring as of PR #1454. Production currently synthesizes symmetric pair estimates from coordinator-to-peer observations; directed node ordering and prediction-return capability remain confined to the explicit `skippy-topology` planner |
 | Perf-aware span assignment (DP over layer boundaries minimizing max modeled stage time) | `skippy-coordinator/src/topology.rs` (`perf_balanced_spans`) | Yes, when every node in a subset reports sustained bandwidth; exact legacy greedy otherwise |
 | Modeled single-stream decode TPOT (Σ stages + Σ hops) for candidate selection | `skippy-coordinator/src/topology.rs` (`modeled_decode_tpot_us`) | Yes, when both compared candidates carry complete bandwidth signals; legacy ordering otherwise |
 | Observed steady-decode timing (µs/layer, sample count, age) | `skippy-server/src/stage_performance.rs`, additive gossip fields in `AdvertisedModelThroughput` | Yes; a fresh observation is a measured floor on the analytical stage estimate in both span DP and serial TPOT scoring |
@@ -103,12 +103,22 @@ first commit.
 | `min_rtt_ms` | existing direct peer RTT floor |
 | `large_frame_bytes_per_sec` | existing `StageEdgeSignal` field |
 | `sample_count`, `first_sample_age_ms`, `last_sample_age_ms` | RTT observation window behind the minimum |
-| `direct_prediction_return_supported` | existing `StageEdgeSignal` field |
+| `direct_prediction_return_supported` | existing `StageEdgeSignal` field; not yet part of the automatic planner contract |
 
-Unknown edges get the existing pessimistic default (`UNKNOWN_EDGE_RTT_MS`).
+The explicit `skippy-topology` planner prices unknown edges with its pessimistic
+`UNKNOWN_EDGE_RTT_MS` default. The automatic coordinator planner instead tries
+the directed edge, then its reverse, then an endpoint's coordinator RTT; if no
+RTT signal exists anywhere for a required hop, modeled TPOT is unavailable.
 The planner deliberately does not estimate distribution tails or variance here:
 iroh owns path selection, while placement only needs to distinguish a one-off
 early minimum from a floor corroborated after the direct-path settle recheck.
+
+`direct_prediction_return_supported` is intentionally not consumed by
+automatic placement in this PR. The stage runtime continues to enforce its
+existing direct-return/fallback contract. Folding this capability into the
+automatic planner requires an explicit mode: either reject an unsupported
+return edge when direct return is mandatory, or price the downstream fallback
+path when it is allowed.
 
 ### 3. Model-side legality (per family)
 
@@ -201,7 +211,9 @@ bandwidth signals and no edge data at all**; it is exercised by
 ## Search algorithm
 
 Preserve the existing candidate enumeration (it is correct and tested); add
-performance to scoring and ordering:
+performance to scoring and ordering. This is the target algorithm; the
+as-built exceptions immediately below distinguish the implementation landed in
+PR #1454:
 
 1. **Hard feasibility filter** (unchanged): memory fit with reserves,
    family cut legality, stage-0 binding, sidebands, artifact access.
@@ -211,7 +223,8 @@ performance to scoring and ordering:
    `order_pipeline_nodes`: exhaustive ≤ 8 stages, greedy beyond) instead of
    VRAM-descending order.
 4. **Span assignment**: replace greedy largest-fit with DP over contiguous
-   layer boundaries that minimizes `pipeline_tpot_ms` subject to per-node
+   layer boundaries that minimizes the maximum modeled stage service time
+   subject to per-node
    memory ceilings. The recurrence compares every prior boundary, so a
    candidate costs `O(layers² × nodes)` — at current scales (≤ ~100 layers,
    ≤ ~8 nodes) that is ≤ ~80K comparisons per candidate, trivially cheap;
@@ -221,6 +234,15 @@ performance to scoring and ordering:
    performance (TPOT or throughput) → context/lane utility → confidence and
    headroom → deterministic tie-breaks (existing `latency_candidate_ordering`
    shape).
+
+**As-built exceptions (PR #1454):** automatic stages remain ordered by usable
+VRAM descending with a node-id tie-break; the coordinator does not yet call
+`order_pipeline_nodes`. Automatic planning also does not yet consume the
+model-family legality/sideband policy or prediction-return support from
+`skippy-topology` (see the current-state table). The span DP balances modeled
+stage service time in that fixed order, while directed edge data affects
+candidate scoring only. Edge-aware node ordering and policy integration remain
+explicit follow-up work.
 
 ## Simulator
 
@@ -379,8 +401,11 @@ anti-churn protection so a transient dip does not cause a topology stampede.
   conditions change, the next transfer re-measures the link — drift detection
   rides the traffic the mesh already generates. Active probing (synthetic
   frames between idle stage peers) remains future work.
-- Edge data is directed and measured from the coordinator's vantage, so a
-  degrading A→B link is visible independently of B→A.
+- The planner edge type is directed, and simulator scenarios can supply truly
+  asymmetric A→B/B→A values. Production does not yet measure remote pair
+  directions independently: `participant_edges` synthesizes both directions
+  with the same conservative max RTT and min bandwidth from coordinator-to-peer
+  observations.
 - The best-seen RTT remains a minimum, but its observation count and first/
   latest sample ages are retained. Remote performance-aware placement waits
   for two samples spanning the 5-second direct-path recheck; a lone 200 ms-old
@@ -430,7 +455,7 @@ distribution-tail estimation is intentionally out of scope.
 | 1 | Cost model + merged scoring in `skippy-coordinator`; absent-signal fallback = exact current behavior | placement-parity tests vs old planner on signal-less inputs | **Done** (PR #1454) — `perf_balanced_spans` DP + parity tests |
 | 2 | Placement sim in CI; scenario corpus incl. BENCHMARKS.md anchors | property tests green; parity suite green | **Done** (PR #1454) — `skippy-topology-sim` + 3 corpus scenarios |
 | 3 | Passive edge measurement; execution sim calibration; observed stage-timing feedback; settle-time RTT confidence | calibration tolerance met; uncorroborated remote signals fall back safely | **Done** (PR #1454) — passive edge bandwidth from real artifact transfers (both directions, age-gated 30 min, conservative min-merge, replan signature); execution sim + BENCHMARKS.md calibration tests (±15% tolerance, currently within ~10% on all three anchors); live steady-decode µs/layer feeds span DP and serial TPOT as a measured floor; min RTT carries sample count + first/latest age and requires corroboration across the settle window. Active synthetic probing remains optional future corpus work, not a phase-4 prerequisite |
-| 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
+| 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | **Code path default-on in PR #1454; reference-hardware A/B gate pending** |
 | 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic perturbations | Planned |
 
 Phase 1's fallback property is the safety story: with no signals *and no
@@ -458,5 +483,6 @@ today's (per-subset scope above). Each phase is independently mergeable.
   corroboration, per-candidate absent-signal fallback, and pessimistic
   unknown-edge defaults. Static gpu-bench claims remain soft hints.
 - **Search blowup on large fleets.** Node subsets are already bounded;
-  DP span assignment is `O(layers × nodes)` per candidate. Beyond ~8 nodes
-  the greedy edge ordering path applies as today.
+  DP span assignment is `O(layers² × nodes)` per candidate. Automatic edge
+  ordering is not wired in today; once adopted, the existing policy planner's
+  exhaustive ≤8-stage / greedy >8-stage split bounds that additional search.
