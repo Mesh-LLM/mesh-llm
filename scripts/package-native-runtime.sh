@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
+
 BUILD=0
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
@@ -29,6 +32,7 @@ Environment:
   LLAMA_STAGE_AMDGPU_TARGETS / SKIPPY_AMDGPU_TARGETS
   LLAMA_STAGE_BUILD_DIR
   MESH_NATIVE_RUNTIME_TARGET
+  MESH_CUDA_VERSION / MESH_LLM_CUDA_TOOLKIT_MAJOR (validated against the selected compiler)
   MESH_LLM_LLAMA_PIN_SHA
 EOF
 }
@@ -136,11 +140,15 @@ backend_flavor() {
     local cuda_major
     case "$BACKEND" in
         cuda)
-            cuda_major="$(cuda_toolkit_major)"
+            if ! cuda_major="$(cuda_toolkit_major)"; then
+                return 1
+            fi
             printf 'cuda%s\n' "$cuda_major"
             ;;
         cuda-blackwell)
-            cuda_major="$(cuda_toolkit_major)"
+            if ! cuda_major="$(cuda_toolkit_major)"; then
+                return 1
+            fi
             printf 'cuda%s-sm120\n' "$cuda_major"
             ;;
         rocm|hip) printf 'rocm\n' ;;
@@ -149,23 +157,12 @@ backend_flavor() {
 }
 
 cuda_toolkit_major() {
-    if [[ -n "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-}" ]]; then
-        if [[ ! "$MESH_LLM_CUDA_TOOLKIT_MAJOR" =~ ^[0-9]+$ ]]; then
-            echo "MESH_LLM_CUDA_TOOLKIT_MAJOR must be digits-only (for example: 12)" >&2
-            exit 1
+    if [[ -z "$_mesh_cuda_toolkit_manifest_major_cache" ]]; then
+        if ! _mesh_cuda_toolkit_manifest_major_cache="$(cuda_toolkit_manifest_major)"; then
+            return 1
         fi
-        printf '%s\n' "$MESH_LLM_CUDA_TOOLKIT_MAJOR"
-        return 0
     fi
-    if [[ -n "${MESH_CUDA_VERSION:-}" ]]; then
-        printf '%s\n' "${MESH_CUDA_VERSION%%.*}"
-        return 0
-    fi
-    if [[ "$BACKEND" == "cuda-blackwell" ]]; then
-        printf '13\n'
-    else
-        printf '12\n'
-    fi
+    printf '%s\n' "$_mesh_cuda_toolkit_manifest_major_cache"
 }
 
 build_backend() {
@@ -289,7 +286,7 @@ build_gpu_benchmark_tool() {
 
     case "$BACKEND" in
         cuda|cuda-blackwell)
-            compiler="${NVCC:-${CUDACXX:-nvcc}}"
+            compiler="$(cuda_selected_compiler)"
             "$compiler" -O3 -std=c++17 "$source_root/cuda/membench-fingerprint.cu" -o "$tool_path"
             ;;
         rocm|hip)
@@ -436,7 +433,9 @@ fi
 platform="$(target_platform "$TARGET_TRIPLE")"
 runtime_os="$(target_runtime_os "$TARGET_TRIPLE")"
 runtime_arch="$(target_runtime_arch "$TARGET_TRIPLE")"
-flavor="$(backend_flavor)"
+if ! flavor="$(backend_flavor)"; then
+    exit 1
+fi
 artifact_id="meshllm-native-runtime-${platform}-${flavor}"
 stage_dir="$OUT_DIR/$artifact_id"
 
@@ -539,7 +538,14 @@ primary_library="lib/$primary_name"
 primary_sha="$(sha256_file "$stage_dir/$primary_library")"
 mesh_version="$(workspace_version)"
 abi_version="$(skippy_abi_version)"
-cuda_major="$(cuda_toolkit_major)"
+cuda_major=""
+case "$BACKEND" in
+    cuda|cuda-blackwell)
+        if ! cuda_major="$(cuda_toolkit_major)"; then
+            exit 1
+        fi
+        ;;
+esac
 
 patched_sha=""
 upstream_sha=""
