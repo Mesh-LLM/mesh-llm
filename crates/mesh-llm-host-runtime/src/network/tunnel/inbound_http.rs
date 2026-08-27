@@ -23,6 +23,21 @@ pub(super) async fn handle_inbound_http_stream(
 ) -> Result<()> {
     let _inflight = node.begin_inflight_request();
 
+    match node
+        .activity_policy_guard
+        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+    {
+        crate::runtime::AdmissionResult::Allowed => {}
+        crate::runtime::AdmissionResult::Paused { reason, .. } => {
+            tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
+            let stream = ClientStream::from_quic_with_prefix(quic_recv, quic_send, Vec::new());
+            crate::network::openai::send_503(stream, &format!("inference paused: {reason}"))
+                .await
+                .context("failed to send paused-inference response")?;
+            return Ok(());
+        }
+    }
+
     // Only raw mesh ingress that successfully claimed a parent emits the
     // private assertion. Direct API requests have it stripped before they can
     // reach this tunnel, so they retain normal target frontend ownership.

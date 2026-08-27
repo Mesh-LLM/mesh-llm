@@ -197,7 +197,6 @@ async fn send_openai_error(
     Ok(())
 }
 
-#[cfg(test)]
 pub async fn send_503(stream: ClientStream, reason: &str) -> std::io::Result<()> {
     tracing::warn!("503 → client: {reason}");
     send_openai_error(stream, 503, reason, None).await
