@@ -330,10 +330,10 @@ index 000000000..67fc99716
 +#endif // SKIPPY_SPECULATIVE_DECODING_H
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 new file mode 100644
-index 000000000..42af1d347
+index 000000000..8440e5b97
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,657 @@
+@@ -0,0 +1,673 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
@@ -479,10 +479,11 @@ index 000000000..42af1d347
 +    return status;
 +}
 +
-+llama_token skippy_greedy_sample_context(
++static llama_token skippy_greedy_sample_context_with_eog_policy(
 +        const llama_model * model,
 +        llama_context * ctx,
-+        int32_t index) {
++        int32_t index,
++        bool ignore_eog) {
 +    if (model == nullptr || ctx == nullptr) {
 +        return 0;
 +    }
@@ -497,6 +498,9 @@ index 000000000..42af1d347
 +    llama_token best = 0;
 +    float best_logit = -std::numeric_limits<float>::infinity();
 +    for (int32_t token = 0; token < n_vocab; ++token) {
++        if (ignore_eog && llama_vocab_is_eog(vocab, token)) {
++            continue;
++        }
 +        if (logits[token] > best_logit) {
 +            best_logit = logits[token];
 +            best = token;
@@ -504,6 +508,13 @@ index 000000000..42af1d347
 +    }
 +
 +    return best;
++}
++
++llama_token skippy_greedy_sample_context(
++        const llama_model * model,
++        llama_context * ctx,
++        int32_t index) {
++    return skippy_greedy_sample_context_with_eog_policy(model, ctx, index, false);
 +}
 +
 +llama_token skippy_greedy_sample_ith(skippy_session * session, int32_t index) {
@@ -658,7 +669,6 @@ index 000000000..42af1d347
 +    }
 +    const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
 +    return sampling->temperature <= 0.0f &&
-+           (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) == 0 &&
 +           sampling->presence_penalty == 0.0f &&
 +           sampling->frequency_penalty == 0.0f &&
 +           repeat_penalty == 1.0f &&
@@ -954,7 +964,13 @@ index 000000000..42af1d347
 +        if (session->sampling_chain != nullptr) {
 +            skippy_clear_chat_sampling(session);
 +        }
-+        return skippy_greedy_sample_ith(session, logits_index);
++        const bool ignore_eog =
++                (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
++        return skippy_greedy_sample_context_with_eog_policy(
++                session->stage_model->model,
++                session->ctx,
++                logits_index,
++                ignore_eog);
 +    }
 +    if (session->sampling_chain != nullptr) {
 +        if (!session->chat_sampling_metadata.empty() ||
