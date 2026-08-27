@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "package-native-runtime.sh"
 
 
+def write_failing_nvcc(path: Path) -> None:
+    path.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
 class PackageNativeRuntimeTests(unittest.TestCase):
     def test_cpu_package_with_no_tools_is_safe_under_macos_bash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -260,6 +265,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             (build_dir / "libllama.so").write_bytes(b"test native runtime")
             tool_dir = root / "bin"
             tool_dir.mkdir()
+            write_failing_nvcc(tool_dir / "nvcc")
             patchelf = tool_dir / "patchelf"
             patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             patchelf.chmod(0o755)
@@ -344,7 +350,9 @@ class PackageNativeRuntimeTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 compiler.chmod(0o755)
-                env["PATH"] = f"{directory}{os.pathsep}{env['PATH']}"
+            else:
+                write_failing_nvcc(Path(directory) / "nvcc")
+            env["PATH"] = f"{directory}{os.pathsep}{env['PATH']}"
             result = subprocess.run(
                 [
                     "bash",
