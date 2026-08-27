@@ -643,3 +643,46 @@ all-small and MoA engages again.
   small-pool ones are marginal.
 - `pool[0]` is assumed to be the strongest member rather than verified.
 - Single judge model.
+
+## Grounded rubric metric + big-tier pool (2026-08-27, $2.30)
+
+The judge was measuring length (r=+0.39 on *both* judges), so the metric was
+replaced rather than the pool swept further. `rubric.py` scores answers against
+per-task checkable items + wrong-claim decoys, judge-free, and **calibrates
+itself**: of 135 hand-written items, 45 fired on 100% of answers and 9 on <10%
+(broken regex, not hard items) — only the 81 discriminating items are scored.
+
+Re-scoring the 397 saved 9B trials for free:
+
+| arm | rubric W/T/L | p | length-matched (<10%) |
+|---|---|---|---|
+| refine | 54/55/36 | 0.073 | 15W/11L p=0.56 |
+| single-round | 54/60/31 | 0.017 | 17W/14L p=0.72 |
+
+Coverage *density* (items per 1k chars) is a dead heat both arms. **The 9B lift
+does not survive length control on a grounded metric either.** Rubric agrees with
+the judge on only 39-45% of rows, so it is measuring something else and still says
+flat.
+
+Only surviving directional signal, and it is not a length artifact — failure
+rescue past a coverage floor of 0.34: single-round 19 rescued / 9 regressed
+(p=0.087); below-floor fraction 28.3% solo -> 21.4% MoA.
+
+**Big diverse tier — the expectation does not hold.** Pool `qwen3.8-27b,
+gemma-3-27b-it, mistral-small-3.2-24b, gpt-oss-20b`, solo baseline the strongest
+member, 120 trials through shipped `handle_turn`:
+
+| metric | result |
+|---|---|
+| judge 1 | 28W/59T/33L p=0.61 |
+| judge 2 | 39W/37T/44L p=0.66 |
+| rubric (n=87) | 28W/38T/21L p=0.39 |
+| rescue/regress | 8/9 |
+| r(len, score) | +0.097 |
+
+Both judges numerically negative; length confound nearly absent here, so there is
+no bias to explain a win away — there is no win. **Mixing at the large tier is not
+supported by this data.** Do not lift the all-small collapse guard either.
+
+Detail: `RESEARCH/MOA_GROUNDED_METRIC_AND_BIG_TIER_2026_08_27.md` in the Buzz
+workspace; artifacts in `RESEARCH/artifacts/moa-bigtier-2026-08-27/`.
