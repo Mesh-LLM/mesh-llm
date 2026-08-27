@@ -22,7 +22,13 @@ XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
 
 class CiArtifactActionTests(unittest.TestCase):
     def read_action(self, name: str) -> str:
-        return (ACTIONS / name / "action.yml").read_text(encoding="utf-8")
+        action = (ACTIONS / name / "action.yml").read_text(encoding="utf-8")
+        if name == "compute-changes":
+            derive = (ROOT / "scripts" / "compute-changes-derive.sh").read_text(
+                encoding="utf-8"
+            )
+            return f"{action}\n{derive}"
+        return action
 
     def test_external_actions_have_sha_and_release_provenance(self) -> None:
         action_files = sorted(ACTIONS.glob("*/action.yml"))
@@ -948,10 +954,10 @@ class CiArtifactActionTests(unittest.TestCase):
 
         self.assertIn("grep -E '^Justfile$|^just/.+\\.just$'", action)
         self.assertIn("$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE", action)
-        self.assertIn("${{ inputs.head_sha }}:$JUSTFILE_SOURCE", action)
+        self.assertIn("$HEAD_SHA:$JUSTFILE_SOURCE", action)
         self.assertIn(
-            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "${{ inputs.base_sha }}" '
-            '"${{ inputs.head_sha }}")',
+            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "$BASE_SHA" '
+            '"$HEAD_SHA")',
             action,
         )
         self.assertIn("git diff --name-status --no-renames", action)
@@ -982,7 +988,7 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
         self.assertIn(
-            'justfile_backend_recipe_tokens "${{ inputs.head_sha }}" '
+            'justfile_backend_recipe_tokens "$HEAD_SHA" '
             '> "$JUSTFILE_BACKEND_TOKENS_HEAD"',
             action,
         )

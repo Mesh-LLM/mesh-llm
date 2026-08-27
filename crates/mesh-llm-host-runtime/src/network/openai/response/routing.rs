@@ -111,53 +111,24 @@ async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + CancelUpstream
     }
 }
 
-/// A read-ready downstream socket can be checked without consuming request
-/// bytes. A peek error is an unambiguous disconnect (including a reset), while
-/// EOF leaves this watcher pending. Keeping the watcher pending avoids a
-/// readiness spin and lets the upstream response probe win for clients that
-/// legally half-close their write side after sending a request.
-async fn wait_for_downstream_disconnect(tcp_stream: &TcpStream) -> DownstreamWatchResult {
-    if tcp_stream.readable().await.is_err() {
-        return DownstreamWatchResult::Disconnected;
-    }
-
-    let mut peeked = [0u8; 1];
-    match tcp_stream.peek(&mut peeked).await {
-        Ok(0) => std::future::pending::<DownstreamWatchResult>().await,
-        Err(_) => DownstreamWatchResult::Disconnected,
-        Ok(_) => DownstreamWatchResult::PipelinedBytes,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DownstreamWatchResult {
-    Disconnected,
-    PipelinedBytes,
-}
-
 enum ProbeOutcome {
     ClientDisconnected,
     Response(Result<ResponseProbe>),
 }
 
 /// Race the complete upstream response probe against a non-consuming
-/// downstream close check. If pipelined bytes are already available, stop
-/// watching and leave them for the normal request/response handling path.
-async fn probe_with_downstream_disconnect<F>(tcp_stream: &ClientStream, probe: F) -> ProbeOutcome
+/// downstream close check. Pipelined TCP bytes leave the watcher pending, while
+/// a TCP reset or QUIC STOP_SENDING reports a client disconnect promptly.
+async fn probe_with_downstream_disconnect<F>(client: &ClientStream, probe: F) -> ProbeOutcome
 where
     F: Future<Output = Result<ResponseProbe>>,
 {
-    let Some(tcp_stream) = tcp_stream.tcp() else {
-        return ProbeOutcome::Response(probe.await);
-    };
     tokio::pin!(probe);
     tokio::select! {
         biased;
-        downstream = wait_for_downstream_disconnect(tcp_stream) => {
-            match downstream {
-                DownstreamWatchResult::Disconnected => ProbeOutcome::ClientDisconnected,
-                DownstreamWatchResult::PipelinedBytes => ProbeOutcome::Response(probe.await),
-            }
+        disconnected = client.wait_for_response_disconnect() => {
+            debug_assert!(disconnected);
+            ProbeOutcome::ClientDisconnected
         }
         response = &mut probe => ProbeOutcome::Response(response),
     }
@@ -452,12 +423,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_quic_downstream_reset_cancels_the_peer_tunnel_during_probe() {
+        const TEST_ALPN: &[u8] = b"mesh-llm/routing-cancellation-test/1";
+
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let server_endpoint = server.clone();
+        let cancels = Arc::new(AtomicUsize::new(0));
+        let route_cancels = Arc::clone(&cancels);
+        let host_id = iroh::SecretKey::generate().public();
+        let route = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.expect("connection arrives");
+            let connection = incoming.await.expect("connection negotiates");
+            let (send, recv) = connection.accept_bi().await.expect("stream arrives");
+            let mut downstream = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
+            let (_upstream_writer, upstream_reader) = tokio::io::duplex(64 * 1024);
+            let mut upstream = DuplexUpstream {
+                inner: upstream_reader,
+                cancels: route_cancels,
+            };
+            route_remote_attempt_after_forward(
+                &mut downstream,
+                &mut upstream,
+                host_id,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+
+        let client = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let connection = client.connect(server.addr(), TEST_ALPN).await.unwrap();
+        let (_request_send, mut response_recv) = connection.open_bi().await.unwrap();
+        response_recv.stop(42u32.into()).unwrap();
+
+        let result = timeout(Duration::from_secs(2), route)
+            .await
+            .expect("QUIC reset must interrupt the pending response probe")
+            .unwrap();
+        assert_eq!(result, RouteAttemptResult::ClientDisconnected);
+        assert_eq!(cancels.load(Ordering::SeqCst), 1);
+
+        client.close().await;
+        server.close().await;
+    }
+
+    #[tokio::test]
     async fn pipelined_downstream_bytes_are_not_consumed_by_disconnect_watch() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
-            let (mut downstream, _) = listener.accept().await.unwrap();
-            let outcome = wait_for_downstream_disconnect(&downstream).await;
+            let (downstream, _) = listener.accept().await.unwrap();
+            let mut downstream: ClientStream = downstream.into();
+            assert!(
+                timeout(
+                    Duration::from_millis(100),
+                    downstream.wait_for_response_disconnect()
+                )
+                .await
+                .is_err(),
+                "pipelined bytes are not a disconnect"
+            );
             let mut pipelined = [0u8; 1];
             timeout(
                 Duration::from_secs(1),
@@ -466,15 +508,13 @@ mod tests {
             .await
             .expect("pipelined byte must remain available after probing")
             .unwrap();
-            (outcome, pipelined)
+            pipelined
         });
 
         let mut client = TcpStream::connect(address).await.unwrap();
         client.write_all(b"x").await.unwrap();
 
-        let (outcome, pipelined) = task.await.unwrap();
-        assert_eq!(outcome, DownstreamWatchResult::PipelinedBytes);
-        assert_eq!(pipelined, [b'x']);
+        assert_eq!(task.await.unwrap(), [b'x']);
     }
 
     /// The counterpart: a normal delivery must not cancel anything.

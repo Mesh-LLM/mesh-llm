@@ -7,6 +7,28 @@ use tokio::net::TcpStream;
 
 type QuicBiStream = tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TcpDisconnectWatch {
+    Disconnected,
+    PipelinedBytes,
+}
+
+/// A read-ready downstream socket can be checked without consuming request
+/// bytes. EOF keeps the watcher pending so clients may legally half-close their
+/// write side after sending a request and still receive the response.
+async fn wait_for_tcp_disconnect(stream: &TcpStream) -> TcpDisconnectWatch {
+    if stream.readable().await.is_err() {
+        return TcpDisconnectWatch::Disconnected;
+    }
+
+    let mut peeked = [0u8; 1];
+    match stream.peek(&mut peeked).await {
+        Ok(0) => std::future::pending::<TcpDisconnectWatch>().await,
+        Err(_) => TcpDisconnectWatch::Disconnected,
+        Ok(_) => TcpDisconnectWatch::PipelinedBytes,
+    }
+}
+
 /// Client-facing byte stream accepted by the OpenAI ingress.
 ///
 /// Local callers arrive over TCP. Remote mesh callers already have an
@@ -49,10 +71,22 @@ impl ClientStream {
         }
     }
 
-    pub(crate) fn tcp(&self) -> Option<&TcpStream> {
+    /// Wait until the downstream can no longer receive a response.
+    ///
+    /// TCP resets are detected without consuming pipelined request bytes. For
+    /// QUIC, the peer dropping or resetting its receive half completes the
+    /// response send stream's `stopped` future. A clean acknowledgement after
+    /// a locally finished response is not a disconnect signal.
+    pub(crate) async fn wait_for_response_disconnect(&self) -> bool {
         match self {
-            Self::Tcp(stream) => Some(stream),
-            Self::Quic { .. } => None,
+            Self::Tcp(stream) => match wait_for_tcp_disconnect(stream).await {
+                TcpDisconnectWatch::Disconnected => true,
+                TcpDisconnectWatch::PipelinedBytes => std::future::pending::<bool>().await,
+            },
+            Self::Quic { stream, .. } => match stream.writer().stopped().await {
+                Ok(Some(_)) | Err(_) => true,
+                Ok(None) => std::future::pending::<bool>().await,
+            },
         }
     }
 
@@ -115,5 +149,60 @@ impl AsyncWrite for ClientStream {
             Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Quic { stream, .. } => Pin::new(stream).poll_shutdown(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroh::{Endpoint, SecretKey};
+    use tokio::time::{Duration, timeout};
+
+    const TEST_ALPN: &[u8] = b"mesh-llm/client-stream-test/1";
+
+    #[tokio::test]
+    async fn quic_stop_sending_reports_response_disconnect() {
+        let server = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let server_endpoint = server.clone();
+        let accepted = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.expect("connection arrives");
+            let connection = incoming.await.expect("connection negotiates");
+            let (send, recv) = connection.accept_bi().await.expect("stream arrives");
+            ClientStream::from_quic_with_prefix(recv, send, Vec::new())
+        });
+
+        let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let connection = client.connect(server.addr(), TEST_ALPN).await.unwrap();
+        let (mut request_send, mut response_recv) = connection.open_bi().await.unwrap();
+        request_send.write_all(b"request").await.unwrap();
+        let downstream = accepted.await.unwrap();
+
+        response_recv.stop(42u32.into()).unwrap();
+        assert!(
+            timeout(
+                Duration::from_secs(2),
+                downstream.wait_for_response_disconnect()
+            )
+            .await
+            .expect("STOP_SENDING must reach the response sender")
+        );
+
+        client.close().await;
+        server.close().await;
     }
 }
