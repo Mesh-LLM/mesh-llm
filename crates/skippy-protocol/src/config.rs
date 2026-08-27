@@ -28,6 +28,16 @@ pub enum FlashAttentionType {
     Enabled,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitMode {
+    #[default]
+    Auto,
+    None,
+    Layer,
+    Row,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageConfig {
     pub run_id: String,
@@ -69,6 +79,20 @@ pub struct StageConfig {
     pub mmap: Option<bool>,
     #[serde(default)]
     pub mlock: bool,
+    #[serde(default)]
+    pub repack: bool,
+    #[serde(default)]
+    pub op_offload: Option<bool>,
+    #[serde(default)]
+    pub no_host_buffer: bool,
+    #[serde(default)]
+    pub check_tensors: bool,
+    #[serde(default)]
+    pub direct_io: bool,
+    #[serde(default)]
+    pub main_gpu: Option<u32>,
+    #[serde(default)]
+    pub split_mode: SplitMode,
     #[serde(default = "default_cache_type")]
     pub cache_type_k: String,
     #[serde(default = "default_cache_type")]

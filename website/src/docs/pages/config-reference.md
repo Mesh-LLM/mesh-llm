@@ -167,21 +167,21 @@ one.
 | `hardware.stage_layer_start`<br>`hardware.stage_layer_end` | integer | planner-generated unless pinned; `start >= 0`, `end > start` | both | model reload | wired (staged mode only) | none |
 | `hardware.placement` | enum | `auto` (default), `pooled`, `separated` | both | model reload | unwired (passes validation, then fails at model load) | none |
 | `hardware.tensor_split` | comma ratios or string | unset | both | model reload | unwired (passes validation, then fails at model load; the separate `--tensor-split` CLI flag has its own plumbing) | `--tensor-split` (separate code path, does not read this field) |
-| `hardware.split_mode` | enum | `auto` (default), `none`, `layer`, `row` | both | model reload | unwired | none |
-| `hardware.main_gpu` | integer | `0` | both | model reload | unwired | none |
+| `hardware.split_mode` | enum | `auto` (default), `none`, `layer`, `row` | both | model reload | wired | none |
+| `hardware.main_gpu` | integer | unset (auto); overrides the derived GPU index when `split_mode` resolves to `none` | both | model reload | wired | none |
 | `hardware.cpu_moe`<br>`hardware.n_cpu_moe` | bool-or-`auto` / integer | family or planner default | both | model reload | unwired | none |
 | `hardware.fit_target_mib` | integer | derived from `safety_margin_gb` or an explicit override | both | model reload | partial (the offline GPU tuner reads it; live serving placement ignores it) | none |
 | `hardware.safety_margin_gb` | float | not a saved key; documented mapping only | both | model reload | wired (feeds `fit_target_mib` derivation) | none |
 | `hardware.fit_context` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 | `hardware.lora_adapters` | array of string | `[]` | both | model reload | unwired | none |
 | `hardware.control_vectors` | array of string | `[]` | both | model reload | unwired | none |
-| `hardware.check_tensors` | boolean | `false` | both | model reload | unwired | none |
+| `hardware.check_tensors` | boolean | `false` | both | model reload | wired | none |
 | `hardware.mmap` | bool-or-`auto` | `auto` | both | model reload | wired | `--mmap` |
 | `hardware.mlock` | boolean | `false` | both | model reload | wired | `--mlock` |
-| `hardware.direct_io` | boolean | `false` | both | model reload | unwired | none |
-| `hardware.repack` | boolean | `false` | both | model reload | unwired (bridge hardcodes repack enabled) | none |
-| `hardware.op_offload` | boolean | `false` | both | model reload | unwired | none |
-| `hardware.no_host_buffer` | boolean | `false` | both | model reload | unwired | none |
+| `hardware.direct_io` | boolean | `false`; takes precedence over `mmap`/`mlock` when `true` | both | model reload | wired | none |
+| `hardware.repack` | boolean | `false` | both | model reload | wired | none |
+| `hardware.op_offload` | boolean | unset preserves llama.cpp's derived default (currently enabled); `false`/`true` force it | both | model reload | wired | none |
+| `hardware.no_host_buffer` | boolean | `false` | both | model reload | wired | none |
 | `hardware.warmup` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
 
 Missing TOML for this group: LoRA per-adapter scale, control-vector scale and

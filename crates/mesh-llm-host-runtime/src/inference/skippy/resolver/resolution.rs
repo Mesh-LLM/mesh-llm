@@ -389,6 +389,38 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         global_hardware.and_then(|hardware| hardware.mlock),
     )
     .unwrap_or(false);
+    let repack = pick_owned(
+        model_hardware.and_then(|hardware| hardware.repack),
+        global_hardware.and_then(|hardware| hardware.repack),
+    )
+    .unwrap_or(false);
+    let op_offload = pick_owned(
+        model_hardware.and_then(|hardware| hardware.op_offload),
+        global_hardware.and_then(|hardware| hardware.op_offload),
+    );
+    let no_host_buffer = pick_owned(
+        model_hardware.and_then(|hardware| hardware.no_host_buffer),
+        global_hardware.and_then(|hardware| hardware.no_host_buffer),
+    )
+    .unwrap_or(false);
+    let check_tensors = pick_owned(
+        model_hardware.and_then(|hardware| hardware.check_tensors),
+        global_hardware.and_then(|hardware| hardware.check_tensors),
+    )
+    .unwrap_or(false);
+    let direct_io = pick_owned(
+        model_hardware.and_then(|hardware| hardware.direct_io),
+        global_hardware.and_then(|hardware| hardware.direct_io),
+    )
+    .unwrap_or(false);
+    let main_gpu = pick_owned(
+        model_hardware.and_then(|hardware| hardware.main_gpu),
+        global_hardware.and_then(|hardware| hardware.main_gpu),
+    );
+    let split_mode = resolve_split_mode(
+        model_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
+        global_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
+    )?;
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
         global_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -420,6 +452,13 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         gpu_layers,
         mmap,
         mlock,
+        repack,
+        op_offload,
+        no_host_buffer,
+        check_tensors,
+        direct_io,
+        main_gpu,
+        split_mode,
         fit_target_mib,
         resolved_model_path,
         projector_path,
@@ -438,6 +477,22 @@ fn resolve_mmap_override(
         Some(BoolOrAuto::String(value)) if value.eq_ignore_ascii_case("auto") => None,
         Some(BoolOrAuto::String(_)) => bail!("hardware.mmap must be a boolean or \"auto\""),
     })
+}
+
+fn resolve_split_mode(
+    model_split_mode: Option<&str>,
+    global_split_mode: Option<&str>,
+) -> Result<skippy_protocol::SplitMode> {
+    match model_split_mode.or(global_split_mode) {
+        None => Ok(skippy_protocol::SplitMode::Auto),
+        Some(value) if value.eq_ignore_ascii_case("auto") => Ok(skippy_protocol::SplitMode::Auto),
+        Some(value) if value.eq_ignore_ascii_case("none") => Ok(skippy_protocol::SplitMode::None),
+        Some(value) if value.eq_ignore_ascii_case("layer") => Ok(skippy_protocol::SplitMode::Layer),
+        Some(value) if value.eq_ignore_ascii_case("row") => Ok(skippy_protocol::SplitMode::Row),
+        Some(other) => bail!(
+            "hardware.split_mode must be \"auto\", \"none\", \"layer\", or \"row\", got {other:?}"
+        ),
+    }
 }
 
 fn resolve_projector_path(context: &ResolverContext<'_>) -> Option<PathBuf> {

@@ -259,6 +259,13 @@ pub struct RuntimeConfig {
     pub kv_offload: i32,
     pub kv_unified: i32,
     pub swa_full: i32,
+    pub op_offload: i32,
+    pub no_host_buffer: bool,
+    pub check_tensors: bool,
+    pub use_direct_io: bool,
+    pub has_main_gpu_override: bool,
+    pub main_gpu: i32,
+    pub split_mode: i32,
 }
 
 /// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.
