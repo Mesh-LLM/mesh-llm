@@ -3,6 +3,7 @@ use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
+use std::borrow::Cow;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -202,6 +203,38 @@ impl BufferedHttpRequest {
         }
         self.raw
             .splice(header_end + 2..header_end + 2, marker.into_bytes());
+    }
+
+    /// Guarantee the raw bytes forwarded for this request carry a capsule
+    /// client nonce, minting one here (once) when absent.
+    ///
+    /// Each retry attempt in `route_model_request_inner` forwards these same
+    /// raw bytes to a (possibly different) target's frontend, which mints its
+    /// own nonce only when the request doesn't already carry one. Without
+    /// this, a request that retries across targets would get a fresh nonce
+    /// per attempt instead of one stable value for the whole logical request.
+    pub(crate) fn raw_with_stable_client_nonce(&self) -> Cow<'_, [u8]> {
+        let Some(header_end) = self.raw.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return Cow::Borrowed(&self.raw);
+        };
+        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+        let has_nonce = self.raw[..header_end]
+            .split(|byte| *byte == b'\r' || *byte == b'\n')
+            .any(|line| {
+                line.split(|byte| *byte == b':')
+                    .next()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(nonce_header.as_bytes()))
+            });
+        if has_nonce {
+            return Cow::Borrowed(&self.raw);
+        }
+        let marker = format!("{nonce_header}: {}\r\n", uuid::Uuid::new_v4());
+        if header_end.saturating_add(4).saturating_add(marker.len()) > MAX_HEADER_BYTES {
+            return Cow::Borrowed(&self.raw);
+        }
+        let mut raw = self.raw.clone();
+        raw.splice(header_end + 2..header_end + 2, marker.into_bytes());
+        Cow::Owned(raw)
     }
 }
 
@@ -1279,6 +1312,60 @@ mod tests {
         assert_eq!(
             raw_lifecycle_owner_from_header_prefix(&request.raw),
             Some(request.request_id)
+        );
+    }
+
+    fn client_nonce_header_value(raw: &[u8]) -> Option<String> {
+        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+        std::str::from_utf8(raw).ok()?.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(nonce_header)
+                .then(|| value.trim().to_string())
+        })
+    }
+
+    #[tokio::test]
+    async fn raw_with_stable_client_nonce_mints_once_for_every_retry_attempt() {
+        let request = read_request_from_parts(vec![
+            b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}"
+                .to_vec(),
+        ])
+        .await;
+
+        // Mirrors how `route_model_request_inner` calls this once, before the
+        // retry loop, and reuses the same bytes for every attempt.
+        let forwarding_raw = request.raw_with_stable_client_nonce();
+        let first_attempt = forwarding_raw.clone().into_owned();
+        let second_attempt = forwarding_raw.clone().into_owned();
+
+        let first_nonce =
+            client_nonce_header_value(&first_attempt).expect("first attempt carries a nonce");
+        let second_nonce =
+            client_nonce_header_value(&second_attempt).expect("second attempt carries a nonce");
+        assert_eq!(
+            first_nonce, second_nonce,
+            "a retried request must carry the identical nonce across attempts"
+        );
+        assert!(uuid::Uuid::parse_str(&first_nonce).is_ok());
+    }
+
+    #[tokio::test]
+    async fn raw_with_stable_client_nonce_preserves_a_client_supplied_nonce() {
+        let supplied_nonce = "11111111-1111-4111-8111-111111111111";
+        let request = read_request_from_parts(vec![
+            format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{}: {supplied_nonce}\r\nContent-Length: 2\r\n\r\n{{}}",
+                openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+            )
+            .into_bytes(),
+        ])
+        .await;
+
+        let forwarding_raw = request.raw_with_stable_client_nonce();
+        assert_eq!(
+            client_nonce_header_value(&forwarding_raw),
+            Some(supplied_nonce.to_string())
         );
     }
 

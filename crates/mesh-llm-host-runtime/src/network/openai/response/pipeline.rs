@@ -2,9 +2,25 @@ use crate::mesh;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+use super::probe::append_capsule_nonce_headers;
 use crate::network::openai::request_parse::pipeline_request_supported;
 use crate::network::openai::response::common::parse_token_usage_from_json_body;
 use mesh_llm_events::logging::events::TokenUsage;
+
+/// Read the capsule client nonce and origin-marker headers off a reqwest
+/// response, so the hand-built responses below (which otherwise carry over
+/// only `content-type`) still echo them to the client.
+fn capsule_nonce_headers(headers: &reqwest::header::HeaderMap) -> (Option<String>, Option<String>) {
+    let nonce = headers
+        .get(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let origin = headers
+        .get(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str())
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    (nonce, origin)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineProxyResult {
@@ -133,9 +149,16 @@ async fn relay_pipeline_streaming_response(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("text/event-stream")
         .to_string();
-    let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n\r\n",
+    let (client_nonce, nonce_origin) = capsule_nonce_headers(resp.headers());
+    let mut header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
     );
+    append_capsule_nonce_headers(
+        &mut header,
+        client_nonce.as_deref(),
+        nonce_origin.as_deref(),
+    );
+    header.push_str("\r\n");
     if client_stream.write_all(header.as_bytes()).await.is_err() {
         return PipelineProxyResult::Dropped;
     }
@@ -224,13 +247,20 @@ async fn relay_pipeline_non_streaming_response(
     resp: reqwest::Response,
 ) -> PipelineProxyResult {
     let status = resp.status();
+    let (client_nonce, nonce_origin) = capsule_nonce_headers(resp.headers());
     match resp.bytes().await {
         Ok(resp_bytes) => {
             let usage = parse_token_usage_from_json_body(&resp_bytes);
-            let header = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            let mut header = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
                 resp_bytes.len()
             );
+            append_capsule_nonce_headers(
+                &mut header,
+                client_nonce.as_deref(),
+                nonce_origin.as_deref(),
+            );
+            header.push_str("\r\n");
             if client_stream.write_all(header.as_bytes()).await.is_err()
                 || client_stream.write_all(&resp_bytes).await.is_err()
                 || client_stream.shutdown().await.is_err()
