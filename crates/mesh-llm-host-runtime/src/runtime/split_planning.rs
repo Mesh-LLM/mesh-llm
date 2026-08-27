@@ -76,6 +76,7 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) stage_transfer_latency_ms: Option<u32>,
     pub(super) sustained_mem_bandwidth_mib_per_s: Option<u32>,
     pub(super) sustained_compute_gflop_per_s: Option<u32>,
+    pub(super) observed_decode_us_per_layer: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,6 +162,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
                 stage_transfer_latency_ms: node.stage_transfer_latency_ms,
                 sustained_mem_bandwidth_mib_per_s: node.sustained_mem_bandwidth_mib_per_s,
                 sustained_compute_gflop_per_s: node.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: node.observed_decode_us_per_layer,
             })
             .collect(),
         context_length_override: input.context_length_override,
@@ -403,6 +405,7 @@ fn runtime_slice_plan_input(
                 stage_transfer_latency_ms: participant.rtt_ms,
                 sustained_mem_bandwidth_mib_per_s: participant.sustained_mem_bandwidth_mib_per_s,
                 sustained_compute_gflop_per_s: participant.sustained_compute_gflop_per_s,
+                observed_decode_us_per_layer: participant.observed_decode_us_per_layer,
             })
             .collect(),
         edges: participant_edges(participants),
@@ -428,6 +431,7 @@ fn strip_perf_aware_signals(plan_input: &mut SplitTopologyPlanInput) {
     for node in &mut plan_input.nodes {
         node.sustained_mem_bandwidth_mib_per_s = None;
         node.sustained_compute_gflop_per_s = None;
+        node.observed_decode_us_per_layer = None;
     }
     plan_input.edges = Vec::new();
     plan_input.activation_frame_bytes = 0;
@@ -641,12 +645,20 @@ pub(super) fn split_participant_labels(participants: &[SplitParticipant]) -> Vec
         .iter()
         .map(|participant| {
             format!(
-                "{}:{} cached={} missing={} rtt={}ms transfer={}",
+                "{}:{} cached={} missing={} rtt={}ms rtt_samples={} rtt_first_age={}ms rtt_last_age={}ms rtt_corroborated={} transfer={}",
                 participant.node_id.fmt_short(),
                 format_gb(participant.vram_bytes),
                 format_gb(participant.cached_slice_bytes),
                 format_gb(participant.missing_artifact_bytes),
                 participant.rtt_ms.unwrap_or_default(),
+                participant.rtt_sample_count,
+                participant
+                    .rtt_first_sample_age_ms
+                    .map_or_else(|| "-".to_string(), |age| age.to_string()),
+                participant
+                    .rtt_last_sample_age_ms
+                    .map_or_else(|| "-".to_string(), |age| age.to_string()),
+                participant.rtt_corroborated,
                 participant.artifact_transfer_supported
             )
         })
@@ -1169,13 +1181,11 @@ mod tests {
                 .all(|node| node.stage_transfer_latency_ms.is_some())
         );
         // Perf-aware signals are stripped.
-        assert!(
-            plan_input
-                .nodes
-                .iter()
-                .all(|node| node.sustained_mem_bandwidth_mib_per_s.is_none()
-                    && node.sustained_compute_gflop_per_s.is_none())
-        );
+        assert!(plan_input.nodes.iter().all(
+            |node| node.sustained_mem_bandwidth_mib_per_s.is_none()
+                && node.sustained_compute_gflop_per_s.is_none()
+                && node.observed_decode_us_per_layer.is_none()
+        ));
         assert!(plan_input.edges.is_empty());
         assert_eq!(plan_input.activation_frame_bytes, 0);
     }

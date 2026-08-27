@@ -212,6 +212,26 @@ pub struct DisplayLatency {
     pub observer_id: Option<EndpointId>,
 }
 
+/// Confidence metadata retained behind the planner's best-seen RTT floor.
+///
+/// This intentionally records only observation count and timing. It is not a
+/// variance or jitter estimate: iroh owns path-quality selection, while split
+/// placement only needs to distinguish a one-off early sample from a floor
+/// corroborated across the connection-settle window.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RttObservationWindow {
+    pub(crate) sample_count: u32,
+    pub(crate) first_observed_at: std::time::Instant,
+    pub(crate) last_observed_at: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RttObservationAges {
+    pub(crate) sample_count: u32,
+    pub(crate) first_sample_age_ms: u64,
+    pub(crate) last_sample_age_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     pub id: EndpointId,
@@ -224,6 +244,9 @@ pub struct PeerInfo {
     pub models: Vec<String>,
     pub vram_bytes: u64,
     pub rtt_ms: Option<u32>,
+    /// Observation confidence for `rtt_ms`, whose value remains the minimum
+    /// accepted sample. Higher samples still advance this window.
+    pub(crate) rtt_observation_window: Option<RttObservationWindow>,
     pub model_source: Option<String>,
     pub admitted: bool,
     /// All models assigned to this peer, even if not yet healthy.
@@ -334,6 +357,7 @@ impl PeerInfo {
             models: ann.models.clone(),
             vram_bytes: ann.vram_bytes,
             rtt_ms: None,
+            rtt_observation_window: None,
             model_source: ann.model_source.clone(),
             admitted: false,
             serving_models: ann.serving_models.clone(),
@@ -385,6 +409,15 @@ impl PeerInfo {
     /// Return the most recent direct RTT sample for display, falling back to best-seen RTT.
     pub fn current_direct_rtt_ms(&self) -> Option<u32> {
         self.display_rtt.as_ref().map(|d| d.rtt_ms).or(self.rtt_ms)
+    }
+
+    pub(crate) fn rtt_observation_ages(&self) -> Option<RttObservationAges> {
+        let window = self.rtt_observation_window?;
+        Some(RttObservationAges {
+            sample_count: window.sample_count,
+            first_sample_age_ms: super::elapsed_ms_u64(window.first_observed_at.elapsed()),
+            last_sample_age_ms: super::elapsed_ms_u64(window.last_observed_at.elapsed()),
+        })
     }
 
     /// Sustained large-frame throughput for this peer link from a recent

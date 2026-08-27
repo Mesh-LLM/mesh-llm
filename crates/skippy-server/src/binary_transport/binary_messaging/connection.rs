@@ -588,6 +588,7 @@ fn handle_binary_connection_messages(
                     result
                 };
                 let compute_ms = elapsed_ms(compute_started);
+                crate::stage_performance::record_stage_decode_timing(config, &message, compute_ms);
                 compute_end_unix_nanos = now_unix_nanos() as u64;
                 (result.0, result.1, result.2, result.3, compute_ms)
             };

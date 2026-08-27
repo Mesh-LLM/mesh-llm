@@ -57,6 +57,7 @@ fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::Peer
         models: vec![model.to_string()],
         vram_bytes: 16 * 1024 * 1024 * 1024,
         rtt_ms: None,
+        rtt_observation_window: None,
         model_source: None,
         admitted: true,
         serving_models: vec![model.to_string()],

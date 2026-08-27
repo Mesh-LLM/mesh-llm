@@ -87,6 +87,7 @@ fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
         models: vec![],
         vram_bytes: 0,
         rtt_ms: None,
+        rtt_observation_window: None,
         model_source: None,
         admitted: true,
         serving_models: vec![],
