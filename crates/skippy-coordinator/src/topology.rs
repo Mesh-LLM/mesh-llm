@@ -251,9 +251,10 @@ fn plan_topology_with_required_stage0(
                 });
                 if let Some(candidate) = best_for_count {
                     if latency_aware {
-                        if best_latency_candidate.as_ref().is_none_or(|current| {
-                            latency_candidate_better(&candidate, current, input)
-                        }) {
+                        if best_latency_candidate
+                            .as_ref()
+                            .is_none_or(|current| latency_candidate_better(&candidate, current))
+                        {
                             best_latency_candidate = Some(candidate);
                         }
                         continue;
@@ -543,9 +544,8 @@ fn fit_candidate(
         // Target-met is scored against the modeled decode TPOT, the best
         // estimate of it this plan has. Network-only scoring would mark
         // single-stage plans as trivially meeting any target.
-        let decode_tpot_target_met = modeled_decode_tpot_us
-            .and_then(|tpot_us| u32::try_from(tpot_us / 1_000).ok())
-            .and_then(|tpot_ms| input.target_decode_tpot_ms.map(|target| tpot_ms <= target));
+        let decode_tpot_target_met =
+            decode_tpot_target_met_us(modeled_decode_tpot_us, input.target_decode_tpot_ms);
         return Some(CandidatePlan {
             plan: TopologyPlan {
                 context_length,
@@ -665,19 +665,11 @@ fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &Candidat
         || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
 }
 
-fn latency_candidate_better(
-    candidate: &CandidatePlan,
-    current: &CandidatePlan,
-    input: &TopologyPlanningInput,
-) -> bool {
-    latency_candidate_ordering(candidate, current, input) == Ordering::Greater
+fn latency_candidate_better(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    latency_candidate_ordering(candidate, current) == Ordering::Greater
 }
 
-fn latency_candidate_ordering(
-    left: &CandidatePlan,
-    right: &CandidatePlan,
-    input: &TopologyPlanningInput,
-) -> Ordering {
+fn latency_candidate_ordering(left: &CandidatePlan, right: &CandidatePlan) -> Ordering {
     // Target-met outranks both estimates: a candidate that meets the decode
     // TPOT target must not lose to one that misses it, whether compared on
     // the modeled TPOT or the network-only estimate. This preserves the
@@ -691,16 +683,8 @@ fn latency_candidate_ordering(
         .plan
         .estimated_decode_network_ms_per_token
         .unwrap_or_default();
-    let left_target_met = decode_tpot_target_met(
-        left.plan.estimated_decode_network_ms_per_token,
-        input.target_decode_tpot_ms,
-    )
-    .unwrap_or(true);
-    let right_target_met = decode_tpot_target_met(
-        right.plan.estimated_decode_network_ms_per_token,
-        input.target_decode_tpot_ms,
-    )
-    .unwrap_or(true);
+    let left_target_met = left.plan.decode_tpot_target_met.unwrap_or(true);
+    let right_target_met = right.plan.decode_tpot_target_met.unwrap_or(true);
 
     left_target_met
         .cmp(&right_target_met)
@@ -827,6 +811,10 @@ fn candidate_network_ms_per_token(
 
 fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
     Some(estimate? <= target?)
+}
+
+fn decode_tpot_target_met_us(estimate_us: Option<u128>, target_ms: Option<u32>) -> Option<bool> {
+    Some(estimate_us? <= u128::from(target_ms?).saturating_mul(1_000))
 }
 
 /// Modeled single-stream decode TPOT for a planned stage sequence, serial
@@ -1537,7 +1525,7 @@ mod tests {
     #[test]
     fn decode_tpot_target_met_uses_modeled_tpot() {
         // Target-met must be scored against the modeled decode TPOT
-        // (bottleneck stage service time + network), not the network-only
+        // (stage service time + network), not the network-only
         // estimate. Single-stage plans have zero network time but still
         // carry the full weight-streaming time of the model.
         // Model: 40 layers, 40 GiB weights (1 GiB/layer), KV 0.
@@ -1550,6 +1538,43 @@ mod tests {
         // 40 GiB at 400_000 MiB/s = 104.9 ms/token modeled decode TPOT —
         // far over a 10 ms target.
         assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn modeled_tpot_target_comparison_keeps_microsecond_precision() {
+        assert_eq!(
+            decode_tpot_target_met_us(Some(33_000), Some(33)),
+            Some(true)
+        );
+        assert_eq!(
+            decode_tpot_target_met_us(Some(33_001), Some(33)),
+            Some(false),
+            "a fractional-millisecond overrun must not be rounded into the target"
+        );
+    }
+
+    #[test]
+    fn candidate_ordering_uses_each_plans_scored_target_result() {
+        let candidate = |network_ms, target_met, modeled_us| CandidatePlan {
+            plan: TopologyPlan {
+                context_length: 65_536,
+                parallel_lanes: 1,
+                stages: Vec::new(),
+                estimated_decode_network_ms_per_token: Some(network_ms),
+                decode_tpot_target_met: Some(target_met),
+                modeled_decode_tpot_us: modeled_us,
+            },
+            minimum_remaining_vram: 0,
+            total_remaining_vram: 0,
+            modeled_decode_tpot_us: modeled_us,
+        };
+        let modeled_miss = candidate(1, false, Some(100_000));
+        let fallback_meets = candidate(20, true, None);
+
+        assert!(
+            latency_candidate_better(&fallback_meets, &modeled_miss),
+            "a target-meeting fallback candidate must outrank a modeled miss even when its network-only estimate is higher"
+        );
     }
 
     #[test]
