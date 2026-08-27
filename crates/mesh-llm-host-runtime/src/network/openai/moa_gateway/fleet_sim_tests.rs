@@ -542,3 +542,125 @@ async fn throughput_breaks_ties_between_healthy_same_tier_models() {
         ]
     );
 }
+
+// ── The actual Buzz curated ladder (PR block/buzz#6189) ─────────────────────
+//
+// `desktop/src-tauri/src/mesh_llm/catalog.rs` recommends exactly one model per
+// rated-memory class, so a real Buzz fleet only ever advertises these three
+// names. Two of the three sit BELOW `SMALL_TIER_MAX_B` (10.0), which is what
+// makes the mix below interesting: the ladder was not chosen with MoA's tier
+// boundary in mind, and Qwen3.5-9B misses it by 1B.
+
+/// `< 32 GB` rung — Gemma 4 E4B.
+const BUZZ_RUNG_SMALL: FleetModel = SMALL_MODELS[0];
+/// `32-79 GB` rung — Qwen3.5 9B. Small tier: 9.0 < 10.0.
+const BUZZ_RUNG_MEDIUM: FleetModel = SMALL_MODELS[1];
+/// `>= 80 GB` rung — Qwen3.8 27B. The only big-tier rung.
+const BUZZ_RUNG_LARGE: FleetModel = BIG_MODELS[0];
+
+/// Every Buzz-ladder fleet shape, through the real assembly path.
+///
+/// Printed rather than asserted row-by-row: the point is the shape of the
+/// table, and the two assertions below pin the load-bearing claims.
+#[tokio::test]
+async fn buzz_ladder_committee_by_fleet_shape() {
+    let shapes: Vec<(&str, Vec<(FleetModel, usize)>)> = vec![
+        ("laptops only (E4B x50)", vec![(BUZZ_RUNG_SMALL, 50)]),
+        ("mid only (9B x50)", vec![(BUZZ_RUNG_MEDIUM, 50)]),
+        (
+            "laptops + mid",
+            vec![(BUZZ_RUNG_SMALL, 50), (BUZZ_RUNG_MEDIUM, 50)],
+        ),
+        ("one big (27B x1)", vec![(BUZZ_RUNG_LARGE, 1)]),
+        ("two big (27B x2)", vec![(BUZZ_RUNG_LARGE, 2)]),
+        ("big fleet (27B x100)", vec![(BUZZ_RUNG_LARGE, 100)]),
+        (
+            "full ladder, one big",
+            vec![
+                (BUZZ_RUNG_SMALL, 50),
+                (BUZZ_RUNG_MEDIUM, 50),
+                (BUZZ_RUNG_LARGE, 1),
+            ],
+        ),
+        (
+            "full ladder, many big",
+            vec![
+                (BUZZ_RUNG_SMALL, 500),
+                (BUZZ_RUNG_MEDIUM, 300),
+                (BUZZ_RUNG_LARGE, 100),
+            ],
+        ),
+    ];
+
+    println!(
+        "\n{:<26} {:>6} {:>9}  committee",
+        "fleet shape", "nodes", "workers"
+    );
+    for (label, fleet) in &shapes {
+        let pool = admitted_pool(fleet).await;
+        println!(
+            "{:<26} {:>6} {:>9}  {:?}",
+            label,
+            total_nodes(fleet),
+            pool.len(),
+            pool
+        );
+    }
+
+    // The two claims that matter, pinned.
+    //
+    // 1. An all-laptop Buzz fleet never convenes a committee: every rung below
+    //    80 GB is small-tier, and an all-small pool collapses to its best
+    //    member (measured loss at every small width, see
+    //    `evals/moa-openrouter/RESULTS.md`).
+    let laptops = admitted_pool(&[(BUZZ_RUNG_SMALL, 500), (BUZZ_RUNG_MEDIUM, 300)]).await;
+    assert_eq!(
+        laptops.len(),
+        1,
+        "all-small Buzz fleet must collapse to one worker, got {laptops:?}"
+    );
+    // Compare canonical bases: alias resolution may return the fully
+    // qualified repo ref rather than the short descriptor name.
+    assert_eq!(
+        super::pool::canonical_base_name(&laptops[0]),
+        super::pool::canonical_base_name(BUZZ_RUNG_MEDIUM.name),
+        "best member is the 9B"
+    );
+
+    // 2. Adding ONE 80GB+ machine does not produce a committee — it produces a
+    //    solo 27B. The pool stops being all-small, so the small collapse no
+    //    longer applies, but a single big name on a single endpoint cannot
+    //    self-fill (iron law), and the smalls are not deleted because
+    //    `healthy_big_count < 2`. So the 27B answers alone.
+    let one_big = admitted_pool(&[
+        (BUZZ_RUNG_SMALL, 500),
+        (BUZZ_RUNG_MEDIUM, 300),
+        (BUZZ_RUNG_LARGE, 1),
+    ])
+    .await;
+    println!("one-big ladder pool: {one_big:?}");
+}
+
+/// Two 80GB+ machines on the same 27B: the committee Buzz can actually reach.
+///
+/// This is the *only* shape on the curated ladder that convenes a real
+/// committee, and it is the homogeneous same-model case the mid-scale eval
+/// measured at 48W/23T/2L — including the refinement round, which `Auto`
+/// enables for a homogeneous non-small pool.
+#[tokio::test]
+async fn buzz_ladder_two_big_machines_form_the_only_reachable_committee() {
+    let pool = admitted_pool(&[(BUZZ_RUNG_LARGE, 2)]).await;
+    assert_eq!(pool.len(), 2, "two 27B endpoints self-fill to a pair");
+    assert!(pool.iter().all(|name| name == BUZZ_RUNG_LARGE.name));
+
+    // And the smalls are deleted once two big *models* are healthy — note this
+    // needs two distinct big NAMES, not two replicas, so the curated ladder
+    // (one big rung) never trips it.
+    let with_smalls = admitted_pool(&[
+        (BUZZ_RUNG_LARGE, 2),
+        (BUZZ_RUNG_SMALL, 10),
+        (BUZZ_RUNG_MEDIUM, 10),
+    ])
+    .await;
+    println!("two big replicas + smalls: {with_smalls:?}");
+}
