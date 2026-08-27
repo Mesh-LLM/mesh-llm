@@ -146,6 +146,24 @@ fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
     }
 }
 
+fn fleet_peer_with_health(
+    seed: u32,
+    model: FleetModel,
+    admission: Option<crate::proto::node::InferenceAdmissionState>,
+    throughput_milli: Option<u64>,
+) -> mesh::PeerInfo {
+    let mut peer = fleet_peer(seed, model);
+    peer.inference_admission_state = admission;
+    if let Some(avg_tokens_per_second_milli) = throughput_milli {
+        peer.advertised_model_throughput = vec![crate::network::metrics::ModelThroughputHint {
+            model_name: model.name.to_string(),
+            avg_tokens_per_second_milli,
+            throughput_samples: 8,
+        }];
+    }
+    peer
+}
+
 /// Build a node whose mesh view is `fleet`: (model, replica count) pairs.
 async fn node_with_fleet(fleet: &[(FleetModel, usize)]) -> mesh::Node {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
@@ -278,4 +296,249 @@ async fn calls_per_turn_vs_fleet_size() {
             pool.len()
         );
     }
+}
+
+#[tokio::test]
+async fn homogeneous_fleet_uses_two_distinct_replicas() {
+    let pool = admitted_pool(&[(BIG_MODELS[0], 2_000)]).await;
+    assert_eq!(pool.len(), 2, "same-model self-fill should form a pair");
+    assert!(pool.iter().all(|name| name == BIG_MODELS[0].name));
+}
+
+#[tokio::test]
+async fn paused_and_deprioritized_replicas_release_affinity() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let paused = fleet_peer_with_health(
+        1,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::RemotePaused),
+        Some(90_000),
+    );
+    let deprioritized = fleet_peer_with_health(
+        2,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+        Some(80_000),
+    );
+    let healthy = fleet_peer_with_health(
+        3,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::Accepting),
+        Some(40_000),
+    );
+    let paused_id = paused.id;
+    let deprioritized_id = deprioritized.id;
+    let healthy_id = healthy.id;
+    node.insert_test_peer(paused).await;
+    node.insert_test_peer(deprioritized).await;
+    node.insert_test_peer(healthy).await;
+
+    let hosts = node.hosts_for_model(BIG_MODELS[0].name).await;
+    assert_eq!(hosts, vec![healthy_id, deprioritized_id]);
+    assert!(!hosts.contains(&paused_id));
+}
+
+#[tokio::test]
+async fn healthy_small_model_precedes_deprioritized_big_actor() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.insert_test_peer(fleet_peer_with_health(
+        1,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+        Some(80_000),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_health(
+        2,
+        BIG_MODELS[1],
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+        Some(70_000),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_health(
+        3,
+        SMALL_MODELS[1],
+        Some(InferenceAdmissionState::Accepting),
+        Some(20_000),
+    ))
+    .await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+    assert_eq!(models.len(), 3, "small spillover must remain admitted");
+    assert_eq!(
+        super::pool::canonical_base_name(&models[actors[0]].name),
+        super::pool::canonical_base_name(SMALL_MODELS[1].name)
+    );
+}
+
+#[tokio::test]
+async fn local_small_model_absorbs_load_when_big_models_are_deprioritized() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let local_name = SMALL_MODELS[1].name.to_string();
+    node.set_hosted_models(vec![local_name.clone()]).await;
+    // A remote descriptor supplies authoritative size metadata for the same
+    // canonical model while the target table selects the local backend.
+    node.insert_test_peer(fleet_peer_with_health(
+        1,
+        SMALL_MODELS[1],
+        Some(InferenceAdmissionState::RemotePaused),
+        Some(20_000),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_health(
+        2,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+        Some(80_000),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_health(
+        3,
+        BIG_MODELS[1],
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+        Some(70_000),
+    ))
+    .await;
+
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        local_name.clone(),
+        vec![election::InferenceTarget::Local(19_337)],
+    );
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+
+    assert_eq!(
+        models.len(),
+        3,
+        "healthy local spillover must remain admitted"
+    );
+    assert_eq!(
+        super::pool::canonical_base_name(&models[actors[0]].name),
+        super::pool::canonical_base_name(&local_name)
+    );
+}
+
+#[tokio::test]
+async fn mixed_version_admission_states_remain_routable() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let legacy = fleet_peer_with_health(1, BIG_MODELS[0], None, None);
+    let unspecified = fleet_peer_with_health(
+        2,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::Unspecified),
+        None,
+    );
+    let legacy_id = legacy.id;
+    let unspecified_id = unspecified.id;
+    node.insert_test_peer(legacy).await;
+    node.insert_test_peer(unspecified).await;
+
+    let hosts = node.hosts_for_model(BIG_MODELS[0].name).await;
+    assert_eq!(hosts.len(), 2);
+    assert!(hosts.contains(&legacy_id));
+    assert!(hosts.contains(&unspecified_id));
+}
+
+#[tokio::test]
+async fn sticky_replica_releases_when_hot_and_recovers_without_extra_reshuffle() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let peers = (1..=4)
+        .map(|seed| {
+            fleet_peer_with_health(
+                seed,
+                BIG_MODELS[0],
+                Some(InferenceAdmissionState::Accepting),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    for peer in &peers {
+        node.insert_test_peer(peer.clone()).await;
+    }
+
+    let initial = node.hosts_for_model(BIG_MODELS[0].name).await;
+    let hot_id = initial[0];
+    let mut hot = peers
+        .iter()
+        .find(|peer| peer.id == hot_id)
+        .expect("selected peer")
+        .clone();
+    hot.inference_admission_state = Some(InferenceAdmissionState::AcceptingDeprioritized);
+    node.insert_test_peer(hot.clone()).await;
+
+    let under_duress = node.hosts_for_model(BIG_MODELS[0].name).await;
+    assert_ne!(under_duress[0], hot_id);
+    assert_eq!(under_duress.last(), Some(&hot_id));
+    assert_eq!(under_duress[..3], initial[1..]);
+
+    hot.inference_admission_state = Some(InferenceAdmissionState::Accepting);
+    node.insert_test_peer(hot).await;
+    assert_eq!(node.hosts_for_model(BIG_MODELS[0].name).await, initial);
+}
+
+#[tokio::test]
+async fn throughput_breaks_ties_between_healthy_same_tier_models() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.insert_test_peer(fleet_peer_with_health(
+        1,
+        BIG_MODELS[0],
+        Some(InferenceAdmissionState::Accepting),
+        Some(20_000),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_health(
+        2,
+        BIG_MODELS[1],
+        Some(InferenceAdmissionState::Accepting),
+        Some(60_000),
+    ))
+    .await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+    let ranked_bases = actors
+        .iter()
+        .map(|&index| super::pool::canonical_base_name(&models[index].name))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranked_bases,
+        vec![
+            super::pool::canonical_base_name(BIG_MODELS[1].name),
+            super::pool::canonical_base_name(BIG_MODELS[0].name)
+        ]
+    );
 }
