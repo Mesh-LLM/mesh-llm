@@ -126,7 +126,45 @@ function isMarkdownReferenceDefinition(value: string, start: number, close: numb
   return /^ {0,3}$/.test(value.slice(lineStart, start))
 }
 
-function normalizePlainText(value: string): string {
+function normalizedReferenceLabel(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function collectReferenceDefinitionLabels(value: string, start: number, end: number, labels: Set<string>): void {
+  let index = start
+  while (index < end) {
+    if (value[index] !== '[' || isEscapedAt(value, index)) {
+      index += 1
+      continue
+    }
+
+    const close = findUnescapedSequence(value, ']', index + 1)
+    if (close < 0 || close >= end) {
+      index += 1
+      continue
+    }
+
+    if (isMarkdownReferenceDefinition(value, index, close)) {
+      labels.add(normalizedReferenceLabel(value.slice(index + 1, close)))
+    }
+    index = close + 1
+  }
+}
+
+function shortcutReferenceLabels(value: string, ranges: readonly ProtectedRange[]): ReadonlySet<string> {
+  const labels = new Set<string>()
+  let cursor = 0
+
+  for (const range of ranges) {
+    if (range.start < cursor) continue
+    collectReferenceDefinitionLabels(value, cursor, range.start, labels)
+    cursor = range.end
+  }
+  collectReferenceDefinitionLabels(value, cursor, value.length, labels)
+  return labels
+}
+
+function normalizePlainText(value: string, shortcutLabels: ReadonlySet<string>): string {
   let normalized = ''
   let index = 0
 
@@ -174,7 +212,8 @@ function normalizePlainText(value: string): string {
         const followingCharacter = value[close + 1]
         const isMarkdownLink = followingCharacter === '(' || followingCharacter === '['
         const isMarkdownDefinition = isMarkdownReferenceDefinition(value, index, close)
-        if (!isMarkdownLink && !isMarkdownDefinition && /\\[A-Za-z]+/.test(inner)) {
+        const isShortcutReference = shortcutLabels.has(normalizedReferenceLabel(inner))
+        if (!isMarkdownLink && !isMarkdownDefinition && !isShortcutReference && /\\[A-Za-z]+/.test(inner)) {
           normalized += `$${inner}$`
           index = close + 1
           continue
@@ -219,17 +258,18 @@ function preservePlainTextMathDelimiters(value: string): string {
  */
 export function normalizeMathDelimiters(value: string): string {
   const ranges = protectedRanges(value)
-  if (ranges.length === 0) return normalizePlainText(value)
+  const shortcutLabels = shortcutReferenceLabels(value, ranges)
+  if (ranges.length === 0) return normalizePlainText(value, shortcutLabels)
 
   let normalized = ''
   let cursor = 0
   for (const range of ranges) {
     if (range.start < cursor) continue
-    normalized += normalizePlainText(value.slice(cursor, range.start))
+    normalized += normalizePlainText(value.slice(cursor, range.start), shortcutLabels)
     normalized += value.slice(range.start, range.end)
     cursor = range.end
   }
-  return normalized + normalizePlainText(value.slice(cursor))
+  return normalized + normalizePlainText(value.slice(cursor), shortcutLabels)
 }
 
 /**
