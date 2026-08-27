@@ -47,6 +47,8 @@ just family-certify FAMILY /path/to/model.gguf \
   --split-layer K \
   --splits A,B \
   --activation-width H \
+  --wire-dtypes f16 \
+  --strict-dtype \
   --ctx-size 256 \
   --n-gpu-layers 999 \
   --corpus crates/skippy-bench/corpora/kv_mixed_prompts.jsonl \
