@@ -24,6 +24,11 @@ class CiArtifactActionTests(unittest.TestCase):
     def read_action(self, name: str) -> str:
         return (ACTIONS / name / "action.yml").read_text(encoding="utf-8")
 
+    def read_compute_changes(self) -> str:
+        return self.read_action("compute-changes") + "\n" + (
+            ACTIONS / "compute-changes" / "derive-outputs.sh"
+        ).read_text(encoding="utf-8")
+
     def test_external_actions_have_sha_and_release_provenance(self) -> None:
         action_files = sorted(ACTIONS.glob("*/action.yml"))
         workflow_files = sorted(
@@ -111,9 +116,18 @@ class CiArtifactActionTests(unittest.TestCase):
             contract,
         )
         self.assertIn(
+            "python3 -m pip install --disable-pip-version-check --no-input "
+            "-r ci/requirements-ci-python.txt",
+            contract,
+        )
+        self.assertIn(
             "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
             contract,
         )
+        requirements = (
+            ROOT / "ci" / "requirements-ci-python.txt"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(requirements, r"(?m)^PyYAML>=6\.0$")
         self.assertIn(
             "cargo run -p xtask -- repo-consistency release-targets",
             contract,
@@ -522,7 +536,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertNotIn("git ", debug)
 
     def test_windows_routes_cover_every_shared_product_primitive(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
         routing = action[
             action.index("WINDOWS_CPU_INPUTS=")
             : action.index("# SDK smokes are consumer tests")
@@ -544,6 +558,27 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 self.assertIn(workflow, cpu_routing)
                 self.assertIn(workflow, gpu_routing)
+
+        for input_name, route in (
+            ("WINDOWS_CPU_INPUTS", cpu_routing),
+            ("WINDOWS_GPU_INPUTS", gpu_routing),
+        ):
+            with self.subTest(input_name=input_name):
+                match = re.search(
+                    rf"{input_name}=.*?grep -E '([^']+)'",
+                    route,
+                )
+                self.assertIsNotNone(
+                    match,
+                    f"{input_name} classifier pattern was not found",
+                )
+                classifier = re.compile(match.group(1))
+                for action_path in (
+                    ".github/actions/compute-changes/action.yml",
+                    ".github/actions/compute-changes/derive-outputs.sh",
+                ):
+                    with self.subTest(action_path=action_path):
+                        self.assertRegex(action_path, classifier)
 
         for primitive in (
             "prepare-windows-host-input",
@@ -864,7 +899,7 @@ class CiArtifactActionTests(unittest.TestCase):
             )
 
     def test_push_routing_diffs_the_complete_event_range(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
         push_start = action.index(
             'elif [[ "${{ inputs.event_name }}" == "push" ]]',
         )
@@ -893,7 +928,7 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_runner_contract_routing_covers_cache_evidence_actions(
         self,
     ) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
         routing = action[
             action.index("RUNNER_CONTRACT_INPUTS=")
             : action.index("# Determine docs_only")
@@ -924,7 +959,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertIn(epoch_resolver, route)
 
     def test_justfile_release_primitives_route_backend_builds(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
         match = re.search(
             r"function is_backend_recipe\(name\).*?"
             r"return name ~ /\^\((.*?)\)\$/",
@@ -944,14 +979,13 @@ class CiArtifactActionTests(unittest.TestCase):
                 self.assertIn(recipe, recipe_names)
 
     def test_imported_justfile_sources_are_classified_on_both_diff_sides(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
 
         self.assertIn("grep -E '^Justfile$|^just/.+\\.just$'", action)
         self.assertIn("$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE", action)
-        self.assertIn("${{ inputs.head_sha }}:$JUSTFILE_SOURCE", action)
+        self.assertIn("$HEAD_SHA:$JUSTFILE_SOURCE", action)
         self.assertIn(
-            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "${{ inputs.base_sha }}" '
-            '"${{ inputs.head_sha }}")',
+            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "$BASE_SHA" "$HEAD_SHA")',
             action,
         )
         self.assertIn("git diff --name-status --no-renames", action)
@@ -974,7 +1008,7 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds(
         self,
     ) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
 
         self.assertIn(
             'justfile_backend_recipe_tokens "$JUSTFILE_SOURCE_BASE_SHA" '
@@ -982,7 +1016,7 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
         )
         self.assertIn(
-            'justfile_backend_recipe_tokens "${{ inputs.head_sha }}" '
+            'justfile_backend_recipe_tokens "$HEAD_SHA" '
             '> "$JUSTFILE_BACKEND_TOKENS_HEAD"',
             action,
         )
@@ -1000,7 +1034,7 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn('>> "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"', action)
 
     def test_backend_recipe_attributes_route_backend_builds(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
 
         self.assertIn("pending_attribute_lines[++pending_attribute_count] = NR", action)
         self.assertIn("print pending_attribute_lines[pending_index]", action)
@@ -1025,7 +1059,7 @@ class CiArtifactActionTests(unittest.TestCase):
                 )
 
     def test_root_justfile_import_graph_changes_fail_open_to_backend_builds(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
 
         self.assertIn("JUSTFILE_SOURCE_DIFF=$(git diff -U0", action)
         self.assertIn(
@@ -1040,7 +1074,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
 
     def test_sdk_routing_covers_every_direct_smoke_script(self) -> None:
-        action = self.read_action("compute-changes")
+        action = self.read_compute_changes()
         match = re.search(
             r"DIRECT_SDK_INPUTS=.*?grep -E '([^']+)'",
             action,
@@ -1054,6 +1088,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         for contract_path in (
             ".github/actions/compute-changes/action.yml",
+            ".github/actions/compute-changes/derive-outputs.sh",
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
         ):
@@ -1096,7 +1131,7 @@ class CiArtifactActionTests(unittest.TestCase):
         restore_script = (
             ROOT / "scripts" / "restore-native-sdk-input.sh"
         ).read_text(encoding="utf-8")
-        routing = self.read_action("compute-changes")
+        routing = self.read_compute_changes()
 
         self.assertIn(
             "uses: ./.github/actions/prepare-native-sdk-input",
@@ -1206,7 +1241,7 @@ class CiArtifactActionTests(unittest.TestCase):
         native_sdk_producer = (
             ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
         ).read_text(encoding="utf-8")
-        routing = self.read_action("compute-changes")
+        routing = self.read_compute_changes()
 
         self.assertIn("CACHE_NAMESPACE: mesh-llm", producer)
         self.assertIn(
@@ -1627,7 +1662,7 @@ class CiArtifactActionTests(unittest.TestCase):
         consumer_script = (
             ROOT / "scripts" / "ci-swift-sdk-smoke.sh"
         ).read_text(encoding="utf-8")
-        routing = self.read_action("compute-changes")
+        routing = self.read_compute_changes()
 
         self.assertIn("type: string", producer)
         self.assertIn("host-only|full", producer)
