@@ -40,9 +40,10 @@ def classify(diff: RevisionDiff) -> bool:
     end = source.index("# Backend/platform lanes rebuild", start)
     script = source[start:end]
     script = (
-        f"EVENT_NAME={diff.event_name!r}\n"
-        f"BASE_SHA={diff.base!r}\n"
-        f"HEAD_SHA={diff.head!r}\n"
+        f"set -- {diff.event_name!r} {diff.base!r} {diff.head!r}\n"
+        'EVENT_NAME="${1:?event name is required}"\n'
+        'BASE_SHA="${2:?base SHA is required}"\n'
+        'HEAD_SHA="${3:?head SHA is required}"\n'
         f"CHANGED_FILES={diff.changed_files!r}\n"
         f"{script}\n"
         "printf '%s\\n' \"$BACKEND_RECIPE_CHANGED\"\n"

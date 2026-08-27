@@ -128,8 +128,8 @@ runs:
     - name: Derive outputs
       id: derive
       shell: bash
-      env:
-        EVENT_NAME: ${{ inputs.event_name }}
-        BASE_SHA: ${{ inputs.base_sha }}
-        HEAD_SHA: ${{ inputs.head_sha }}
-      run: bash scripts/compute-changes-derive.sh
+      run: >-
+        bash scripts/compute-changes-derive.sh
+        "${{ inputs.event_name }}"
+        "${{ inputs.base_sha }}"
+        "${{ inputs.head_sha }}"

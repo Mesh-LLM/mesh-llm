@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+EVENT_NAME="${1:?event name is required}"
+BASE_SHA="${2:?base SHA is required}"
+HEAD_SHA="${3:?head SHA is required}"
+
 # Read the JSON output from affected-crates.sh
 CRATES_JSON=$(cat /tmp/crates_output.json)
 
