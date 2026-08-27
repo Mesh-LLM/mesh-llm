@@ -116,9 +116,18 @@ class CiArtifactActionTests(unittest.TestCase):
             contract,
         )
         self.assertIn(
+            "python3 -m pip install --disable-pip-version-check --no-input "
+            "-r ci/requirements-ci-python.txt",
+            contract,
+        )
+        self.assertIn(
             "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
             contract,
         )
+        requirements = (
+            ROOT / "ci" / "requirements-ci-python.txt"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(requirements, r"(?m)^PyYAML>=6\.0$")
         self.assertIn(
             "cargo run -p xtask -- repo-consistency release-targets",
             contract,
@@ -549,6 +558,27 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 self.assertIn(workflow, cpu_routing)
                 self.assertIn(workflow, gpu_routing)
+
+        for input_name, route in (
+            ("WINDOWS_CPU_INPUTS", cpu_routing),
+            ("WINDOWS_GPU_INPUTS", gpu_routing),
+        ):
+            with self.subTest(input_name=input_name):
+                match = re.search(
+                    rf"{input_name}=.*?grep -E '([^']+)'",
+                    route,
+                )
+                self.assertIsNotNone(
+                    match,
+                    f"{input_name} classifier pattern was not found",
+                )
+                classifier = re.compile(match.group(1))
+                for action_path in (
+                    ".github/actions/compute-changes/action.yml",
+                    ".github/actions/compute-changes/derive-outputs.sh",
+                ):
+                    with self.subTest(action_path=action_path):
+                        self.assertRegex(action_path, classifier)
 
         for primitive in (
             "prepare-windows-host-input",
@@ -1058,6 +1088,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         for contract_path in (
             ".github/actions/compute-changes/action.yml",
+            ".github/actions/compute-changes/derive-outputs.sh",
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
         ):
