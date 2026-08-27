@@ -1,11 +1,11 @@
 use crate::mesh;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_parse::public_model_id;
 use crate::network::openai::routing_rank::{capabilities_for_model, descriptor_for_model};
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 pub async fn send_models_list_with_descriptors(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
     runtimes: &[mesh::ModelRuntimeDescriptor],

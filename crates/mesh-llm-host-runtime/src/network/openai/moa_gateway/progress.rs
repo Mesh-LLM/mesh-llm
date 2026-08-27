@@ -17,11 +17,11 @@ use super::streaming::{
     ProgressContinuation, final_text_stream_mode_for_result, is_moa_failure_body,
     send_moa_as_responses_sse_inner, send_moa_as_sse_inner,
 };
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_mixture_of_agents as moa;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 /// Time between progress events while MoA's arbiter is still waiting.
 /// One second feels alive without flooding the wire; the typical MoA
@@ -41,7 +41,7 @@ const MOA_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// 3. Once MoA returns, hand to the existing SSE body writers with
 ///    `header_already_sent = true`.
 pub(super) async fn run_moa_turn_with_progress(
-    mut tcp_stream: TcpStream,
+    mut tcp_stream: ClientStream,
     moa_body: serde_json::Value,
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,
@@ -123,7 +123,7 @@ fn completed_progress_response(failed: bool, usage: Option<TokenUsage>) -> MoaDi
 /// Returns `None` if the client disconnected (caller must bail and let
 /// the pinned MoA future drop, cancelling the work).
 async fn drip_progress_phase(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     config: &moa::GatewayConfig,
     moa_body: &serde_json::Value,
     response_adapter: proxy::ResponseAdapter,
@@ -166,7 +166,7 @@ async fn drip_progress_phase(
 /// The `Option<i64>` lets the caller thread the timestamp into the
 /// body writer so `response.completed` matches `response.created`.
 async fn send_progress_response_created_if_responses(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     completion_id: &str,
     adapter: proxy::ResponseAdapter,
 ) -> Option<Option<i64>> {
@@ -212,7 +212,7 @@ fn short_hex_nanos() -> String {
 /// the body writer (so `response.completed` carries the same value).
 /// Returns `None` if the connection died so the caller can bail.
 async fn send_responses_created_for_progress(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     completion_id: &str,
 ) -> Option<i64> {
     match write_progress_response_created(stream, completion_id).await {
@@ -230,7 +230,7 @@ async fn send_responses_created_for_progress(
 /// `output_text.delta` content from the body writer). Returns the
 /// `created_at` value written so the caller can thread it onward.
 async fn write_progress_response_created(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     completion_id: &str,
 ) -> std::io::Result<i64> {
     use openai_frontend::responses as resp;
@@ -257,7 +257,7 @@ async fn write_progress_response_created(
 
 /// Send HTTP response headers up front so the client knows the
 /// stream is alive while MoA arbitrates. Returns true on success.
-async fn send_progress_headers(stream: &mut TcpStream) -> bool {
+async fn send_progress_headers(stream: &mut ClientStream) -> bool {
     let header = "HTTP/1.1 200 OK\r\n\
                   Content-Type: text/event-stream\r\n\
                   Transfer-Encoding: chunked\r\n\
@@ -284,7 +284,7 @@ async fn send_progress_headers(stream: &mut TcpStream) -> bool {
 /// Worst case: the body write is delayed by up to one interval after
 /// MoA finishes.
 async fn drip_progress_until_moa_completes(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     config: &moa::GatewayConfig,
     moa_body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
@@ -308,7 +308,7 @@ async fn drip_progress_until_moa_completes(
 /// to verify drop-on-client-disconnect cancellation behaviour)
 /// without spinning up a real MoA gateway.
 async fn drip_progress_against_future<F>(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     moa_fut: F,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
@@ -368,7 +368,7 @@ where
 /// and carries the running sequence_number + the original created_at
 /// so the body writer can emit a wire-monotonic stream.
 async fn write_progress_body(
-    mut tcp_stream: TcpStream,
+    mut tcp_stream: ClientStream,
     moa_result: &moa::TurnResult,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
@@ -420,7 +420,7 @@ fn progress_line(step: usize, _adapter: proxy::ResponseAdapter) -> String {
 }
 
 async fn write_progress_event(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     text: &str,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
@@ -497,7 +497,7 @@ fn item_id_from_completion_id(completion_id: &str) -> String {
 /// status can't be changed at this point — best we can do is make
 /// sure the stream doesn't silently truncate.
 async fn write_failure_as_sse_tail(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
@@ -618,7 +618,8 @@ mod tests {
         let addr = listener.local_addr().expect("local_addr");
         let t = text.to_string();
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             // Tests don't care about the cross-event sequence; start
             // from 1 to match production (response.created is 0).
             let mut seq = 1i32;
@@ -741,7 +742,8 @@ mod tests {
             .expect("bind loopback");
         let addr = listener.local_addr().expect("local_addr");
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             let mut seq = 1i32;
             write_progress_event(
                 &mut socket,
@@ -795,7 +797,8 @@ mod tests {
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             write_failure_as_sse_tail(&mut socket, &body, adapter, TEST_COMPLETION_ID)
                 .await
                 .expect("write");
@@ -850,7 +853,8 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
 
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             // Imitate run_moa_turn_with_progress on the Responses path:
             // headers → response.created → one progress delta → body
             // writer with header_already_sent=true.
@@ -962,7 +966,8 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
 
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             super::super::streaming::write_sse_response_headers(&mut socket, &[])
                 .await
                 .unwrap();
@@ -1127,7 +1132,8 @@ mod tests {
         let dropped_for_task = dropped.clone();
 
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut socket: ClientStream = socket.into();
             // Build a pending MoA future that flags itself when dropped.
             let pending = DropTrackingPendingFuture {
                 dropped: dropped_for_task,

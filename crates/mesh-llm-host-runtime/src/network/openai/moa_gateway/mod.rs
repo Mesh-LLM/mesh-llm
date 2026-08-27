@@ -16,13 +16,13 @@ use crate::inference::election;
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
 use crate::network::openai::automatic;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_mixture_of_agents as moa;
-use tokio::net::TcpStream;
 
 pub(crate) enum MoaDispatchResult {
-    Passthrough(TcpStream),
+    Passthrough(ClientStream),
     Responded(u16),
     RespondedWithUsage {
         status_code: u16,
@@ -45,7 +45,7 @@ async fn degrade_to_single_model(
     node: &mesh::Node,
     targets: Option<&election::ModelTargets>,
     required_tokens: Option<u32>,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> MoaDispatchResult {
@@ -150,7 +150,7 @@ fn committee_admission(
 /// Detect `model: "mesh"`, build a mesh-wide MoA config, run the turn,
 /// and write the HTTP response (JSON or SSE) directly to the stream.
 ///
-/// Return value carries the un-consumed `TcpStream` so the caller knows
+/// Return value carries the un-consumed `ClientStream` so the caller knows
 /// what to do next:
 ///
 /// * `Some(stream)` — the request is *not* MoA-shaped (effective model
@@ -163,7 +163,7 @@ fn committee_admission(
 ///   must *not* attempt to respond again.
 pub async fn try_handle_moa(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
     targets: Option<&election::ModelTargets>,
@@ -278,7 +278,7 @@ fn gateway_required(worker_count: usize) -> bool {
 /// be derived from the finished `TurnResult`.
 /// Caller has already validated the request and built the config.
 async fn run_moa_turn(
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     body_json: serde_json::Value,
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,

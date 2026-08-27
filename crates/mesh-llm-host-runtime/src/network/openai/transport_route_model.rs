@@ -8,7 +8,7 @@ pub(crate) struct RouteModelRequestContext<'a> {
 
 pub async fn route_model_request(
     node: mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     targets: &election::ModelTargets,
     model: &str,
     request: &BufferedHttpRequest,
@@ -29,7 +29,7 @@ pub async fn route_model_request(
 
 struct RouteModelRequestArgs<'a> {
     node: mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     targets: &'a election::ModelTargets,
     model: &'a str,
     request: &'a BufferedHttpRequest,
@@ -192,7 +192,7 @@ fn record_route_model_unavailable(node: &mesh::Node, model: &str, attempts: usiz
 
 async fn send_route_model_none_target(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     model: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
@@ -208,7 +208,7 @@ async fn send_route_model_none_target(
 
 async fn finish_exhausted_route_model_request(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     model: &str,
     total_targets: usize,
     state: &RouteModelState,

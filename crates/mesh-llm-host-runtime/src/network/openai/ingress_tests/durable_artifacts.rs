@@ -27,9 +27,10 @@ async fn parsed_missing_model_error_persists_the_client_visible_response_artifac
         let (stream, _) = listener.accept().await.expect("accept ingress client");
         handle_api_proxy_connection(
             node,
-            stream,
+            stream.into(),
             election::ModelTargets::default(),
             affinity::AffinityRouter::new(),
+            crate::runtime::IngressType::LocalOpenAi,
         )
         .await;
     });
@@ -142,9 +143,10 @@ async fn ingress_body_parse_error_persists_a_response_only_after_complete_header
         let (stream, _) = listener.accept().await.expect("accept ingress client");
         handle_api_proxy_connection(
             node,
-            stream,
+            stream.into(),
             election::ModelTargets::default(),
             affinity::AffinityRouter::new(),
+            crate::runtime::IngressType::LocalOpenAi,
         )
         .await;
     });

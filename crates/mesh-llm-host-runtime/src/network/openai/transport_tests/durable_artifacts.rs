@@ -80,6 +80,120 @@ async fn send_tunneled_request(
         .expect("read tunneled lifecycle response")
 }
 
+#[tokio::test]
+async fn paused_inbound_quic_http_rejects_before_reading_or_routing_request() {
+    let (sender, sender_channels) = start_http_tunnel_test_node().await;
+    let (mut receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    receiver.activity_policy_guard = crate::runtime::activity_policy::ActivityPolicyGuard::new(
+        &mesh_llm_config::RuntimeActivityConfig {
+            enabled: true,
+            response: mesh_llm_config::ActivityResponse::PauseRemote,
+            ..Default::default()
+        },
+    );
+    receiver
+        .activity_policy_guard
+        .update_detector_state(mesh_llm_system::activity::HostActivity::Active);
+
+    let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "test".to_string(),
+        vec![election::InferenceTarget::Local(upstream_port)],
+    );
+    let (_target_tx, target_rx) = watch::channel(targets);
+    let tunnel_manager = TunnelManager::start(
+        receiver.clone(),
+        receiver_channels.rpc,
+        receiver_channels.http,
+        receiver_channels.stage,
+    )
+    .await
+    .expect("start receiving tunnel manager");
+    tunnel_manager.set_http_ingress(target_rx, AffinityRouter::new());
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect HTTP tunnel test nodes");
+
+    let (mut send, mut recv) = sender
+        .open_http_tunnel(receiver.id())
+        .await
+        .expect("open paused HTTP tunnel");
+    send.write_all(
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 8388608\r\n\r\n",
+    )
+    .await
+    .expect("write request headers");
+
+    let wire = tokio::time::timeout(Duration::from_secs(2), recv.read_to_end(1024 * 1024))
+        .await
+        .expect("paused host must respond without waiting for the declared body")
+        .expect("read paused response");
+    let response = String::from_utf8(wire).expect("HTTP response should be UTF-8");
+    assert!(
+        response.starts_with("HTTP/1.1 503 Service Unavailable"),
+        "response: {response}"
+    );
+    assert!(response.contains("remote inference paused (host activity)"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), upstream_rx)
+            .await
+            .is_err(),
+        "paused request must not reach an inference target"
+    );
+
+    drop(send);
+    upstream_handle.abort();
+    drop(sender_channels);
+}
+
+#[tokio::test]
+async fn inbound_quic_http_dispatches_without_local_api_listener() {
+    let (sender, sender_channels) = start_http_tunnel_test_node().await;
+    let (receiver, receiver_channels) = start_http_tunnel_test_node().await;
+    let (upstream_port, upstream_rx, upstream_handle) = spawn_tunnel_capture().await;
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "test".to_string(),
+        vec![election::InferenceTarget::Local(upstream_port)],
+    );
+    let (_target_tx, target_rx) = watch::channel(targets);
+    let tunnel_manager = TunnelManager::start(
+        receiver.clone(),
+        receiver_channels.rpc,
+        receiver_channels.http,
+        receiver_channels.stage,
+    )
+    .await
+    .expect("start receiving tunnel manager");
+    tunnel_manager.set_http_ingress(target_rx, AffinityRouter::new());
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect HTTP tunnel test nodes");
+
+    let wire = send_tunneled_request(&sender, receiver.id(), "/v1/chat/completions").await;
+    let response = String::from_utf8(wire).expect("HTTP response should be UTF-8");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "response: {response}"
+    );
+    let upstream_request = upstream_rx.await.expect("capture upstream request");
+    assert!(
+        String::from_utf8_lossy(&upstream_request).starts_with("POST /v1/chat/completions "),
+        "upstream request: {}",
+        String::from_utf8_lossy(&upstream_request)
+    );
+
+    upstream_handle.abort();
+    drop(sender_channels);
+}
+
 async fn assert_passive_legacy_lifecycle_path_is_rejected(path: &str) {
     let (sender, sender_channels) = start_http_tunnel_test_node().await;
     let (receiver, receiver_channels) = start_http_tunnel_test_node().await;
@@ -184,7 +298,7 @@ async fn passive_missing_model_error_persists_the_client_visible_response_artifa
         .expect("test node");
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept passive client");
-        handle_mesh_request(node, stream, true, AffinityRouter::new()).await;
+        handle_mesh_request(node, stream.into(), true, AffinityRouter::new()).await;
     });
 
     let request_id = RequestId::new();
@@ -292,7 +406,7 @@ async fn passive_body_parse_error_persists_a_response_only_after_complete_header
         .expect("test node");
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept passive client");
-        handle_mesh_request(node, stream, true, AffinityRouter::new()).await;
+        handle_mesh_request(node, stream.into(), true, AffinityRouter::new()).await;
     });
 
     let request_id = RequestId::new();

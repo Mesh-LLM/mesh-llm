@@ -1488,7 +1488,7 @@ pub(crate) mod tests {
 
         let routed = transport::route_to_target(
             node.clone(),
-            proxy_stream,
+            proxy_stream.into(),
             Some("glm"),
             election::InferenceTarget::Local(upstream_port),
             b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}",

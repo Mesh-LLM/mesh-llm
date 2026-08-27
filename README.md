@@ -101,6 +101,9 @@ mesh-llm serve --auto --headless
   the model locally without stage traffic.
 - **Mesh routing.** Every node exposes the same `/v1` API. Requests are routed
   by the `model` field to the peer that can serve that model.
+- **Encrypted peer transport.** QUIC end-to-end encrypts traffic between Mesh
+  nodes, including inference requests, responses, and split-model activations.
+  Iroh relays forward encrypted packets without reading their payload.
 - **Owner-control plane.** Operator config and inventory actions use an
   additive `mesh-llm-control/1` lane with explicit endpoint bootstrap, while
   public mesh join, gossip, routing, and inference stay on the public mesh

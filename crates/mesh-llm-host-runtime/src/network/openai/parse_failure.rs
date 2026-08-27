@@ -4,7 +4,7 @@
 //! produced a canonical request ID and client path. Earlier failures write the
 //! client error without inventing a request lifecycle or artifact.
 
-use tokio::net::TcpStream;
+use crate::network::openai::client_stream::ClientStream;
 
 use super::request_parse::OpenAiRequestReadError;
 use super::response::{send_400, send_400_observed};
@@ -25,7 +25,7 @@ fn attach_read_failure_logging(
 }
 
 pub(crate) async fn send_read_failure(
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     error: &OpenAiRequestReadError,
 ) -> RouteDispatchOutcome {
     let mut lifecycle = attach_read_failure_logging(error);
