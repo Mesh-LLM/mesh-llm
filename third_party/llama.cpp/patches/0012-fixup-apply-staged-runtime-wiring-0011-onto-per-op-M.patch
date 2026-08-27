@@ -1450,7 +1450,7 @@ index 74ebe85bc..5a9496887 100644
          graph(const llama_model & model, const llm_graph_params & params);
      };
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 42af1d347..6af39dec4 100644
+index 8440e5b97..74eb3aa59 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -372,9 +372,11 @@ llama_sampler * skippy_build_sampling_chain(

@@ -114,7 +114,6 @@ mod tests {
         let prefix = &tokens[..2];
         let long_prefill = &tokens[..tokens.len().min(6)];
         let short_prefill = &tokens[..3];
-
         let mut mixed = [
             model.create_session()?,
             model.create_session()?,
@@ -130,7 +129,6 @@ mod tests {
         let (serial_decode_token, _) =
             serial[0].prefill_chunk_frame_sampled(prefix, None, None, 0)?;
         assert_eq!(mixed_decode_token, serial_decode_token);
-
         let decode_tokens = [mixed_decode_token];
         let output = {
             let [decode, long, short] = &mut mixed;
@@ -171,6 +169,8 @@ mod tests {
         serial[1].prefill_chunk_frame(long_prefill, None, 0)?;
         let (serial_short_prediction, _) =
             serial[2].prefill_chunk_frame_sampled(short_prefill, None, None, 0)?;
+        assert_eq!(mixed[0].last_token_signal()?, serial[0].last_token_signal()?);
+        assert_eq!(mixed[2].last_token_signal()?, serial[2].last_token_signal()?);
         assert_eq!(
             output
                 .samples

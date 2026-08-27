@@ -132,10 +132,10 @@ index 0ec72958e..f48e56cb5 100644
  
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index a8694dbed..754b940dc 100644
+index a8694dbed..8f6facc96 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -23,6 +23,348 @@
+@@ -23,6 +23,347 @@
  
  
  extern "C" {
@@ -434,7 +434,6 @@ index a8694dbed..754b940dc 100644
 +            // the sparse-row translation internally.
 +            const int32_t logits_index =
 +                    static_cast<int32_t>(request_offsets[request_index + 1] - 1);
-+            skippy_record_signal(request.session, logits_index);
 +            out_sampled_request_indexes[sampled_output_index] = request_index;
 +            out_predicted_tokens[sampled_output_index] = skippy_sample_token_ith(
 +                    request.session,
