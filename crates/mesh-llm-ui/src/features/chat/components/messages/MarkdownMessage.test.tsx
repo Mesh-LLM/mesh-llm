@@ -66,6 +66,21 @@ describe('chat math rendering', () => {
     expect(container.querySelector('.katex')).not.toBeInTheDocument()
   })
 
+  it('preserves full and collapsed reference links that resemble bracketed TeX', () => {
+    const content = String.raw`[\alpha][formula] and [\beta][]
+
+[formula]: https://example.com/formula
+[\beta]: https://example.com/beta`
+    const { container } = render(<MarkdownMessage content={content} />)
+
+    expect(screen.getByRole('link', { name: String.raw`\alpha` })).toHaveAttribute(
+      'href',
+      'https://example.com/formula'
+    )
+    expect(screen.getByRole('link', { name: String.raw`\beta` })).toHaveAttribute('href', 'https://example.com/beta')
+    expect(container.querySelector('.katex')).not.toBeInTheDocument()
+  })
+
   it('does not reinterpret inline or fenced code as math', async () => {
     const fenced = ['```text', '$x$ $$y$$ \\[z\\] \\(w\\)', '```'].join('\n')
     const { container } = render(

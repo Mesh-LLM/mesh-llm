@@ -119,6 +119,13 @@ function displayMath(value: string): string {
   return `\n\n$$\n${value.trim()}\n$$\n\n`
 }
 
+function isMarkdownReferenceDefinition(value: string, start: number, close: number): boolean {
+  if (value[close + 1] !== ':') return false
+
+  const lineStart = value.lastIndexOf('\n', start - 1) + 1
+  return /^ {0,3}$/.test(value.slice(lineStart, start))
+}
+
 function normalizePlainText(value: string): string {
   let normalized = ''
   let index = 0
@@ -164,8 +171,10 @@ function normalizePlainText(value: string): string {
       const close = findUnescapedSequence(value, ']', index + 1)
       if (close >= 0) {
         const inner = value.slice(index + 1, close)
-        const isMarkdownLink = value[close + 1] === '('
-        if (!isMarkdownLink && /\\[A-Za-z]+/.test(inner)) {
+        const followingCharacter = value[close + 1]
+        const isMarkdownLink = followingCharacter === '(' || followingCharacter === '['
+        const isMarkdownDefinition = isMarkdownReferenceDefinition(value, index, close)
+        if (!isMarkdownLink && !isMarkdownDefinition && /\\[A-Za-z]+/.test(inner)) {
           normalized += `$${inner}$`
           index = close + 1
           continue
