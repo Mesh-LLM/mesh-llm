@@ -198,9 +198,9 @@ Pinned GPU startup is also local-node only:
 - pin resolution is host-local and fail-closed: missing, ambiguous, unsupported, or stale IDs abort startup and config push for that node instead of silently falling back to auto placement
 - explicit CLI `--model` / `--gguf` keeps the selected artifact, context, and
   projector choices. An exact, unique `--model` ref carries only its effective
-  pinned GPU selector; unmatched refs and `--gguf` paths remain ad-hoc, and
-  duplicate configured refs are rejected because the CLI has no profile
-  selector
+  pinned GPU selector. Unmatched refs and `--gguf` paths carry no configured
+  model identity but may inherit only `defaults.hardware.device`; duplicate
+  configured refs are rejected because the CLI has no profile selector
 
 Bare `mesh-llm serve` is the config-owned path. If `[[models]]` is empty, it warns,
 prints help, and exits cleanly. Background services use that path directly.

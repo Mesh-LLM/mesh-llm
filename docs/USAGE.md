@@ -841,7 +841,9 @@ Config precedence:
   runtime settings.
 - Explicit `--model` or `--gguf` ignores configured `[[models]]` for model
   selection and tuning. An exact, unique `--model` ref may still inherit its
-  configured pinned GPU selector.
+  configured pinned GPU selector. Unmatched `--model` refs and `--gguf` paths
+  carry no configured model identity but may inherit only
+  `defaults.hardware.device`.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
 - Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the

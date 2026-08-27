@@ -792,6 +792,63 @@ fn cli_gguf_does_not_match_configured_model_path_for_pinned_gpu() {
 }
 
 #[test]
+fn cli_gguf_inherits_global_pinned_default_without_model_ownership() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("selected.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+    ]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        defaults: Some(plugin::ModelConfigDefaults {
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        models: vec![plugin::ModelConfigEntry {
+            model: "configured/model-ref".into(),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(model_path.display().to_string()),
+                device: Some("pci:0000:b3:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, model_path);
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+    assert!(!specs[0].resolve_pinned_gpu);
+    assert_eq!(specs[0].config_model_id, None);
+
+    let mut plans = vec![startup_model_plan(model_path.to_str().expect("model path"))];
+    plans[0].gpu_id = specs[0].gpu_id.clone();
+    preflight_pinned_startup_models_with_gpus(
+        &config,
+        &specs,
+        &mut plans,
+        &[synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))],
+        None,
+    )
+    .expect("global pinned default should resolve for an explicit gguf model");
+    assert_eq!(
+        plans[0].pinned_gpu.as_ref().unwrap().backend_device,
+        "CUDA0"
+    );
+}
+
+#[test]
 fn cli_model_matching_is_independent_for_multiple_models() {
     let options = runtime_options_for_test(&[
         "mesh-llm",

@@ -107,7 +107,8 @@ mesh-llm serve
   projector choices. When the ref exactly matches one configured model, only
   that model's effective pinned GPU selector is carried forward and resolved
   from its stable ID to the backend device name. Unmatched refs and all
-  `--gguf` paths remain ad-hoc; duplicate configured refs are rejected as
+  `--gguf` paths carry no configured model identity but may inherit only
+  `defaults.hardware.device`; duplicate configured refs are rejected as
   ambiguous because the CLI has no profile selector.
 - Do not use GPU indexes, `index:*`, or backend-device names like `CUDA0` / `HIP0` / `MTL0` as `gpu_id`
 
