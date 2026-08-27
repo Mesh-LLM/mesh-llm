@@ -465,6 +465,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             mmproj_path: None,
             ctx_size: Some(8192),
             gpu_id: Some("GPU0".to_string()),
+            config_model_id: None,
             pinned_gpu: None,
             parallel: Some(2),
             cache_type_k: None,
@@ -481,6 +482,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             mmproj_path: None,
             ctx_size: Some(4096),
             gpu_id: None,
+            config_model_id: None,
             pinned_gpu: Some(StartupPinnedGpuTarget {
                 index: 1,
                 stable_id: "gpu-b".to_string(),
@@ -560,6 +562,7 @@ pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model(
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: None,
+        config_model_id: None,
         pinned_gpu: None,
         parallel: Some(4),
         cache_type_k: None,
@@ -1156,6 +1159,9 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             mmproj_path: extra_model.mmproj_path.clone(),
             ctx_size: extra_model.ctx_size,
             pinned_gpu: extra_model.pinned_gpu.clone(),
+            device_override: super::startup_models::startup_device_override(
+                extra_model.gpu_id.as_deref(),
+            ),
             runtime_capacity_ledger: ctx.runtime_capacity_ledger.clone(),
             cache_type_k: extra_model.cache_type_k.clone(),
             cache_type_v: extra_model.cache_type_v.clone(),

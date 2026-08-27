@@ -67,7 +67,9 @@ mesh-llm serve
 
 - Both configured startup models should be considered for launch
 - If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
-- Explicit `--model` or `--gguf` should ignore configured `[[models]]`
+- Explicit `--model` or `--gguf` should ignore configured `[[models]]` for
+  model selection and tuning, except that an exact, unique `--model` ref may
+  inherit its configured pinned GPU selector
 - Explicit `--ctx-size` should override configured `ctx_size`
 - `mesh-llm benchmark tune` is the measured local model-serving tuning companion for these startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and runs isolated throughput trials. For speculative decoding changes, run a small sweep that includes the disabled baseline plus `mtp`, `mtp-ngram`, or draft candidates as applicable, then inspect trial logs/telemetry for native MTP or draft acceptance statistics in addition to decode tok/s.
 
@@ -101,7 +103,12 @@ mesh-llm serve
 
 - Startup should succeed only when `gpu_id` matches a valid local pinnable stable ID from `mesh-llm gpus`
 - If the pinned ID is missing, ambiguous, unsupported, or stale, startup should fail closed before local launch
-- Explicit `mesh-llm serve --model ...` should still bypass configured `[[models]]` and therefore bypass config-owned pinned IDs
+- Explicit `mesh-llm serve --model ...` keeps the CLI model path, context, and
+  projector choices. When the ref exactly matches one configured model, only
+  that model's effective pinned GPU selector is carried forward and resolved
+  from its stable ID to the backend device name. Unmatched refs and all
+  `--gguf` paths remain ad-hoc; duplicate configured refs are rejected as
+  ambiguous because the CLI has no profile selector.
 - Do not use GPU indexes, `index:*`, or backend-device names like `CUDA0` / `HIP0` / `MTL0` as `gpu_id`
 
 ### 0c. Requirement-aware mesh smoke

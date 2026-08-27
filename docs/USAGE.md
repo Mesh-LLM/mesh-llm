@@ -839,7 +839,9 @@ Config precedence:
   frontend boundary. Explicit request values win, and those defaults never
   become `StageConfig`, runtime load structs, protobuf payloads, or lower-layer
   runtime settings.
-- Explicit `--model` or `--gguf` ignores configured `[[models]]`.
+- Explicit `--model` or `--gguf` ignores configured `[[models]]` for model
+  selection and tuning. An exact, unique `--model` ref may still inherit its
+  configured pinned GPU selector.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
 - Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the

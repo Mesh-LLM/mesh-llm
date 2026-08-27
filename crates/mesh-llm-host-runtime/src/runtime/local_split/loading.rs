@@ -59,6 +59,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) ctx_size: u32,
     pub(super) compact_meta: &'a models::gguf::GgufCompactMeta,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<&'a str>,
     pub(super) slots: usize,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -599,6 +600,9 @@ pub(super) async fn split_generation_load_settings<'a>(
     }
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
+    }
+    if let Some(device) = spec.device_override {
+        resolved.hardware.device = Some(device.to_string());
     }
     let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);

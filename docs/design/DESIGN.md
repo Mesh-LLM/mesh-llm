@@ -185,7 +185,9 @@ Phase 2 keeps this config intentionally local-node only. There is no authored me
 
 CLI precedence is by concern:
 
-- explicit `--model` or `--gguf` ignores configured `[[models]]`
+- explicit `--model` or `--gguf` ignores configured `[[models]]` for model
+  selection and tuning; an exact, unique `--model` ref may still inherit its
+  configured pinned GPU selector
 - explicit `--ctx-size` overrides configured `ctx_size`
 - plugin config continues to load from the same file
 
@@ -194,7 +196,11 @@ Pinned GPU startup is also local-node only:
 - `[gpu].assignment = "pinned"` means each configured `[[models]]` entry must carry its own `gpu_id`
 - valid IDs come from the local `mesh-llm gpus` / `mesh-llm gpus --json` inventory surface
 - pin resolution is host-local and fail-closed: missing, ambiguous, unsupported, or stale IDs abort startup and config push for that node instead of silently falling back to auto placement
-- explicit CLI `--model` / `--gguf` still bypass configured `[[models]]`, so they do not inherit config-owned pinned IDs
+- explicit CLI `--model` / `--gguf` keeps the selected artifact, context, and
+  projector choices. An exact, unique `--model` ref carries only its effective
+  pinned GPU selector; unmatched refs and `--gguf` paths remain ad-hoc, and
+  duplicate configured refs are rejected because the CLI has no profile
+  selector
 
 Bare `mesh-llm serve` is the config-owned path. If `[[models]]` is empty, it warns,
 prints help, and exits cleanly. Background services use that path directly.

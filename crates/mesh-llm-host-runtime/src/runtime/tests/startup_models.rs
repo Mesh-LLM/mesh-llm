@@ -265,6 +265,7 @@ fn startup_model_plan(model_ref: &str) -> StartupModelPlan {
         mmproj_path: None,
         ctx_size: None,
         gpu_id: None,
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -624,7 +625,240 @@ fn test_build_startup_model_specs_prefers_cli_models_over_config() {
     assert_eq!(specs[0].mmproj_ref, None);
     assert_eq!(specs[0].ctx_size, Some(4096));
     assert_eq!(specs[0].gpu_id, None);
-    assert!(!specs[0].config_owned);
+    assert!(!specs[0].resolve_pinned_gpu);
+}
+
+#[test]
+fn cli_model_exact_config_ref_resolves_pinned_backend_and_keeps_cli_overrides() {
+    let mut options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--model",
+        "Qwen3-8B-Q4_K_M",
+        "--ctx-size",
+        "4096",
+    ]);
+    options.mmproj = Some(PathBuf::from("/tmp/cli-mmproj.gguf"));
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            mmproj: Some("/tmp/config-mmproj.gguf".into()),
+            ctx_size: Some(8192),
+            gpu_id: None,
+            parallel: Some(8),
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                model_path: Some("/configured/model.gguf".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, PathBuf::from("Qwen3-8B-Q4_K_M"));
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+    assert!(specs[0].resolve_pinned_gpu);
+    assert_eq!(specs[0].config_model_id, None);
+    assert_eq!(specs[0].ctx_size, Some(4096));
+    assert_eq!(
+        specs[0].mmproj_ref,
+        Some(PathBuf::from("/tmp/cli-mmproj.gguf"))
+    );
+    assert_eq!(specs[0].parallel, None);
+
+    let mut plans = vec![StartupModelPlan {
+        declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+        mmproj_path: specs[0].mmproj_ref.clone(),
+        ctx_size: specs[0].ctx_size,
+        gpu_id: specs[0].gpu_id.clone(),
+        config_model_id: specs[0].config_model_id.clone(),
+        pinned_gpu: None,
+        parallel: specs[0].parallel,
+        cache_type_k: None,
+        cache_type_v: None,
+        n_batch: None,
+        n_ubatch: None,
+        flash_attention: FlashAttentionType::Auto,
+        profile: String::new(),
+    }];
+    let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
+
+    preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .expect("exact CLI config ref should resolve its pinned GPU");
+    assert_eq!(
+        plans[0].pinned_gpu.as_ref().unwrap().backend_device,
+        "CUDA0"
+    );
+}
+
+#[test]
+fn cli_model_exact_config_ref_without_gpu_fails_before_launch() {
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "configured/model"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "configured/model".into(),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    let mut plans = vec![startup_model_plan("configured/model")];
+
+    let error = preflight_pinned_startup_models_with_gpus(
+        &config,
+        &specs,
+        &mut plans,
+        &[synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))],
+        None,
+    )
+    .expect_err("a selected configured model without a GPU must fail preflight");
+    let message = format!("{error:#}");
+    assert!(message.contains("startup model 'configured/model'"));
+    assert!(message.contains("missing configured gpu_id"));
+}
+
+#[test]
+fn cli_model_matching_duplicate_config_refs_fails_as_ambiguous() {
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
+    let config = plugin::MeshConfig {
+        models: vec![
+            plugin::ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                gpu_id: Some("pci:0000:65:00.0".into()),
+                ctx_size: Some(4096),
+                ..Default::default()
+            },
+            plugin::ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                gpu_id: Some("pci:0000:b3:00.0".into()),
+                ctx_size: Some(8192),
+                ..Default::default()
+            },
+        ],
+        ..plugin::MeshConfig::default()
+    };
+
+    let error = build_startup_model_specs(&options, &config)
+        .expect_err("a CLI ref cannot select between duplicate configured profiles");
+    let message = format!("{error:#}");
+    assert!(message.contains("matches multiple configured model entries"));
+    assert!(message.contains("Qwen3-8B-Q4_K_M"));
+}
+
+#[test]
+fn cli_gguf_does_not_match_configured_model_path_for_pinned_gpu() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let model_path = temp_dir.path().join("configured.gguf");
+    std::fs::write(&model_path, b"gguf").expect("write model");
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--gguf",
+        model_path.to_str().expect("model path"),
+    ]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "configured/model-ref".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(model_path.display().to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, model_path);
+    assert_eq!(specs[0].gpu_id, None);
+    assert!(!specs[0].resolve_pinned_gpu);
+    assert_eq!(specs[0].config_model_id, None);
+}
+
+#[test]
+fn cli_model_matching_is_independent_for_multiple_models() {
+    let options = runtime_options_for_test(&[
+        "mesh-llm",
+        "--model",
+        "Qwen3-8B-Q4_K_M",
+        "--model",
+        "ad-hoc-model",
+    ]);
+    let config = plugin::MeshConfig {
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+    assert!(specs[0].resolve_pinned_gpu);
+    assert_eq!(specs[1].gpu_id, None);
+    assert!(!specs[1].resolve_pinned_gpu);
+}
+
+#[test]
+fn cli_unmatched_model_uses_global_pinned_default_without_model_ownership() {
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "ad-hoc-model"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        defaults: Some(plugin::ModelConfigDefaults {
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        models: vec![plugin::ModelConfigEntry {
+            model: "configured/model".into(),
+            gpu_id: Some("pci:0000:b3:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+    assert!(!specs[0].resolve_pinned_gpu);
+    assert_eq!(specs[0].config_model_id, None);
+
+    let mut plans = vec![startup_model_plan("ad-hoc-model")];
+    plans[0].gpu_id = specs[0].gpu_id.clone();
+    preflight_pinned_startup_models_with_gpus(
+        &config,
+        &specs,
+        &mut plans,
+        &[synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))],
+        None,
+    )
+    .expect("global pinned default should resolve for an ad-hoc CLI model");
+    assert_eq!(
+        plans[0].pinned_gpu.as_ref().unwrap().backend_device,
+        "CUDA0"
+    );
 }
 
 #[tokio::test]
@@ -696,14 +930,14 @@ fn test_build_startup_model_specs_uses_config_models_when_cli_is_empty() {
     assert_eq!(specs[0].model_ref, PathBuf::from("Qwen3-8B-Q4_K_M"));
     assert_eq!(specs[0].ctx_size, Some(4096));
     assert_eq!(specs[0].gpu_id, None);
-    assert!(specs[0].config_owned);
+    assert!(specs[0].resolve_pinned_gpu);
     assert_eq!(
         specs[1].mmproj_ref,
         Some(PathBuf::from("bartowski/Qwen2.5-VL/mmproj.gguf"))
     );
     assert_eq!(specs[1].ctx_size, Some(4096));
     assert_eq!(specs[1].gpu_id, None);
-    assert!(specs[1].config_owned);
+    assert!(specs[1].resolve_pinned_gpu);
 }
 
 #[test]
@@ -743,7 +977,7 @@ alias = "public-model"
         specs[1].config_model_id.as_deref(),
         Some("canonical/override-model")
     );
-    assert!(specs.iter().all(|spec| spec.config_owned));
+    assert!(specs.iter().all(|spec| spec.resolve_pinned_gpu));
 }
 
 #[test]
@@ -775,7 +1009,7 @@ fn ad_hoc_gguf_alias_preserves_existing_cli_model_overrides() {
         Some(projector_path.as_path())
     );
     assert_eq!(specs[0].ctx_size, Some(8192));
-    assert!(!specs[0].config_owned);
+    assert!(!specs[0].resolve_pinned_gpu);
 }
 
 #[test]
@@ -808,7 +1042,7 @@ parallel = 3
     assert_eq!(specs[0].n_ubatch, Some(192));
     assert_eq!(specs[0].flash_attention, FlashAttentionType::Enabled);
     assert!(!specs[0].profile.is_empty());
-    assert!(!specs[0].config_owned);
+    assert!(!specs[0].resolve_pinned_gpu);
 }
 
 #[test]
@@ -924,11 +1158,24 @@ fn gguf_with_plain_model_name_binds_the_name_to_the_local_file() {
         "deepseek-v4-flash",
     ]);
 
-    let specs =
-        build_startup_model_specs(&options, &plugin::MeshConfig::default()).expect("startup specs");
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "deepseek-v4-flash".into(),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0].model_ref, model_path);
     assert_eq!(specs[0].declared_ref.as_deref(), Some("deepseek-v4-flash"));
+    assert_eq!(specs[0].gpu_id, None);
+    assert!(!specs[0].resolve_pinned_gpu);
 }
 
 #[test]
@@ -1024,6 +1271,7 @@ async fn local_model_only_rejects_catalog_and_relative_model_refs() {
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: None,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1031,7 +1279,7 @@ async fn local_model_only_rejects_catalog_and_relative_model_refs() {
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
         profile: "default".into(),
-        config_owned: false,
+        resolve_pinned_gpu: false,
     }];
 
     let error = resolve_local_model_only_startup_models(&specs)
@@ -1172,6 +1420,7 @@ fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
         mmproj_path: None,
         ctx_size: Some(8192),
         gpu_id: specs[0].gpu_id.clone(),
+        config_model_id: specs[0].config_model_id.clone(),
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1186,8 +1435,7 @@ fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
         synthetic_gpu(1, Some("pci:0000:b3:00.0"), Some("CUDA1")),
     ];
 
-    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-        .unwrap();
+    preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None).unwrap();
 
     assert_eq!(plans[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
     assert_eq!(
@@ -1231,7 +1479,8 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1247,6 +1496,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1263,7 +1513,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         available_devices: vec!["Vulkan0".into(), "CPU".into()],
     };
 
-    let err = preflight_config_owned_startup_models_with_gpus(
+    let err = preflight_pinned_startup_models_with_gpus(
         &config,
         &specs,
         &mut plans,
@@ -1294,7 +1544,8 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1310,6 +1561,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: Some("pci:0000:b3:00.0".into()),
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1326,7 +1578,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         available_devices: vec!["HIP1".into(), "CPU".into()],
     };
 
-    preflight_config_owned_startup_models_with_gpus(
+    preflight_pinned_startup_models_with_gpus(
         &config,
         &specs,
         &mut plans,
@@ -1394,7 +1646,7 @@ fn skippy_telemetry_debug_keeps_debug_level_when_endpoint_is_set() {
 }
 
 #[test]
-fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
+fn pinned_gpu_startup_preflight_unmatched_cli_models_bypass_config_gpu_id() {
     let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
     let config = plugin::MeshConfig {
         gpu: plugin::GpuConfig {
@@ -1424,6 +1676,7 @@ fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
         mmproj_path: None,
         ctx_size: None,
         gpu_id: specs[0].gpu_id.clone(),
+        config_model_id: specs[0].config_model_id.clone(),
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1435,11 +1688,10 @@ fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
-    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-        .unwrap();
+    preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None).unwrap();
 
     assert_eq!(specs[0].gpu_id, None);
-    assert!(!specs[0].config_owned);
+    assert!(!specs[0].resolve_pinned_gpu);
     assert_eq!(plans[0].gpu_id, None);
     assert_eq!(plans[0].pinned_gpu, None);
 }
@@ -1460,7 +1712,8 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: None,
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1476,6 +1729,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
         mmproj_path: None,
         ctx_size: None,
         gpu_id: None,
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1487,9 +1741,8 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
-    let err =
-        preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-            .unwrap_err();
+    let err = preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap_err();
     let message = format!("{err:#}");
 
     assert!(message.contains("failed pinned GPU preflight"));
@@ -1512,7 +1765,8 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1528,6 +1782,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1540,8 +1795,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
     let mut gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
     gpus[0].reserved_bytes = Some(500_000_000);
 
-    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-        .unwrap();
+    preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None).unwrap();
 
     let pinned_gpu = plans[0].pinned_gpu.as_ref().unwrap();
     assert_eq!(pinned_gpu.index, 3);
@@ -1567,7 +1821,8 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
         mmproj_ref: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1583,6 +1838,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: Some("uuid:GPU-123".into()),
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1594,9 +1850,8 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
     }];
     let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), None)];
 
-    let err =
-        preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-            .unwrap_err();
+    let err = preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap_err();
     let message = format!("{err:#}");
 
     assert!(message.contains("failed pinned GPU preflight"));
@@ -1619,7 +1874,8 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: Some("pci:0000:b3:00.0".into()),
-        config_owned: true,
+        resolve_pinned_gpu: true,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
@@ -1635,6 +1891,7 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
         mmproj_path: None,
         ctx_size: None,
         gpu_id: Some("pci:0000:b3:00.0".into()),
+        config_model_id: None,
         pinned_gpu: None,
         parallel: None,
         cache_type_k: None,
@@ -1646,9 +1903,8 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
-    let err =
-        preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
-            .unwrap_err();
+    let err = preflight_pinned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .unwrap_err();
     let message = format!("{err:#}");
 
     assert!(message.contains("failed pinned GPU preflight"));
@@ -1677,7 +1933,8 @@ fn test_should_not_show_serve_config_help_when_models_are_present() {
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: None,
-        config_owned: false,
+        resolve_pinned_gpu: false,
+        config_model_id: None,
         parallel: None,
         cache_type_k: None,
         cache_type_v: None,
