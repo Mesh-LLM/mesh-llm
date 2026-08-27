@@ -1,6 +1,9 @@
 # Private Meshes
 
-A private mesh is a named group of your own machines. Use the same name on each machine you want to connect.
+A private mesh is a named group of your own machines. Use the same name on each
+machine you want to connect. Traffic between those Mesh nodes is end-to-end
+encrypted by QUIC. If iroh uses a relay, the relay forwards encrypted packets
+and cannot read prompts, responses, or split-model activations.
 
 ## Start the first serving node
 
