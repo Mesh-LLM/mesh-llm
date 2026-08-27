@@ -67,6 +67,65 @@ fn tier_for(name: &str, sizes: &HashMap<String, f64>) -> SizeTier {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum AvailabilityRank {
+    Healthy,
+    Deprioritized,
+}
+
+/// Best currently routable health and advertised throughput for each canonical
+/// model. A local model is healthy by definition; paused remote peers are not
+/// routable and therefore do not contribute.
+async fn model_routing_hints(
+    node: &mesh::Node,
+) -> HashMap<String, (AvailabilityRank, Option<u64>)> {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let mut hints = HashMap::new();
+    for local in node.hosted_models().await {
+        hints.insert(
+            canonical_base_name(&local),
+            (AvailabilityRank::Healthy, None),
+        );
+    }
+    for peer in node.peers().await {
+        let availability = match peer.inference_admission_state {
+            Some(InferenceAdmissionState::RemotePaused | InferenceAdmissionState::AllPaused) => {
+                continue;
+            }
+            Some(InferenceAdmissionState::AcceptingDeprioritized) => {
+                AvailabilityRank::Deprioritized
+            }
+            _ => AvailabilityRank::Healthy,
+        };
+        for model in peer.http_routable_models() {
+            let model_base = canonical_base_name(&model);
+            let throughput = peer
+                .advertised_model_throughput
+                .iter()
+                .filter(|hint| canonical_base_name(&hint.model_name) == model_base)
+                .map(|hint| hint.avg_tokens_per_second_milli)
+                .max();
+            hints
+                .entry(model_base)
+                .and_modify(|(best_availability, best_throughput)| {
+                    match availability.cmp(best_availability) {
+                        std::cmp::Ordering::Less => {
+                            *best_availability = availability;
+                            *best_throughput = throughput;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            *best_throughput = (*best_throughput).max(throughput);
+                        }
+                        std::cmp::Ordering::Greater => {}
+                    }
+                })
+                .or_insert((availability, throughput));
+        }
+    }
+    hints
+}
+
 /// Try each alias in `aliases` until one resolves to a backend, then stop.
 ///
 /// Aliases are pre-sorted by `group_aliases_by_canonical_base` so the most
@@ -302,13 +361,24 @@ pub(super) async fn assemble_worker_pool(
         .await;
     }
 
-    // Admission control: a weak worker must not drag down a pool that already
-    // has a stronger one. Aggregation is sensitive to proposal quality
-    // (Self-MoA, arXiv:2502.00674), so an 8B draft added to a 24-32B pool is
-    // expected noise-to-harm. When tiers are mixed, keep only big-tier workers;
-    // an all-small or all-big pool is untouched. A lone big model then remains
-    // a one-worker Mesh gateway.
-    apply_admission_control(&mut backends, &mut models, &sizes);
+    // Admission control preserves its measured quality rule while healthy big
+    // capacity exists. If fewer than two big models are currently healthy,
+    // retain small/local workers as spillover rather than deleting the only
+    // responsive route.
+    let routing_hints = model_routing_hints(node).await;
+    let healthy_big_count = models
+        .iter()
+        .filter(|model| tier_for(&model.name, &sizes) == SizeTier::Big)
+        .filter(|model| {
+            routing_hints
+                .get(&canonical_base_name(&model.name))
+                .map(|(availability, _)| *availability == AvailabilityRank::Healthy)
+                .unwrap_or(true)
+        })
+        .count();
+    if healthy_big_count >= 2 {
+        apply_admission_control(&mut backends, &mut models, &sizes);
+    }
 
     // Same-model fill: if only one model resolved but it is served by >=2
     // DISTINCT physical endpoints, form a committee from them. Self-MoA shows
@@ -641,28 +711,45 @@ pub(super) async fn compute_actor_candidates(
             .or_insert(level);
     }
 
+    let routing_hints = model_routing_hints(node).await;
     let mut ranked: Vec<usize> = (0..models.len()).collect();
     ranked.sort_by(|&a, &b| {
         let ma = &models[a];
         let mb = &models[b];
+        let base_a = canonical_base_name(&ma.name);
+        let base_b = canonical_base_name(&mb.name);
         let tool_a = tool_use_by_base
-            .get(&canonical_base_name(&ma.name))
+            .get(&base_a)
             .copied()
             .unwrap_or(crate::models::CapabilityLevel::None);
         let tool_b = tool_use_by_base
-            .get(&canonical_base_name(&mb.name))
+            .get(&base_b)
             .copied()
             .unwrap_or(crate::models::CapabilityLevel::None);
+        let (availability_a, throughput_a) = routing_hints
+            .get(&base_a)
+            .copied()
+            .unwrap_or((AvailabilityRank::Healthy, None));
+        let (availability_b, throughput_b) = routing_hints
+            .get(&base_b)
+            .copied()
+            .unwrap_or((AvailabilityRank::Healthy, None));
         // 1) higher tool_use first
         tool_b
             .cmp(&tool_a)
-            // 2) big-tier before small-tier
+            // 2) healthy before explicitly deprioritized. This is deliberately
+            // ahead of size so a healthy local/small model can absorb spillover.
+            .then_with(|| availability_a.cmp(&availability_b))
+            // 3) big-tier before small-tier when health is equal
             .then_with(|| {
                 let small_a = moa::entry_is_small_tier(ma);
                 let small_b = moa::entry_is_small_tier(mb);
                 small_a.cmp(&small_b) // false (big) sorts before true (small)
             })
-            // 3) stable index order
+            // 4) faster advertised service rate within the same health/tier.
+            // This is a historical capability hint, not live load pressure.
+            .then_with(|| throughput_b.cmp(&throughput_a))
+            // 5) stable index order
             .then_with(|| a.cmp(&b))
     });
     ranked
