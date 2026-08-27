@@ -155,6 +155,10 @@ impl Scenario {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: self.workload.target_decode_tpot_ms,
+            active_weight_fraction_permil: ((self.model.active_weight_fraction.unwrap_or(1.0)
+                * 1000.0)
+                .round() as u32)
+                .clamp(1, 1000),
             edges,
             activation_frame_bytes: self.model.activation_frame_bytes,
         }

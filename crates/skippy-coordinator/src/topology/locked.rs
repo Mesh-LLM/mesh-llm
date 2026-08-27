@@ -168,6 +168,7 @@ fn fit_locked_candidate(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
+            modeled_decode_tpot_us: None,
         },
         minimum_remaining_vram,
         total_remaining_vram,
@@ -208,6 +209,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
             edges: Vec::new(),
             activation_frame_bytes: 0,
         }

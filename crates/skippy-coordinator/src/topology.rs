@@ -3,6 +3,22 @@ use std::collections::HashMap;
 
 mod locked;
 
+/// Calibrated per-stage software overhead for one decode step (dispatch,
+/// kernel-launch slop), in microseconds. Inherited from the execution sim's
+/// calibration against the BENCHMARKS.md anchors (see
+/// `skippy-topology-sim/scenarios/benchmarks_anchor_pair.toml`,
+/// `per_stage_overhead_ms = 1.3`). The `planner_model_matches_execution_sim`
+/// test locks the planner and sim to the same values.
+pub const CALIBRATED_PER_STAGE_OVERHEAD_US: u128 = 1_300;
+
+/// Calibrated per-hop overhead beyond RTT + activation transfer for one
+/// decode token (QUIC stream setup, copies, scheduling), in microseconds.
+/// Inherited from the execution sim's calibration: BENCHMARKS.md names
+/// per-token RPC latency the dominant split cost, and 13 ms/hop is the
+/// back-solved coefficient from the 2-way anchor. Without this term the
+/// planner under-prices every WAN edge by ~10 ms per hop.
+pub const CALIBRATED_PER_HOP_OVERHEAD_US: u128 = 13_000;
+
 pub use locked::{LockedTopologyStage, plan_locked_topology};
 
 const MINIMUM_AUTO_CONTEXT_LENGTH: u32 = 65_536;
@@ -48,6 +64,13 @@ pub struct TopologyPlanningInput {
     pub context_length_override: Option<u32>,
     pub parallel_lanes_override: Option<usize>,
     pub target_decode_tpot_ms: Option<u32>,
+    /// Fraction of layer weights actually streamed per decode token, in
+    /// per-mille of total (1000 = dense). MoE models touch only the active
+    /// experts; the calibrated anchor scenario uses 340 (0.34). Default for
+    /// callers without MoE metadata: 1000 — dense over-estimates TPOT
+    /// uniformly, which is conservative for target-met and does not change
+    /// relative candidate ordering.
+    pub active_weight_fraction_permil: u32,
     /// Directed node-pair link measurements. An empty vector keeps the
     /// legacy hop-count × worst-RTT network estimate, so callers without
     /// edge data reproduce today's behavior exactly.
@@ -95,6 +118,17 @@ pub struct TopologyPlan {
     pub stages: Vec<TopologyStagePlan>,
     pub estimated_decode_network_ms_per_token: Option<u32>,
     pub decode_tpot_target_met: Option<bool>,
+    /// Modeled single-stream decode TPOT in microseconds: serial form —
+    /// Σ stage service times + Σ hop times (including the prediction
+    /// return), each stage charged its weight-streaming time plus the
+    /// calibrated per-stage overhead, each hop its RTT + activation
+    /// transfer + the calibrated per-hop overhead. `None` unless every
+    /// node in the chosen subset reports sustained memory bandwidth
+    /// (capacity-only plans carry no model). Matches the calibrated
+    /// execution sim (`skippy-topology-sim`); the
+    /// `planner_model_matches_execution_sim` calibration test locks the
+    /// two together on the BENCHMARKS.md anchor scenario.
+    pub modeled_decode_tpot_us: Option<u128>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -462,7 +496,7 @@ fn fit_candidate(
     // node to its memory ceiling. Any missing signal falls back to the exact
     // capacity-greedy walk below, so signal-less fleets keep bit-identical
     // placement.
-    if let Some((spans, bottleneck_us)) = perf_balanced_spans(
+    if let Some((spans, _bottleneck_us)) = perf_balanced_spans(
         &layer_weights,
         &layer_required_bytes,
         &capacities,
@@ -492,13 +526,17 @@ fn fit_candidate(
 
         let estimated_decode_network_ms_per_token =
             candidate_network_ms_per_token(&stages, nodes, input);
-        let modeled_decode_tpot_us =
-            bottleneck_us.checked_add(network_us_from_ms(estimated_decode_network_ms_per_token));
-        // Target-met is scored against the modeled decode TPOT (bottleneck
-        // stage + network), not the network-only estimate: the target is a
-        // decode-TPOT target, and the modeled number is the best estimate of
-        // it this plan has. Network-only scoring would mark single-stage
-        // plans as trivially meeting any target.
+        // Modeled single-stream decode TPOT, serial form: every token
+        // traverses every stage and returns, so TPOT = Σ stage service
+        // times + Σ hop times. This is the form the BENCHMARKS.md anchors
+        // prove (see the execution sim's calibration); the previous
+        // bottleneck-stage form under-priced multi-stage plans. Both
+        // calibrated overhead terms are included so the planner's number
+        // matches the calibrated sim.
+        let modeled_decode_tpot_us = modeled_serial_decode_tpot_us(&stages, input);
+        // Target-met is scored against the modeled decode TPOT, the best
+        // estimate of it this plan has. Network-only scoring would mark
+        // single-stage plans as trivially meeting any target.
         let decode_tpot_target_met = modeled_decode_tpot_us
             .and_then(|tpot_us| u32::try_from(tpot_us / 1_000).ok())
             .and_then(|tpot_ms| input.target_decode_tpot_ms.map(|target| tpot_ms <= target));
@@ -509,6 +547,7 @@ fn fit_candidate(
                 stages,
                 estimated_decode_network_ms_per_token,
                 decode_tpot_target_met,
+                modeled_decode_tpot_us,
             },
             minimum_remaining_vram,
             total_remaining_vram,
@@ -569,6 +608,7 @@ fn fit_candidate(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
+            modeled_decode_tpot_us: None,
         },
         minimum_remaining_vram,
         total_remaining_vram,
@@ -779,13 +819,121 @@ fn candidate_network_ms_per_token(
     }
 }
 
-/// Convert whole milliseconds to microseconds without overflow.
-fn network_us_from_ms(ms: Option<u32>) -> u128 {
-    u128::from(ms.unwrap_or(0)) * 1_000
-}
-
 fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
     Some(estimate? <= target?)
+}
+
+/// Modeled single-stream decode TPOT for a planned stage sequence, serial
+/// form: Σ per-stage service times + Σ per-hop times (including the
+/// prediction return). Stage service time = stage weight-streaming time at
+/// the node's sustained bandwidth + calibrated per-stage overhead; hop time
+/// = edge RTT + activation transfer + calibrated per-hop overhead (falling
+/// back the same way the network estimate does). Requires every stage's
+/// node to report bandwidth; `None` otherwise (capacity-only plan).
+fn modeled_serial_decode_tpot_us(
+    stages: &[TopologyStagePlan],
+    input: &TopologyPlanningInput,
+) -> Option<u128> {
+    if stages.is_empty() {
+        return None;
+    }
+    // Per-stage service times from the same per-layer weight table the DP
+    // used (scaled by the active weight fraction for MoE models); `None`
+    // if any node lacks a bandwidth signal.
+    let layer_weights = streamed_layer_weight_bytes(input);
+    let node_bandwidth = |node_id: &str| -> Option<u32> {
+        input
+            .nodes
+            .iter()
+            .find(|node| node.node_id == node_id)
+            .and_then(|node| node.sustained_mem_bandwidth_mib_per_s)
+            .filter(|bw| *bw > 0)
+    };
+    let mut total_us = 0u128;
+    for stage in stages {
+        let bandwidth = node_bandwidth(&stage.node_id)?;
+        let range = stage.layer_start as usize..stage.layer_end as usize;
+        let weight_bytes: u64 = layer_weights.get(range.clone()).map_or(0, sum_u64);
+        total_us += modeled_stage_time_us_from(bandwidth, weight_bytes);
+        total_us += CALIBRATED_PER_STAGE_OVERHEAD_US;
+    }
+    // Hop times: reuse the edge model's per-hop accounting (RTT +
+    // transfer), and add the calibrated per-hop overhead per hop, including
+    // the prediction return. Node RTTs are looked up directly (the edge
+    // model works on UsableNode slices; here input.nodes suffices).
+    let hop_rtt_ms = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> Option<u32> {
+        input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .map(|edge| edge.rtt_ms)
+            .or_else(|| {
+                input
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id == target.node_id)
+                    .and_then(|node| node.stage_transfer_latency_ms)
+                    .or_else(|| {
+                        input
+                            .nodes
+                            .iter()
+                            .find(|node| node.node_id == source.node_id)
+                            .and_then(|node| node.stage_transfer_latency_ms)
+                    })
+            })
+    };
+    let hop_transfer_us = |source: &TopologyStagePlan, target: &TopologyStagePlan| -> u128 {
+        input
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_node_id == source.node_id && edge.target_node_id == target.node_id
+            })
+            .or_else(|| {
+                input.edges.iter().find(|edge| {
+                    edge.source_node_id == target.node_id && edge.target_node_id == source.node_id
+                })
+            })
+            .and_then(|edge| edge.large_frame_mib_per_s)
+            .map_or(0, |bandwidth| {
+                if bandwidth > 0 && input.activation_frame_bytes > 0 {
+                    u128::from(input.activation_frame_bytes) * 1_000_000
+                        / (u128::from(bandwidth) * 1_048_576)
+                } else {
+                    0
+                }
+            })
+    };
+    let mut hop_count = 0u128;
+    for window in stages.windows(2) {
+        let rtt_ms = hop_rtt_ms(&window[0], &window[1])?;
+        total_us += u128::from(rtt_ms) * 1_000;
+        total_us += hop_transfer_us(&window[0], &window[1]);
+        hop_count += 1;
+    }
+    if stages.len() > 1 {
+        let last = stages.last().expect("len > 1");
+        let first = stages.first().expect("len > 1");
+        let return_rtt_ms = hop_rtt_ms(last, first)?;
+        total_us += u128::from(return_rtt_ms) * 1_000;
+        total_us += hop_transfer_us(last, first);
+        hop_count += 1;
+    }
+    total_us += hop_count * CALIBRATED_PER_HOP_OVERHEAD_US;
+    Some(total_us)
+}
+
+/// Weight-streaming time in microseconds for `weight_bytes` at
+/// `bandwidth_mib_per_s` (bytes × 1e6 / (MiB/s × 2^20)).
+fn modeled_stage_time_us_from(bandwidth_mib_per_s: u32, weight_bytes: u64) -> u128 {
+    u128::from(weight_bytes) * 1_000_000 / (u128::from(bandwidth_mib_per_s) * 1_048_576)
 }
 
 fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
@@ -796,6 +944,21 @@ fn layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
         .model_weight_bytes
         .div_ceil(u64::from(input.layer_count));
     vec![weight_per_layer; input.layer_count as usize]
+}
+
+/// Layer weights actually streamed per decode token: the full table scaled
+/// by `active_weight_fraction_permil` (per-mille; 1000 = dense). MoE models
+/// touch only the active experts — the calibrated anchor scenario uses 340
+/// (0.34). Clamped to [1, 1000] so a zero fraction can never make stage
+/// service time vanish. Used only by the modeled-TPOT path; capacity
+/// accounting always uses full weights.
+fn streamed_layer_weight_bytes(input: &TopologyPlanningInput) -> Vec<u64> {
+    let weights = layer_weight_bytes(input);
+    let fraction_permil = input.active_weight_fraction_permil.clamp(1, 1000);
+    weights
+        .into_iter()
+        .map(|bytes| bytes * u64::from(fraction_permil) / 1_000)
+        .collect()
 }
 
 fn candidate_bytes_per_layer(
@@ -1045,6 +1208,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
             edges: Vec::new(),
             activation_frame_bytes: 0,
         }
@@ -1064,6 +1228,7 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
             edges: Vec::new(),
             activation_frame_bytes: 0,
         }
@@ -1349,6 +1514,12 @@ mod tests {
             perf_node("small", 30, 150_000),
             perf_node("tiny", 20, 150_000),
         ]);
+        // Hops need RTT data for the modeled TPOT to exist: without any
+        // RTT signal the planner declines to model TPOT (None) rather
+        // than pretending hops are free.
+        for node in &mut planning.nodes {
+            node.stage_transfer_latency_ms = Some(3);
+        }
         planning.kv_bytes_per_token = 1; // negligible KV; weights dominate
         planning.target_decode_tpot_ms = Some(110);
         // Binding stage 0 to the large node: it fits the 40 GiB model solo
@@ -1427,6 +1598,7 @@ mod tests {
             context_length_override: Some(65_536),
             parallel_lanes_override: Some(LANES),
             target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
             edges: Vec::new(),
             activation_frame_bytes: 0,
         };
