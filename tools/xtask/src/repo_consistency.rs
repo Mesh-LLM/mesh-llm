@@ -256,8 +256,9 @@ pub(crate) fn check_publish_crates_command() -> DynResult<()> {
 pub(crate) fn check_test_all_coverage_command() -> DynResult<()> {
     let repo_root = repo_root()?;
     let workspace_crates = workspace_package_names(&repo_root)?;
-    let justfile = fs::read_to_string(repo_root.join("Justfile"))?;
-    let (dynamic_targets, excluded_targets, isolated_targets) = test_all_test_targets(&justfile)?;
+    let test_all_source = fs::read_to_string(repo_root.join("just/ci.just"))?;
+    let (dynamic_targets, excluded_targets, isolated_targets) =
+        test_all_test_targets(&test_all_source)?;
     check_subset(
         &workspace_crates,
         &dynamic_targets,
@@ -293,7 +294,9 @@ fn test_all_test_targets(
     let mut lines = contents
         .lines()
         .skip_while(|line| line.trim_end() != "test-all:");
-    lines.next().ok_or("Justfile: missing test-all recipe")?;
+    lines
+        .next()
+        .ok_or("just/ci.just: missing test-all recipe")?;
     let mut commands = Vec::new();
     let mut current = String::new();
     for line in lines

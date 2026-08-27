@@ -931,7 +931,8 @@ class CiArtifactActionTests(unittest.TestCase):
             action,
             re.DOTALL,
         )
-        self.assertIsNotNone(match)
+        if match is None:
+            self.fail("backend recipe allowlist was not found")
         recipe_names = set(match.group(1).split("|"))
 
         for recipe in (
@@ -942,13 +943,110 @@ class CiArtifactActionTests(unittest.TestCase):
             with self.subTest(recipe=recipe):
                 self.assertIn(recipe, recipe_names)
 
+    def test_imported_justfile_sources_are_classified_on_both_diff_sides(self) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn("grep -E '^Justfile$|^just/.+\\.just$'", action)
+        self.assertIn("$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE", action)
+        self.assertIn("${{ inputs.head_sha }}:$JUSTFILE_SOURCE", action)
+        self.assertIn(
+            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "${{ inputs.base_sha }}" '
+            '"${{ inputs.head_sha }}")',
+            action,
+        )
+        self.assertIn("git diff --name-status --no-renames", action)
+        self.assertIn("A$'\\t'*)", action)
+        self.assertIn("D$'\\t'*)", action)
+        self.assertIn("M$'\\t'*)", action)
+        self.assertIn("justfile_has_recipe \"$JUSTFILE_SOURCE_BASE\"", action)
+        self.assertIn("justfile_has_recipe \"$JUSTFILE_SOURCE_HEAD\"", action)
+        self.assertIn(
+            'changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" '
+            '"$JUSTFILE_SOURCE_CHANGED_LINES" new',
+            action,
+        )
+        self.assertIn(
+            'changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" '
+            '"$JUSTFILE_SOURCE_CHANGED_LINES" old',
+            action,
+        )
+
+    def test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds(
+        self,
+    ) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn(
+            'justfile_backend_recipe_tokens "$JUSTFILE_SOURCE_BASE_SHA" '
+            '> "$JUSTFILE_BACKEND_TOKENS_BASE"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_recipe_tokens "${{ inputs.head_sha }}" '
+            '> "$JUSTFILE_BACKEND_TOKENS_HEAD"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_input_lines "$JUSTFILE_SOURCE_BASE" '
+            '"$JUSTFILE_BACKEND_TOKENS_BASE"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_input_lines "$JUSTFILE_SOURCE_HEAD" '
+            '"$JUSTFILE_BACKEND_TOKENS_HEAD"',
+            action,
+        )
+        self.assertIn('>> "$JUSTFILE_SOURCE_BACKEND_LINES_BASE"', action)
+        self.assertIn('>> "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"', action)
+
+    def test_backend_recipe_attributes_route_backend_builds(self) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn("pending_attribute_lines[++pending_attribute_count] = NR", action)
+        self.assertIn("print pending_attribute_lines[pending_index]", action)
+        self.assertIn("delete pending_attribute_lines", action)
+
+    def test_sccache_seed_keys_include_imported_just_sources(self) -> None:
+        workflow_dir = ROOT / ".github" / "workflows"
+        workflows = (
+            "cache-warm-sccache.yml",
+            "ci-quality-slice.yml",
+            "ci-linux-host-slice.yml",
+            "ci-rust-tests-slice.yml",
+            "ci-linux-runtime-slice.yml",
+        )
+
+        for workflow in workflows:
+            with self.subTest(workflow=workflow):
+                source = (workflow_dir / workflow).read_text(encoding="utf-8")
+                self.assertIn(
+                    "hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**')",
+                    source,
+                )
+
+    def test_root_justfile_import_graph_changes_fail_open_to_backend_builds(self) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn("JUSTFILE_SOURCE_DIFF=$(git diff -U0", action)
+        self.assertIn(
+            'printf \'%s\\n\' "$JUSTFILE_SOURCE_DIFF" | justfile_changed_import',
+            action,
+        )
+        self.assertIn("if (line ~ /^import[?]?[[:space:]]+/)", action)
+        self.assertIn(
+            '[[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "false" '
+            '&& "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "false" ]]',
+            action,
+        )
+
     def test_sdk_routing_covers_every_direct_smoke_script(self) -> None:
         action = self.read_action("compute-changes")
         match = re.search(
             r"DIRECT_SDK_INPUTS=.*?grep -E '([^']+)'",
             action,
         )
-        self.assertIsNotNone(match)
+        if match is None:
+            self.fail("direct SDK routing pattern was not found")
         direct_sdk_pattern = re.compile(match.group(1))
         self.assertRegex(
             ".github/actions/restore-smoke-inputs/action.yml",
@@ -1116,6 +1214,7 @@ class CiArtifactActionTests(unittest.TestCase):
             "steps.native_toolchain.outputs.epoch, hashFiles(",
             producer,
         )
+        self.assertIn("'Justfile', 'just/**'", producer)
         self.assertIn(
             "uses: ./.github/actions/resolve-native-toolchain-epoch",
             producer,
@@ -2747,7 +2846,8 @@ class CiArtifactActionTests(unittest.TestCase):
             jobs,
             re.MULTILINE | re.DOTALL,
         )
-        self.assertIsNotNone(match)
+        if match is None:
+            self.fail("authority sentinel job was not found")
         sentinel = match.group("body")
         self.assertIn(
             "# Explicit diagnostic exception: this no-checkout job attests the",

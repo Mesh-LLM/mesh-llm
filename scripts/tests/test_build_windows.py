@@ -1,6 +1,8 @@
 from pathlib import Path
 import unittest
 
+from scripts.tests.justfile_source import read_justfile_source
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/build-windows.ps1"
@@ -20,7 +22,7 @@ class BuildWindowsScriptTests(unittest.TestCase):
         self.assertNotIn("Get-ChildItem -LiteralPath $uiDist", action)
 
     def test_windows_release_recipes_request_dynamic_hosts(self):
-        justfile = (ROOT / "Justfile").read_text()
+        justfile = read_justfile_source(ROOT / "Justfile")
         for recipe in (
             "release-build-windows:",
             "release-build-cuda-windows",

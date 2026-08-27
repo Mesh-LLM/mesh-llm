@@ -49,6 +49,13 @@ impl ClientStream {
         }
     }
 
+    pub(crate) fn tcp(&self) -> Option<&TcpStream> {
+        match self {
+            Self::Tcp(stream) => Some(stream),
+            Self::Quic { .. } => None,
+        }
+    }
+
     pub(crate) fn peer_addr(&self) -> std::io::Result<SocketAddr> {
         match self {
             Self::Tcp(stream) => stream.peer_addr(),

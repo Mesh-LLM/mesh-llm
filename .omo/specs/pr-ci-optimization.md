@@ -31,6 +31,12 @@ or cache identity.
   use protected detached lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
+- Protected PR planning extracts only those two manifests from the validated
+  immutable source SHA and passes their unique runner-temp root to the
+  default-branch planner. The source manifests are data only. Planner code,
+  Cargo workspace discovery, and affected-crate operations remain rooted in
+  the protected checkout. The source ownership and slice catalogs must match
+  the protected catalogs, and missing manifests fail closed.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.
@@ -94,12 +100,14 @@ Routine main validation has the same acceptance invariant and exposes
 Each PR entry calls one protected default-branch workflow as a nested reusable
 job, and each main entry calls its same-commit workflow. Both preserve native
 run/log visibility without a monolithic graph. The manual-only controller
-dispatches the same list with bounded JSON inputs. All paths pass the
-immutable source SHA only to product checkouts; each lane contains a
-platform-local static superset of typed reusable calls. Workflow YAML is never
-generated, and lanes do not download a planner artifact or allocate a planner.
-Fork heads are fetched through the base repository while workflow
-definitions remain protected on the default branch.
+dispatches the same list with bounded JSON inputs. PR planning also uses the
+immutable source SHA to read only `ci/ownership.yml` and `ci/slices.yml` as
+inert routing data. Product workflows use it for source checkout. Each lane
+contains a platform-local static superset of typed reusable calls. Workflow
+YAML is never generated, and lanes do not download a planner artifact or
+allocate a planner. Fork heads are fetched through the base repository while
+planner, action, and workflow definitions remain protected on the default
+branch.
 
 ## Planner contract
 
@@ -110,6 +118,13 @@ runner-infrastructure changes fail open to control rows and all supported
 product rows. Paths that map only to documentation plus `ci-control` are the
 exception. They keep the profile base and add only `runner-contract`, without
 forcing product rows.
+
+The planner accepts a separate manifest root for the two catalog files. It
+defaults to the workspace root. Protected PR callers provide a unique
+runner-temp directory populated from the immutable source SHA; push and manual
+callers keep the protected workspace default. The manifest root never changes
+workspace package discovery or affected-crate command paths. Missing source
+manifests fail closed.
 
 Each plan contains:
 

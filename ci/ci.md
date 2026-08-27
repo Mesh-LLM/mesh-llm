@@ -33,6 +33,22 @@ reusable workflow. GitHub therefore exposes five focused PR-associated runs
 with direct job and step drill-down. Each has a stable `PR / <lane>` result.
 The entries receive no repository secrets, cannot select Depot or publish
 trusted-main caches, and independently cancel superseded synchronizations.
+The protected planner action extracts only `ci/ownership.yml` and
+`ci/slices.yml` from the validated immutable PR source SHA into a unique
+runner-temp directory. The source ownership and slice catalogs must match the
+protected catalogs, preventing PR-controlled routing, matrix, or worker
+expansion. These files are routing data, not executable code.
+Planner code, Cargo workspace discovery, and affected-crate operations still
+run from the protected default-branch checkout. A missing or non-regular source
+manifest fails the plan.
+
+Because the catalogs must match byte for byte, a branch cannot introduce its
+own ownership or slice entry and pass its own Plan gate. Catalog evolution is a
+sequenced maintainer merge, not an escape hatch: land a catalog-only commit on
+the default branch that registers the new paths or slices, then rebase the
+dependent branch onto it so both copies match again. Do not relax the compare
+to unblock a branch — the byte-identical check is the boundary that keeps
+PR-controlled routing out of the protected planner.
 
 ### Required PR shape and visibility
 
@@ -183,6 +199,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 `scripts/plan-ci.py` is the only source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
 their schema and dependency graph, and emits `ci/ci-plan.schema.json` output.
+Its optional manifest root changes only those two reads. All workspace and
+Cargo operations use the planner's workspace root. PR callers pass the
+runner-temp source-manifest root; push and manual callers use
+`GITHUB_WORKSPACE`.
 Each plan contains source/base identities, direct crates, affected crates,
 semantic domains, signals, selected slices, reasons, typed matrices, runner
 roles, cache modes and fan-out budgets. Unknown paths and malformed inputs fail

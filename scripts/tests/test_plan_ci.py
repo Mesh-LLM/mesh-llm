@@ -5,8 +5,10 @@ import importlib.util
 import json
 from fnmatch import fnmatchcase
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -26,6 +28,142 @@ def fixture(name: str) -> dict[str, object]:
 
 
 class PlanCiTests(unittest.TestCase):
+    def test_manifest_root_is_independent_from_workspace_root(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as workspace_directory,
+            tempfile.TemporaryDirectory() as manifest_directory,
+        ):
+            workspace_root = Path(workspace_directory)
+            manifest_root = Path(manifest_directory)
+            manifest_ci = manifest_root / "ci"
+            manifest_ci.mkdir()
+            ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text())
+            ownership["path_rules"].append(
+                {"domain": "docs", "patterns": ["source-only/**"]}
+            )
+            (manifest_ci / "ownership.yml").write_text(json.dumps(ownership))
+            shutil.copyfile(ROOT / "ci" / "slices.yml", manifest_ci / "slices.yml")
+            payload = fixture("docs-only.json")
+            payload.update(
+                {
+                    "changed_files": ["source-only/guide.md"],
+                    "workspace_packages": [
+                        {"name": "workspace-crate", "path": "crates/workspace-crate"}
+                    ],
+                    "affected_crates": ["workspace-crate"],
+                }
+            )
+
+            plan = PLANNER.build_plan(
+                payload,
+                root=workspace_root,
+                manifest_root=manifest_root,
+            )
+
+            self.assertEqual(plan["domains"], ["docs"])
+
+    def test_workspace_operations_remain_rooted_at_workspace_root(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as workspace_directory,
+            tempfile.TemporaryDirectory() as manifest_directory,
+        ):
+            workspace_root = Path(workspace_directory)
+            manifest_root = Path(manifest_directory)
+            manifest_ci = manifest_root / "ci"
+            manifest_ci.mkdir()
+            shutil.copyfile(ROOT / "ci" / "ownership.yml", manifest_ci / "ownership.yml")
+            shutil.copyfile(ROOT / "ci" / "slices.yml", manifest_ci / "slices.yml")
+            payload = fixture("runtime.json")
+            del payload["workspace_packages"]
+            payload["affected_crates"] = []
+            package_ids = {
+                "mesh-llm-host-runtime": "host-id",
+                "mesh-llm": "binary-id",
+            }
+            metadata = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "workspace_members": list(package_ids.values()),
+                        "workspace_root": str(workspace_root),
+                        "packages": [
+                            {
+                                "id": package_id,
+                                "name": package_name,
+                                "manifest_path": str(
+                                    workspace_root
+                                    / "crates"
+                                    / package_name
+                                    / "Cargo.toml"
+                                ),
+                            }
+                            for package_name, package_id in package_ids.items()
+                        ],
+                    }
+                ),
+                stderr="",
+            )
+            affected = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"affected":["mesh-llm-host-runtime","mesh-llm"]}',
+                stderr="",
+            )
+
+            with mock.patch.object(
+                PLANNER.subprocess,
+                "run",
+                side_effect=(metadata, affected),
+            ) as run:
+                PLANNER.build_plan(
+                    payload,
+                    root=workspace_root,
+                    manifest_root=manifest_root,
+                )
+
+            self.assertEqual(run.call_count, 2)
+            metadata_call, affected_call = run.call_args_list
+            self.assertEqual(metadata_call.kwargs["cwd"], workspace_root)
+            self.assertEqual(
+                metadata_call.args[0],
+                ["cargo", "metadata", "--format-version=1", "--no-deps"],
+            )
+            self.assertEqual(affected_call.kwargs["cwd"], workspace_root)
+            self.assertEqual(
+                affected_call.args[0],
+                [
+                    "bash",
+                    str(workspace_root / "scripts" / "affected-crates.sh"),
+                    "--stdin",
+                ],
+            )
+
+    def test_missing_source_manifest_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as manifest_directory:
+            manifest_root = Path(manifest_directory)
+            manifest_ci = manifest_root / "ci"
+            manifest_ci.mkdir()
+            shutil.copyfile(ROOT / "ci" / "ownership.yml", manifest_ci / "ownership.yml")
+
+            with self.assertRaisesRegex(
+                PLANNER.PlanError,
+                r"unable to load .*ci/slices\.yml",
+            ):
+                PLANNER.build_plan(
+                    fixture("docs-only.json"),
+                    root=ROOT,
+                    manifest_root=manifest_root,
+                )
+
+    def test_manifest_root_defaults_to_workspace_root(self) -> None:
+        payload = fixture("docs-only.json")
+
+        default_plan = PLANNER.build_plan(payload, root=ROOT)
+        explicit_plan = PLANNER.build_plan(payload, root=ROOT, manifest_root=ROOT)
+
+        self.assertEqual(default_plan, explicit_plan)
+
     def test_all_tracked_paths_have_ownership(self) -> None:
         ownership = json.loads((ROOT / "ci" / "ownership.yml").read_text())
         patterns = [
@@ -46,6 +184,14 @@ class PlanCiTests(unittest.TestCase):
         ]
 
         self.assertEqual([], unmatched)
+
+    def test_imported_justfiles_use_existing_rust_ownership(self) -> None:
+        payload = fixture("docs-only.json")
+        payload["changed_files"] = ["just/build.just"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertEqual(plan["domains"], ["rust"])
 
     def test_docs_only_selects_the_fast_quality_slice(self) -> None:
         plan = PLANNER.build_plan(fixture("docs-only.json"), root=ROOT)
@@ -492,7 +638,12 @@ class PlanCiTests(unittest.TestCase):
 
     def test_cli_emits_one_versioned_json_plan(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(PLANNER_PATH)],
+            [
+                sys.executable,
+                str(PLANNER_PATH),
+                "--manifest-root",
+                str(ROOT),
+            ],
             cwd=ROOT,
             input=json.dumps(fixture("runtime.json")),
             text=True,
