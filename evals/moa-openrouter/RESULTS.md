@@ -454,16 +454,40 @@ tasks and judge:
 | 2x 9B same | single-round | 5 / 74 / 1 | 0.22 |
 | **2x 9B same** | **refine** | **11 / 69 / 0** | **0.00098** |
 
-Zero losses in 80 trials, consistent across all four strata (code_review 5-0,
-reason_over_output 3-0, planning 2-0, explain 1-0). This is the only
-significantly positive arm of the four measured, and it is the shape a real
-mid-tier Buzz fleet forms.
+**Both rows above are superseded — they were underpowered.** Re-run at 5 draws
+(~200 trials/arm instead of 80), with a second judge scoring the identical
+answer texts:
 
-Caveat specific to it: MoA output is LONGER than solo here (4523 vs 4124), the
-reverse of the 8B pools, so length bias runs *with* the winner. The shorter-MoA
-subset is 5W/0L (p = 0.0625) — same direction, underpowered.
+| arm | n | judge1 W/T/L | p | judge2 W/T/L | both-judges W/L |
+|---|---|---|---|---|---|
+| refine | 197 | 29 / 160 / 8 | 0.00075 | 116 / 66 / 15 | 26 / 8 (p=0.0029) |
+| single-round | 200 | 23 / 174 / 3 | 0.00009 | 90 / 101 / 9 | 15 / 1 (p=0.00052) |
 
-Full data: `RESEARCH/MOA_REFINEMENT_E2E_2026_08_27.md` in the Buzz workspace.
+Three conclusions changed:
+
+1. **Single-round is NOT null on this pool.** 5/74/1 (p=0.22) at 80 trials
+   becomes 23/174/3 (p=0.00009) at 200. The earlier "single-round is null,
+   layered is the entire win" reading was a sample-size artifact.
+2. **Refine is not measurably better than single-round.** Fisher on decided
+   win/loss: p=0.50 (judge1), p=0.67 (judge2). With ~10x the decided trials the
+   arms *converged* rather than separated, so the extra ~N calls per turn buy
+   no detectable quality here.
+3. **The length confound explains both wins.** MoA output is longer on both
+   arms. Every win sits in the longer-output subset (refine 19W/0L, n=131;
+   single 18W/0L, n=134); in the MoA-shorter subset both arms are
+   indistinguishable from solo (refine 10W/8L p=0.81; single 5W/3L p=0.73).
+   r(length delta, verdict) = +0.387 / +0.405. The second judge shows the
+   *same* bias, so two-judge agreement here is correlated error, not
+   independence — it rules out one-judge idiosyncrasy and nothing else.
+
+Consequence: do not lift the all-small collapse guard on this evidence, and the
+refinement fix must rest on the 8B harm-reduction result (15 losses -> 5), not
+on a 9B quality lift. The blocking methodological need is now a metric an LLM
+judge cannot satisfy by writing more prose.
+
+Full data: `RESEARCH/MOA_REFINEMENT_E2E_2026_08_27.md` (first run) and
+`RESEARCH/MOA_9B_CONFIRMATION_2026_08_27.md` (this one) in the Buzz workspace.
+Scored by `evals/moa-openrouter/analyze_e2e.py`.
 
 Six eval-vs-production divergences were found by measuring the shipped path and
 fixed: grace finalizing the turn before refinement could run, two truncation

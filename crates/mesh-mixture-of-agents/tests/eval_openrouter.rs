@@ -672,6 +672,7 @@ async fn e2e_handle_turn_beats_best_single_small_model() {
     // best you could have run alone", not "mesh vs an average member".
     let solo = pool[0].clone();
     let judge = committee_judge();
+    let judge2 = second_judge();
     let tasks = load_committee_tasks();
     let backend = Arc::new(OpenRouterBackend::new(key.clone()));
     let cfg = Arc::new(e2e_config(&pool, &key));
@@ -689,6 +690,7 @@ async fn e2e_handle_turn_beats_best_single_small_model() {
         for task in &tasks {
             let (backend, cfg, sem) = (backend.clone(), cfg.clone(), sem.clone());
             let (solo, judge) = (solo.clone(), judge.clone());
+            let judge2 = judge2.clone();
             let (id, category, prompt) =
                 (task.id.clone(), task.category.clone(), task.prompt.clone());
             js.spawn(async move {
@@ -703,13 +705,21 @@ async fn e2e_handle_turn_beats_best_single_small_model() {
                     return None;
                 }
                 let verdict = judge_pair(&backend, &judge, &prompt, &b, &a).await;
+                // Second judge scores the SAME texts, so a disagreement
+                // isolates judge effects from resampling.
+                let verdict2 = match judge2.as_deref() {
+                    Some(j2) => Some(judge_pair(&backend, j2, &prompt, &b, &a).await),
+                    None => None,
+                };
                 eprintln!(
-                    "  draw {draw} {id:22} MoA/solo={verdict:+}  kind={:?} reducer={}  len A{} B{}",
+                    "  draw {draw} {id:22} MoA/solo={verdict:+}{}  kind={:?} reducer={}  len A{} B{}",
+                    verdict2.map(|v| format!(" j2={v:+}")).unwrap_or_default(),
                     turn.turn_kind,
                     turn.reducer_used,
                     a.len(),
                     b.len(),
                 );
+                let keep_text = save_text();
                 Some(CommitteeTrial {
                     draw,
                     task_id: id,
@@ -720,6 +730,9 @@ async fn e2e_handle_turn_beats_best_single_small_model() {
                     len_a: a.len(),
                     len_b: b.len(),
                     len_c: 0,
+                    b_vs_a_j2: verdict2,
+                    text_a: keep_text.then(|| a.clone()),
+                    text_b: keep_text.then(|| b.clone()),
                 })
             });
         }
@@ -757,6 +770,22 @@ async fn e2e_handle_turn_beats_best_single_small_model() {
         mean(|x| x.len_a),
         mean(|x| x.len_b)
     );
+    if judge2.is_some() {
+        let j2 = |v: i8| lines.iter().filter(|l| l.b_vs_a_j2 == Some(v)).count();
+        let agree = lines
+            .iter()
+            .filter(|l| l.b_vs_a_j2 == Some(l.b_vs_a))
+            .count();
+        eprintln!(
+            "  second judge ({}):  win {}  tie {}  loss {}   agrees with judge 1 on {}/{}",
+            judge2.as_deref().unwrap_or(""),
+            j2(1),
+            j2(0),
+            j2(-1),
+            agree,
+            lines.len()
+        );
+    }
     eprintln!(
         "  analyze: python3 evals/moa-openrouter/analyze_ablation.py is for the ablation; use the printed w/t/l here\n"
     );

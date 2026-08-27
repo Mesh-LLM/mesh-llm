@@ -221,6 +221,17 @@ pub(crate) struct CommitteeTrial {
     pub(crate) len_a: usize,
     pub(crate) len_b: usize,
     pub(crate) len_c: usize,
+    /// Second-judge verdict for the same B-vs-A pair, when `MOA_E2E_JUDGE2` is
+    /// set. Judged from the identical answer texts, so a disagreement is a
+    /// judge effect and not a resampling effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) b_vs_a_j2: Option<i8>,
+    /// Raw answer texts, captured only with `MOA_E2E_SAVE_TEXT=1` so a verdict
+    /// can be re-judged later without paying to regenerate the answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) text_a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) text_b: Option<String>,
 }
 
 /// One committee trial: build all three arms for a prompt, then judge them.
@@ -298,7 +309,25 @@ pub(crate) async fn run_committee_trial(
         len_a: a.len(),
         len_b: b.len(),
         len_c: c.len(),
+        b_vs_a_j2: None,
+        text_a: None,
+        text_b: None,
     })
+}
+
+/// Optional second judge model. Set `MOA_E2E_JUDGE2` to re-score the same
+/// answer pair with a different judge; length bias is judge-specific, so
+/// agreement across two judges is the cheapest guard against banking a
+/// verdict the judge invented.
+pub(crate) fn second_judge() -> Option<String> {
+    std::env::var("MOA_E2E_JUDGE2")
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
+/// Whether to persist raw answer texts alongside verdicts.
+pub(crate) fn save_text() -> bool {
+    std::env::var("MOA_E2E_SAVE_TEXT").as_deref() == Ok("1")
 }
 
 // ─── End-to-end: the shipped path, not the harness ───────────────────
