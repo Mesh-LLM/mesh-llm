@@ -250,7 +250,7 @@ async fn moa_single_worker_stays_in_gateway() {
     let lifecycle = OpenAiLifecycleAttachment::unowned();
 
     let result = try_handle_moa_intercept(
-        tcp_stream,
+        tcp_stream.into(),
         &mut request,
         &ctx,
         &decision,

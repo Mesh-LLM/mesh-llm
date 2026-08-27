@@ -7,6 +7,7 @@ use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::{probe_http_response, probe_http_response_local};
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::forwarded_request::prepare_peer_forwarded_request;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use mesh_llm_events::logging::identifiers::RequestId;
@@ -15,7 +16,7 @@ use tokio::net::TcpStream;
 
 pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     port: u16,
     prefetched: &[u8],
     logging: RouteAttemptLoggingContext<'_>,
@@ -69,7 +70,7 @@ async fn acquire_local_attempt_upstream(
 }
 
 async fn route_local_attempt_after_forward(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     upstream: &mut TcpStream,
     port: u16,
     request_id: RequestId,
@@ -106,7 +107,7 @@ async fn route_local_attempt_after_forward(
 
 pub(in crate::network::openai) async fn route_remote_attempt(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
     logging: RouteAttemptLoggingContext<'_>,
@@ -183,7 +184,7 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
 }
 
 async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstream>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     quic_recv: &mut R,
     host_id: iroh::EndpointId,
     request_id: RequestId,
@@ -332,7 +333,7 @@ mod tests {
             let (client, _) = listener.accept().await.unwrap();
             let client_std = client.into_std().unwrap();
             let observer_std = client_std.try_clone().unwrap();
-            let mut client = TcpStream::from_std(client_std).unwrap();
+            let mut client: ClientStream = TcpStream::from_std(client_std).unwrap().into();
             let observer = TcpStream::from_std(observer_std).unwrap();
             let observer_task = tokio::spawn(async move {
                 let mut peeked = [0; 1];
@@ -414,7 +415,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
             route_remote_attempt_after_forward(
                 &mut client,
                 &mut upstream,

@@ -1546,7 +1546,7 @@ pub(super) async fn run_passive_listener_loop(
                 let node = node.clone();
                 let affinity = affinity_router.clone();
                 tokio::spawn(Box::pin(crate::network::proxy::handle_mesh_request(
-                    node, tcp_stream, true, affinity,
+                    node, tcp_stream.into(), true, affinity,
                 )));
             }
             Some(model_name) = promote_rx.recv() => {

@@ -2,15 +2,15 @@ use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_f
 use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::ChatStreamNormalizationState;
 use anyhow::{Context, Result, anyhow};
 use mesh_llm_events::logging::events::TokenUsage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 async fn write_captured_sse_event(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     event: Option<&str>,
     data: &str,
@@ -63,7 +63,7 @@ impl ResponsesStreamRelayState {
 pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_stream<
     R: AsyncRead + Unpin,
 >(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
@@ -172,7 +172,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
 pub(in crate::network::openai::response) async fn relay_translated_responses_stream<
     R: AsyncRead + Unpin,
 >(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
@@ -283,7 +283,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
 }
 
 async fn process_translated_responses_frame(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     data: &str,
@@ -308,7 +308,7 @@ fn update_translated_responses_model(
 }
 
 async fn emit_translated_response_created(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
@@ -330,7 +330,7 @@ async fn emit_translated_response_created(
 }
 
 async fn emit_translated_reasoning_delta(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     chunk: &openai_frontend::responses::ChatCompletionStreamChunk,
@@ -363,7 +363,7 @@ async fn emit_translated_reasoning_delta(
 }
 
 async fn emit_translated_output_delta(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
     chunk: &openai_frontend::responses::ChatCompletionStreamChunk,
@@ -403,7 +403,7 @@ async fn emit_translated_output_delta(
 }
 
 async fn emit_translated_output_item_prelude(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
@@ -460,7 +460,7 @@ fn update_translated_responses_usage(
 }
 
 async fn finish_translated_responses_stream(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
@@ -525,7 +525,7 @@ async fn finish_translated_responses_stream(
 }
 
 async fn emit_translated_fallback_created(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     state: &mut ResponsesStreamRelayState,
 ) -> Result<()> {
@@ -547,7 +547,7 @@ async fn emit_translated_fallback_created(
 }
 
 async fn emit_translated_stream_done_event(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     capture: &mut Option<OpenAiStreamArtifactCapture>,
     event_name: Option<&str>,
     payload: String,
@@ -611,7 +611,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
                 header_end: b"HTTP/1.1 201 Created\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".len(),
@@ -651,7 +652,7 @@ mod tests {
         upstream_writer.shutdown().await.unwrap();
 
         // ── read everything the relay wrote
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         use tokio::io::AsyncReadExt;
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
@@ -696,7 +697,8 @@ mod tests {
         let capture = Arc::new(Captures::default());
         let observer_capture: Arc<dyn OpenAiArtifactCapture> = capture.clone();
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.to_vec(),
                 header_end: header.len(),
@@ -725,7 +727,7 @@ mod tests {
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
 
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
         let route_result = server_task.await.expect("server task");
@@ -764,7 +766,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.to_vec(),
                 header_end: header.len(),
@@ -793,7 +796,7 @@ mod tests {
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
 
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
         let route_result = server_task.await.expect("server task");
@@ -815,7 +818,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.to_vec(),
                 header_end: header.len(),
@@ -838,7 +842,7 @@ mod tests {
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
 
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
         let route_result = server_task.await.expect("server task");

@@ -3,8 +3,7 @@ use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::request_normalize::{
     ResponseAdapter, normalize_openai_compat_request, resolve_request_object_references,
@@ -248,34 +247,46 @@ struct RequestRewriteOutcome {
 /// This reads complete headers plus the full request body when body framing is
 /// known via `Content-Length` or `Transfer-Encoding: chunked`. The raw request
 /// bytes are preserved so the chosen upstream sees the original payload.
-pub async fn read_http_request(stream: &mut TcpStream) -> Result<BufferedHttpRequest> {
+pub async fn read_http_request<S>(stream: &mut S) -> Result<BufferedHttpRequest>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     read_http_request_with_limits(stream, HTTP_READ_LIMITS, None).await
 }
 
 /// Variant for host ingress boundaries that need to bind locally generated
 /// error responses to a safely established request lifecycle.
-pub(crate) async fn read_http_request_with_plugin_manager_with_context(
-    stream: &mut TcpStream,
+pub(crate) async fn read_http_request_with_plugin_manager_with_context<S>(
+    stream: &mut S,
     plugin_manager: Option<&plugin::PluginManager>,
-) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     read_http_request_with_limits_with_context(stream, HTTP_READ_LIMITS, plugin_manager).await
 }
 
-pub(super) async fn read_http_request_with_limits(
-    stream: &mut TcpStream,
+pub(super) async fn read_http_request_with_limits<S>(
+    stream: &mut S,
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
-) -> Result<BufferedHttpRequest> {
+) -> Result<BufferedHttpRequest>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     read_http_request_with_limits_with_context(stream, limits, plugin_manager)
         .await
         .map_err(OpenAiRequestReadError::into_error)
 }
 
-async fn read_http_request_with_limits_with_context(
-    stream: &mut TcpStream,
+async fn read_http_request_with_limits_with_context<S>(
+    stream: &mut S,
     limits: HttpReadLimits,
     plugin_manager: Option<&plugin::PluginManager>,
-) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError> {
+) -> std::result::Result<BufferedHttpRequest, OpenAiRequestReadError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut raw = Vec::with_capacity(8192);
     let parsed = read_until_headers_parsed(stream, &mut raw, limits.max_header_bytes)
         .await
@@ -370,13 +381,16 @@ async fn read_http_request_with_limits_with_context(
     })
 }
 
-async fn read_buffered_request_body(
-    stream: &mut TcpStream,
+async fn read_buffered_request_body<S>(
+    stream: &mut S,
     raw: &mut Vec<u8>,
     parsed: &ParsedHeaders,
     header_end: usize,
     body_limits: HttpReadLimits,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     if parsed.is_chunked {
         return read_chunked_request_body(stream, raw, parsed, header_end, body_limits).await;
     }
@@ -395,13 +409,16 @@ async fn read_buffered_request_body(
     Ok(Vec::new())
 }
 
-async fn read_chunked_request_body(
-    stream: &mut TcpStream,
+async fn read_chunked_request_body<S>(
+    stream: &mut S,
     raw: &mut Vec<u8>,
     parsed: &ParsedHeaders,
     header_end: usize,
     body_limits: HttpReadLimits,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut sent_continue = false;
     loop {
         if let Some((consumed, decoded)) =
@@ -424,14 +441,17 @@ async fn read_chunked_request_body(
     }
 }
 
-async fn read_fixed_length_request_body(
-    stream: &mut TcpStream,
+async fn read_fixed_length_request_body<S>(
+    stream: &mut S,
     raw: &mut Vec<u8>,
     parsed: &ParsedHeaders,
     header_end: usize,
     content_length: usize,
     body_limits: HttpReadLimits,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     if content_length > body_limits.max_body_bytes {
         bail!("HTTP body exceeds {} bytes", body_limits.max_body_bytes);
     }
@@ -567,11 +587,14 @@ fn finalize_forwarded_request(
 /// Read from the stream until httparse can fully parse the request headers.
 /// Returns parsed metadata; `buf` contains all bytes read so far (headers +
 /// any trailing body bytes that arrived in the same read).
-async fn read_until_headers_parsed(
-    stream: &mut TcpStream,
+async fn read_until_headers_parsed<S>(
+    stream: &mut S,
     buf: &mut Vec<u8>,
     max_header_bytes: usize,
-) -> Result<ParsedHeaders> {
+) -> Result<ParsedHeaders>
+where
+    S: AsyncRead + Unpin,
+{
     loop {
         let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
         let mut req = httparse::Request::new(&mut headers_buf);
@@ -749,7 +772,7 @@ fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option
     openai_frontend::parse_single_request_id(request_id_values)
 }
 
-async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<()> {
+async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> Result<()> {
     let mut chunk = [0u8; 8192];
     let n = stream.read(&mut chunk).await?;
     if n == 0 {
@@ -1096,6 +1119,7 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
 
     #[test]
     fn canonical_request_id_from_header_prefix_requires_one_valid_uuid() {
