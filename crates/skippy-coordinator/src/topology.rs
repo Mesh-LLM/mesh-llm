@@ -494,16 +494,21 @@ fn fit_candidate(
             candidate_network_ms_per_token(&stages, nodes, input);
         let modeled_decode_tpot_us =
             bottleneck_us.checked_add(network_us_from_ms(estimated_decode_network_ms_per_token));
+        // Target-met is scored against the modeled decode TPOT (bottleneck
+        // stage + network), not the network-only estimate: the target is a
+        // decode-TPOT target, and the modeled number is the best estimate of
+        // it this plan has. Network-only scoring would mark single-stage
+        // plans as trivially meeting any target.
+        let decode_tpot_target_met = modeled_decode_tpot_us
+            .and_then(|tpot_us| u32::try_from(tpot_us / 1_000).ok())
+            .and_then(|tpot_ms| input.target_decode_tpot_ms.map(|target| tpot_ms <= target));
         return Some(CandidatePlan {
             plan: TopologyPlan {
                 context_length,
                 parallel_lanes,
                 stages,
                 estimated_decode_network_ms_per_token,
-                decode_tpot_target_met: decode_tpot_target_met(
-                    estimated_decode_network_ms_per_token,
-                    input.target_decode_tpot_ms,
-                ),
+                decode_tpot_target_met,
             },
             minimum_remaining_vram,
             total_remaining_vram,
@@ -591,6 +596,10 @@ fn candidate_has_required_stage0(
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    // Same-shape candidates (same node set) always both carry modeled TPOT or
+    // both not (signal completeness is a property of the node subset), so
+    // comparing on it here is equivalent to the latency path below and keeps
+    // the two orderings consistent.
     if let (Some(candidate_tpot), Some(current_tpot)) = (
         candidate.modeled_decode_tpot_us,
         current.modeled_decode_tpot_us,
@@ -623,15 +632,11 @@ fn latency_candidate_ordering(
     right: &CandidatePlan,
     input: &TopologyPlanningInput,
 ) -> Ordering {
-    // With complete bandwidth signals the modeled decode TPOT subsumes the
-    // network estimate (it includes network time); prefer it when both
-    // candidates carry it. Mixed-signal comparisons keep the legacy order.
-    if let (Some(left_tpot), Some(right_tpot)) =
-        (left.modeled_decode_tpot_us, right.modeled_decode_tpot_us)
-        && left_tpot != right_tpot
-    {
-        return right_tpot.cmp(&left_tpot);
-    }
+    // Target-met outranks both estimates: a candidate that meets the decode
+    // TPOT target must not lose to one that misses it, whether compared on
+    // the modeled TPOT or the network-only estimate. This preserves the
+    // legacy priority; the modeled-TPOT tiebreak below is new and must not
+    // jump the target-met key.
     let left_estimate = left
         .plan
         .estimated_decode_network_ms_per_token
@@ -653,6 +658,16 @@ fn latency_candidate_ordering(
 
     left_target_met
         .cmp(&right_target_met)
+        .then_with(|| {
+            // With complete bandwidth signals the modeled decode TPOT
+            // subsumes the network estimate (it includes network time);
+            // prefer it when both candidates carry it. Mixed-signal
+            // comparisons keep the legacy order.
+            match (left.modeled_decode_tpot_us, right.modeled_decode_tpot_us) {
+                (Some(left_tpot), Some(right_tpot)) => right_tpot.cmp(&left_tpot),
+                _ => Ordering::Equal,
+            }
+        })
         .then_with(|| right_estimate.cmp(&left_estimate))
         .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
         .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
@@ -1234,6 +1249,122 @@ mod tests {
             spans, spans_partial,
             "partial signals must fall back to capacity-only placement"
         );
+    }
+
+    #[test]
+    fn signalless_subset_placement_unchanged_by_other_nodes_signals() {
+        // The fallback is per-subset, not fleet-wide: a node without a
+        // bandwidth signal keeps its capacity-only span assignment even when
+        // other fleet nodes do report signals (a heterogeneous fleet). The
+        // two signaled nodes are too small to host the model alone or as a
+        // pair, so every feasible candidate contains the plain node — the
+        // assertion is never vacuous.
+        let plain = node("plain", 60);
+        let mut planning_mixed = input(vec![
+            plain.clone(),
+            perf_node("signaled", 10, 400_000),
+            perf_node("other", 10, 400_000),
+        ]);
+        planning_mixed.minimum_nodes = 2;
+        let mut planning_plain_twin = input(vec![plain, node("signaled", 10), node("other", 10)]);
+        planning_plain_twin.minimum_nodes = 2;
+        let mixed = plan_topology(&planning_mixed).expect("mixed plan");
+        let plain_twin = plan_topology(&planning_plain_twin).expect("plain twin plan");
+        let span_of = |plan: &TopologyPlan, id: &str| {
+            plan.stages
+                .iter()
+                .find(|stage| stage.node_id == id)
+                .map(|stage| (stage.layer_start, stage.layer_end))
+        };
+        assert!(
+            span_of(&mixed, "plain").is_some() && span_of(&plain_twin, "plain").is_some(),
+            "fixture must select the plain node in both plans for the test to mean anything"
+        );
+        assert_eq!(
+            span_of(&mixed, "plain"),
+            span_of(&plain_twin, "plain"),
+            "a signal-less node's span must not change because other fleet nodes report signals"
+        );
+    }
+
+    #[test]
+    fn edge_data_changes_capacity_greedy_candidate_ordering() {
+        // Documented behavior, not a bug: any non-empty edge data switches
+        // the network estimate to per-hop edge-aware accounting for every
+        // candidate — including capacity-greedy plans from signal-less
+        // nodes. This test pins that: with plain nodes (no bandwidth
+        // signals), asymmetric edge data changes the selected plan's
+        // network estimate vs the legacy hop-count × max-RTT number.
+        let mut planning = input(vec![latency_node("a", 48, 5), latency_node("b", 48, 5)]);
+        planning.minimum_nodes = 2;
+        let legacy = plan_topology(&planning).expect("legacy plan");
+        let mut edged = planning.clone();
+        edged.edges = vec![TopologyEdge {
+            source_node_id: "a".into(),
+            target_node_id: "b".into(),
+            rtt_ms: 2,
+            large_frame_mib_per_s: None,
+        }];
+        let edge_plan = plan_topology(&edged).expect("edge plan");
+        assert_ne!(
+            legacy.estimated_decode_network_ms_per_token,
+            edge_plan.estimated_decode_network_ms_per_token,
+            "edge data must change the network estimate for capacity-greedy plans too"
+        );
+        assert_eq!(legacy.estimated_decode_network_ms_per_token, Some(10));
+        assert_eq!(edge_plan.estimated_decode_network_ms_per_token, Some(4));
+    }
+
+    #[test]
+    fn decode_tpot_target_met_uses_modeled_tpot() {
+        // Target-met must be scored against the modeled decode TPOT
+        // (bottleneck stage service time + network), not the network-only
+        // estimate. Single-stage plans have zero network time but still
+        // carry the full weight-streaming time of the model.
+        // Model: 40 layers, 40 GiB weights (1 GiB/layer), KV 0.
+        let mut planning = input(vec![perf_node("solo", 80, 400_000)]);
+        planning.kv_bytes_per_token = 1; // negligible KV; weights dominate
+        planning.target_decode_tpot_ms = Some(10);
+        let plan = plan_topology(&planning).expect("plan");
+        // Network-only estimate may be None (no RTT data); the modeled TPOT
+        // is what the target must be scored against.
+        // 40 GiB at 400_000 MiB/s = 104.9 ms/token modeled decode TPOT —
+        // far over a 10 ms target.
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
+    }
+
+    #[test]
+    fn tpot_target_met_outranks_modeled_tpot_in_candidate_ordering() {
+        // Locks the candidate-ordering priority: decode-TPOT-target-met
+        // outranks the modeled TPOT (and context/lanes). Note that after
+        // scoring target-met against the *modeled* TPOT (see
+        // `decode_tpot_target_met_uses_modeled_tpot`), met is monotone in
+        // modeled TPOT, so on the fully-signaled path the two keys cannot
+        // conflict; this ordering matters for mixed-signal comparisons and
+        // keeps legacy key priority. Constructed via stage-0 binding, the
+        // only input surface that forces different candidate sets from one
+        // fleet.
+        let mut planning = input(vec![
+            perf_node("large", 80, 400_000),
+            perf_node("small", 30, 150_000),
+            perf_node("tiny", 20, 150_000),
+        ]);
+        planning.kv_bytes_per_token = 1; // negligible KV; weights dominate
+        planning.target_decode_tpot_ms = Some(110);
+        // Binding stage 0 to the large node: it fits the 40 GiB model solo
+        // (104.9 ms/token at 400_000 MiB/s), so a target-meeting plan
+        // exists and must be returned.
+        let large_stage0 =
+            plan_topology_with_stage0(&planning, "large").expect("large stage0 plan");
+        assert_eq!(large_stage0.decode_tpot_target_met, Some(true));
+        // Binding stage 0 to the small node rules out every subset where
+        // the large node would be stage 0 (stage order is VRAM-descending),
+        // leaving {small, tiny}: 40 GiB across two 150_000 MiB/s nodes is a
+        // ~133 ms/token bottleneck - over the 110 ms target.
+        let small_stage0 =
+            plan_topology_with_stage0(&planning, "small").expect("small stage0 plan");
+        assert_eq!(small_stage0.stages.len(), 2);
+        assert_eq!(small_stage0.decode_tpot_target_met, Some(false));
     }
 
     #[test]

@@ -158,6 +158,20 @@ integer microseconds; conversions happen once at parse (GB/s → MiB/s,
 TFLOP/s → GFLOP/s). Metric-age/confidence decay is designed (below) but
 **not yet implemented** — current signals are un-aged measurements.
 
+**Scope of the fallback guarantee:** the all-or-nothing signal check and
+the fallback span assignment are **per candidate subset**, not fleet-wide.
+In a mixed fleet (some nodes reporting bandwidth, some not), fully-signaled
+subsets get perf-balanced spans while subsets containing a signal-less node
+keep the capacity-greedy walk — so which subsets win candidate selection
+can differ from a signal-less fleet. Additionally, any non-empty edge data
+switches the network estimate to edge-aware per-hop accounting for *every*
+candidate, including capacity-greedy plans from signal-less subsets. The
+bit-identical guarantee holds only when the fleet reports **no node
+bandwidth signals and no edge data at all**; it is exercised by
+`missing_perf_signals_keep_capacity_only_placement`,
+`signalless_subset_placement_unchanged_by_other_nodes_signals`, and
+`edge_data_changes_capacity_greedy_candidate_ordering`.
+
 ## Search algorithm
 
 Preserve the existing candidate enumeration (it is correct and tested); add
@@ -382,8 +396,9 @@ be the testbed for choosing between these.
 | 4 | Performance-aware placement live (default on) | A/B on staging meshes vs capacity-only | Planned |
 | 5 | Adaptive replanning with hysteresis + migration budgets | dwell-time threshold; no churn under synthetic jitter | Planned |
 
-Phase 1's fallback property is the safety story: with no signals, the merged
-planner is bit-identical to today's. Each phase is independently mergeable.
+Phase 1's fallback property is the safety story: with no signals *and no
+edge data anywhere in the fleet*, the merged planner is bit-identical to
+today's (per-subset scope above). Each phase is independently mergeable.
 
 ## Alternatives considered
 

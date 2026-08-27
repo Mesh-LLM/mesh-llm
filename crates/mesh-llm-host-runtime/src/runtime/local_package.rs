@@ -946,6 +946,8 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update(participant.5.unwrap_or_default().to_le_bytes());
         hasher.update([u8::from(participant.6)]);
         hasher.update(participant.7.to_le_bytes());
+        hasher.update(participant.8.unwrap_or_default().to_le_bytes());
+        hasher.update(participant.9.unwrap_or_default().to_le_bytes());
     }
     hex::encode(hasher.finalize())
 }
