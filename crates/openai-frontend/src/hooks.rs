@@ -8,8 +8,8 @@ use crate::{
         ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
     },
     chat::{
-        CapsuleMarker, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
-        MessageContentPart, capsule_id_is_valid,
+        CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
+        ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid,
     },
     completions::{CompletionRequest, CompletionResponse},
     models::ModelObject,
@@ -228,6 +228,13 @@ pub enum ChatCompletionOutcome<'a> {
     /// this variant exists so every admitted exchange still gets exactly
     /// one terminal callback instead of none.
     Cancelled,
+    /// A streaming chat completion sent every chunk to the client and the
+    /// underlying stream ended on its own (as opposed to being dropped
+    /// mid-stream, which reports [`Self::Cancelled`] instead). Streaming
+    /// dispatches whole [`crate::chat::ChatCompletionChunk`]s rather than
+    /// one assembled [`ChatCompletionResponse`], so unlike [`Self::Success`]
+    /// there is no response to report here.
+    StreamCompleted,
 }
 
 /// Guarantees exactly one [`OpenAiHookPolicy::on_chat_completion_terminal`]
@@ -245,15 +252,42 @@ pub enum ChatCompletionOutcome<'a> {
 /// terminal call with
 /// [`ChatCompletionOutcome::Cancelled`] so it still happens, just detached
 /// from (and unable to block) whatever cancelled the original future.
-struct TerminalGuard {
+pub struct TerminalGuard {
     hooks: Arc<dyn OpenAiHookPolicy>,
     request: ChatCompletionRequest,
     exchange_id: String,
     fired: bool,
 }
 
+/// A [`ChatCompletionOutcome`] with no borrowed fields, for the streaming
+/// terminal path: [`TerminalGuard::fire_detached`] hands the outcome to a
+/// spawned task that outlives the caller's stack frame, so it needs data it
+/// owns rather than a reference into a local that's about to go away.
+/// Deliberately narrower than [`ChatCompletionOutcome`] — it omits
+/// [`ChatCompletionOutcome::Success`], which streaming never has a
+/// [`ChatCompletionResponse`] to report; [`ChatCompletionOutcome::Denied`],
+/// which is always fired inline (before any stream exists to detach from);
+/// and [`ChatCompletionOutcome::Cancelled`], which [`Drop`] below fires
+/// directly without going through `fire_detached` at all.
+enum OwnedChatCompletionOutcome {
+    Error { status: u16, message: String },
+    StreamCompleted,
+}
+
+impl OwnedChatCompletionOutcome {
+    fn as_ref(&self) -> ChatCompletionOutcome<'_> {
+        match self {
+            Self::Error { status, message } => ChatCompletionOutcome::Error {
+                status: *status,
+                message,
+            },
+            Self::StreamCompleted => ChatCompletionOutcome::StreamCompleted,
+        }
+    }
+}
+
 impl TerminalGuard {
-    fn new(
+    pub fn new(
         hooks: Arc<dyn OpenAiHookPolicy>,
         request: ChatCompletionRequest,
         exchange_id: String,
@@ -266,11 +300,39 @@ impl TerminalGuard {
         }
     }
 
-    async fn fire(mut self, outcome: &ChatCompletionOutcome<'_>) {
+    pub fn set_request(&mut self, request: ChatCompletionRequest) {
+        self.request = request;
+    }
+
+    pub async fn fire(mut self, outcome: &ChatCompletionOutcome<'_>) {
         self.hooks
             .on_chat_completion_terminal(&self.request, &self.exchange_id, outcome)
             .await;
         self.fired = true;
+    }
+
+    /// Fire the terminal callback from a context that cannot `.await` — a
+    /// `Stream::poll_next` implementation, specifically — by handing it to a
+    /// detached task on the current Tokio runtime, exactly like [`Drop`]'s
+    /// own fallback below. Consumes `self` (after marking it fired) so the
+    /// guard's own `Drop` can never also fire once this returns.
+    fn fire_detached(mut self, outcome: OwnedChatCompletionOutcome) {
+        self.fired = true;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!(
+                exchange_id = %self.exchange_id,
+                "TerminalGuard dropped outside a Tokio runtime; skipping terminal callback"
+            );
+            return;
+        };
+        let hooks = self.hooks.clone();
+        let request = std::mem::take(&mut self.request);
+        let exchange_id = std::mem::take(&mut self.exchange_id);
+        handle.spawn(async move {
+            hooks
+                .on_chat_completion_terminal(&request, &exchange_id, &outcome.as_ref())
+                .await;
+        });
     }
 }
 
@@ -300,6 +362,70 @@ impl Drop for TerminalGuard {
                 )
                 .await;
         });
+    }
+}
+
+/// Wraps a [`ChatCompletionStream`] so its admitted exchange still gets
+/// exactly one terminal callback, the same guarantee
+/// [`HookedOpenAiBackend::chat_completion_with_context`] gives a
+/// non-streaming exchange via [`TerminalGuard`] — just adapted for a type
+/// that can outlive the call that created it and whose `Stream::poll_next`
+/// cannot `.await`.
+///
+/// - The stream ending on its own (`poll_next` returns `Ready(None)`) fires
+///   [`ChatCompletionOutcome::StreamCompleted`].
+/// - A chunk carrying an error fires [`ChatCompletionOutcome::Error`]
+///   immediately — matching the non-streaming path, which never waits for a
+///   graceful end once the backend has already reported failure.
+/// - Both fire via [`TerminalGuard::fire_detached`], since neither can
+///   `.await` inside `poll_next`.
+/// - Dropping this wrapper before either of the above happens — an outer
+///   timeout, or the client disconnecting mid-stream — drops the
+///   still-armed [`TerminalGuard`], whose own `Drop` fires
+///   [`ChatCompletionOutcome::Cancelled`]. Exactly one of
+///   {`StreamCompleted`, `Error`, `Cancelled`} can ever happen, because each
+///   path takes the guard out of `self.guard` (an `Option`) before firing,
+///   and a `None` guard fires nothing on drop.
+pub struct TerminalGuardedChatStream {
+    inner: ChatCompletionStream,
+    guard: Option<TerminalGuard>,
+}
+
+impl TerminalGuardedChatStream {
+    pub fn new(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
+        Box::pin(Self {
+            inner,
+            guard: Some(guard),
+        })
+    }
+}
+
+impl futures_core::Stream for TerminalGuardedChatStream {
+    type Item = OpenAiResult<ChatCompletionChunk>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let poll = this.inner.as_mut().poll_next(cx);
+        match &poll {
+            std::task::Poll::Ready(Some(Err(error))) => {
+                if let Some(guard) = this.guard.take() {
+                    guard.fire_detached(OwnedChatCompletionOutcome::Error {
+                        status: error.status().as_u16(),
+                        message: error.to_string(),
+                    });
+                }
+            }
+            std::task::Poll::Ready(None) => {
+                if let Some(guard) = this.guard.take() {
+                    guard.fire_detached(OwnedChatCompletionOutcome::StreamCompleted);
+                }
+            }
+            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+        }
+        poll
     }
 }
 
@@ -417,9 +543,50 @@ impl OpenAiBackend for HookedOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionStream> {
-        let outcome = self.hooks.before_chat_completion(&mut request).await?;
+        let exchange_id = uuid::Uuid::new_v4().to_string();
+        // Same admission-time arming as `chat_completion_with_context` above
+        // — see its comment. A future dropped while `before_chat_completion`
+        // is still running still gets exactly one terminal callback.
+        let mut guard =
+            TerminalGuard::new(self.hooks.clone(), request.clone(), exchange_id.clone());
+        let outcome = match self.hooks.before_chat_completion(&mut request).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let reason = error.to_string();
+                let denial = ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &reason,
+                };
+                guard.set_request(request.clone());
+                guard.fire(&denial).await;
+                return Err(error);
+            }
+        };
         apply_chat_hook_outcome(&mut request, &outcome);
-        self.backend.chat_completion_stream(request, context).await
+        let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
+        self.hooks
+            .on_effective_chat_completion(&request, &route)
+            .await;
+        // Post-mutation copy for the guard, mirroring the non-streaming path
+        // — the stream itself will own `request` from here.
+        guard.set_request(request.clone());
+        match self.backend.chat_completion_stream(request, context).await {
+            Ok(stream) => Ok(TerminalGuardedChatStream::new(stream, guard)),
+            Err(error) => {
+                // The backend failed before yielding a stream at all — an
+                // `Error` terminal, exactly like a non-streaming backend
+                // failure, not the `Cancelled` the guard's `Drop` would
+                // report if left to fire on its own.
+                let message = error.to_string();
+                guard
+                    .fire(&ChatCompletionOutcome::Error {
+                        status: error.status().as_u16(),
+                        message: &message,
+                    })
+                    .await;
+                Err(error)
+            }
+        }
     }
 
     async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
@@ -687,6 +854,7 @@ fn is_video_container(container_key: &str) -> bool {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use futures_util::StreamExt;
     use serde_json::json;
 
     use super::*;
@@ -766,6 +934,7 @@ mod tests {
         Error { status: u16, message: String },
         Denied { status: u16, reason: String },
         Cancelled,
+        StreamCompleted,
     }
 
     #[derive(Default)]
@@ -819,6 +988,7 @@ mod tests {
                     reason: (*reason).to_string(),
                 },
                 ChatCompletionOutcome::Cancelled => TerminalRecord::Cancelled,
+                ChatCompletionOutcome::StreamCompleted => TerminalRecord::StreamCompleted,
             };
             self.terminals.lock().unwrap().push(record);
         }
@@ -1679,6 +1849,222 @@ mod tests {
             &terminals[0],
             TerminalRecord::Denied { status: 400, reason }
                 if reason.contains("denied by policy")
+        ));
+    }
+
+    struct StreamingBackend {
+        chunks: Mutex<Option<Vec<OpenAiResult<ChatCompletionChunk>>>>,
+    }
+
+    impl StreamingBackend {
+        fn new(chunks: Vec<OpenAiResult<ChatCompletionChunk>>) -> Self {
+            Self {
+                chunks: Mutex::new(Some(chunks)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for StreamingBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            unreachable!("streaming tests only call chat_completion_stream")
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            let chunks = self.chunks.lock().unwrap().take().expect("chunks");
+            Ok(Box::pin(futures_util::stream::iter(chunks)))
+        }
+    }
+
+    /// A backend whose stream yields one real chunk, then never resolves
+    /// again — long enough for a test to observe a chunk before dropping the
+    /// stream, mirroring a client that disconnects mid-stream rather than
+    /// before receiving anything at all.
+    struct HangingStreamBackend;
+
+    #[async_trait]
+    impl OpenAiBackend for HangingStreamBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(Vec::new())
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            unreachable!("streaming tests only call chat_completion_stream")
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            let first = ChatCompletionChunk::delta(request.model, "partial");
+            Ok(Box::pin(
+                futures_util::stream::once(async move { Ok(first) })
+                    .chain(futures_util::stream::pending()),
+            ))
+        }
+    }
+
+    /// Terminal delivery for a stream fires via
+    /// [`TerminalGuard::fire_detached`] — a spawned, detached task, since
+    /// `Stream::poll_next` can't `.await` it inline — so it lands sometime
+    /// after `poll_next` returns rather than before. Tests must wait for it
+    /// rather than asserting synchronously the instant the stream stops
+    /// yielding items.
+    async fn wait_for_terminal(policy: &RecordingPolicy) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !policy.terminals.lock().unwrap().is_empty() {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "terminal event never fired"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_exchange_that_ends_normally_fires_stream_completed_terminal_exactly_once() {
+        let backend = Arc::new(StreamingBackend::new(vec![
+            Ok(ChatCompletionChunk::delta("gpt-mesh", "hi")),
+            Ok(ChatCompletionChunk::done("gpt-mesh")),
+        ]));
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let mut stream = hooked
+            .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+            .await
+            .expect("stream created");
+        while stream
+            .next()
+            .await
+            .transpose()
+            .expect("no chunk errors")
+            .is_some()
+        {}
+        wait_for_terminal(&policy).await;
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::StreamCompleted]);
+    }
+
+    #[tokio::test]
+    async fn streaming_exchange_with_an_error_chunk_fires_error_terminal_exactly_once() {
+        let backend = Arc::new(StreamingBackend::new(vec![
+            Ok(ChatCompletionChunk::delta("gpt-mesh", "hi")),
+            Err(crate::errors::OpenAiError::backend("upstream exploded")),
+        ]));
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let mut stream = hooked
+            .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+            .await
+            .expect("stream created");
+        while let Some(item) = stream.next().await {
+            let _ = item;
+        }
+        wait_for_terminal(&policy).await;
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0],
+            TerminalRecord::Error { status: 502, message }
+                if message.contains("upstream exploded")
+        ));
+    }
+
+    /// Reproduces the streaming counterpart of
+    /// `dropping_the_backend_future_still_fires_exactly_one_terminal_event`:
+    /// an outer timeout or client disconnect drops the stream — after it has
+    /// already delivered a chunk — before it ends on its own, so without
+    /// `TerminalGuardedChatStream` the exchange would never get a terminal
+    /// event at all.
+    #[tokio::test]
+    async fn streamed_exchange_dropped_mid_stream_fires_exactly_one_cancelled_terminal() {
+        let backend = Arc::new(HangingStreamBackend);
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let mut stream = hooked
+            .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+            .await
+            .expect("stream created");
+        let first = stream.next().await;
+        assert!(matches!(first, Some(Ok(_))), "first chunk should flow");
+        drop(stream);
+        wait_for_terminal(&policy).await;
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.as_slice(), [TerminalRecord::Cancelled]);
+    }
+
+    #[tokio::test]
+    async fn streaming_denial_by_before_hook_never_creates_a_stream_but_reports_terminal() {
+        let backend = Arc::new(StreamingBackend::new(Vec::new()));
+        let policy = Arc::new(RecordingPolicy {
+            deny: true,
+            ..RecordingPolicy::default()
+        });
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let error = match hooked
+            .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+            .await
+        {
+            Ok(_) => panic!("policy denies the request"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status().as_u16(), 400);
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0],
+            TerminalRecord::Denied { status: 400, reason }
+                if reason.contains("denied by policy")
+        ));
+    }
+
+    #[tokio::test]
+    async fn streaming_backend_failure_before_any_chunk_reports_terminal_error_exactly_once() {
+        let backend = Arc::new(FailingBackend);
+        let policy = Arc::new(RecordingPolicy::default());
+        let hooked = HookedOpenAiBackend::new(backend, policy.clone());
+
+        let error = match hooked
+            .chat_completion_stream(request_for("gpt-mesh"), OpenAiRequestContext::new())
+            .await
+        {
+            Ok(_) => panic!("backend fails before yielding a stream"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status().as_u16(), 502);
+
+        let terminals = policy.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0],
+            TerminalRecord::Error { status: 502, message }
+                if message.contains("upstream exploded")
         ));
     }
 }

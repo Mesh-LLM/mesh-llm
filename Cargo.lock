@@ -7541,6 +7541,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tower",
+ "tracing",
  "uuid",
 ]
 

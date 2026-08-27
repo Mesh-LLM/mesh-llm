@@ -1,6 +1,20 @@
 use super::*;
+use crate::binary_transport::DecodeFrameBatcher;
+use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::SpeculativeDecodeConfig;
+use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::decode_batcher::DecodeBatcher;
+use crate::frontend::generation::OpenAiBackendMode;
+use crate::runtime_state::RuntimeState;
+use futures_util::StreamExt;
+use openai_frontend::ChatCompletionChunk;
 use openai_frontend::ChatCompletionRequest;
+use openai_frontend::ChatCompletionResponse;
+use openai_frontend::ChatHookOutcome;
 use openai_frontend::FinishReason;
+use openai_frontend::OpenAiHookPolicy;
+use openai_frontend::Usage;
+use openai_frontend::set_chat_mesh_hooks_enabled;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
@@ -734,4 +748,384 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
         "terminal send must short-circuit instead of waiting out the stall timeout again, took {elapsed:?} (timeout {stall_timeout:?})"
     );
     drop(rx);
+}
+
+// --- Terminal-hook lifecycle wiring (mesh1437 production wiring) ---
+//
+// `chat_completion_with_hooks`/`chat_completion_stream_with_hooks` are unit
+// tested directly with a fake `dispatch` closure rather than through the
+// full `chat_completion_with_context`/`chat_completion_stream` trait methods:
+// real generation needs a loaded GGUF (see `recurrent_test_backend` in
+// `local_generation/tests.rs`, gated on `SKIPPY_RECURRENT_CACHE_TEST_MODEL`),
+// but the hook lifecycle itself never touches `self.runtime` — it only reads
+// `self.hook_policy` — so it's fully exercisable on a modelless backend.
+
+fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOpenAiBackend {
+    let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
+        "run_id": "hooks-test",
+        "topology_id": "hooks-test",
+        "model_id": "hooks-test-model",
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "layer_start": 0,
+        "layer_end": 1,
+        "load_mode": "runtime-slice",
+        "bind_addr": "127.0.0.1:0",
+    }))
+    .expect("minimal stage config for hook lifecycle tests");
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    StageOpenAiBackend {
+        runtime: runtime.clone(),
+        config: config.clone(),
+        telemetry: crate::telemetry::Telemetry::new(
+            None,
+            1,
+            config,
+            crate::telemetry::TelemetryLevel::Off,
+        ),
+        model_id: "hooks-test-model".to_string(),
+        default_max_tokens: 16,
+        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        ctx_size: 128,
+        mode: OpenAiBackendMode::LocalRuntime,
+        draft: None,
+        speculative_window: 0,
+        adaptive_speculative_window: false,
+        ngram_max: 0,
+        speculative: SpeculativeDecodeConfig::default(),
+        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+        generation_queue_limit: 1,
+        generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
+        hook_policy,
+        generation_receipt: None,
+        linear_proposal_ingress: None,
+        kv: None,
+        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
+        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+    }
+}
+
+fn mesh_hooks_request(model: &str) -> ChatCompletionRequest {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+    }))
+    .expect("minimal chat completion request");
+    set_chat_mesh_hooks_enabled(&mut request, true);
+    request
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum HookTerminalRecord {
+    Success { model: String },
+    Error { status: u16, message: String },
+    Denied { status: u16, reason: String },
+    Cancelled,
+    StreamCompleted,
+}
+
+#[derive(Default)]
+struct RecordingHookPolicy {
+    deny: bool,
+    hang_before_dispatch: bool,
+    terminals: Mutex<Vec<HookTerminalRecord>>,
+}
+
+#[async_trait]
+impl OpenAiHookPolicy for RecordingHookPolicy {
+    async fn before_chat_completion(
+        &self,
+        _request: &mut ChatCompletionRequest,
+    ) -> OpenAiResult<ChatHookOutcome> {
+        if self.hang_before_dispatch {
+            std::future::pending::<()>().await;
+        }
+        if self.deny {
+            return Err(OpenAiError::invalid_request("denied by policy"));
+        }
+        Ok(ChatHookOutcome::none())
+    }
+
+    async fn on_chat_completion_terminal(
+        &self,
+        _request: &ChatCompletionRequest,
+        _exchange_id: &str,
+        outcome: &ChatCompletionOutcome<'_>,
+    ) {
+        let record = match outcome {
+            ChatCompletionOutcome::Success { response } => HookTerminalRecord::Success {
+                model: response.model.clone(),
+            },
+            ChatCompletionOutcome::Error { status, message } => HookTerminalRecord::Error {
+                status: *status,
+                message: (*message).to_string(),
+            },
+            ChatCompletionOutcome::Denied { status, reason } => HookTerminalRecord::Denied {
+                status: *status,
+                reason: (*reason).to_string(),
+            },
+            ChatCompletionOutcome::Cancelled => HookTerminalRecord::Cancelled,
+            ChatCompletionOutcome::StreamCompleted => HookTerminalRecord::StreamCompleted,
+            other => {
+                unreachable!("unhandled ChatCompletionOutcome variant in test fixture: {other:?}")
+            }
+        };
+        self.terminals.lock().unwrap().push(record);
+    }
+}
+
+/// Terminal delivery for a dropped/streamed exchange fires from a detached
+/// spawned task (see `TerminalGuard::drop`/`fire_detached`), so it lands
+/// sometime after the driving future is aborted or the stream stops
+/// yielding items, not synchronously at that instant.
+async fn wait_for_hook_terminal(policy: &RecordingHookPolicy) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if !policy.terminals.lock().unwrap().is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "terminal event never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn stage_backend_success_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let response = backend
+        .chat_completion_with_hooks(request, |request| async move {
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        })
+        .await
+        .expect("fake dispatch succeeds");
+    assert_eq!(response.model, "hooks-test-model");
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(
+        terminals.as_slice(),
+        [HookTerminalRecord::Success {
+            model: "hooks-test-model".to_string()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn stage_backend_dispatch_error_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let error = backend
+        .chat_completion_with_hooks(request, |_request| async move {
+            Err(OpenAiError::backend("upstream exploded"))
+        })
+        .await
+        .expect_err("fake dispatch fails");
+    assert_eq!(error.status().as_u16(), 502);
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Error { status: 502, message }
+            if message.contains("upstream exploded")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_denied_request_never_dispatches_and_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy {
+        deny: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+    let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dispatched_flag = dispatched.clone();
+
+    let error = backend
+        .chat_completion_with_hooks(request, move |request| {
+            dispatched_flag.store(true, Ordering::Release);
+            async move {
+                Ok(ChatCompletionResponse::new(
+                    request.model,
+                    "ok",
+                    Usage::new(0, 0),
+                ))
+            }
+        })
+        .await
+        .expect_err("policy denies the request");
+    assert_eq!(error.status().as_u16(), 400);
+    assert!(
+        !dispatched.load(Ordering::Acquire),
+        "a denied request must never reach dispatch"
+    );
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Denied { status: 400, reason }
+            if reason.contains("denied by policy")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_dropped_during_admission_hook_fires_exactly_one_cancelled_terminal() {
+    let policy = Arc::new(RecordingHookPolicy {
+        hang_before_dispatch: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let handle = tokio::spawn(async move {
+        backend
+            .chat_completion_with_hooks(request, |request| async move {
+                Ok(ChatCompletionResponse::new(
+                    request.model,
+                    "ok",
+                    Usage::new(0, 0),
+                ))
+            })
+            .await
+    });
+
+    // Let the task run until it's parked in `before_chat_completion`, then
+    // cancel it the way an outer timeout or client disconnect would.
+    tokio::task::yield_now().await;
+    handle.abort();
+    let _ = handle.await;
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::Cancelled]);
+}
+
+#[tokio::test]
+async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(ChatCompletionChunk::delta(request.model.clone(), "hi")),
+                Ok(ChatCompletionChunk::done(request.model)),
+            ])) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    while stream
+        .next()
+        .await
+        .transpose()
+        .expect("no chunk errors")
+        .is_some()
+    {}
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::StreamCompleted]);
+}
+
+/// The explicit case this wiring exists for: a client disconnects (or an
+/// outer timeout fires) after a stream has already delivered a chunk but
+/// before it ends on its own. Without `TerminalGuardedChatStream` wired into
+/// `StageOpenAiBackend`, this exchange got zero terminal events.
+#[tokio::test]
+async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_terminal() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            let first = ChatCompletionChunk::delta(request.model, "partial");
+            Ok(Box::pin(
+                futures_util::stream::once(async move { Ok(first) })
+                    .chain(futures_util::stream::pending()),
+            ) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    let first = stream.next().await;
+    assert!(matches!(first, Some(Ok(_))), "first chunk should flow");
+    drop(stream);
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::Cancelled]);
+}
+
+#[tokio::test]
+async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(ChatCompletionChunk::delta(request.model, "hi")),
+                Err(OpenAiError::backend("upstream exploded")),
+            ])) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    while let Some(item) = stream.next().await {
+        let _ = item;
+    }
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Error { status: 502, message }
+            if message.contains("upstream exploded")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy {
+        deny: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let error = match backend
+        .chat_completion_stream_with_hooks(request, |_request| async move {
+            panic!("a denied request must never reach dispatch")
+        })
+        .await
+    {
+        Ok(_) => panic!("policy denies the request"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status().as_u16(), 400);
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Denied { status: 400, reason }
+            if reason.contains("denied by policy")
+    ));
 }
