@@ -4,10 +4,10 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, ModelInfo, MtpSource,
-        NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-        Status, TensorRole, format_skippy_error,
+        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, DecodeFrameBatchRequest,
+        FlashAttentionType, GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, ModelInfo,
+        MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig, StageModel,
+        StageSession, Status, TensorRole, format_skippy_error,
     };
     use std::{
         env,
@@ -185,6 +185,71 @@ mod tests {
         for index in 0..3 {
             assert_eq!(mixed[index].token_count(), serial[index].token_count());
             assert_eq!(mixed[index].native_position()?, serial[index].native_position()?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_batched_decode_preserves_lazy_token_signals_when_model_is_configured()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 4)?;
+        let tokens = model.tokenize("Legacy batch sampling keeps token signals lazy.", true)?;
+        assert!(tokens.len() >= 2, "correctness prompt must produce two tokens");
+        let prefix = &tokens[..2];
+        let mut batched = [model.create_session()?, model.create_session()?];
+        let mut serial = [model.create_session()?, model.create_session()?];
+        let mut batched_inputs = [0; 2];
+        let mut serial_inputs = [0; 2];
+        for index in 0..2 {
+            batched_inputs[index] = batched[index]
+                .prefill_chunk_frame_sampled(prefix, None, None, 0)?
+                .0;
+            serial_inputs[index] = serial[index]
+                .prefill_chunk_frame_sampled(prefix, None, None, 0)?
+                .0;
+            assert_eq!(batched_inputs[index], serial_inputs[index]);
+        }
+
+        let outputs = {
+            let [first, second] = &mut batched;
+            let mut requests = [
+                DecodeFrameBatchRequest {
+                    session: first,
+                    token_id: batched_inputs[0],
+                    sampling: None,
+                    input: None,
+                },
+                DecodeFrameBatchRequest {
+                    session: second,
+                    token_id: batched_inputs[1],
+                    sampling: None,
+                    input: None,
+                },
+            ];
+            StageSession::decode_step_frame_batch_sampled(&mut requests)?
+        };
+        let serial_outputs = [
+            serial[0]
+                .decode_step_frame_sampled(serial_inputs[0], None, None, 0)?
+                .0,
+            serial[1]
+                .decode_step_frame_sampled(serial_inputs[1], None, None, 0)?
+                .0,
+        ];
+
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|output| output.predicted_token)
+                .collect::<Vec<_>>(),
+            serial_outputs,
+        );
+        for index in 0..2 {
+            assert_eq!(batched[index].last_token_signal()?, serial[index].last_token_signal()?);
         }
         Ok(())
     }
