@@ -225,7 +225,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
         let first_read = buffered.is_empty();
         if first_read {
             let mut chunk = [0u8; 8192];
-            let read_result = tokio::time::timeout(timeout, reader.read(&mut chunk))
+            let read_timeout = timeout.saturating_sub(started.elapsed());
+            let read_result = tokio::time::timeout(read_timeout, reader.read(&mut chunk))
                 .await
                 .map_err(|_| {
                     anyhow!(
@@ -238,7 +239,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
             }
             buffered.extend_from_slice(&chunk[..read_result]);
         } else {
-            read_response_chunk_with_timeout(reader, &mut buffered, timeout).await?;
+            let read_timeout = timeout.saturating_sub(started.elapsed());
+            read_response_chunk_with_timeout(reader, &mut buffered, read_timeout).await?;
         }
         if buffered.len() > MAX_HEADER_BYTES {
             bail!("HTTP response headers exceed {MAX_HEADER_BYTES} bytes");
@@ -254,7 +256,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
         0
     };
     while buffered.len() < parsed.header_end + preview_len {
-        read_response_chunk_with_timeout(reader, &mut buffered, timeout).await?;
+        let read_timeout = timeout.saturating_sub(started.elapsed());
+        read_response_chunk_with_timeout(reader, &mut buffered, read_timeout).await?;
     }
 
     let retryable_context_overflow = parsed.status_code == 400
@@ -369,6 +372,42 @@ mod tests {
 
         assert!(is_timeout_error(&error), "unexpected error: {error:#}");
         assert!(error.to_string().contains("continuation read timeout"));
+    }
+
+    #[tokio::test]
+    async fn probe_partial_headers_share_one_timeout_budget() {
+        let timeout_budget = Duration::from_millis(100);
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"H").await.unwrap();
+            for byte in b"TTP/1.1 200 OK\r\n" {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                if writer.write_all(&[*byte]).await.is_err() {
+                    return;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_http_response_with_timeout(&mut reader, timeout_budget),
+        )
+        .await
+        .expect("partial headers must time out before the outer guard");
+        let elapsed = started.elapsed();
+        writer_task.abort();
+
+        let error = match result {
+            Ok(_) => panic!("a partial header stream must time out"),
+            Err(error) => error,
+        };
+        assert!(is_timeout_error(&error), "unexpected error: {error:#}");
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "partial bytes extended the overall header budget: {elapsed:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]
