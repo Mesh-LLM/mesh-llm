@@ -127,6 +127,11 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install CI Python requirements
+        run: python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt
       - uses: ./.github/actions/install-actionlint
       - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Validate GitHub Actions
