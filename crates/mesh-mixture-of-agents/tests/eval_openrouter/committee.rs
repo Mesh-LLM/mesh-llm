@@ -356,6 +356,13 @@ pub(crate) fn e2e_config(pool: &[String], api_key: &str) -> GatewayConfig {
         enable_thinking: Some(false),
         actor_candidates: Vec::new(),
         reference_policy: Default::default(),
-        refinement_policy: Default::default(),
+        // `MOA_E2E_REFINEMENT=never|always` pins the round so the two arms can
+        // be run back to back in one session. Unset = the shipped `Auto`
+        // policy, which is what a production turn takes.
+        refinement_policy: match std::env::var("MOA_E2E_REFINEMENT").as_deref() {
+            Ok("never") => mesh_mixture_of_agents::RefinementPolicy::Never,
+            Ok("always") => mesh_mixture_of_agents::RefinementPolicy::Always,
+            _ => Default::default(),
+        },
     }
 }

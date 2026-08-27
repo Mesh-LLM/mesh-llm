@@ -424,10 +424,27 @@ refinement.** Length-controlled: layered beats solo 11–1 on decided trials
 (p = 0.0063), single-round does not (6–1, ns). Ties dominate at 68/80 — on most
 prompts a small mesh and a single small model are indistinguishable.
 
-**End-to-end through `handle_turn` — parity, not yet a win.** Latest:
-9 / 59 / 12 (p = 0.66) against the pool's best member; the prior run was
-5 / 65 / 10 (p = 0.30). Both are parity, and the difference between them is
-noise at this sample size.
+**End-to-end through `handle_turn` — was a significant LOSS; the refinement
+fix removes it but does not reach the harness win.** Measured 2026-08-27 at
+`lab/moa-fleet-sim` `e4b611e8d`, both arms through the shipped entrypoint,
+40 tasks x 2 draws, same pool and judge:
+
+| arm | win / tie / loss | decided | sign p |
+|---|---|---|---|
+| single-round (the behaviour that shipped) | 5 / 60 / 15 | 20 | **0.041** |
+| refinement on (`Auto` after the fix) | 7 / 66 / 5 | 12 | 0.77 |
+
+The cause found: `RefinementPolicy::Auto` excluded all-small pools, so the
+shipped path ran the arm this file measured as null (6/73/1) while the harness
+ran the arm that won (11/68/1). The exclusion was justified by the withdrawn
+6x-8B single-aggregation cell.
+
+Earlier runs recorded 9 / 59 / 12 (p = 0.66) and 5 / 65 / 10 (p = 0.30) and were
+read as parity; the direction was consistent with this loss all along.
+
+Direct arm comparison is Fisher p = 0.13 — directional, not separated, at
+~12-20 decided trials per arm. Full data:
+`RESEARCH/MOA_REFINEMENT_E2E_2026_08_27.md` in the Buzz workspace.
 
 Six eval-vs-production divergences were found by measuring the shipped path and
 fixed: grace finalizing the turn before refinement could run, two truncation
