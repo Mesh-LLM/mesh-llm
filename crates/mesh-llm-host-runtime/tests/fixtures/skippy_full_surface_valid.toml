@@ -45,7 +45,6 @@ tuning_profile = "balanced"
 
 [defaults.skippy]
 activation_wire_dtype = "auto"
-binary_stage_transport = "auto"
 
 [defaults.speculative]
 mode = "auto"

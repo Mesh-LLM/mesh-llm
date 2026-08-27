@@ -166,7 +166,7 @@ fn recurrent_test_backend(
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         config,
@@ -521,7 +521,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         config,

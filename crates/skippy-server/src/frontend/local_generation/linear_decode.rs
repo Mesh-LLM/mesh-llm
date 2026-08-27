@@ -410,7 +410,8 @@ mod tests {
         let speculative = SpeculativeDecodeConfig::default();
         let telemetry = Telemetry::new(None, 1, stage_config.clone(), TelemetryLevel::Off);
         let iteration_scheduler =
-            IterationScheduler::new(runtime.clone(), &stage_config, 1, telemetry.clone()).unwrap();
+            IterationScheduler::new(runtime.clone(), &stage_config, 1, true, telemetry.clone())
+                .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
             config: stage_config.clone(),

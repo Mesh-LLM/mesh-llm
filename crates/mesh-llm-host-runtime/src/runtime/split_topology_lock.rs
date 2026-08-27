@@ -49,13 +49,111 @@ pub(super) struct ConfiguredTopologyResolutionInput<'a> {
 pub(super) fn resolve_configured_topology_assignments(
     input: ConfiguredTopologyResolutionInput<'_>,
 ) -> Result<Option<Vec<LockedSplitStageAssignment>>> {
-    let _ = (
-        input.config,
-        input.model_ref,
-        input.package,
-        input.identities,
+    let Some(model_ref) = input.model_ref else {
+        return Ok(None);
+    };
+    let model = input
+        .config
+        .models
+        .iter()
+        .find(|model| model.model == model_ref);
+    let topology = mesh_llm_config::merge_model_topology(
+        input
+            .config
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.topology.as_ref()),
+        model.and_then(|model| model.topology.as_ref()),
     );
-    Ok(None)
+    let Some(topology) = topology else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        model.is_some(),
+        "configured locked topology has no matching [[models]] entry for {model_ref}"
+    );
+    anyhow::ensure!(
+        topology.mode == Some(mesh_llm_config::ModelTopologyMode::Locked),
+        "configured topology mode must be locked"
+    );
+    let manifest = topology
+        .manifest_sha256
+        .as_deref()
+        .context("configured locked topology is missing manifest_sha256")?;
+    anyhow::ensure!(
+        manifest == input.package.manifest_sha256,
+        "configured topology manifest {manifest} does not match resolved package manifest {}",
+        input.package.manifest_sha256
+    );
+    let stages = topology
+        .stages
+        .as_deref()
+        .context("configured locked topology is missing stages")?;
+    anyhow::ensure!(
+        stages.len() >= super::local::SPLIT_DEFAULT_MIN_PARTICIPANTS,
+        "configured locked topology requires at least two stages"
+    );
+    stages
+        .iter()
+        .enumerate()
+        .map(|(index, stage)| resolve_configured_stage(index, stage, input.identities))
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+pub(super) async fn load_configured_split_assignments(
+    config: &mesh_llm_config::MeshConfig,
+    model_ref: Option<&str>,
+    node: &mesh::Node,
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+) -> Result<Option<Vec<LockedSplitStageAssignment>>> {
+    let identities = participant_identities(node, participants).await;
+    resolve_configured_topology_assignments(ConfiguredTopologyResolutionInput {
+        config,
+        model_ref,
+        package,
+        identities: &identities,
+    })
+}
+
+fn resolve_configured_stage(
+    index: usize,
+    stage: &mesh_llm_config::ModelTopologyStageConfig,
+    identities: &[ParticipantIdentity],
+) -> Result<LockedSplitStageAssignment> {
+    let matches = identities
+        .iter()
+        .filter(|identity| configured_selector_matches(identity, &stage.node))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        matches.len() == 1,
+        "configured topology stage {index} selector matched {} eligible nodes; available: {}",
+        matches.len(),
+        participant_identity_labels(identities).join(", ")
+    );
+    Ok(LockedSplitStageAssignment {
+        node_id: matches[0].node_id,
+        layer_start: stage.layer_start,
+        layer_end: stage.layer_end,
+    })
+}
+
+fn configured_selector_matches(
+    identity: &ParticipantIdentity,
+    selector: &mesh_llm_config::ModelTopologyNodeSelector,
+) -> bool {
+    match (
+        selector.endpoint_id.as_deref(),
+        selector.hostname.as_deref(),
+    ) {
+        (Some(endpoint_id), None) => identity.node_id.to_string() == endpoint_id,
+        (None, Some(hostname)) => identity
+            .hostname
+            .as_deref()
+            .is_some_and(|candidate| normalize_hostname(candidate) == normalize_hostname(hostname)),
+        (Some(_), Some(_)) | (None, None) => false,
+    }
 }
 
 pub(super) async fn load_locked_split_assignments(

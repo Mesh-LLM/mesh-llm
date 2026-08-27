@@ -218,6 +218,37 @@ fn runtime_local_targets_keep_duplicate_same_model_ports() {
 }
 
 #[test]
+fn staged_lifecycle_intervals_use_model_over_defaults() {
+    let config: plugin::MeshConfig = toml::from_str(
+        r#"
+[defaults.skippy]
+lifecycle_startup_timeout_ms = 90000
+lifecycle_readiness_interval_ms = 250
+lifecycle_health_interval_ms = 30000
+
+[[models]]
+model = "test/model"
+
+[models.skippy]
+lifecycle_startup_timeout_ms = 120000
+lifecycle_readiness_interval_ms = 125
+lifecycle_health_interval_ms = 5000
+"#,
+    )
+    .expect("lifecycle config");
+
+    let configured = configured_stage_lifecycle_intervals(&config, "test/model");
+    let defaults = configured_stage_lifecycle_intervals(&config, "other/model");
+
+    assert_eq!(configured.startup_timeout, Duration::from_secs(120));
+    assert_eq!(configured.readiness_interval, Duration::from_millis(125));
+    assert_eq!(configured.health_interval, Duration::from_secs(5));
+    assert_eq!(defaults.startup_timeout, Duration::from_secs(90));
+    assert_eq!(defaults.readiness_interval, Duration::from_millis(250));
+    assert_eq!(defaults.health_interval, Duration::from_secs(30));
+}
+
+#[test]
 fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
     let capacities = [
         (1, 24_000_000_000),

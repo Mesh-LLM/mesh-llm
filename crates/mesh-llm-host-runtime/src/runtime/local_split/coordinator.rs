@@ -1,3 +1,4 @@
+use super::loading::stage_health_ticks;
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
     split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
@@ -92,6 +93,7 @@ pub(super) struct SplitTopologyCoordinator {
     /// A locked topology may be withdrawn after stage loss, but never replaced
     /// or collapsed to a local fallback.
     pub(super) topology_locked: bool,
+    pub(super) health_interval: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,7 +111,7 @@ pub(super) fn spawn_split_topology_coordinator(
 impl SplitTopologyCoordinator {
     async fn run(mut self) {
         let mut peer_rx = self.node.peer_change_rx.clone();
-        let mut health_tick = tokio::time::interval(Duration::from_secs(30));
+        let mut health_tick = stage_health_ticks(self.health_interval);
         health_tick.tick().await;
         tracing::info!(
             model_ref = self.model_ref,

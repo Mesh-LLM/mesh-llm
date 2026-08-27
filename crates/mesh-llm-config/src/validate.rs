@@ -5,8 +5,8 @@ pub use crate::diagnostic::{
     legacy_validation_error_text, rejected_field_diagnostic, unsupported_field_diagnostic,
 };
 use crate::model_validation::{
-    collect_legacy_draft_model_path_warnings, validate_duplicate_model_entries,
-    validate_model_defaults, validate_model_entry,
+    collect_legacy_draft_model_path_warnings, model_topology_diagnostics,
+    validate_duplicate_model_entries, validate_model_defaults, validate_model_entry,
 };
 use crate::plugin_validation::{
     PluginSchemaAvailability, validate_plugin_entries, validate_plugin_entries_strict,
@@ -123,6 +123,11 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
         ) {
             diagnostics.push(diagnostic);
         }
+        diagnostics.extend(model_topology_diagnostics(
+            config.defaults.as_ref(),
+            model,
+            &format!("models[{index}]"),
+        ));
     }
 
     collect_legacy_draft_model_path_warnings(config, &mut diagnostics);

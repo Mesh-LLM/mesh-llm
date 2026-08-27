@@ -102,9 +102,6 @@ gpu_layers = 99
 [models.throughput]
 parallel = 4
 
-[models.skippy]
-binary_stage_transport = "auto"
-
 [models.speculative]
 draft_selection_policy = "auto"
 

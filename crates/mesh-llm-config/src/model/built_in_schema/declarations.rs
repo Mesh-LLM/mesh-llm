@@ -159,6 +159,7 @@ fn model_defaults_settings() -> Vec<ConfigSettingSchema> {
         "defaults.throughput",
         &[flat_alias("defaults.parallel")],
     ));
+    settings.extend(topology_settings("defaults.topology"));
     settings.extend(skippy_settings("defaults.skippy"));
     settings.extend(speculative_settings("defaults.speculative"));
     settings.extend(request_defaults_settings("defaults.request_defaults"));
@@ -195,6 +196,7 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.throughput"),
         &[flat_alias(&format!("{model_prefix}.parallel"))],
     ));
+    settings.extend(topology_settings(&format!("{model_prefix}.topology")));
     settings.extend(skippy_settings(&format!("{model_prefix}.skippy")));
     settings.extend(speculative_settings(&format!("{model_prefix}.speculative")));
     settings.extend(request_defaults_settings(&format!(
@@ -206,6 +208,22 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
     ));
     settings.extend(advanced_settings(&format!("{model_prefix}.advanced")));
     settings
+}
+
+fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
+    vec![
+        basic_setting(&format!("{prefix}.mode"), string_enum(["locked"])),
+        basic_setting(
+            &format!("{prefix}.manifest_sha256"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{prefix}.stages"),
+            ConfigValueSchema::Array {
+                items: Box::new(ConfigValueSchema::Object),
+            },
+        ),
+    ]
 }
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {

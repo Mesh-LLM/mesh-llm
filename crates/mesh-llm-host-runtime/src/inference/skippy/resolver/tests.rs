@@ -1484,12 +1484,21 @@ continuous_batching = false
     let disabled_args = resolve_with_config(&disabled)
         .to_embedded_openai_args(4096, true)
         .expect("disabled OpenAI args");
+    let automatic_args = resolve_with_config(&parse_config(""))
+        .to_embedded_openai_args(4096, true)
+        .expect("automatic OpenAI args");
+
+    let enabled_debug = format!("{enabled_args:?}");
+    let disabled_debug = format!("{disabled_args:?}");
+    let automatic_debug = format!("{automatic_args:?}");
 
     assert_ne!(
-        format!("{enabled_args:?}"),
-        format!("{disabled_args:?}"),
+        enabled_debug, disabled_debug,
         "the embedded scheduler boundary must retain continuous_batching"
     );
+    assert!(enabled_debug.contains("continuous_batching: true"));
+    assert!(disabled_debug.contains("continuous_batching: false"));
+    assert!(automatic_debug.contains("continuous_batching: true"));
 }
 
 #[test]
