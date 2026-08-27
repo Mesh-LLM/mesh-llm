@@ -63,24 +63,39 @@ pub(crate) fn refinement_expected(config: &GatewayConfig) -> bool {
                 return false;
             }
             // The cross-peer refine round is an extra *serial* fan-out pass
-            // (draft -> synth -> refine -> synth). It only earns that cost in
-            // one measured case: a homogeneous pool at real scale, where the
-            // repeated same-model drafts are correlated enough that a round of
-            // cross-pollination helps (same-model 32B ×2: 48/2 with refine vs
-            // 35/10 without).
+            // (draft -> synth -> refine -> synth), so it must be gated on
+            // measured benefit. Two shapes earn it
+            // (`evals/moa-openrouter/RESULTS.md`):
             //
-            // It does NOT pay for small pools. The width sprint measured
-            // refine-vs-single-aggregation as null in every 8B cell (2/4/6,
-            // diverse and same); single aggregation alone is what wins there
-            // (6× diverse 8B, 12W/2L). And a diverse big pool gains ~nothing
-            // either (mid diverse 49/6 layered vs 47/4 single-round). So skip
-            // the round for any all-small pool and for diverse pools —
-            // matching Hermes' cheaper single-synth cadence where refine buys
-            // nothing. See `evals/moa-openrouter/RESULTS.md`.
-            let all_small = config.models.iter().all(worker::entry_is_small_tier);
-            !all_small && worker::pool_is_homogeneous(&config.models)
+            //   * homogeneous pool at real scale — repeated same-model drafts
+            //     are correlated enough that cross-pollination helps
+            //     (same-model 32B x2: 48/2 with refine vs 35/10 without);
+            //   * all-small pool — the ONLY arm that beat the pool's best
+            //     member is the layered one (11/68/1, p=0.0063), while
+            //     single-round synthesis on the same four 8B models is null
+            //     (6/73/1, p=0.125). "Yes, but only with the refinement round"
+            //     is the study's own summary.
+            //
+            // A diverse big pool gains ~nothing (mid diverse 49/6 layered vs
+            // 47/4 single-round), so it keeps Hermes' cheaper single-synth
+            // cadence.
+            //
+            // The previous predicate excluded all-small pools, citing the width
+            // sprint's "6x diverse 8B, 12W/2L" single-aggregation cell. That
+            // cell is WITHDRAWN — it did not replicate (3W/76T/1L, p=0.63) —
+            // so it cannot justify skipping the round on the one small-pool
+            // configuration that did produce a significant win.
+            config_is_all_small(config) || worker::pool_is_homogeneous(&config.models)
         }
     }
+}
+
+/// Is every pool member small-tier?
+///
+/// Small-tier membership decides whether the refinement round pays, so it is
+/// named rather than inlined at its two call sites.
+fn config_is_all_small(config: &GatewayConfig) -> bool {
+    config.models.iter().all(worker::entry_is_small_tier)
 }
 
 /// Run one refinement round over `drafts`.
@@ -216,17 +231,22 @@ mod tests {
         }
     }
 
-    /// An all-small pool wins by WIDTH + single aggregation, not the refine
-    /// round: the width sprint measured refine-vs-single-aggregation null in
-    /// every 8B cell (2/4/6, diverse and same). So Auto skips the extra serial
-    /// pass here — single aggregation over a wide pool is what wins.
+    /// An all-small pool takes the refine round: it is the only arm that beat
+    /// the pool's best member (layered 11/68/1, p=0.0063), while single-round
+    /// synthesis over the same models is null (6/73/1, p=0.125).
+    ///
+    /// This test previously asserted the opposite, on the strength of the width
+    /// sprint's "refine-vs-single-aggregation null in every 8B cell" reading.
+    /// That reading rested on the 6x diverse 8B single-aggregation win, which
+    /// is withdrawn (3W/76T/1L, p=0.63 on re-run), so the comparison it drew
+    /// was against a baseline that does not hold.
     #[test]
-    fn auto_skips_an_all_small_pool() {
+    fn auto_refines_an_all_small_pool() {
         let c = config(
             &["Qwen3-8B", "Llama-3.1-8B", "Ministral-8B"],
             RefinementPolicy::Auto,
         );
-        assert!(!should_refine(&c, 3));
+        assert!(should_refine(&c, 3));
     }
 
     /// A *diverse* pool with a big-tier synthesizer gains ~nothing from the
@@ -286,5 +306,55 @@ mod tests {
         let budget = refinement_budget(Duration::from_secs(60));
         assert_eq!(budget, Duration::from_secs(30));
         assert!(budget < Duration::from_secs(60));
+    }
+
+    /// The e2e study pool takes the refinement round the study measured.
+    ///
+    /// `evals/moa-openrouter/RESULTS.md` reports two numbers on the SAME four
+    /// 8B-class models (`small_mesh_pool()` in the eval harness):
+    ///
+    /// | path | win/tie/loss | sign test |
+    /// |---|---|---|
+    /// | harness `refine` + `synthesize` (layered) | 11 / 68 / 1 | p = 0.0063 |
+    /// | shipped `moa::handle_turn` | 9 / 59 / 12 | p = 0.66 |
+    ///
+    /// and separately reports that for this pool shape single-round synthesis
+    /// is null (6 / 73 / 1, p = 0.125) while layered is the only arm that wins.
+    /// So the harness win REQUIRES the refinement round.
+    ///
+    /// Before this test, `Auto` returned false here — the round was skipped on
+    /// exactly the pool whose only significant win came from having it. The
+    /// justification in the policy comment cited the width sprint's
+    /// "6x diverse 8B, 12W/2L" cell, which is **withdrawn** (did not replicate:
+    /// 3W/76T/1L, p=0.63).
+    ///
+    /// This test pins the pool shape against the policy so the two cannot drift
+    /// apart again silently.
+    #[test]
+    fn auto_refines_the_all_small_diverse_pool_the_study_measured() {
+        // Exactly `small_mesh_pool()` from tests/eval_openrouter/committee.rs.
+        let cfg = config(
+            &[
+                "qwen/qwen3-8b",
+                "meta-llama/llama-3.1-8b-instruct",
+                "ibm-granite/granite-4.1-8b",
+                "mistralai/ministral-8b-2512",
+            ],
+            RefinementPolicy::Auto,
+        );
+        assert!(
+            config_is_all_small(&cfg),
+            "fixture must stay all-small for this test to mean anything"
+        );
+        assert!(
+            !worker::pool_is_homogeneous(&cfg.models),
+            "fixture must stay diverse for this test to mean anything"
+        );
+        assert!(
+            refinement_expected(&cfg),
+            "the layered arm (11/68/1, p=0.0063) is the only measured small-pool \
+             win; Auto must not skip the round that produced it"
+        );
+        assert!(should_refine(&cfg, 4));
     }
 }
