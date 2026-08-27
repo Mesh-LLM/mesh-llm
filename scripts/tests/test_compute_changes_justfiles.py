@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-DERIVE_SCRIPT: Final = ROOT / "scripts/compute-changes-derive.sh"
+ACTION: Final = ROOT / ".github/actions/compute-changes/action.yml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,19 +35,15 @@ def commit(repository: Path, message: str) -> str:
 
 
 def classify(diff: RevisionDiff) -> bool:
-    source = DERIVE_SCRIPT.read_text(encoding="utf-8")
-    start = source.index("JUSTFILE_RECIPE_AWK='")
-    end = source.index("# Backend/platform lanes rebuild", start)
-    script = source[start:end]
-    script = (
-        f"set -- {diff.event_name!r} {diff.base!r} {diff.head!r}\n"
-        'EVENT_NAME="${1:?event name is required}"\n'
-        'BASE_SHA="${2:?base SHA is required}"\n'
-        'HEAD_SHA="${3:?head SHA is required}"\n'
-        f"CHANGED_FILES={diff.changed_files!r}\n"
-        f"{script}\n"
-        "printf '%s\\n' \"$BACKEND_RECIPE_CHANGED\"\n"
-    )
+    action = ACTION.read_text(encoding="utf-8")
+    start = action.index("        JUSTFILE_RECIPE_AWK='")
+    end = action.index("        # Backend/platform lanes rebuild", start)
+    script = action[start:end]
+    script = script.replace("        ", "", 1)
+    script = script.replace("${{ inputs.event_name }}", diff.event_name)
+    script = script.replace("${{ inputs.base_sha }}", diff.base)
+    script = script.replace("${{ inputs.head_sha }}", diff.head)
+    script = f"CHANGED_FILES={diff.changed_files!r}\n{script}\nprintf '%s\\n' \"$BACKEND_RECIPE_CHANGED\"\n"
     result = subprocess.run(
         ["bash", "-c", script],
         cwd=diff.repository,
