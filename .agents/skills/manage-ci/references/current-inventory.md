@@ -397,6 +397,12 @@ source commit.
   rooted in the protected checkout. Missing or non-regular source manifests
   fail planning. Jobs and logs remain attached to five focused PR runs rather
   than one monolithic graph.
+- Catalog evolution is a sequenced maintainer merge. A branch that needs a new
+  `ci/ownership.yml` or `ci/slices.yml` entry cannot pass its own Plan gate,
+  because the byte-identical compare is the boundary keeping PR-controlled
+  routing out of the protected planner. Land a catalog-only commit on the
+  default branch first, then rebase the dependent branch onto it. Do not relax
+  the compare, add a label-gated bypass, or special-case catalog paths.
 - Each `main_*.yml` workflow plans the exhaustive main profile at the pushed
   SHA, projects one bounded lane, and calls its matching same-commit lane as a
   nested reusable workflow. Routine main jobs and logs therefore remain

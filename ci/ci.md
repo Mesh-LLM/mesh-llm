@@ -37,11 +37,18 @@ The protected planner action extracts only `ci/ownership.yml` and
 `ci/slices.yml` from the validated immutable PR source SHA into a unique
 runner-temp directory. The source ownership and slice catalogs must match the
 protected catalogs, preventing PR-controlled routing, matrix, or worker
-expansion. These files are
-routing data, not executable code.
+expansion. These files are routing data, not executable code.
 Planner code, Cargo workspace discovery, and affected-crate operations still
 run from the protected default-branch checkout. A missing or non-regular source
 manifest fails the plan.
+
+Because the catalogs must match byte for byte, a branch cannot introduce its
+own ownership or slice entry and pass its own Plan gate. Catalog evolution is a
+sequenced maintainer merge, not an escape hatch: land a catalog-only commit on
+the default branch that registers the new paths or slices, then rebase the
+dependent branch onto it so both copies match again. Do not relax the compare
+to unblock a branch — the byte-identical check is the boundary that keeps
+PR-controlled routing out of the protected planner.
 
 ### Required PR shape and visibility
 

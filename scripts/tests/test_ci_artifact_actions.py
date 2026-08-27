@@ -946,9 +946,14 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_imported_justfile_sources_are_classified_on_both_diff_sides(self) -> None:
         action = self.read_action("compute-changes")
 
-        self.assertIn("grep -E '^just/.+\\.just$'", action)
-        self.assertIn("${{ inputs.base_sha }}:$JUSTFILE_SOURCE", action)
+        self.assertIn("grep -E '^Justfile$|^just/.+\\.just$'", action)
+        self.assertIn("$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE", action)
         self.assertIn("${{ inputs.head_sha }}:$JUSTFILE_SOURCE", action)
+        self.assertIn(
+            'JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "${{ inputs.base_sha }}" '
+            '"${{ inputs.head_sha }}")',
+            action,
+        )
         self.assertIn("git diff --name-status --no-renames", action)
         self.assertIn("A$'\\t'*)", action)
         self.assertIn("D$'\\t'*)", action)
@@ -956,15 +961,50 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("justfile_has_recipe \"$JUSTFILE_SOURCE_BASE\"", action)
         self.assertIn("justfile_has_recipe \"$JUSTFILE_SOURCE_HEAD\"", action)
         self.assertIn(
-            'changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" '
+            'changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" '
             '"$JUSTFILE_SOURCE_CHANGED_LINES" new',
             action,
         )
         self.assertIn(
-            'changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" '
+            'changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" '
             '"$JUSTFILE_SOURCE_CHANGED_LINES" old',
             action,
         )
+
+    def test_top_level_justfile_inputs_of_backend_recipes_route_backend_builds(
+        self,
+    ) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn(
+            'justfile_backend_recipe_tokens "$JUSTFILE_SOURCE_BASE_SHA" '
+            '> "$JUSTFILE_BACKEND_TOKENS_BASE"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_recipe_tokens "${{ inputs.head_sha }}" '
+            '> "$JUSTFILE_BACKEND_TOKENS_HEAD"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_input_lines "$JUSTFILE_SOURCE_BASE" '
+            '"$JUSTFILE_BACKEND_TOKENS_BASE"',
+            action,
+        )
+        self.assertIn(
+            'justfile_backend_input_lines "$JUSTFILE_SOURCE_HEAD" '
+            '"$JUSTFILE_BACKEND_TOKENS_HEAD"',
+            action,
+        )
+        self.assertIn('>> "$JUSTFILE_SOURCE_BACKEND_LINES_BASE"', action)
+        self.assertIn('>> "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"', action)
+
+    def test_backend_recipe_attributes_route_backend_builds(self) -> None:
+        action = self.read_action("compute-changes")
+
+        self.assertIn("pending_attribute_lines[++pending_attribute_count] = NR", action)
+        self.assertIn("print pending_attribute_lines[pending_index]", action)
+        self.assertIn("delete pending_attribute_lines", action)
 
     def test_sccache_seed_keys_include_imported_just_sources(self) -> None:
         workflow_dir = ROOT / ".github" / "workflows"
@@ -987,8 +1027,12 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_root_justfile_import_graph_changes_fail_open_to_backend_builds(self) -> None:
         action = self.read_action("compute-changes")
 
-        self.assertIn("ROOT_JUSTFILE_DIFF=$(git diff -U0", action)
-        self.assertIn("^[+-]import 'just/[^']+\\.just'$", action)
+        self.assertIn("JUSTFILE_SOURCE_DIFF=$(git diff -U0", action)
+        self.assertIn(
+            'printf \'%s\\n\' "$JUSTFILE_SOURCE_DIFF" | justfile_changed_import',
+            action,
+        )
+        self.assertIn("if (line ~ /^import[?]?[[:space:]]+/)", action)
         self.assertIn(
             '[[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "false" '
             '&& "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "false" ]]',

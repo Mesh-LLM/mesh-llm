@@ -9,6 +9,19 @@ remaining consumable by normal YAML tooling.
 This planner is the eligibility boundary for both PR and main CI. It is strict:
 an invalid manifest, unknown path, missing producer, or malformed matrix is an
 error rather than an implicit broad build.
+
+``--manifest-root`` is the audit path, not a convenience.  The planner itself
+always runs from the protected default-branch checkout, which is the authority:
+by default it reads the catalogs beside its own code.  A PR caller instead
+extracts the source revision's ``ci/ownership.yml`` and ``ci/slices.yml`` into a
+runner-temp directory and points ``--manifest-root`` at it, so the routing
+inputs that reviewers see on the PR are the ones the plan is audited against
+while the executable planner, Cargo workspace discovery, and every fan-out
+ceiling stay protected.  The caller first requires those source catalogs to
+match the protected copies byte for byte.  In that protected PR path, the
+comparison prevents the switch from widening routing.  Do not collapse it into
+a single read of the source tree, and do not delete it as redundant: the two
+roots are deliberately different trust domains.
 """
 
 from __future__ import annotations

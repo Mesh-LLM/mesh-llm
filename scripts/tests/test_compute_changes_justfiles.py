@@ -18,6 +18,7 @@ class RevisionDiff:
     base: str
     head: str
     changed_files: str
+    event_name: str = "push"
 
 
 def commit(repository: Path, message: str) -> str:
@@ -35,11 +36,11 @@ def commit(repository: Path, message: str) -> str:
 
 def classify(diff: RevisionDiff) -> bool:
     action = ACTION.read_text(encoding="utf-8")
-    start = action.index("        justfile_backend_recipe_lines() {")
+    start = action.index("        JUSTFILE_RECIPE_AWK='")
     end = action.index("        # Backend/platform lanes rebuild", start)
     script = action[start:end]
     script = script.replace("        ", "", 1)
-    script = script.replace("${{ inputs.event_name }}", "push")
+    script = script.replace("${{ inputs.event_name }}", diff.event_name)
     script = script.replace("${{ inputs.base_sha }}", diff.base)
     script = script.replace("${{ inputs.head_sha }}", diff.head)
     script = f"CHANGED_FILES={diff.changed_files!r}\n{script}\nprintf '%s\\n' \"$BACKEND_RECIPE_CHANGED\"\n"
@@ -54,6 +55,56 @@ def classify(diff: RevisionDiff) -> bool:
 
 
 class ComputeChangesJustfileTests(unittest.TestCase):
+    def test_backend_recipe_attribute_changes_are_backend_relevant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            justfile = repository / "Justfile"
+            justfile.write_text("[unix]\nbundle:\n    printf backend\n", encoding="utf-8")
+            base = commit(repository, "base")
+            justfile.write_text("[windows]\nbundle:\n    printf backend\n", encoding="utf-8")
+            head = commit(repository, "backend recipe attribute")
+
+            self.assertTrue(classify(RevisionDiff(repository, base, head, "Justfile")))
+
+    def test_pull_request_old_side_uses_merge_base(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            justfile = repository / "Justfile"
+            justfile.write_text(
+                "light:\n    printf light\n\nbundle:\n    printf backend\n",
+                encoding="utf-8",
+            )
+            merge_base = commit(repository, "merge base")
+
+            subprocess.run(["git", "switch", "-q", "-c", "feature"], cwd=repository, check=True)
+            justfile.write_text("light:\n    printf light\n", encoding="utf-8")
+            head = commit(repository, "remove backend recipe")
+
+            subprocess.run(
+                ["git", "switch", "-q", "-c", "base", merge_base],
+                cwd=repository,
+                check=True,
+            )
+            justfile.write_text(
+                "setting := \"base\"\n\nlight:\n    printf light\n\nbundle:\n    printf backend\n",
+                encoding="utf-8",
+            )
+            base = commit(repository, "advance base")
+
+            self.assertTrue(
+                classify(
+                    RevisionDiff(
+                        repository,
+                        base,
+                        head,
+                        "Justfile",
+                        event_name="pull_request",
+                    )
+                )
+            )
+
     def test_standalone_quantize_recipe_changes_are_backend_relevant(self) -> None:
         recipes = (
             "skippy-quantize-standalone-build",
@@ -77,6 +128,54 @@ class ComputeChangesJustfileTests(unittest.TestCase):
                 self.assertTrue(
                     classify(RevisionDiff(repository, base, head, "just/skippy.just"))
                 )
+
+    def test_top_level_assignments_are_classified_by_backend_recipe_use(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            recipes = repository / "just"
+            recipes.mkdir()
+            (repository / "Justfile").write_text(
+                "website_dir := \"website\"\n\ndefault: build\n\n"
+                "import 'just/mesh.just'\n\nimport 'just/website-ui.just'\n",
+                encoding="utf-8",
+            )
+            mesh = recipes / "mesh.just"
+            mesh.write_text(
+                'mesh_bin := env("MESH_LLM_BIN", "target/release/mesh-llm")\n\n'
+                "bundle:\n"
+                '    "{{ mesh_bin }}" --version\n',
+                encoding="utf-8",
+            )
+            (recipes / "website-ui.just").write_text(
+                'website-build:\n    printf "{{ website_dir }}"\n', encoding="utf-8"
+            )
+            base = commit(repository, "base")
+
+            mesh.write_text(
+                mesh.read_text(encoding="utf-8").replace(
+                    "target/release/mesh-llm", "target/debug/mesh-llm"
+                ),
+                encoding="utf-8",
+            )
+            backend_input_head = commit(repository, "backend input assignment")
+            self.assertTrue(
+                classify(RevisionDiff(repository, base, backend_input_head, "just/mesh.just"))
+            )
+
+            root_justfile = repository / "Justfile"
+            root_justfile.write_text(
+                root_justfile.read_text(encoding="utf-8").replace(
+                    'website_dir := "website"', 'website_dir := "site"'
+                ),
+                encoding="utf-8",
+            )
+            light_input_head = commit(repository, "light input assignment")
+            self.assertFalse(
+                classify(
+                    RevisionDiff(repository, backend_input_head, light_input_head, "Justfile")
+                )
+            )
 
     def test_recipe_sources_cover_light_backend_added_deleted_and_root_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

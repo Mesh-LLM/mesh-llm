@@ -51,6 +51,18 @@ class JustfileSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(JustfileImportError, "import cycle"):
                 read_justfile_source(root / "Justfile")
 
+    def test_non_canonical_import_cycle_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "just").mkdir()
+            (root / "Justfile").write_text("import 'just/build.just'\n", encoding="utf-8")
+            (root / "just" / "build.just").write_text(
+                "import '../Justfile'\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(JustfileImportError, "import cycle"):
+                read_justfile_source(root / "Justfile")
+
     def test_namespaced_and_optional_imports_are_rejected(self) -> None:
         for directive in ("mod build\n", "import? 'build.just'\n"):
             with self.subTest(directive=directive), tempfile.TemporaryDirectory() as directory:

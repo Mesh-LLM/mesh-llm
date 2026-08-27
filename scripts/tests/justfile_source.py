@@ -35,7 +35,8 @@ def _read_justfile_source(path: Path, stack: tuple[Path, ...]) -> str:
     for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
         match = FLAT_IMPORT.fullmatch(line)
         if match is not None:
-            source.append(_read_justfile_source(path.parent / match.group(1), next_stack))
+            imported_path = (path.parent / match.group(1)).resolve()
+            source.append(_read_justfile_source(imported_path, next_stack))
         elif UNSUPPORTED_DIRECTIVE.match(line):
             raise JustfileImportError(path=path, reason=f"unsupported directive: {line.strip()}")
         else:

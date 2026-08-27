@@ -210,27 +210,98 @@ runs:
           fi
         fi
 
+        # Shared Just recipe classification for the backend-input checks below.
+        JUSTFILE_RECIPE_AWK='
+          function recipe_name(line, parts) {
+            if (line ~ /^[[:alnum:]_-]/ && line !~ /^[[:alnum:]_-]+[[:space:]]*:=/ && line ~ /:/) {
+              split(line, parts, /[[:space:]:]/)
+              return parts[1]
+            }
+            return ""
+          }
+
+          function is_backend_recipe(name) {
+            return name ~ /^(with-lld|build|build-dev|build-mac|build-linux|build-runtime|release-host-build|release-host-build-windows|release-runtime-build|release-build|release-build-[[:alnum:]-]+|llama-prepare|llama-prepare-latest|llama-build|skippy-quantize-standalone-build|skippy-quantize-standalone-release-build|bundle|release-bundle|release-bundle-[[:alnum:]-]+)$/
+          }
+
+          FNR == 1 { backend = 0 }
+        '
+
         justfile_backend_recipe_lines() {
           local justfile_path="$1"
-          awk '
-            function recipe_name(line, parts) {
-              if (line ~ /^[[:alnum:]_-]/ && line !~ /^[[:alnum:]_-]+[[:space:]]*:=/ && line ~ /:/) {
-                split(line, parts, /[[:space:]:]/)
-                return parts[1]
+          awk "$JUSTFILE_RECIPE_AWK"'
+            /^\[/ {
+              pending_attribute_lines[++pending_attribute_count] = NR
+              next
+            }
+            {
+              name = recipe_name($0)
+              if (name != "") {
+                backend = is_backend_recipe(name)
+                if (backend) {
+                  for (pending_index = 1; pending_index <= pending_attribute_count; pending_index++) {
+                    print pending_attribute_lines[pending_index]
+                  }
+                }
+                delete pending_attribute_lines
+                pending_attribute_count = 0
               }
-              return ""
+              if (backend) {
+                print NR
+              }
             }
+          ' "$justfile_path"
+        }
 
-            function is_backend_recipe(name) {
-              return name ~ /^(with-lld|build|build-dev|build-mac|build-linux|build-runtime|release-host-build|release-host-build-windows|release-runtime-build|release-build|release-build-[[:alnum:]-]+|llama-prepare|llama-prepare-latest|llama-build|skippy-quantize-standalone-build|skippy-quantize-standalone-release-build|bundle|release-bundle|release-bundle-[[:alnum:]-]+)$/
-            }
-
+        # Top-level assignments are global Just inputs shared across the whole
+        # import graph, so a backend recipe can change meaning without any
+        # backend recipe line changing (for example `mesh_bin`, which `bundle`
+        # consumes). Collect every identifier appearing in a backend recipe
+        # header or body at one revision so assignment edits to those names are
+        # classified as backend inputs. Over-collection is intentional: it fails
+        # toward running backend lanes.
+        justfile_backend_recipe_tokens() {
+          local sha="$1"
+          local sources_dir source_path
+          local source_paths=()
+          sources_dir="$(mktemp -d)"
+          while IFS= read -r source_path; do
+            [[ -n "$source_path" ]] || continue
+            mkdir -p "$sources_dir/$(dirname "$source_path")" || return 1
+            git show "$sha:$source_path" > "$sources_dir/$source_path" || return 1
+            source_paths+=("$sources_dir/$source_path")
+          done < <(git ls-tree -r --name-only "$sha" | grep -E '^Justfile$|\.just$' || true)
+          [[ ${#source_paths[@]} -gt 0 ]] || return 1
+          awk "$JUSTFILE_RECIPE_AWK"'
             {
               name = recipe_name($0)
               if (name != "") {
                 backend = is_backend_recipe(name)
               }
-              if (backend) {
+              if (!backend) {
+                next
+              }
+              line = $0
+              while (match(line, /[[:alpha:]_][[:alnum:]_]*/)) {
+                print substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+              }
+            }
+          ' "${source_paths[@]}" | sort -u
+        }
+
+        justfile_backend_input_lines() {
+          local justfile_path="$1"
+          local tokens_file="$2"
+          awk -v tokens_file="$tokens_file" '
+            BEGIN {
+              while ((getline token < tokens_file) > 0) {
+                referenced[token] = 1
+              }
+            }
+            /^[[:alnum:]_-]+[[:space:]]*:=/ {
+              match($0, /^[[:alnum:]_-]+/)
+              if (referenced[substr($0, RSTART, RLENGTH)]) {
                 print NR
               }
             }
@@ -279,7 +350,7 @@ runs:
           '
         }
 
-        changed_range_touches_backend_recipe() {
+        changed_range_touches_lines() {
           local backend_lines_file="$1"
           local changed_lines_file="$2"
           local side="$3"
@@ -296,21 +367,26 @@ runs:
         # lanes. Root import-graph changes and unreadable imported sources fail
         # open because they can change which recipe definitions are effective.
         BACKEND_RECIPE_CHANGED="false"
+        JUSTFILE_SOURCE_BASE_SHA="${{ inputs.base_sha }}"
         if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
           JUSTFILE_DIFF_RANGE=("${{ inputs.base_sha }}...${{ inputs.head_sha }}")
+          if ! JUSTFILE_SOURCE_BASE_SHA=$(git merge-base "${{ inputs.base_sha }}" "${{ inputs.head_sha }}"); then
+            BACKEND_RECIPE_CHANGED="true"
+          fi
         else
           JUSTFILE_DIFF_RANGE=("${{ inputs.base_sha }}" "${{ inputs.head_sha }}")
         fi
 
-        if echo "$CHANGED_FILES" | grep -qx 'Justfile'; then
-          if ! ROOT_JUSTFILE_DIFF=$(git diff -U0 "${JUSTFILE_DIFF_RANGE[@]}" -- Justfile); then
-            BACKEND_RECIPE_CHANGED="true"
-          elif printf '%s\n' "$ROOT_JUSTFILE_DIFF" | grep -Eq "^[+-]import 'just/[^']+\.just'$"; then
+        JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^Justfile$|^just/.+\.just$' || true)
+        JUSTFILE_BACKEND_TOKENS_BASE="$(mktemp)"
+        JUSTFILE_BACKEND_TOKENS_HEAD="$(mktemp)"
+        if [[ -n "$JUSTFILE_SOURCES" ]]; then
+          if ! justfile_backend_recipe_tokens "$JUSTFILE_SOURCE_BASE_SHA" > "$JUSTFILE_BACKEND_TOKENS_BASE" ||
+              ! justfile_backend_recipe_tokens "${{ inputs.head_sha }}" > "$JUSTFILE_BACKEND_TOKENS_HEAD"; then
             BACKEND_RECIPE_CHANGED="true"
           fi
         fi
 
-        JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^just/.+\.just$' || true)
         while IFS= read -r JUSTFILE_SOURCE; do
           [[ -n "$JUSTFILE_SOURCE" ]] || continue
           [[ "$BACKEND_RECIPE_CHANGED" == "false" ]] || break
@@ -335,14 +411,16 @@ runs:
           esac
 
           if [[ "$JUSTFILE_SOURCE_EXPECT_BASE" == "true" ]]; then
-            if ! git cat-file -e "${{ inputs.base_sha }}:$JUSTFILE_SOURCE" 2>/dev/null ||
-                ! git show "${{ inputs.base_sha }}:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_BASE" 2>/dev/null ||
+            if ! git cat-file -e "$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE" 2>/dev/null ||
+                ! git show "$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_BASE" 2>/dev/null ||
                 ! justfile_has_recipe "$JUSTFILE_SOURCE_BASE"; then
               BACKEND_RECIPE_CHANGED="true"
               break
             fi
             JUSTFILE_SOURCE_BASE_AVAILABLE="true"
-            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_BASE" > "$JUSTFILE_SOURCE_BACKEND_LINES_BASE"; then
+            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_BASE" > "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" ||
+                ! justfile_backend_input_lines "$JUSTFILE_SOURCE_BASE" "$JUSTFILE_BACKEND_TOKENS_BASE" \
+                  >> "$JUSTFILE_SOURCE_BACKEND_LINES_BASE"; then
               BACKEND_RECIPE_CHANGED="true"
               break
             fi
@@ -356,7 +434,9 @@ runs:
               break
             fi
             JUSTFILE_SOURCE_HEAD_AVAILABLE="true"
-            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_HEAD" > "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"; then
+            if ! justfile_backend_recipe_lines "$JUSTFILE_SOURCE_HEAD" > "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" ||
+                ! justfile_backend_input_lines "$JUSTFILE_SOURCE_HEAD" "$JUSTFILE_BACKEND_TOKENS_HEAD" \
+                  >> "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD"; then
               BACKEND_RECIPE_CHANGED="true"
               break
             fi
@@ -381,10 +461,10 @@ runs:
           fi
 
           if [[ "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "true" ]] &&
-              changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" "$JUSTFILE_SOURCE_CHANGED_LINES" new; then
+              changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" "$JUSTFILE_SOURCE_CHANGED_LINES" new; then
             BACKEND_RECIPE_CHANGED="true"
           elif [[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "true" ]] &&
-              changed_range_touches_backend_recipe "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" "$JUSTFILE_SOURCE_CHANGED_LINES" old; then
+              changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_BASE" "$JUSTFILE_SOURCE_CHANGED_LINES" old; then
             BACKEND_RECIPE_CHANGED="true"
           fi
         done <<< "$JUSTFILE_SOURCES"
