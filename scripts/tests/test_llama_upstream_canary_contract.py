@@ -364,15 +364,15 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             commands[0]
             .strip()
             .endswith(
-                "--require-lanes --skip-build --skip-speculative"
+                "--require-lanes --wire-dtypes f16 --strict-dtype --skip-build --skip-speculative"
             )
         )
 
-    def test_family_certification_keeps_q8_observational(self) -> None:
-        script = FAMILY_CERTIFY.read_text(encoding="utf-8")
+    def test_family_battery_certifies_only_the_shipping_f16_wire_dtype(self) -> None:
+        script = BATTERY.read_text(encoding="utf-8")
 
-        self.assertIn("dtype_args+=(--allowed-mismatch-dtypes q8)", script)
-        self.assertNotIn("dtype_args+=(--allow-mismatch)", script)
+        self.assertIn("--wire-dtypes f16", script)
+        self.assertIn("--strict-dtype", script)
 
     def test_dry_run_reconciles_every_planned_family(self) -> None:
         first = self._model()

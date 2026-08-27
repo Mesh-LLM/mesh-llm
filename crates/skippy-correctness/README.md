@@ -70,7 +70,7 @@ skippy-correctness dtype-matrix \
   --model model.gguf \
   --model-id org/repo:Q4_K_M \
   --split-layer 15 \
-  --dtypes f32,f16,q8
+  --dtypes f16
 
 skippy-correctness state-handoff \
   --model model.gguf \

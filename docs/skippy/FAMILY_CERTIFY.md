@@ -18,14 +18,14 @@ A family is certified when the current recommended artifact has evidence for:
 | --- | --- |
 | `single-step` | A two-stage split produces the same next token as full-model execution. |
 | `chain` | The recommended multi-stage split produces the same next token as full-model execution, unless the family has a documented two-stage-only split. |
-| `dtype-matrix` | `f32` is exact; `f16` and `q8` are each marked validated or rejected for that family/split, and the selected family default is exact. |
+| `dtype-matrix` | The shipping `f16` wire format produces the same next token as full-model execution. The supported-family canary runs this lane with `--dtypes f16` and fails on any mismatch. |
 | `state-handoff` | Exact live state mobility is accepted or explicitly rejected by the Qwen3 baseline rule. |
 | `context-capacity` | The staged serving path allocates the required context and completes a near-limit prefill plus continuation. For models whose native context is at least 131,072 tokens, this lane must use at least 131,072; smaller-context models must use their native limit. |
 | `llama-spec-bench` | Optional target/draft speculative compatibility checks. |
 
-The usual shipping wire dtype is `f16`. A family whose F16 lane is rejected
-must select `f32` explicitly in its capability record. `q8` is opt-in only when
-the dtype-matrix lane proves exactness for that family and split.
+The shipping wire dtype is `f16`. F32 and q8 experiments may still use the
+standalone correctness tool, but they are outside the supported-family
+certification gate and do not alter the shipping dtype.
 
 The small `--ctx-size 256` correctness run below proves graph and split parity;
 it does not prove usable context capacity. Context support is a separate live
