@@ -171,6 +171,8 @@ cuda_toolkit_manifest_version() {
   local declared_major="${MESH_LLM_CUDA_TOOLKIT_MAJOR:-}"
   local declared_version="${MESH_CUDA_VERSION:-}"
   local declared_version_major=""
+  local declared_version_minor=""
+  local declared_version_major_minor=""
 
   if [[ -n "$declared_major" && ! "$declared_major" =~ ^[0-9]+$ ]]; then
     echo "MESH_LLM_CUDA_TOOLKIT_MAJOR must be digits-only (for example: 12)" >&2
@@ -182,6 +184,11 @@ cuda_toolkit_manifest_version() {
       return 1
     fi
     declared_version_major="${declared_version%%.*}"
+    if [[ "$declared_version" == *.* ]]; then
+      declared_version_minor="${declared_version#*.}"
+      declared_version_minor="${declared_version_minor%%.*}"
+      declared_version_major_minor="${declared_version_major}.${declared_version_minor}"
+    fi
   fi
   if [[ -n "$declared_major" && -n "$declared_version_major" &&
         "$declared_major" != "$declared_version_major" ]]; then
@@ -206,6 +213,12 @@ cuda_toolkit_manifest_version() {
         "$declared_version_major" != "$detected_major" ]]; then
     printf '%s\n' \
       "MESH_CUDA_VERSION=$declared_version does not match the selected CUDA compiler/toolkit major $detected_major" >&2
+    return 1
+  fi
+  if [[ -n "$declared_version_major_minor" &&
+        "$declared_version_major_minor" != "$detected_version" ]]; then
+    printf '%s\n' \
+      "MESH_CUDA_VERSION=$declared_version does not match the selected CUDA compiler/toolkit version $detected_version (major.minor)" >&2
     return 1
   fi
 

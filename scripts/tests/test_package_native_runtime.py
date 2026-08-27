@@ -141,9 +141,27 @@ class PackageNativeRuntimeTests(unittest.TestCase):
     def test_cuda_flavor_uses_mesh_cuda_version_major(self) -> None:
         self.assertEqual(
             self.backend_flavor(
-                "cuda", mesh_cuda_version="13.1.2", compiler_version="13.0"
+                "cuda", mesh_cuda_version="13.1.2", compiler_version="13.1"
             ),
             "cuda13",
+        )
+
+    def test_cuda_flavor_accepts_major_only_mesh_cuda_version(self) -> None:
+        self.assertEqual(
+            self.backend_flavor(
+                "cuda", mesh_cuda_version="13", compiler_version="13.0"
+            ),
+            "cuda13",
+        )
+
+    def test_cuda_flavor_rejects_mesh_cuda_version_minor_mismatch(self) -> None:
+        result = self.backend_flavor_process(
+            "cuda", mesh_cuda_version="13.1.2", compiler_version="13.0"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "does not match the selected CUDA compiler/toolkit version 13.0",
+            result.stderr,
         )
 
     def test_explicit_cuda_toolkit_major_wins(self) -> None:
@@ -209,11 +227,30 @@ class PackageNativeRuntimeTests(unittest.TestCase):
 
     def test_cuda_version_declaration_is_validated_against_compiler(self) -> None:
         result, manifest = self.package_cuda_fixture(
-            compiler_version="13.0",
+            compiler_version="13.1",
             mesh_cuda_version="13.1.2",
         )
         result.check_returncode()
         self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 13)
+
+    def test_cuda_major_only_version_declaration_is_accepted(self) -> None:
+        result, manifest = self.package_cuda_fixture(
+            compiler_version="13.0",
+            mesh_cuda_version="13",
+        )
+        result.check_returncode()
+        self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 13)
+
+    def test_cuda_version_declaration_rejects_compiler_minor_mismatch(self) -> None:
+        result, _ = self.package_cuda_fixture(
+            compiler_version="13.0",
+            mesh_cuda_version="13.1.2",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "does not match the selected CUDA compiler/toolkit version 13.0",
+            result.stderr,
+        )
 
     def test_cuda_packaging_without_toolkit_evidence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -299,7 +336,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             if compiler_version is not None:
                 compiler = Path(directory) / "nvcc"
                 compiler.write_text(
-                    "#!/usr/bin/env bash\n"
+                    "#!/bin/bash\n"
                     'if [[ "${1:-}" == "--version" ]]; then\n'
                     f'  printf "Cuda compilation tools, release {compiler_version}, V{compiler_version}.0\\n"\n'
                     "  exit 0\n"
@@ -340,7 +377,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         tool_dir.mkdir()
         nvcc = tool_dir / "nvcc"
         nvcc.write_text(
-            "#!/usr/bin/env bash\n"
+            "#!/bin/bash\n"
             'if [[ "${1:-}" == "--version" ]]; then\n'
             f'  printf "Cuda compilation tools, release {compiler_version}, V{compiler_version}.0\\n"\n'
             "  exit 0\n"
@@ -359,7 +396,9 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         patchelf.chmod(0o755)
 
-        env = self.clean_package_env(tool_dir)
+        inherited_env = os.environ.copy()
+        inherited_env["CMAKE_CUDA_COMPILER"] = str(root / "inherited-cmake-nvcc")
+        env = self.clean_package_env(tool_dir, inherited_env)
         env["LLAMA_STAGE_BUILD_DIR"] = str(build_dir)
         if mesh_cuda_version is not None:
             env["MESH_CUDA_VERSION"] = mesh_cuda_version
@@ -390,10 +429,13 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         return result, manifest
 
     @staticmethod
-    def clean_package_env(tool_dir: Path) -> dict[str, str]:
-        env = os.environ.copy()
+    def clean_package_env(
+        tool_dir: Path, base_env: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        env = (base_env if base_env is not None else os.environ).copy()
         for name in (
             "CUDACXX",
+            "CMAKE_CUDA_COMPILER",
             "CUDAToolkit_ROOT",
             "CUDA_HOME",
             "CUDA_PATH",
