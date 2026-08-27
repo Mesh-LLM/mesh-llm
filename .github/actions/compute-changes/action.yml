@@ -132,4 +132,4 @@ runs:
         EVENT_NAME: ${{ inputs.event_name }}
         BASE_SHA: ${{ inputs.base_sha }}
         HEAD_SHA: ${{ inputs.head_sha }}
-      run: scripts/compute-changes-derive.sh
+      run: bash scripts/compute-changes-derive.sh

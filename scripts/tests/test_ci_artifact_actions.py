@@ -30,6 +30,10 @@ class CiArtifactActionTests(unittest.TestCase):
             return f"{action}\n{derive}"
         return action
 
+    def test_compute_changes_executes_derive_script_via_bash(self) -> None:
+        action = (ACTIONS / "compute-changes" / "action.yml").read_text(encoding="utf-8")
+        self.assertIn("run: bash scripts/compute-changes-derive.sh", action)
+
     def test_external_actions_have_sha_and_release_provenance(self) -> None:
         action_files = sorted(ACTIONS.glob("*/action.yml"))
         workflow_files = sorted(
