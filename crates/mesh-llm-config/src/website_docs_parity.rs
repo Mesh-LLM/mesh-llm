@@ -11,7 +11,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{CANONICAL_MODEL_REF_SEGMENT, CANONICAL_PLUGIN_NAME_SEGMENT, built_in_config_settings};
+    use crate::{
+        CANONICAL_MODEL_REF_SEGMENT, CANONICAL_PLUGIN_NAME_SEGMENT, built_in_config_settings,
+    };
     use std::collections::BTreeMap;
 
     const CONFIG_TOML_MD: &str = include_str!(concat!(
@@ -59,40 +61,60 @@ mod tests {
     ];
 
     fn combined_config_pages() -> String {
-        format!(
-            "{CONFIG_TOML_MD}\n{CONFIG_DEFAULTS_MD}\n{CONFIG_MODELS_MD}\n{CONFIG_REFERENCE_MD}"
-        )
+        format!("{CONFIG_TOML_MD}\n{CONFIG_DEFAULTS_MD}\n{CONFIG_MODELS_MD}\n{CONFIG_REFERENCE_MD}")
     }
 
+    /// The built-in schema has exactly two top-level fields with no dot in
+    /// their canonical path: the schema-version field and the required
+    /// `[[models]]` entry's `model` reference.
+    const DOTLESS_TOP_LEVEL_FIELDS: [&str; 2] = ["version", "model"];
+
     fn looks_like_config_path(candidate: &str) -> bool {
+        if DOTLESS_TOP_LEVEL_FIELDS.contains(&candidate) {
+            return true;
+        }
         !candidate.is_empty()
             && candidate.contains('.')
-            && candidate.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-            && candidate.chars().all(|c| {
-                c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '<' | '>' | '-')
-            })
+            && candidate
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && candidate
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '<' | '>' | '-'))
     }
 
     /// Extract every backtick-quoted, dotted key-path-shaped token from the
-    /// combined website configuration pages. Cells that pair multiple paths
-    /// with `<br>` (either inside or outside the backticks) are split into
-    /// their individual paths.
+    /// *first column* of every Markdown table row across the combined
+    /// website configuration pages. Restricting extraction to the first
+    /// (canonical "Key path") column, rather than the whole page, means an
+    /// incidental prose mention of a field elsewhere in a description column
+    /// does not register as a second canonical entry. Cells that pair
+    /// multiple paths with `<br>` (either inside or outside the backticks)
+    /// are split into their individual paths.
     fn documented_short_paths() -> Vec<String> {
-        let combined = combined_config_pages();
         let mut paths = Vec::new();
-        let mut rest = combined.as_str();
-        while let Some(start) = rest.find('`') {
-            let after_tick = &rest[start + 1..];
-            let Some(end) = after_tick.find('`') else {
-                break;
+        for line in combined_config_pages().lines() {
+            let Some(line) = line.strip_prefix('|') else {
+                continue;
             };
-            let inner = &after_tick[..end];
-            if looks_like_config_path(inner) {
-                for part in inner.split("<br>") {
-                    paths.push(part.trim().to_string());
+            let Some(first_column) = line.split('|').next() else {
+                continue;
+            };
+            let mut rest = first_column;
+            while let Some(start) = rest.find('`') {
+                let after_tick = &rest[start + 1..];
+                let Some(end) = after_tick.find('`') else {
+                    break;
+                };
+                let inner = &after_tick[..end];
+                if looks_like_config_path(inner) {
+                    for part in inner.split("<br>") {
+                        paths.push(part.trim().to_string());
+                    }
                 }
+                rest = &after_tick[end + 1..];
             }
-            rest = &after_tick[end + 1..];
         }
         paths
     }
@@ -161,46 +183,197 @@ mod tests {
         );
     }
 
+    const SKIPPY_CONFIGURATION_MD: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/skippy/CONFIGURATION.md"
+    ));
+
+    const KNOWN_STATUSES: [&str; 4] = ["wired", "partial", "unwired", "rejected"];
+
+    /// The two `ConfigDiagnosticCode` variants a validator emits for a field
+    /// documented in the website reference's "Unsupported and reserved
+    /// settings" table (`RejectedField`, `UnsupportedField`). Per that page's
+    /// own status legend, both are the concrete validator behavior behind the
+    /// `rejected` status, so a row naming either diagnostic counts as a
+    /// documented `rejected` `Status` row too.
+    const REJECTED_DIAGNOSTIC_TOKENS: [&str; 2] = ["RejectedField", "UnsupportedField"];
+
+    /// Classify a table row's wiring status by looking for one of the four
+    /// known status tokens as a whole word, falling back to a `rejected`
+    /// diagnostic-code token. Word-splitting on non-alphanumeric characters
+    /// means an incidental substring match (`unwired` inside a longer word)
+    /// does not get misread as the row's status.
+    fn classify_status(line: &str) -> Option<&'static str> {
+        let words: Vec<&str> = line
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        KNOWN_STATUSES
+            .into_iter()
+            .find(|status| words.contains(status))
+            .or_else(|| {
+                REJECTED_DIAGNOSTIC_TOKENS
+                    .into_iter()
+                    .any(|token| words.contains(&token))
+                    .then_some("rejected")
+            })
+    }
+
+    /// Read a status-matrix row's `Wiring status` value from the table's
+    /// last column, rather than word-scanning the whole line. Every row ends
+    /// with a dedicated `Wiring status` column, but the `Notes` column right
+    /// before it can itself use a status word in prose (for example,
+    /// "specialized product mode reserved but not wired as model config"),
+    /// which a whole-line scan would misread as the row's classification.
+    fn matrix_row_status(line: &str) -> Option<&'static str> {
+        let last_column = line.trim_end_matches('|').rsplit('|').next()?.trim();
+        KNOWN_STATUSES
+            .into_iter()
+            .find(|status| *status == last_column)
+    }
+
+    fn matrix_path_status_pairs() -> Vec<(String, &'static str)> {
+        let mut pairs = Vec::new();
+        for line in SKIPPY_CONFIGURATION_MD.lines() {
+            if !line.starts_with('|') {
+                continue;
+            }
+            let columns: Vec<_> = line.split('|').collect();
+            let Some(key_cell) = columns.get(3) else {
+                continue;
+            };
+            if !key_cell.contains('`') {
+                continue;
+            }
+            let Some(status) = matrix_row_status(line) else {
+                continue;
+            };
+            for part in key_cell.split("<br>") {
+                let trimmed = part.trim();
+                if let Some(path) = trimmed.strip_prefix('`').and_then(|v| v.strip_suffix('`')) {
+                    let candidate = path.trim_end_matches(".*");
+                    if looks_like_config_path(candidate) {
+                        pairs.push((candidate.to_string(), status));
+                    }
+                }
+            }
+        }
+        pairs
+    }
+
+    /// Locate the `Status` or `Diagnostic` column in a website configuration
+    /// reference table header row. Different tables on this page use
+    /// different column counts (six for `Group 1`, seven for the rest, three
+    /// for the "Unsupported and reserved settings" table), so the
+    /// classification column must be resolved per table rather than assumed
+    /// fixed.
+    fn website_status_column_index(line: &str) -> Option<usize> {
+        line.trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .position(|cell| cell == "Status" || cell == "Diagnostic")
+    }
+
+    /// Read `(path, status)` pairs from the *first column* / row-level status
+    /// of every website configuration reference table, mirroring
+    /// [`documented_short_paths`] but keeping the row's classified status
+    /// alongside each path. The classification column is resolved per table
+    /// from its header row and only that cell is classified, rather than the
+    /// whole row: word-scanning the whole row would let a status word in an
+    /// unrelated cell (for example, a stray `wired` inside a `CLI
+    /// equivalent` note) override the row's actual `Status`/`Diagnostic`
+    /// cell.
+    fn website_path_status_pairs() -> Vec<(String, &'static str)> {
+        let mut pairs = Vec::new();
+        let mut status_column: Option<usize> = None;
+        for line in CONFIG_REFERENCE_MD.lines() {
+            let Some(rest) = line.strip_prefix('|') else {
+                status_column = None;
+                continue;
+            };
+            if let Some(index) = website_status_column_index(line) {
+                status_column = Some(index);
+                continue;
+            }
+            if rest.chars().all(|c| matches!(c, '-' | '|' | ':' | ' ')) {
+                continue;
+            }
+            let Some(status_index) = status_column else {
+                continue;
+            };
+            let cells: Vec<&str> = rest.split('|').collect();
+            let (Some(first_column), Some(status_cell)) = (cells.first(), cells.get(status_index))
+            else {
+                continue;
+            };
+            let Some(status) = classify_status(status_cell) else {
+                continue;
+            };
+            let mut scan = *first_column;
+            while let Some(start) = scan.find('`') {
+                let after_tick = &scan[start + 1..];
+                let Some(end) = after_tick.find('`') else {
+                    break;
+                };
+                let inner = &after_tick[..end];
+                if looks_like_config_path(inner) {
+                    for part in inner.split("<br>") {
+                        pairs.push((part.trim().to_string(), status));
+                    }
+                }
+                scan = &after_tick[end + 1..];
+            }
+        }
+        pairs
+    }
+
     #[test]
     fn website_config_reference_stays_in_sync_with_skippy_status_matrix() {
-        const SKIPPY_CONFIGURATION_MD: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/skippy/CONFIGURATION.md"
-        ));
+        let matrix_pairs = matrix_path_status_pairs();
+        let website_status_paths: BTreeMap<String, &'static str> =
+            website_path_status_pairs().into_iter().collect();
 
-        let matrix_paths: Vec<String> = SKIPPY_CONFIGURATION_MD
-            .lines()
-            .filter(|line| line.starts_with('|'))
-            .filter_map(|line| {
-                let columns: Vec<_> = line.split('|').map(str::trim).collect();
-                columns.get(3).copied()
-            })
-            .filter(|cell| cell.contains('`'))
-            .flat_map(|cell| {
-                cell.split("<br>")
-                    .filter_map(|part| {
-                        let trimmed = part.trim();
-                        trimmed
-                            .strip_prefix('`')
-                            .and_then(|value| value.strip_suffix('`'))
-                    })
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|path| path.contains('.') && !path.starts_with('#'))
-            .collect();
-
-        let documented = documented_short_paths();
-        let missing_from_website: Vec<&String> = matrix_paths
+        let missing_from_website: Vec<&String> = matrix_pairs
             .iter()
-            .filter(|path| !documented.contains(path))
+            .map(|(path, _)| path)
+            .filter(|path| !website_status_paths.contains_key(*path))
             .collect();
 
         assert!(
             missing_from_website.is_empty(),
-            "docs/skippy/CONFIGURATION.md documents these key paths, but the website \
-             configuration reference does not: {missing_from_website:#?}\n\
-             Keep the internal status matrix and the public configuration reference in sync."
+            "docs/skippy/CONFIGURATION.md documents these key paths, but \
+             website/src/docs/pages/config-reference.md has no corresponding `Status` row: \
+             {missing_from_website:#?}\n\
+             Keep the internal status matrix and the public configuration reference's Status \
+             column in sync."
+        );
+    }
+
+    #[test]
+    fn website_config_reference_status_matches_skippy_wiring_status() {
+        let website_status: BTreeMap<String, &'static str> =
+            website_path_status_pairs().into_iter().collect();
+
+        let mismatches: Vec<(String, &'static str, &'static str)> = matrix_path_status_pairs()
+            .into_iter()
+            .filter_map(|(path, matrix_status)| {
+                let website_status = *website_status.get(&path)?;
+                if website_status == matrix_status {
+                    None
+                } else {
+                    Some((path, matrix_status, website_status))
+                }
+            })
+            .collect();
+
+        assert!(
+            mismatches.is_empty(),
+            "these key paths have a different `Wiring status` in \
+             docs/skippy/CONFIGURATION.md than the `Status` documented in \
+             website/src/docs/pages/config-reference.md \
+             (path, skippy matrix status, website status): {mismatches:#?}\n\
+             A downstream PR that wires a field in code must update both documents to the \
+             same status token."
         );
     }
 

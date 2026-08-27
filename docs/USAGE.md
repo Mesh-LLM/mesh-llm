@@ -3,7 +3,7 @@
 Use this operational reference for installation details, setup, service mode,
 model storage, and runtime control.
 
-For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md).
+For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md). For the field-by-field `config.toml` reference, see the [canonical configuration reference](https://meshllm.cloud/docs/pages/config-reference/).
 
 ## Installation details
 
