@@ -177,6 +177,29 @@ class ComputeChangesJustfileTests(unittest.TestCase):
                 )
             )
 
+    def test_exported_assignments_are_classified_by_backend_recipe_use(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            justfile = repository / "Justfile"
+            justfile.write_text(
+                'export mesh_bin := "target/release/mesh-llm"\n\n'
+                "bundle:\n"
+                '    "{{ mesh_bin }}" --version\n',
+                encoding="utf-8",
+            )
+            base = commit(repository, "base")
+
+            justfile.write_text(
+                justfile.read_text(encoding="utf-8").replace(
+                    "target/release/mesh-llm", "target/debug/mesh-llm"
+                ),
+                encoding="utf-8",
+            )
+            head = commit(repository, "exported backend input assignment")
+
+            self.assertTrue(classify(RevisionDiff(repository, base, head, "Justfile")))
+
     def test_recipe_sources_cover_light_backend_added_deleted_and_root_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)

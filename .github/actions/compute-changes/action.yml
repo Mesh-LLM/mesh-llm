@@ -299,9 +299,11 @@ runs:
                 referenced[token] = 1
               }
             }
-            /^[[:alnum:]_-]+[[:space:]]*:=/ {
-              match($0, /^[[:alnum:]_-]+/)
-              if (referenced[substr($0, RSTART, RLENGTH)]) {
+            /^(export[[:space:]]+)?[[:alnum:]_-]+[[:space:]]*:=/ {
+              assignment = $0
+              sub(/^export[[:space:]]+/, "", assignment)
+              match(assignment, /^[[:alnum:]_-]+/)
+              if (referenced[substr(assignment, RSTART, RLENGTH)]) {
                 print NR
               }
             }
