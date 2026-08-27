@@ -136,6 +136,7 @@ pub(super) fn resolve_speculative_config(
         model_config,
         global_config,
         package_generation,
+        has_draft_model: draft_model_path.is_some(),
     })?;
     // A standalone N-gram plan (no native MTP, no draft model) runs in the
     // legacy `ngram` mode so the embedded frontend derives its window from the
@@ -201,6 +202,7 @@ struct DecodeResolutionInput<'a> {
     model_config: Option<&'a SpeculativeConfig>,
     global_config: Option<&'a SpeculativeConfig>,
     package_generation: Option<&'a PackageGenerationInfo>,
+    has_draft_model: bool,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -411,6 +413,39 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
     }
+    let ngram_fallback = pick_string(
+        input
+            .model_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        input
+            .global_config
+            .and_then(|value| value.ngram_fallback.as_deref()),
+        None,
+    );
+    config.ngram_fallback_draft = match ngram_fallback {
+        "draft" => {
+            if config.ngram.is_none() {
+                bail!("skippy speculative ngram_fallback = \"draft\" requires an N-gram strategy");
+            }
+            // Both of these would otherwise start cleanly and never take the
+            // fallback path: the operator gets baseline behaviour and a
+            // telemetry counter stuck at zero, indistinguishable from a
+            // proposer that simply never missed.
+            if !input.has_draft_model {
+                bail!(
+                    "skippy speculative ngram_fallback = \"draft\" requires speculative.draft_model"
+                );
+            }
+            if config.verify_window.pipeline_depth <= 1 {
+                bail!(
+                    "skippy speculative ngram_fallback = \"draft\" requires verify_window_pipeline_depth > 1; the classic serial draft loop is authoritative at depth 1"
+                );
+            }
+            true
+        }
+        "none" | "" => false,
+        other => bail!("skippy speculative ngram_fallback must be draft or none, got {other}"),
+    };
     config.validate()?;
     Ok(config)
 }
@@ -506,6 +541,7 @@ fn package_decode_config(
         ngram,
         extension,
         verify_window,
+        ngram_fallback_draft: false,
     }))
 }
 

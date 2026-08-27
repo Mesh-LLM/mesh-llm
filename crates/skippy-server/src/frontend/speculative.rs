@@ -28,6 +28,11 @@ pub struct SpeculativeDecodeConfig {
     pub ngram: Option<NgramProposalConfig>,
     pub extension: Option<NgramExtensionConfig>,
     pub verify_window: VerifyWindowConfig,
+    /// Propose from the configured draft model when the N-gram proposer
+    /// misses, instead of degrading to one token per round trip. Pipelined
+    /// paths only; requires a draft model.
+    #[serde(default)]
+    pub ngram_fallback_draft: bool,
 }
 
 /// Native multi-token-prediction draft settings.
@@ -121,6 +126,7 @@ impl Default for SpeculativeDecodeConfig {
                 pipeline_depth: 1,
                 runahead_max_tokens: 0,
             },
+            ngram_fallback_draft: false,
         }
     }
 }
@@ -179,6 +185,9 @@ impl SpeculativeDecodeConfig {
             bail!(
                 "verify window requires 0 < min_tokens <= max_tokens and 0 < pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
             );
+        }
+        if self.ngram_fallback_draft && self.ngram.is_none() {
+            bail!("ngram_fallback_draft requires an N-gram proposer to fall back from");
         }
         if self.verify_window.runahead_max_tokens > MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS {
             bail!(
@@ -379,6 +388,9 @@ mod standalone_speculative_config_tests {
 pub(super) struct OpenAiSpeculativeStats {
     pub(super) windows: usize,
     pub(super) draft_tokens: usize,
+    pub(super) fallback_draft_proposals: usize,
+    pub(super) fallback_draft_tokens: usize,
+    pub(super) fallback_draft_ms: f64,
     pub(super) accepted_tokens: usize,
     pub(super) rejected_tokens: usize,
     pub(super) full_accept_windows: usize,
@@ -610,6 +622,18 @@ fn elapsed_us(started: Instant) -> u64 {
 impl OpenAiSpeculativeStats {
     pub(super) fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
         timings.insert("speculative_windows".to_string(), json!(self.windows));
+        timings.insert(
+            "speculative_fallback_draft_proposals".to_string(),
+            json!(self.fallback_draft_proposals),
+        );
+        timings.insert(
+            "speculative_fallback_draft_tokens".to_string(),
+            json!(self.fallback_draft_tokens),
+        );
+        timings.insert(
+            "speculative_fallback_draft_ms".to_string(),
+            json!(self.fallback_draft_ms),
+        );
         timings.insert(
             "speculative_proposed_n".to_string(),
             json!(self.draft_tokens),

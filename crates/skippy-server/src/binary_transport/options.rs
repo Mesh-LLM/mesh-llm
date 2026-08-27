@@ -238,6 +238,7 @@ mod tests {
                 pipeline_depth: 2,
                 runahead_max_tokens: 0,
             },
+            ngram_fallback_draft: false,
         }
     }
 

@@ -1635,3 +1635,67 @@ verify_window_runahead_tokens = 0
         "Some(0) at the model level must win over the inherited positive default"
     );
 }
+
+#[test]
+fn draft_fallback_without_a_draft_model_is_rejected_not_silently_ignored() {
+    use crate::plugin::SpeculativeConfig;
+    let config: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+verify_window_pipeline_depth = 2
+ngram_fallback = "draft"
+"#,
+    )
+    .expect("parse speculative config");
+    let error = super::speculative::resolve_speculative_config(
+        Some(&config),
+        None,
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect_err("a draft fallback with no draft model must not resolve");
+
+    assert!(
+        error
+            .to_string()
+            .contains("requires speculative.draft_model"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn draft_fallback_at_pipeline_depth_one_is_rejected() {
+    use crate::plugin::SpeculativeConfig;
+    let config: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+verify_window_pipeline_depth = 1
+ngram_fallback = "draft"
+draft_model = "meshllm/draft-model"
+draft_max_tokens = 4
+"#,
+    )
+    .expect("parse speculative config");
+    let error = super::speculative::resolve_speculative_config(
+        Some(&config),
+        None,
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect_err("depth 1 keeps the serial draft loop authoritative");
+
+    assert!(
+        error
+            .to_string()
+            .contains("verify_window_pipeline_depth > 1"),
+        "unexpected error: {error}"
+    );
+}
