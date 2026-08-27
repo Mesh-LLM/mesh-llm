@@ -56,6 +56,57 @@ fn client_nonce_middleware_forwards_present_header_unchanged() {
     );
 }
 
+#[test]
+fn client_nonce_middleware_strips_forged_origin_marker_on_supplied_nonce() {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
+        .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "local_ingress")
+        .body(Body::empty())
+        .unwrap();
+
+    apply_client_nonce_headers(&mut request);
+
+    assert_eq!(
+        request.headers().get(&CLIENT_NONCE_HEADER),
+        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+    );
+    assert!(
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER).is_none(),
+        "a caller-forged local_ingress marker must be stripped, not preserved"
+    );
+}
+
+#[tokio::test]
+async fn full_router_strips_forged_origin_marker_on_supplied_nonce() {
+    let app = router_for(Arc::new(FakeBackend));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
+                .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "local_ingress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(&CLIENT_NONCE_HEADER),
+        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+    );
+    assert!(
+        response
+            .headers()
+            .get(&CLIENT_NONCE_ORIGIN_HEADER)
+            .is_none(),
+        "a caller-forged local_ingress marker must not survive to the response"
+    );
+}
+
 #[tokio::test]
 async fn full_router_mints_and_marks_client_nonce_when_absent() {
     let app = router_for(Arc::new(FakeBackend));
