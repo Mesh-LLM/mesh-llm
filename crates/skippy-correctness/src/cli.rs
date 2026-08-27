@@ -173,6 +173,11 @@ pub struct DtypeMatrixArgs {
     pub stage1_bind_addr: SocketAddr,
     #[arg(long, default_value = "f32,f16,q8")]
     pub dtypes: String,
+    #[arg(
+        long,
+        help = "Comma-separated dtypes whose recorded parity mismatch is an accepted rejection"
+    )]
+    pub allowed_mismatch_dtypes: Option<String>,
     #[arg(long)]
     pub allow_mismatch: bool,
 }

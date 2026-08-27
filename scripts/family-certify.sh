@@ -32,7 +32,9 @@ Correctness options:
   --wire-dtype DTYPE          default activation wire dtype; default: f16
   --wire-dtypes CSV           dtype matrix list; default: f32,f16,q8
   --allow-mismatch            allow mismatch in single-step and chain lanes
-  --strict-dtype              make dtype-matrix mismatch a hard failure
+  --strict-dtype              make every dtype-matrix mismatch a hard failure;
+                              by default q8 rejection is measured while f32/f16
+                              remain hard parity gates
   --skip-build                do not build correctness binaries first
   --skip-correctness          skip all correctness/state lanes
   --skip-dtype                skip dtype matrix
@@ -433,7 +435,9 @@ else
       "${native_mtp_args[@]}"
     )
     if (( STRICT_DTYPE == 0 )); then
-      dtype_args+=(--allow-mismatch)
+      # q8 is a measured opt-in capability. Its rejection remains recorded in
+      # the report, while f32 and the shipping f16 default stay hard gates.
+      dtype_args+=(--allowed-mismatch-dtypes q8)
     fi
     run_logged "dtype-matrix" "$REPORT_DIR/dtype-matrix.json" "${dtype_args[@]}"
   else

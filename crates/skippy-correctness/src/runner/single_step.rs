@@ -10,7 +10,7 @@ use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
     report::SingleStepReport,
     support::{
-        ChildGuard, activation_width, connect_ready, generate_run_id, parse_wire_dtype,
+        ChildGuard, activation_width, connect_ready_child, generate_run_id, parse_wire_dtype,
         temp_config_path_for,
     },
 };
@@ -314,10 +314,14 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage_command, args.child_logs);
-    let _stage1 = ChildGuard::spawn(stage_command)?;
+    let mut stage1 = ChildGuard::spawn(stage_command)?;
 
-    let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
-        .context("stage 1 binary server did not become ready")?;
+    let mut stream = connect_ready_child(
+        args.stage1_bind_addr,
+        args.startup_timeout_secs,
+        &mut stage1,
+    )
+    .context("stage 1 binary server did not become ready")?;
     let request_id = 1;
     let session_id = 1;
     send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)

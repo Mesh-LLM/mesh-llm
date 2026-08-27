@@ -37,9 +37,31 @@ impl Drop for ChildGuard {
 }
 
 pub fn connect_ready(addr: SocketAddr, timeout_secs: u64) -> Result<TcpStream> {
+    connect_ready_until(addr, timeout_secs, || Ok(()))
+}
+
+pub fn connect_ready_child(
+    addr: SocketAddr,
+    timeout_secs: u64,
+    child: &mut ChildGuard,
+) -> Result<TcpStream> {
+    connect_ready_until(addr, timeout_secs, || {
+        if let Some(status) = child.try_wait()? {
+            bail!("child process exited before readiness with status {status}");
+        }
+        Ok(())
+    })
+}
+
+fn connect_ready_until(
+    addr: SocketAddr,
+    timeout_secs: u64,
+    mut check_child: impl FnMut() -> Result<()>,
+) -> Result<TcpStream> {
     let attempts = timeout_secs.saturating_mul(2).max(1);
     let mut last_error = None;
     for _ in 0..attempts {
+        check_child()?;
         match TcpStream::connect(addr) {
             Ok(mut stream) => {
                 stream.set_nodelay(true).ok();
@@ -68,6 +90,7 @@ pub fn connect_ready(addr: SocketAddr, timeout_secs: u64) -> Result<TcpStream> {
         }
         thread::sleep(Duration::from_millis(500));
     }
+    check_child()?;
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }
 
@@ -113,4 +136,38 @@ pub fn generate_run_id() -> String {
 
 pub fn temp_config_path_for(run_id: &str, stage_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{run_id}-{stage_id}.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{SocketAddr, TcpListener},
+        process::{Command, Stdio},
+    };
+
+    use super::{ChildGuard, connect_ready_child};
+
+    #[test]
+    fn readiness_reports_a_child_that_exits_before_listening() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr: SocketAddr = listener.local_addr()?;
+        drop(listener);
+
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = ChildGuard::spawn(command)?;
+
+        let error = connect_ready_child(addr, 10, &mut child)
+            .expect_err("short-lived child must be reported")
+            .to_string();
+
+        assert!(
+            error.contains("child process exited before readiness with status"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
 }

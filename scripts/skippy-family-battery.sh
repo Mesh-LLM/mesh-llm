@@ -516,7 +516,6 @@ run_certify() {
     --cert-root "$cert_run_dir"
     --run-id certification
     --require-lanes
-    --strict-dtype
     --skip-build
   )
   if (( native_mtp == 1 )); then

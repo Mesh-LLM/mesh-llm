@@ -20,7 +20,7 @@ use crate::{
         StatePayloadDigestReport,
     },
     support::{
-        ChildGuard, activation_width, connect_ready, generate_run_id, parse_wire_dtype,
+        ChildGuard, activation_width, connect_ready_child, generate_run_id, parse_wire_dtype,
         temp_config_path_for,
     },
 };
@@ -456,10 +456,14 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut source_command, args.child_logs);
-    let _source = ChildGuard::spawn(source_command)?;
+    let mut source = ChildGuard::spawn(source_command)?;
 
-    let mut source_stream = connect_ready(args.source_bind_addr, args.startup_timeout_secs)
-        .context("source binary server did not become ready")?;
+    let mut source_stream = connect_ready_child(
+        args.source_bind_addr,
+        args.startup_timeout_secs,
+        &mut source,
+    )
+    .context("source binary server did not become ready")?;
     let source_prefill_started = Instant::now();
     send_prefill_for_state_handoff(
         &mut source_stream,
@@ -493,7 +497,7 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
     )
     .context("send source stop")?;
     drop(source_stream);
-    drop(_source);
+    drop(source);
 
     let mut restore_command = Command::new(&args.stage_server_bin);
     restore_command.args([
@@ -510,10 +514,14 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut restore_command, args.child_logs);
-    let _restore = ChildGuard::spawn(restore_command)?;
+    let mut restore = ChildGuard::spawn(restore_command)?;
 
-    let mut restore_stream = connect_ready(args.restore_bind_addr, args.startup_timeout_secs)
-        .context("restore binary server did not become ready")?;
+    let mut restore_stream = connect_ready_child(
+        args.restore_bind_addr,
+        args.startup_timeout_secs,
+        &mut restore,
+    )
+    .context("restore binary server did not become ready")?;
     let restore_import_started = Instant::now();
     import_state_over_binary(&mut restore_stream, &state_bytes, wire_dtype, true)
         .context("import state into restore server")?;

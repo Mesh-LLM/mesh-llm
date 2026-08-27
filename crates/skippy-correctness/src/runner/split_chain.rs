@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     net::SocketAddr,
     path::PathBuf,
@@ -19,7 +20,7 @@ use crate::{
         StageModelReport,
     },
     support::{
-        ChildGuard, activation_width, connect_ready, generate_run_id, parse_wire_dtype,
+        ChildGuard, activation_width, connect_ready_child, generate_run_id, parse_wire_dtype,
         temp_config_path_for,
     },
 };
@@ -224,6 +225,8 @@ pub fn dtype_matrix(args: DtypeMatrixArgs) -> Result<()> {
     let native_mtp = native_mtp_requirement(args.native_mtp);
     ensure_native_mtp_artifact_if_required(&args.runtime, native_mtp)?;
     let dtypes = parse_csv(&args.dtypes)?;
+    let allowed_mismatch_dtypes =
+        parse_allowed_mismatch_dtypes(args.allowed_mismatch_dtypes.as_deref(), &dtypes)?;
     let model_identity = runtime_model_identity(&args.runtime)?;
     let baseline = run_full_model_decode(&args.runtime)?;
     let mut results = Vec::with_capacity(dtypes.len());
@@ -246,9 +249,19 @@ pub fn dtype_matrix(args: DtypeMatrixArgs) -> Result<()> {
         )?);
     }
     let mismatch_count = results.iter().filter(|result| !result.matches).count();
+    let unaccepted_mismatch_count = results
+        .iter()
+        .filter(|result| {
+            is_unaccepted_mismatch(
+                &result.split.wire_dtype,
+                result.matches,
+                &allowed_mismatch_dtypes,
+            )
+        })
+        .count();
     let report = DtypeMatrixReport {
         mode: "dtype-matrix",
-        status: status(mismatch_count == 0),
+        status: status(unaccepted_mismatch_count == 0),
         model_identity,
         baseline: baseline_report(baseline),
         dtype_count: results.len(),
@@ -256,9 +269,34 @@ pub fn dtype_matrix(args: DtypeMatrixArgs) -> Result<()> {
         results,
     };
     emit_report(&report, args.output.report_out.as_deref())?;
-    ensure_matches(mismatch_count == 0, args.allow_mismatch)?;
+    ensure_matches(unaccepted_mismatch_count == 0, args.allow_mismatch)?;
     Ok(())
 }
+
+fn parse_allowed_mismatch_dtypes(
+    spec: Option<&str>,
+    dtypes: &[String],
+) -> Result<BTreeSet<String>> {
+    let allowed = spec
+        .map(parse_csv)
+        .transpose()?
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if let Some(unknown) = allowed.iter().find(|allowed| !dtypes.contains(allowed)) {
+        bail!("allowed mismatch dtype {unknown} is not present in --dtypes");
+    }
+    Ok(allowed)
+}
+
+fn is_unaccepted_mismatch(
+    wire_dtype: &str,
+    matches: bool,
+    allowed_mismatch_dtypes: &BTreeSet<String>,
+) -> bool {
+    !matches && !allowed_mismatch_dtypes.contains(wire_dtype)
+}
+
 fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
     if args.split_layer_1 == 0
         || args.split_layer_1 >= args.split_layer_2
@@ -487,10 +525,14 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage2_command, args.child_logs);
-    let _stage2 = ChildGuard::spawn(stage2_command)?;
+    let mut stage2 = ChildGuard::spawn(stage2_command)?;
     drop(
-        connect_ready(args.stage2_bind_addr, args.startup_timeout_secs)
-            .context("stage 2 binary server did not become ready")?,
+        connect_ready_child(
+            args.stage2_bind_addr,
+            args.startup_timeout_secs,
+            &mut stage2,
+        )
+        .context("stage 2 binary server did not become ready")?,
     );
 
     let mut stage1_command = Command::new(&args.stage_server_bin);
@@ -512,10 +554,14 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage1_command, args.child_logs);
-    let _stage1 = ChildGuard::spawn(stage1_command)?;
+    let mut stage1 = ChildGuard::spawn(stage1_command)?;
 
-    let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
-        .context("stage 1 binary server did not become ready")?;
+    let mut stream = connect_ready_child(
+        args.stage1_bind_addr,
+        args.startup_timeout_secs,
+        &mut stage1,
+    )
+    .context("stage 1 binary server did not become ready")?;
     let request_id = 2;
     let session_id = 2;
     send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
@@ -587,4 +633,40 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             stage2_resolution.report,
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_unaccepted_mismatch, parse_allowed_mismatch_dtypes};
+
+    fn dtype_names() -> Vec<String> {
+        ["f32", "f16", "q8"].map(str::to_string).to_vec()
+    }
+
+    #[test]
+    fn q8_can_be_an_explicit_non_blocking_capability_rejection() -> anyhow::Result<()> {
+        let allowed = parse_allowed_mismatch_dtypes(Some("q8"), &dtype_names())?;
+
+        assert_eq!(allowed.into_iter().collect::<Vec<_>>(), ["q8"]);
+        Ok(())
+    }
+
+    #[test]
+    fn accepted_mismatch_dtype_must_be_exercised() {
+        let error = parse_allowed_mismatch_dtypes(Some("q8"), &["f32".to_string()])
+            .expect_err("unexercised accepted dtype must be rejected")
+            .to_string();
+
+        assert!(error.contains("q8 is not present in --dtypes"));
+    }
+
+    #[test]
+    fn only_an_explicit_q8_rejection_is_non_blocking() -> anyhow::Result<()> {
+        let allowed = parse_allowed_mismatch_dtypes(Some("q8"), &dtype_names())?;
+
+        assert!(!is_unaccepted_mismatch("q8", false, &allowed));
+        assert!(is_unaccepted_mismatch("f16", false, &allowed));
+        assert!(!is_unaccepted_mismatch("f16", true, &allowed));
+        Ok(())
+    }
 }

@@ -1017,9 +1017,12 @@ impl StageSession {
 }
 
 fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
+    let framed_origin = request.session.token_count() == 0
+        && request.input.is_some()
+        && (request.positions.is_empty() || request.positions == [0]);
     anyhow::ensure!(
-        request.session.token_count() > 0,
-        "serial decode fallback requires an established session"
+        request.session.token_count() > 0 || framed_origin,
+        "serial decode fallback requires an established session or a framed origin decode"
     );
     anyhow::ensure!(
         request.token_ids.len() == 1,
@@ -1114,6 +1117,31 @@ mod tests {
         };
 
         validate_serial_decode_request(&request).unwrap();
+    }
+
+    #[test]
+    fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
+        for positions in [&[][..], &[0][..]] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: 0,
+            };
+            let frame = ActivationFrame {
+                desc: activation_desc(1),
+                payload: vec![1],
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids: &[7],
+                positions,
+                sampling: None,
+                input: Some(&frame),
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            };
+
+            validate_serial_decode_request(&request).unwrap();
+        }
     }
 
     #[test]

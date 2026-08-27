@@ -9952,6 +9952,11 @@ index 5596620f0..290583ef6 100644
      cur = build_norm(cur,
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
+@@ -181,2 +193,3 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+-    int64_t n_vocab_in  = model.tok_embd->ne[1];
++    int64_t n_vocab_in  = model.tok_embd ? model.tok_embd->ne[1]
++                                         : (int64_t) model.vocab.n_tokens();
+     int64_t n_vocab_out = model.output->ne[1];
 diff --git a/src/models/qwen3vlmoe.cpp b/src/models/qwen3vlmoe.cpp
 index 7c41592f7..33c961a41 100644
 --- a/src/models/qwen3vlmoe.cpp
