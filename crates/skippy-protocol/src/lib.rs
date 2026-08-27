@@ -29,11 +29,11 @@ pub use messages::{
     StateImportMessage, StopMessage, TokenReplyMessage,
 };
 pub use validation::{
-    MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, SCHEMA_VERSION, STAGE_ALPN_V2,
-    STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL,
-    STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
+    MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS,
+    SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER,
+    STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL, STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
     validate_stage_control_request, validate_stage_control_response, validate_stage_transport_open,
@@ -53,7 +53,7 @@ mod tests {
         stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
         StageFrameError, validate_stage_artifact_transfer_request,
         validate_stage_artifact_transfer_response, validate_stage_control_request,
         validate_stage_control_response, validate_stage_transport_open,
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }

@@ -64,8 +64,13 @@ impl BinaryStageOptions {
             bail!("--openai-prefill-chunk-size must be greater than zero");
         }
         let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
-        let downstream_wire_condition =
-            WireCondition::new(args.downstream_wire_delay_ms, args.downstream_wire_mbps)?;
+        let downstream_wire_condition = WireCondition::with_jitter(
+            args.downstream_wire_delay_ms,
+            args.downstream_wire_mbps,
+            args.downstream_wire_jitter_ms,
+            args.downstream_wire_stall_ms,
+            args.downstream_wire_stall_p,
+        )?;
         let config = load_json::<StageConfig>(&args.config)
             .with_context(|| format!("load stage config {}", args.config.display()))?;
         let topology = match args.topology.as_ref() {
@@ -231,6 +236,7 @@ mod tests {
                 min_tokens: 1,
                 max_tokens: 6,
                 pipeline_depth: 2,
+                runahead_max_tokens: 0,
             },
         }
     }

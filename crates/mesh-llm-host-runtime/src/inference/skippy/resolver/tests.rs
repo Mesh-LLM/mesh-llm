@@ -1592,3 +1592,46 @@ verify_window_pipeline_depth = 2
     assert_eq!(translated.max_proposal_tokens, 48);
     assert_eq!(args.speculative.verify_window.pipeline_depth, 2);
 }
+
+#[test]
+fn model_level_zero_runahead_overrides_a_positive_global_default() {
+    use crate::plugin::SpeculativeConfig;
+    let global: SpeculativeConfig = toml::from_str(
+        r#"
+strategy = "ngram-suffix"
+ngram_proposer = "suffix"
+ngram_min = 5
+ngram_max = 32
+verify_window_pipeline_depth = 2
+verify_window_runahead_tokens = 256
+"#,
+    )
+    .expect("parse global speculative config");
+    let model: SpeculativeConfig = toml::from_str(
+        r#"
+verify_window_runahead_tokens = 0
+"#,
+    )
+    .expect("parse model speculative config");
+    let inherited = super::speculative::resolve_speculative_config(
+        None,
+        Some(&global),
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect("global run-ahead must resolve");
+    assert_eq!(inherited.decode.verify_window.runahead_max_tokens, 256);
+    let overridden = super::speculative::resolve_speculative_config(
+        Some(&model),
+        Some(&global),
+        "meshllm/test-model",
+        std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
+    )
+    .expect("model-level zero must resolve to fixed-depth mode");
+    assert_eq!(
+        overridden.decode.verify_window.runahead_max_tokens, 0,
+        "Some(0) at the model level must win over the inherited positive default"
+    );
+}
