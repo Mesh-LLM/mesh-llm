@@ -28,6 +28,10 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: false,
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {

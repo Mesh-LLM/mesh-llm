@@ -61,6 +61,9 @@ impl DraftRunner {
                 include_output: true,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: false,
+                kv_offload: config.kv_offload,
+                kv_unified: config.kv_unified,
+                swa_full: config.swa_full,
             },
         )
         .with_context(|| format!("open draft model {}", path.display()))?;
@@ -163,6 +166,9 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
                 include_output: true,
                 mtp_source: MtpSource::External,
                 filter_tensors_on_load: false,
+                kv_offload: config.kv_offload,
+                kv_unified: config.kv_unified,
+                swa_full: config.swa_full,
             },
         )
         .with_context(|| format!("attach MTP draft model {}", path.display()))

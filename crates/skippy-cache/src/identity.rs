@@ -253,6 +253,10 @@ mod identity_completeness_tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -301,10 +305,18 @@ mod identity_completeness_tests {
     fn flash_attention_changes_page_identity() {
         let enabled = StageConfig {
             flash_attn_type: FlashAttentionType::Enabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
         let disabled = StageConfig {
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
 
@@ -445,6 +457,10 @@ mod identity_stability_tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,

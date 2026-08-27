@@ -1,0 +1,105 @@
+From ecc4b6d286dc7c2d608c8481c85a8def401868d1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 27 Aug 2026 15:26:27 -0400
+Subject: [PATCH] skippy: add kv_offload, kv_unified, and swa_full runtime
+ config controls
+
+---
+ include/skippy/common.h      |  2 +-
+ include/skippy/runtime.h     | 17 +++++++++++++++++
+ src/skippy/model_loading.cpp | 22 ++++++++++++++++++++++
+ 3 files changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index e7f322abf..af927f835 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -34,7 +34,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 41
++#define SKIPPY_ABI_VERSION_PATCH 42
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index bfb80e105..1d9491848 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -80,8 +80,25 @@ struct skippy_runtime_config {
+     int32_t  glm_dsa_direct_sparse_decode_max_top_k;
+     uint64_t glm_dsa_dense_sparse_mask_max_bytes;
+     int32_t  glm_dsa_compact_flash_min_kv;
++
++    // Tri-state KV/session controls resolved from `model_fit` config.
++    // SKIPPY_TRISTATE_AUTO preserves today's derived default; FALSE/TRUE
++    // force the value.
++    /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
++    int32_t kv_offload;
++    /** @brief Whether the KV cache is unified across sequences/lanes instead of per-sequence (mirrors upstream `kv_unified`). Recurrent/hybrid architectures still force this true regardless of the requested value. */
++    int32_t kv_unified;
++    /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
++    int32_t swa_full;
+ };
+ 
++/** @brief Sentinel for `skippy_runtime_config` tri-state fields: keep the derived default. */
++#define SKIPPY_TRISTATE_AUTO  (-1)
++/** @brief Sentinel for `skippy_runtime_config` tri-state fields: force false. */
++#define SKIPPY_TRISTATE_FALSE (0)
++/** @brief Sentinel for `skippy_runtime_config` tri-state fields: force true. */
++#define SKIPPY_TRISTATE_TRUE  (1)
++
+ /** @brief Opens a direct GGUF, runtime slice, layer package, or artifact slice. */
+ LLAMA_API enum skippy_status skippy_model_open(
+         const char * path,
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 9ad6d4f3a..2694fa56e 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -452,6 +452,18 @@ static void skippy_enable_integrated_mtp_tensors(
+                       config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED;
+ }
+ 
++// Applies a tri-state config override on top of a derived default. Auto
++// (SKIPPY_TRISTATE_AUTO) keeps the derived value; false/true replace it.
++static bool skippy_resolve_tristate(int32_t tristate, bool derived_default) {
++    if (tristate == SKIPPY_TRISTATE_FALSE) {
++        return false;
++    }
++    if (tristate == SKIPPY_TRISTATE_TRUE) {
++        return true;
++    }
++    return derived_default;
++}
++
+ extern "C" {
+ 
+ static enum skippy_status skippy_finish_model_open(
+@@ -634,6 +646,11 @@ static enum skippy_status skippy_finish_model_open(
+     params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : params.n_threads;
+     params.n_seq_max = stage_model->lane_count;
+     params.kv_unified = stage_model->lane_count > 1;
++    if (config != nullptr) {
++        params.kv_unified = skippy_resolve_tristate(config->kv_unified, params.kv_unified);
++        params.offload_kqv = skippy_resolve_tristate(config->kv_offload, params.offload_kqv);
++        params.swa_full = skippy_resolve_tristate(config->swa_full, params.swa_full);
++    }
+     params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
+     params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
+     params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+@@ -931,6 +948,11 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+     ctx_params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : ctx_params.n_threads;
+     ctx_params.n_seq_max = target_model->lane_count;
+     ctx_params.kv_unified = target_model->lane_count > 1;
++    if (config != nullptr) {
++        ctx_params.kv_unified = skippy_resolve_tristate(config->kv_unified, ctx_params.kv_unified);
++        ctx_params.offload_kqv = skippy_resolve_tristate(config->kv_offload, ctx_params.offload_kqv);
++        ctx_params.swa_full = skippy_resolve_tristate(config->swa_full, ctx_params.swa_full);
++    }
+     ctx_params.type_k = config != nullptr && config->cache_type_k > 0 ? static_cast<ggml_type>(config->cache_type_k) : GGML_TYPE_F16;
+     ctx_params.type_v = config != nullptr && config->cache_type_v > 0 ? static_cast<ggml_type>(config->cache_type_v) : GGML_TYPE_F16;
+     ctx_params.flash_attn_type = config != nullptr ? static_cast<llama_flash_attn_type>(config->flash_attn_type) : LLAMA_FLASH_ATTN_TYPE_AUTO;
+-- 
+2.50.1 (Apple Git-155)
+

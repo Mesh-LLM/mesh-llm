@@ -84,6 +84,9 @@ mod tests {
             include_output: true,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         };
         StageModel::open(model_path, &config)
     }

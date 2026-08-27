@@ -39,6 +39,9 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             include_output: false,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: true,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     )
     .with_context(|| format!("open tokenizer model {}", tokenizer_path.display()))?;
@@ -86,6 +89,9 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 include_output: false,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: true,
+                kv_offload: None,
+                kv_unified: None,
+                swa_full: None,
             },
         )
         .with_context(|| format!("open chat template model {}", args.model_path.display()))?;

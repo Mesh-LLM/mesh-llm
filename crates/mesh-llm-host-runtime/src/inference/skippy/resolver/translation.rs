@@ -85,6 +85,12 @@ impl ResolvedSkippyConfig {
         .with_batch_sizes(Some(self.model_fit.batch), Some(self.model_fit.ubatch))
         .with_thread_counts(self.throughput.threads, self.throughput.threads_batch)
         .with_flash_attn_type(self.model_fit.flash_attention)
+        .with_kv_session_controls(
+            self.model_fit.kv_offload_resolved,
+            self.model_fit.kv_unified,
+            self.model_fit.swa_full,
+        )
+        .with_cache_idle_slots(self.model_fit.cache_idle_slots)
         .with_telemetry(telemetry);
 
         options.default_max_tokens = self.request_defaults.max_tokens;

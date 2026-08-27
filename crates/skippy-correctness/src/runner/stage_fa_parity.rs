@@ -88,6 +88,9 @@ fn decode_boundary(
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let selection = select_layer_package_parts(&PackageStageRequest {
         model_id: args.model_id.clone(),

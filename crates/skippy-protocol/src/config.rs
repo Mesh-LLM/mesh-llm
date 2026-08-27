@@ -76,6 +76,14 @@ pub struct StageConfig {
     #[serde(default)]
     pub flash_attn_type: FlashAttentionType,
     #[serde(default)]
+    pub kv_offload: Option<bool>,
+    #[serde(default)]
+    pub kv_unified: Option<bool>,
+    #[serde(default)]
+    pub swa_full: Option<bool>,
+    #[serde(default)]
+    pub cache_idle_slots: Option<u32>,
+    #[serde(default)]
     pub filter_tensors_on_load: bool,
     #[serde(default)]
     pub selected_device: Option<StageDevice>,
