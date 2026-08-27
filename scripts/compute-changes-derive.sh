@@ -1,41 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 EVENT_NAME="${1:?event name is required}"
 BASE_SHA="${2:?base SHA is required}"
 HEAD_SHA="${3:?head SHA is required}"
-
-# Read the JSON output from affected-crates.sh
 CRATES_JSON=$(cat /tmp/crates_output.json)
-
-# Extract fields from JSON
 AFFECTED_CRATES=$(echo "$CRATES_JSON" | jq -c '.affected // []')
 TEST_CRATES=$(echo "$CRATES_JSON" | jq -c '.test_crates // []')
 BATCHES=$(echo "$CRATES_JSON" | jq -c '.batches // []')
 ALL_RUST=$(echo "$CRATES_JSON" | jq -r '.all_rust // false')
 UI_CHANGED=$(echo "$CRATES_JSON" | jq -r '.ui_changed // false')
 WEBSITE_CHANGED=$(echo "$CRATES_JSON" | jq -r '.website_changed // false')
-
 if [[ "$ALL_RUST" == "true" ]]; then
   CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --all)
 else
   CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --crates-json "$AFFECTED_CRATES")
 fi
-
 if [[ "$EVENT_NAME" != "pull_request" ]] || [[ "$ALL_RUST" == "true" ]]; then
   TEST_BATCHES=$(bash scripts/plan-test-batches.sh --all --bins 4)
 else
   TEST_BATCHES=$(bash scripts/plan-test-batches.sh --crates-json "$AFFECTED_CRATES" --bins 4)
 fi
-
 FORCE_ALL="false"
 if grep -qx "__force_all__" /tmp/changed_files.txt; then
   FORCE_ALL="true"
 fi
-
-# Read changed files for docs_only and rust_changed logic
 CHANGED_FILES=$(cat /tmp/changed_files.txt | grep -v "^__force_all__$" || true)
-
+# Determine runner-contract routing.
 RUNNER_CONTRACT_REQUIRED="false"
 if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
   RUNNER_CONTRACT_REQUIRED="true"
@@ -45,12 +35,9 @@ elif [[ -n "$CHANGED_FILES" ]]; then
     RUNNER_CONTRACT_REQUIRED="true"
   fi
 fi
-
-# Determine docs_only: true if all_rust=false, UI/website are unchanged,
-# and all files match authored docs patterns.
+# Determine docs_only.
 DOCS_ONLY="false"
 if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]] && [[ "$WEBSITE_CHANGED" == "false" ]]; then
-  # Check if all changed files match docs patterns (*.md or docs/**)
   if [[ -n "$CHANGED_FILES" ]]; then
     NON_DOCS=$(echo "$CHANGED_FILES" | grep -v -E '(\.md$|^docs/)' || true)
     if [[ -z "$NON_DOCS" ]]; then
@@ -58,18 +45,12 @@ if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]] && [[ "$WEBSIT
     fi
   fi
 fi
-
-# Determine rust_changed: true if all_rust=true OR affected_crates is non-empty
 RUST_CHANGED="false"
 if [[ "$ALL_RUST" == "true" ]]; then
   RUST_CHANGED="true"
 elif [[ $(echo "$AFFECTED_CRATES" | jq 'length') -gt 0 ]]; then
   RUST_CHANGED="true"
 fi
-
-# CLI surface definitions are public documentation inputs. Keep this
-# limited to Clap/parser sources, not the React console UI or command
-# handler internals, so website docs sync is precise and explainable.
 CLI_SURFACE_CHANGED="false"
 if [[ -n "$CHANGED_FILES" ]]; then
   CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/src/(parser|models|runtime|benchmark)\.rs$' || true)
@@ -77,7 +58,6 @@ if [[ -n "$CHANGED_FILES" ]]; then
     CLI_SURFACE_CHANGED="true"
   fi
 fi
-
 WEBSITE_DOCS_CHANGED="false"
 if [[ -n "$CHANGED_FILES" ]]; then
   WEBSITE_DOC_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^website/src/(docs/pages/|_includes/)' || true)
@@ -85,8 +65,6 @@ if [[ -n "$CHANGED_FILES" ]]; then
     WEBSITE_DOCS_CHANGED="true"
   fi
 fi
-
-# Shared Just recipe classification for the backend-input checks below.
 JUSTFILE_RECIPE_AWK='
   function recipe_name(line, parts) {
     if (line ~ /^[[:alnum:]_-]/ &&
@@ -98,14 +76,11 @@ JUSTFILE_RECIPE_AWK='
     }
     return ""
   }
-
   function is_backend_recipe(name) {
     return name ~ /^(with-lld|build|build-dev|build-mac|build-linux|build-runtime|release-host-build|release-host-build-windows|release-runtime-build|release-build|release-build-[[:alnum:]-]+|llama-prepare|llama-prepare-latest|llama-build|skippy-quantize-standalone-build|skippy-quantize-standalone-release-build|bundle|release-bundle|release-bundle-[[:alnum:]-]+)$/
   }
-
   FNR == 1 { backend = 0 }
 '
-
 justfile_backend_recipe_lines() {
   local justfile_path="$1"
   awk "$JUSTFILE_RECIPE_AWK"'
@@ -136,14 +111,6 @@ justfile_backend_recipe_lines() {
     }
   ' "$justfile_path"
 }
-
-# Top-level assignments are global Just inputs shared across the whole
-# import graph, so a backend recipe can change meaning without any
-# backend recipe line changing (for example `mesh_bin`, which `bundle`
-# consumes). Collect every identifier appearing in a backend recipe
-# header or body at one revision so assignment edits to those names are
-# classified as backend inputs. Over-collection is intentional: it fails
-# toward running backend lanes.
 justfile_backend_recipe_tokens() {
   local sha="$1"
   local sources_dir source_path
@@ -175,7 +142,6 @@ justfile_backend_recipe_tokens() {
     }
   ' "${source_paths[@]}" | sort -u
 }
-
 justfile_backend_input_lines() {
   local justfile_path="$1"
   local tokens_file="$2"
@@ -195,7 +161,6 @@ justfile_backend_input_lines() {
     }
   ' "$justfile_path"
 }
-
 justfile_has_recipe() {
   local justfile_path="$1"
   awk "$JUSTFILE_RECIPE_AWK"'
@@ -203,7 +168,6 @@ justfile_has_recipe() {
     END { exit found ? 0 : 1 }
   ' "$justfile_path"
 }
-
 justfile_changed_line_ranges() {
   awk '
     function emit_range(spec, label, parts, start, count, i) {
@@ -215,14 +179,12 @@ justfile_changed_line_ranges() {
         print label, start + i
       }
     }
-
     /^@@ / {
       emit_range($2, "old")
       emit_range($3, "new")
     }
   '
 }
-
 justfile_changed_import() {
   awk '
     /^@@ / { in_hunk = 1; next }
@@ -235,7 +197,6 @@ justfile_changed_import() {
     END { exit found ? 0 : 1 }
   '
 }
-
 changed_range_touches_lines() {
   local backend_lines_file="$1"
   local changed_lines_file="$2"
@@ -246,12 +207,6 @@ changed_range_touches_lines() {
     END { exit found ? 0 : 1 }
   ' "$backend_lines_file" "$changed_lines_file"
 }
-
-# Recipe-source edits are not automatically native build inputs. Inspect
-# changed hunk ranges so website recipes can stay light while every line
-# inside native build, ABI, release, and bundle recipes exercises backend
-# lanes. Root import-graph changes and unreadable imported sources fail
-# open because they can change which recipe definitions are effective.
 BACKEND_RECIPE_CHANGED="false"
 JUSTFILE_SOURCE_BASE_SHA="$BASE_SHA"
 if [[ "$EVENT_NAME" == "pull_request" ]]; then
@@ -262,7 +217,6 @@ if [[ "$EVENT_NAME" == "pull_request" ]]; then
 else
   JUSTFILE_DIFF_RANGE=("$BASE_SHA" "$HEAD_SHA")
 fi
-
 JUSTFILE_SOURCES=$(echo "$CHANGED_FILES" | grep -E '^Justfile$|^just/.+\.just$' || true)
 JUSTFILE_BACKEND_TOKENS_BASE="$(mktemp)"
 JUSTFILE_BACKEND_TOKENS_HEAD="$(mktemp)"
@@ -272,11 +226,9 @@ if [[ -n "$JUSTFILE_SOURCES" ]]; then
     BACKEND_RECIPE_CHANGED="true"
   fi
 fi
-
 while IFS= read -r JUSTFILE_SOURCE; do
   [[ -n "$JUSTFILE_SOURCE" ]] || continue
   [[ "$BACKEND_RECIPE_CHANGED" == "false" ]] || break
-
   JUSTFILE_SOURCE_BASE="$(mktemp)"
   JUSTFILE_SOURCE_HEAD="$(mktemp)"
   JUSTFILE_SOURCE_CHANGED_LINES="$(mktemp)"
@@ -284,7 +236,6 @@ while IFS= read -r JUSTFILE_SOURCE; do
   JUSTFILE_SOURCE_BACKEND_LINES_HEAD="$(mktemp)"
   JUSTFILE_SOURCE_BASE_AVAILABLE="false"
   JUSTFILE_SOURCE_HEAD_AVAILABLE="false"
-
   if ! JUSTFILE_SOURCE_STATUS=$(git diff --name-status --no-renames "${JUSTFILE_DIFF_RANGE[@]}" -- "$JUSTFILE_SOURCE"); then
     BACKEND_RECIPE_CHANGED="true"
     break
@@ -295,7 +246,6 @@ while IFS= read -r JUSTFILE_SOURCE; do
     M$'\t'*) JUSTFILE_SOURCE_EXPECT_BASE="true"; JUSTFILE_SOURCE_EXPECT_HEAD="true" ;;
     *) BACKEND_RECIPE_CHANGED="true"; break ;;
   esac
-
   if [[ "$JUSTFILE_SOURCE_EXPECT_BASE" == "true" ]]; then
     if ! git cat-file -e "$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE" 2>/dev/null ||
         ! git show "$JUSTFILE_SOURCE_BASE_SHA:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_BASE" 2>/dev/null ||
@@ -311,7 +261,6 @@ while IFS= read -r JUSTFILE_SOURCE; do
       break
     fi
   fi
-
   if [[ "$JUSTFILE_SOURCE_EXPECT_HEAD" == "true" ]]; then
     if ! git cat-file -e "$HEAD_SHA:$JUSTFILE_SOURCE" 2>/dev/null ||
         ! git show "$HEAD_SHA:$JUSTFILE_SOURCE" > "$JUSTFILE_SOURCE_HEAD" 2>/dev/null ||
@@ -327,7 +276,6 @@ while IFS= read -r JUSTFILE_SOURCE; do
       break
     fi
   fi
-
   if [[ "$JUSTFILE_SOURCE_BASE_AVAILABLE" == "false" && "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "false" ]]; then
     BACKEND_RECIPE_CHANGED="true"
     break
@@ -345,7 +293,6 @@ while IFS= read -r JUSTFILE_SOURCE; do
     BACKEND_RECIPE_CHANGED="true"
     break
   fi
-
   if [[ "$JUSTFILE_SOURCE_HEAD_AVAILABLE" == "true" ]] &&
       changed_range_touches_lines "$JUSTFILE_SOURCE_BACKEND_LINES_HEAD" "$JUSTFILE_SOURCE_CHANGED_LINES" new; then
     BACKEND_RECIPE_CHANGED="true"
@@ -354,12 +301,7 @@ while IFS= read -r JUSTFILE_SOURCE; do
     BACKEND_RECIPE_CHANGED="true"
   fi
 done <<< "$JUSTFILE_SOURCES"
-
-# Backend/platform lanes rebuild only for all-rust escalations or files
-# that can alter the native ABI/backend build products. Keep broad
-# orchestration files like Justfile out of this path unless changed
-# hunks touch native build/release recipes; cache keys still include
-# them when backend jobs run for concrete build inputs.
+# Backend/platform lanes rebuild for native inputs.
 BACKEND_CHANGED="false"
 if [[ "$ALL_RUST" == "true" ]]; then
   BACKEND_CHANGED="true"
@@ -369,7 +311,6 @@ elif [[ -n "$CHANGED_FILES" ]]; then
     BACKEND_CHANGED="true"
   fi
 fi
-
 WINDOWS_CPU_BUILD_REQUIRED="false"
 WINDOWS_GPU_BUILD_REQUIRED="false"
 if [[ "$FORCE_ALL" == "true" ]]; then
@@ -389,9 +330,7 @@ elif [[ -n "$CHANGED_FILES" ]]; then
     WINDOWS_GPU_BUILD_REQUIRED="true"
   fi
 fi
-
-# SDK smokes are consumer tests: run for workflow dispatch, direct SDK
-# files, or when affected crate analysis reaches the SDK/API crates.
+# SDK smokes are consumer tests.
 SDK_SMOKE_REQUIRED="false"
 if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
   SDK_SMOKE_REQUIRED="true"
@@ -406,25 +345,19 @@ elif [[ -n "$CHANGED_FILES" ]]; then
     SDK_SMOKE_REQUIRED="true"
   fi
 fi
-
-# Inference artifacts are needed for runtime-facing changes, SDK smoke
-# tests, backend/native inputs, or embedded React console changes. Do
-# not build mesh-llm artifacts just because Rust tooling such as xtask
-# changed; the quality slice's targeted fmt/Clippy jobs cover those crates.
+# Inference artifacts are needed for runtime-facing changes.
 INFERENCE_ARTIFACT_REQUIRED="false"
 if [[ "$ALL_RUST" == "true" ]] || [[ "$UI_CHANGED" == "true" ]] || [[ "$BACKEND_CHANGED" == "true" ]] || [[ "$SDK_SMOKE_REQUIRED" == "true" ]]; then
   INFERENCE_ARTIFACT_REQUIRED="true"
 elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-host-runtime") or index("mesh-llm-client") or index("openai-frontend") or index("skippy-server") or index("skippy-runtime") or index("model-artifact")' >/dev/null; then
   INFERENCE_ARTIFACT_REQUIRED="true"
 fi
-
 LINUX_TEST_GROUPS_JSON='[]'
 add_linux_test_group() {
   local group="$1"
   local cache_key="$2"
   LINUX_TEST_GROUPS_JSON=$(jq -c --arg group "$group" --arg cache_key "$cache_key" '. + [{group: $group, cache_key: $cache_key}]' <<<"$LINUX_TEST_GROUPS_JSON")
 }
-
 if [[ "$EVENT_NAME" == "workflow_dispatch" ]] || [[ "$ALL_RUST" == "true" ]]; then
   add_linux_test_group protocol linux-tests-protocol
   add_linux_test_group skippy-smoke linux-tests-skippy-smoke
@@ -436,8 +369,6 @@ else
     add_linux_test_group skippy-smoke linux-tests-skippy-smoke
   fi
 fi
-
-# Set outputs using GITHUB_OUTPUT
 {
   echo "changed_files<<EOF"
   cat /tmp/changed_files.txt | grep -v "^__force_all__$" || true
