@@ -2789,11 +2789,11 @@
   ],
   "crates/mesh-llm/src/main.rs": [
     {
-      "line": 74,
+      "line": 75,
       "macro_name": "eprintln!"
     },
     {
-      "line": 81,
+      "line": 82,
       "macro_name": "eprintln!"
     }
   ],

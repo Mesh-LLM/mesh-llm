@@ -489,6 +489,10 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
 
         self.assertIn("scripts/verify-checksum-sidecar.py", smoke)
         self.assertIn("scripts/safe-extract-tar.py", smoke)
+        self.assertIn(
+            'scripts/ci-hf-xet-portability-smoke.sh "$binary"',
+            smoke,
+        )
         self.assertNotIn("tar -xzf", smoke)
         self.assertNotIn("command -v sha256sum", smoke)
 
