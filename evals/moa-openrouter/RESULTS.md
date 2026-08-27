@@ -443,8 +443,27 @@ Earlier runs recorded 9 / 59 / 12 (p = 0.66) and 5 / 65 / 10 (p = 0.30) and were
 read as parity; the direction was consistent with this loss all along.
 
 Direct arm comparison is Fisher p = 0.13 — directional, not separated, at
-~12-20 decided trials per arm. Full data:
-`RESEARCH/MOA_REFINEMENT_E2E_2026_08_27.md` in the Buzz workspace.
+~12-20 decided trials per arm.
+
+A second pool was run to test the policy itself: **2x `qwen/qwen3.5-9b`** (the
+Buzz mid rung, and a same-model pair is what self-fill builds), both arms, same
+tasks and judge:
+
+| pool | arm | win / tie / loss | sign p |
+|---|---|---|---|
+| 2x 9B same | single-round | 5 / 74 / 1 | 0.22 |
+| **2x 9B same** | **refine** | **11 / 69 / 0** | **0.00098** |
+
+Zero losses in 80 trials, consistent across all four strata (code_review 5-0,
+reason_over_output 3-0, planning 2-0, explain 1-0). This is the only
+significantly positive arm of the four measured, and it is the shape a real
+mid-tier Buzz fleet forms.
+
+Caveat specific to it: MoA output is LONGER than solo here (4523 vs 4124), the
+reverse of the 8B pools, so length bias runs *with* the winner. The shorter-MoA
+subset is 5W/0L (p = 0.0625) — same direction, underpowered.
+
+Full data: `RESEARCH/MOA_REFINEMENT_E2E_2026_08_27.md` in the Buzz workspace.
 
 Six eval-vs-production divergences were found by measuring the shipped path and
 fixed: grace finalizing the turn before refinement could run, two truncation
