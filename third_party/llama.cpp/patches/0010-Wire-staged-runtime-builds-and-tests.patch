@@ -1,7 +1,7 @@
-From c141e5932b9651484ecda710eb4fef471a9bccf7 Mon Sep 17 00:00:00 2001
+From 6a72e4ca65f478dd680924248bc4a0675e766814 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 10/18] Wire staged runtime builds and tests
+Subject: [PATCH 10/26] Wire staged runtime builds and tests
 
 ---
  .scratch_port/analyze.py  |  96 ++++++++++++++++++
@@ -403,5 +403,5 @@ index 000000000..d636d4f34
 +print('== CONFLICTS ==',len(conflicts))
 +for c in conflicts: print(c)
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

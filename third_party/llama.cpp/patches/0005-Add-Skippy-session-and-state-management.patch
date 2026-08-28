@@ -1,7 +1,7 @@
-From 0c7eaf706e35f3052fa85159769884c6a57d624c Mon Sep 17 00:00:00 2001
+From 49efe9fc06825375d254e2f6e80a091910177a56 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 05/18] Add Skippy session and state management
+Subject: [PATCH 05/26] Add Skippy session and state management
 
 ---
  include/skippy/signals.h                      |  44 +
@@ -1942,3 +1942,6 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
+-- 
+2.55.0
+

@@ -1,7 +1,7 @@
-From 523c2ac2004d6bc8b44fbc8633fea131ba3386be Mon Sep 17 00:00:00 2001
+From af2db0830634e54cbfd53cd841c3eda497e51903 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 14:37:39 +1000
-Subject: [PATCH] skippy: support latent experts in nemotron MTP block
+Subject: [PATCH 24/26] skippy: support latent experts in nemotron MTP block
 
 ---
  src/models/nemotron-h-moe.cpp | 12 +++++++++++-
@@ -40,7 +40,7 @@ index 4d03f49e0..3dc30c95c 100644
                  layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
                  NULL,                 NULL, NULL,
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index 2cbfe4d91..a9b5e7e55 100644
+index e337da107..41f78b874 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
 @@ -152,6 +152,11 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
@@ -56,5 +56,5 @@ index 2cbfe4d91..a9b5e7e55 100644
          layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {moe_n_embd, n_ff_exp,   n_expert}, mtp_flags);
          layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,  "weight", i), {n_ff_shexp, n_embd}, mtp_flags);
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

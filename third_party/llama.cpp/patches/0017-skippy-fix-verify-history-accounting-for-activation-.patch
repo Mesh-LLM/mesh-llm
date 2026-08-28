@@ -1,7 +1,7 @@
-From 68e633c1a2f9f7aaf6c02d6f8887263296e390d1 Mon Sep 17 00:00:00 2001
+From 6e46e5b23da9ac0b07c5e37faf68f71f5fd7906b Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 22 Aug 2026 14:29:39 +1000
-Subject: [PATCH 17/18] skippy: fix verify history accounting for
+Subject: [PATCH 17/26] skippy: fix verify history accounting for
  activation-input stages
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -54,5 +54,5 @@ index b140efbb0..9ab6b0712 100644
              skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "sampled verification history is behind sampler state");
              return SKIPPY_STATUS_RUNTIME_ERROR;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

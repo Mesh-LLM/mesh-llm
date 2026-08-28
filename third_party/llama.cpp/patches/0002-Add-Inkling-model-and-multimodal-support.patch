@@ -1,7 +1,7 @@
-From d00d4d9d3c242c5915b904a4f26d45c47b48f8bb Mon Sep 17 00:00:00 2001
+From 79eeaafee1761aa2e620de8f0dac0228223ee413 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/18] Add Inkling model and multimodal support
+Subject: [PATCH 02/26] Add Inkling model and multimodal support
 
 ---
  conversion/__init__.py         |   2 +
@@ -29,10 +29,10 @@ Subject: [PATCH 02/18] Add Inkling model and multimodal support
  create mode 100644 tools/mtmd/models/inkling.cpp
 
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index 8de97e959..d80c787f7 100644
+index a5632fcc4..ea521a580 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
-@@ -124,6 +124,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+@@ -125,6 +125,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "HYV3ForCausalLM": "hunyuan",
      "IQuestCoderForCausalLM": "llama",
@@ -40,7 +40,7 @@ index 8de97e959..d80c787f7 100644
      "InternLM2ForCausalLM": "internlm",
      "InternLM3ForCausalLM": "internlm",
      "JAISLMHeadModel": "jais",
-@@ -301,6 +302,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
+@@ -304,6 +305,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
      "GraniteSpeechPlusForConditionalGeneration": "granite",
      "HunYuanVLForConditionalGeneration": "hunyuan",
      "Idefics3ForConditionalGeneration": "smolvlm",
@@ -49,7 +49,7 @@ index 8de97e959..d80c787f7 100644
      "JanusForConditionalGeneration": "januspro",
      "KimiK25ForConditionalGeneration": "kimivl",
 diff --git a/conversion/base.py b/conversion/base.py
-index 56547ace0..39ccdc414 100644
+index daae28e92..d0257c2b7 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
 @@ -274,8 +274,17 @@ class ModelBase:
@@ -91,7 +91,7 @@ index 56547ace0..39ccdc414 100644
                  # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
                  # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
                  # are dequantized here. k/v scale tensors are unused.
-@@ -1066,6 +1089,14 @@ class ModelBase:
+@@ -1070,6 +1093,14 @@ class ModelBase:
  
      def write(self):
          self.prepare_tensors()
@@ -535,10 +535,10 @@ index 000000000..079842903
 +
 +        raise ValueError(f"unexpected Inkling vision tensor {name!r}")
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index f236a5d2c..9ebc0e04f 100644
+index c99feb3c7..be712cbc5 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -606,6 +606,7 @@ class MODEL_ARCH(IntEnum):
+@@ -625,6 +625,7 @@ class MODEL_ARCH(IntEnum):
      NANBEIGE         = auto()
      QWEN3TTS         = auto()
      POCKETTTS        = auto()
@@ -546,7 +546,7 @@ index f236a5d2c..9ebc0e04f 100644
  
  
  class VISION_PROJECTOR_TYPE(IntEnum):
-@@ -836,6 +837,14 @@ class MODEL_TENSOR(IntEnum):
+@@ -872,6 +873,14 @@ class MODEL_TENSOR(IntEnum):
      SHORTCONV_CONV       = auto()
      SHORTCONV_INPROJ     = auto()
      SHORTCONV_OUTPROJ    = auto()
@@ -561,7 +561,7 @@ index f236a5d2c..9ebc0e04f 100644
      VISEXP_ATTN_QKV      = auto()
      VISEXP_ATTN_OUT      = auto()
      VISEXP_GATE          = auto()
-@@ -1330,6 +1339,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1374,6 +1383,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.NANBEIGE:         "nanbeige",
      MODEL_ARCH.QWEN3TTS:         "qwen3tts",
      MODEL_ARCH.POCKETTTS:        "pockettts",
@@ -569,7 +569,7 @@ index f236a5d2c..9ebc0e04f 100644
  }
  
  VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-@@ -1558,6 +1568,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1619,6 +1629,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
      MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
      MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
@@ -583,7 +583,7 @@ index f236a5d2c..9ebc0e04f 100644
      MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
      MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
      MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
-@@ -4682,6 +4699,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -4802,6 +4819,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_UP_EXP,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
      ],
@@ -622,7 +622,7 @@ index f236a5d2c..9ebc0e04f 100644
      MODEL_ARCH.SMALLTHINKER: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.OUTPUT_NORM,
-@@ -5482,6 +5531,7 @@ class GGUFValueType(IntEnum):
+@@ -5609,6 +5658,7 @@ class GGUFValueType(IntEnum):
  
  
  class VisionProjectorType:
@@ -631,7 +631,7 @@ index f236a5d2c..9ebc0e04f 100644
      GEMMA3NV = "gemma3nv"
      GEMMA3NA = "gemma3na"
 diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index ef580518e..d83b25e96 100644
+index 861acfe18..103447d0d 100644
 --- a/gguf-py/gguf/tensor_mapping.py
 +++ b/gguf-py/gguf/tensor_mapping.py
 @@ -63,6 +63,7 @@ class TensorNameMap:
@@ -650,7 +650,7 @@ index ef580518e..d83b25e96 100644
          ),
          MODEL_TENSOR.DENSE_2_OUT: (
              "dense_2_out",  # embeddinggemma
-@@ -2672,6 +2674,53 @@ class TensorNameMap:
+@@ -2700,6 +2702,53 @@ class TensorNameMap:
  
      # architecture-specific block mappings
      arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
@@ -1917,10 +1917,10 @@ index 000000000..5dba09c1d
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 969429e3b..74ebe85bc 100644
+index af60764c2..694fd912b 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1320,6 +1320,10 @@ struct llama_model_glm_dsa : public llama_model_base {
+@@ -1323,6 +1323,10 @@ struct llama_model_glm_dsa : public llama_model_base {
      void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
@@ -1931,7 +1931,7 @@ index 969429e3b..74ebe85bc 100644
      struct graph : public llm_graph_context {
          graph(const llama_model & model, const llm_graph_params & params);
      };
-@@ -2066,6 +2070,19 @@ struct llama_model_lfm2moe : public llama_model_base {
+@@ -2069,6 +2073,19 @@ struct llama_model_lfm2moe : public llama_model_base {
  };
  
  
@@ -2512,5 +2512,5 @@ index 5b306180d..8ea35863d 100644
                      // other models, we only need the total number of tokens
                      image_tokens->nx = n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

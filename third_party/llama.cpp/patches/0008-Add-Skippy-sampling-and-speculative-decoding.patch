@@ -1,7 +1,7 @@
-From 297b231181f9cf4f70cca1f9fbac4a0dc4a30f52 Mon Sep 17 00:00:00 2001
+From 5f0b386094e7fb5e9bcfe6ff75a962294c944854 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 08/18] Add Skippy sampling and speculative decoding
+Subject: [PATCH 08/26] Add Skippy sampling and speculative decoding
 
 ---
  common/ngram-cache.cpp                | 153 ++++++-
@@ -1574,5 +1574,5 @@ index 000000000..db0055657
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

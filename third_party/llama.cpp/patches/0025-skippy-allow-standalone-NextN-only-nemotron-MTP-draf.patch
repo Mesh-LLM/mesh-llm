@@ -1,7 +1,8 @@
-From 9424c00a1135ab3a578200dc485bb4da8b87384a Mon Sep 17 00:00:00 2001
+From 4f187b7033dbb0e170f26cba088df983e78094c5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 15:20:36 +1000
-Subject: [PATCH] skippy: allow standalone NextN-only nemotron MTP draft models
+Subject: [PATCH 25/26] skippy: allow standalone NextN-only nemotron MTP draft
+ models
 
 A NextN-only draft GGUF (converted with convert_hf_to_gguf.py --mtp)
 carries only blk.<n>.* tensors: it has no token_embd, output_norm, or
@@ -57,7 +58,7 @@ index 3dc30c95c..ce1cec84f 100644
      cb(cur, "result_output", -1);
  
 diff --git a/src/models/nemotron-h.cpp b/src/models/nemotron-h.cpp
-index a9b5e7e55..1bbfe8397 100644
+index 41f78b874..165541bbd 100644
 --- a/src/models/nemotron-h.cpp
 +++ b/src/models/nemotron-h.cpp
 @@ -53,14 +53,16 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
@@ -80,8 +81,6 @@ index a9b5e7e55..1bbfe8397 100644
              output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
          }
      }
-
-base-commit: 523c2ac2004d6bc8b44fbc8633fea131ba3386be
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

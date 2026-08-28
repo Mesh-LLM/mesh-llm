@@ -1,8 +1,8 @@
-From 7ed84952652a35dfbf1bbccd51423395b82161a2 Mon Sep 17 00:00:00 2001
+From b2703f006e908f43c5323e1f29d1057f64cbde32 Mon Sep 17 00:00:00 2001
 From: Scam
  <a1860575018c4680d5669dd7bc3bd356b478bccb8d42e194df46304a5e25f49a@meshllm.communities.buzz.xyz>
 Date: Thu, 27 Aug 2026 04:53:05 +1000
-Subject: [PATCH] skippy: derive restored position from native memory
+Subject: [PATCH 23/26] skippy: derive restored position from native memory
 
 ---
  src/skippy/state.cpp | 72 ++++++++++++++++++++++++++------------------
@@ -142,5 +142,5 @@ index 375cc7196..7270d2ea2 100644
      return skippy_success(out_error);
  }
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

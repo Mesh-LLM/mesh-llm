@@ -1,8 +1,8 @@
-From 8f4ddf1b4873e84eb686a433559b3c9a2bf94115 Mon Sep 17 00:00:00 2001
+From 08bc402710ab12f0b41aba53185947d711ead8e4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 22:47:11 +1000
-Subject: [PATCH] skippy: propagate ctx_other for nemotron-h-moe MTP draft
- contexts
+Subject: [PATCH 26/26] skippy: propagate ctx_other for nemotron-h-moe MTP
+ draft contexts
 
 Rediffed for the post-#1436/#1457 patch series: insertion point moved
 after the INKLING clause (the old 'backend samplers' anchor region was
@@ -12,10 +12,10 @@ restructured upstream).
  1 file changed, 10 insertions(+)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index aa1f94bd0..dce2c4bf0 100644
+index 64dfc098d..52950d08c 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -164,6 +164,16 @@ llama_context::llama_context(
+@@ -165,6 +165,16 @@ llama_context::llama_context(
          cparams.ctx_other = params.ctx_other;
      }
  
@@ -33,5 +33,5 @@ index aa1f94bd0..dce2c4bf0 100644
      if (rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
          rope_scaling_type = hparams.rope_scaling_type_train;
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

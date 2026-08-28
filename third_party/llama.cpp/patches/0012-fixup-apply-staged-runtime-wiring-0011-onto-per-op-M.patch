@@ -1,11 +1,11 @@
-From bc7abbb9a6bb3a4960fe0a83a5931699053c6997 Mon Sep 17 00:00:00 2001
+From c5cb567aa5fa2a8754a1245df758d74528168710 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 25 Aug 2026 23:23:33 +1000
-Subject: [PATCH 12/18] fixup: apply staged runtime wiring (0011) onto per-op
+Subject: [PATCH 12/26] fixup: apply staged runtime wiring (0011) onto per-op
  Metal layout
 
 ---
- CMakeLists.txt                        |   5 +
+ CMakeLists.txt                        |   5 ++
  common/CMakeLists.txt                 |   1 +
  ggml/src/ggml-metal/ggml-metal-impl.h |  61 ++++++++++---
  include/skippy.h                      |   8 ++
@@ -14,31 +14,31 @@ Subject: [PATCH 12/18] fixup: apply staged runtime wiring (0011) onto per-op
  include/skippy/devices.h              |   7 ++
  include/skippy/events.h               |  11 +++
  include/skippy/execution.h            |  19 ++++
- include/skippy/model_package.h        |  15 +++
- include/skippy/runtime.h              |  25 +++++
+ include/skippy/model_package.h        |  15 ++++
+ include/skippy/runtime.h              |  25 ++++++
  include/skippy/sampling.h             |   6 ++
  include/skippy/signals.h              |   9 ++
  include/skippy/speculative_decoding.h |  11 +++
- include/skippy/state.h                |  15 +++
+ include/skippy/state.h                |  19 ++++
  include/skippy/tokenization.h         |  11 +++
  src/CMakeLists.txt                    |  17 ++++
  src/llama-arch.cpp                    |   6 ++
  src/llama-arch.h                      |   6 ++
- src/llama-context.cpp                 | 102 +++++----------------
- src/llama-hparams.cpp                 |  10 ++
+ src/llama-context.cpp                 | 102 ++++++---------------
+ src/llama-hparams.cpp                 |  10 +++
  src/llama-hparams.h                   |   4 +
- src/llama-model.cpp                   |  79 ++++++++++------
- src/llama-model.h                     |  20 ++++
+ src/llama-model.cpp                   |  70 +++++++++------
+ src/llama-model.h                     |  19 ++++
  src/models/glm-dsa.cpp                |   3 +
  src/models/models.h                   |   4 -
  src/skippy/sampling.cpp               |   2 +
  tests/CMakeLists.txt                  |   3 +
- tests/test-llama-archs.cpp            | 127 +++++++++++++++++++++++++-
+ tests/test-llama-archs.cpp            | 125 +++++++++++++++++++++++++-
  tools/mtmd/mtmd-image.cpp             |  72 +++++++++++++++
- 30 files changed, 553 insertions(+), 127 deletions(-)
+ 30 files changed, 548 insertions(+), 124 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 730d5561f..77ba63059 100644
+index 1d4bcf45f..586bf97f6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -271,6 +271,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
@@ -73,10 +73,10 @@ index 36f1e0cd5..9757ba821 100644
      speculative.h
      subproc.cpp
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index f0b779979..f178b7a07 100644
+index 9becf0479..119ac2f41 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -985,6 +985,17 @@ typedef struct {
+@@ -991,6 +991,17 @@ typedef struct {
      uint64_t nb1;
      uint64_t nb2;
      uint64_t nb3;
@@ -94,7 +94,7 @@ index f0b779979..f178b7a07 100644
  } ggml_metal_kargs_solve_tri;
  
  typedef struct {
-@@ -1197,20 +1208,46 @@ typedef struct {
+@@ -1203,20 +1214,46 @@ typedef struct {
  } ggml_metal_kargs_memset;
  
  typedef struct {
@@ -780,7 +780,7 @@ index 67fc99716..3953ed990 100644
          struct skippy_ngram_cache * cache,
          const llama_token * continuation_prefix,
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index fa5ca80be..0e7bec61d 100644
+index fa5ca80be..74f9ac52a 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
 @@ -1,6 +1,11 @@
@@ -843,7 +843,7 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_import_full_state(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -70,6 +81,7 @@ LLAMA_API enum skippy_status skippy_import_full_state(
+@@ -70,23 +81,27 @@ LLAMA_API enum skippy_status skippy_import_full_state(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -851,7 +851,6 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_import_recurrent_state(
          struct skippy_session * session,
          const void * input,
-@@ -76,17 +88,20 @@ LLAMA_API enum skippy_status skippy_import_recurrent_state(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -872,7 +871,7 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
          int32_t layer_start,
-@@ -99,27 +113,31 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+@@ -99,6 +114,7 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
          size_t * out_bytes,
          struct skippy_error ** out_error);
  
@@ -880,7 +879,7 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_import_kv_page(
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
-         const void * input,
+@@ -106,12 +122,14 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
          size_t input_bytes,
          struct skippy_error ** out_error);
  
@@ -895,7 +894,7 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_session_restore_prefix(
          struct skippy_session * session,
          int32_t cache_seq_id,
-         const llama_token * token_ids,
+@@ -119,6 +137,7 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
          size_t token_count,
          struct skippy_error ** out_error);
  
@@ -903,7 +902,6 @@ index fa5ca80be..0e7bec61d 100644
  LLAMA_API enum skippy_status skippy_session_drop_sequence(
          struct skippy_session * session,
          int32_t seq_id,
-         struct skippy_error ** out_error);
 diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
 index 7b8c4dcc4..ccf3d020c 100644
 --- a/include/skippy/tokenization.h
@@ -963,10 +961,10 @@ index 7b8c4dcc4..ccf3d020c 100644
          const char * generated_text,
          const char * metadata_json,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c6df19f2e..b5bc083fc 100644
+index 8922dc12a..7ee82c713 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -38,6 +38,23 @@ add_library(llama
+@@ -39,6 +39,23 @@ add_library(llama
              llama-model.cpp
              llama-quant.cpp
              llama-sampler.cpp
@@ -991,10 +989,10 @@ index c6df19f2e..b5bc083fc 100644
              unicode-data.cpp
              unicode.cpp
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index a3fcb4592..b60d94ea0 100644
+index 37b2d3147..c51057643 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -71,6 +71,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -72,6 +72,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_OLMO,             "olmo"             },
      { LLM_ARCH_OLMO2,            "olmo2"            },
      { LLM_ARCH_OLMOE,            "olmoe"            },
@@ -1002,7 +1000,7 @@ index a3fcb4592..b60d94ea0 100644
      { LLM_ARCH_OPENELM,          "openelm"          },
      { LLM_ARCH_ARCTIC,           "arctic"           },
      { LLM_ARCH_DEEPSEEK,         "deepseek"         },
-@@ -232,6 +233,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -233,6 +234,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"              },
      { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                    },
      { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
@@ -1015,10 +1013,10 @@ index a3fcb4592..b60d94ea0 100644
      { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
      { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 909e34290..b1341dd04 100644
+index 644fac937..195dbe88d 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -76,6 +76,7 @@ enum llm_arch {
+@@ -77,6 +77,7 @@ enum llm_arch {
      LLM_ARCH_OLMO,
      LLM_ARCH_OLMO2,
      LLM_ARCH_OLMOE,
@@ -1026,7 +1024,7 @@ index 909e34290..b1341dd04 100644
      LLM_ARCH_OPENELM,
      LLM_ARCH_ARCTIC,
      LLM_ARCH_DEEPSEEK,
-@@ -237,6 +238,11 @@ enum llm_kv {
+@@ -238,6 +239,11 @@ enum llm_kv {
      LLM_KV_TIME_DECAY_EXTRA_DIM,
      LLM_KV_RESIDUAL_SCALE,
      LLM_KV_EMBEDDING_SCALE,
@@ -1039,10 +1037,10 @@ index 909e34290..b1341dd04 100644
      LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
      LLM_KV_FULL_ATTENTION_INTERVAL,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index fe4d7748c..786e086eb 100644
+index 0b441d8a6..64dfc098d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1254,7 +1254,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+@@ -1263,7 +1263,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
      if (sampler && can_offload) {
          auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
  
@@ -1051,7 +1049,7 @@ index fe4d7748c..786e086eb 100644
  
          sampling.samplers[seq_id] = sampler;
  
-@@ -1617,90 +1617,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
+@@ -1626,90 +1626,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
      return seq_to_row;
  }
  
@@ -1161,7 +1159,7 @@ index fe4d7748c..786e086eb 100644
      }
  }
  
-@@ -2049,11 +1997,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -2058,11 +2006,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
@@ -1177,7 +1175,7 @@ index fe4d7748c..786e086eb 100644
          }
  
          n_outputs_prev += n_outputs;
-@@ -3576,6 +3523,7 @@ llama_context_params llama_context_default_params() {
+@@ -3675,6 +3622,7 @@ llama_context_params llama_context_default_params() {
          /*.n_seq_max                   =*/ 1,
          /*.n_rs_seq                    =*/ 0,
          /*.n_outputs_max               =*/ 0,
@@ -1186,7 +1184,7 @@ index fe4d7748c..786e086eb 100644
          /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
          /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
 diff --git a/src/llama-hparams.cpp b/src/llama-hparams.cpp
-index 293619dbb..041828b16 100644
+index 9fbce9bdf..351f18a25 100644
 --- a/src/llama-hparams.cpp
 +++ b/src/llama-hparams.cpp
 @@ -180,6 +180,16 @@ uint32_t llama_hparams::n_embd_v_gqa_max() const {
@@ -1207,10 +1205,10 @@ index 293619dbb..041828b16 100644
      if (n_embd_r_impl != 0) {
          // explicit override (e.g. inkling: 4 packed shortconv streams per layer)
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index 4bf1c4558..225dd8cb9 100644
+index 402015415..d5b060efe 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
-@@ -54,6 +54,8 @@ struct llama_hparams {
+@@ -57,6 +57,8 @@ struct llama_hparams {
      uint32_t n_embd;
      uint32_t n_layer_all;
      uint32_t n_layer_nextn = 0;
@@ -1219,7 +1217,7 @@ index 4bf1c4558..225dd8cb9 100644
      uint32_t n_expert = 0;
      uint32_t n_expert_used = 0;
      uint32_t n_rel_attn_bkts = 0;
-@@ -416,6 +418,8 @@ struct llama_hparams {
+@@ -449,6 +451,8 @@ struct llama_hparams {
  
      bool has_kv(uint32_t il) const;
  
@@ -1229,10 +1227,10 @@ index 4bf1c4558..225dd8cb9 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 42455490a..0666389b8 100644
+index f56d4b16e..b93addeb4 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -177,6 +177,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -178,6 +178,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_olmo2(params);
          case LLM_ARCH_OLMOE:
              return new llama_model_olmoe(params);
@@ -1241,7 +1239,7 @@ index 42455490a..0666389b8 100644
          case LLM_ARCH_OPENELM:
              return new llama_model_openelm(params);
          case LLM_ARCH_GPTNEOX:
-@@ -2530,15 +2532,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2593,15 +2595,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                      }
  
@@ -1260,7 +1258,7 @@ index 42455490a..0666389b8 100644
                          if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                              filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                          } else {
-@@ -2548,24 +2544,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2611,24 +2607,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
  
                      filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
  
@@ -1286,7 +1284,7 @@ index 42455490a..0666389b8 100644
                          GGML_ASSERT(hparams.is_swa_any());
  
                          if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-@@ -2685,6 +2664,7 @@ llama_model_params llama_model_default_params() {
+@@ -2749,6 +2728,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -1294,7 +1292,7 @@ index 42455490a..0666389b8 100644
      };
  
      return result;
-@@ -2824,6 +2804,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2892,6 +2872,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_DEEPSEEK2OCR:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DEEPSEEK4:
@@ -1302,39 +1300,7 @@ index 42455490a..0666389b8 100644
          case LLM_ARCH_PLM:
          case LLM_ARCH_CHATGLM:
          case LLM_ARCH_GRANITE:
-@@ -2921,9 +2902,12 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_STEP35:
-         case LLM_ARCH_TALKIE:
-         case LLM_ARCH_MELLUM:
--        case LLM_ARCH_DFLASH:
-             return LLAMA_ROPE_TYPE_NEOX;
- 
-+        case LLM_ARCH_DFLASH:
-+            // DSV4 DSpark drafters use DeepSeek-V4's normal RoPE; legacy DFlash backbones are NeoX
-+            return model->hparams.dsv4_hc_mult > 0 ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
-+
-         case LLM_ARCH_QWEN2VL:
-         case LLM_ARCH_PADDLEOCR:
-             return LLAMA_ROPE_TYPE_MROPE;
-@@ -2931,6 +2915,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_QWEN3VLMOE:
-         case LLM_ARCH_QWEN35:
-         case LLM_ARCH_QWEN35MOE:
-+        case LLM_ARCH_QWEN3TTS:
-             return LLAMA_ROPE_TYPE_IMROPE;
- 
-         case LLM_ARCH_GLM4:
-@@ -3105,7 +3090,8 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
-     TENSOR_DUPLICATED     (llama_model_loader::TENSOR_DUPLICATED),
-     TENSOR_NOT_REQUIRED   (llama_model_loader::TENSOR_NOT_REQUIRED),
-     TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
--    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL) {}
-+    TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL),
-+    TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE) {}
- 
- ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
-     GGML_ASSERT(ml != nullptr);
-@@ -3146,3 +3132,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+@@ -3225,3 +3206,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
  uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
      return (uint32_t) model->target_layer_ids.size();
  }
@@ -1374,10 +1340,10 @@ index 42455490a..0666389b8 100644
 +    return (uint32_t) nelements;
 +}
 diff --git a/src/llama-model.h b/src/llama-model.h
-index ecc923d73..e5a9ddaa8 100644
+index dea1118d8..468de3e56 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -132,6 +132,7 @@ enum llm_type {
+@@ -133,6 +133,7 @@ enum llm_type {
      LLM_TYPE_100B_A6B,
      LLM_TYPE_102B_A12B, // Solar-Open
      LLM_TYPE_106B_A12B, // GLM-4.5-Air
@@ -1385,7 +1351,7 @@ index ecc923d73..e5a9ddaa8 100644
      LLM_TYPE_120B_A12B, // Nemotron 3 Super
      LLM_TYPE_122B_A10B, // Qwen3.5
      LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
-@@ -227,6 +228,24 @@ struct llama_layer_nextn {
+@@ -228,6 +229,24 @@ struct llama_layer_nextn {
      struct ggml_tensor * shared_head_norm      = nullptr;
  };
  
@@ -1410,14 +1376,6 @@ index ecc923d73..e5a9ddaa8 100644
  struct llama_layer {
      // normalization
      struct ggml_tensor * attn_norm       = nullptr;
-@@ -745,6 +764,7 @@ struct llama_model_base : public llama_model {
-     const int TENSOR_NOT_REQUIRED;
-     const int TENSOR_SKIP;
-     const int TENSOR_SKIP_IF_VIRTUAL;
-+    const int TENSOR_ALLOW_RESHAPE;
- 
-     explicit llama_model_base(const llama_model_params & params);
-     virtual ~llama_model_base() = default;
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
 index 93a1448b4..000b95cdc 100644
 --- a/src/models/glm-dsa.cpp
@@ -1433,10 +1391,10 @@ index 93a1448b4..000b95cdc 100644
      const uint32_t kv_lora_rank = hparams.n_lora_kv;
  
 diff --git a/src/models/models.h b/src/models/models.h
-index 74ebe85bc..5a9496887 100644
+index 694fd912b..bcf4745f3 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -1320,10 +1320,6 @@ struct llama_model_glm_dsa : public llama_model_base {
+@@ -1323,10 +1323,6 @@ struct llama_model_glm_dsa : public llama_model_base {
      void load_arch_hparams(llama_model_loader & ml) override;
      void load_arch_tensors(llama_model_loader & ml) override;
  
@@ -1464,11 +1422,11 @@ index 3a9fb82f0..49d4eaa59 100644
                          repeat_penalty,
                          sampling->frequency_penalty,
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index b9f9d4b78..25dc1b014 100644
+index fe3d14ffc..9c6fc6828 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -151,6 +151,9 @@ endif ()
- llama_build(test-recurrent-state-rollback.cpp)
+@@ -152,6 +152,9 @@ llama_build(test-recurrent-state-rollback.cpp)
+ llama_build(test-save-load-state.cpp)
  
  if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 +    llama_build_and_test(test-skippy-kv-page-export.cpp)
@@ -1478,7 +1436,7 @@ index b9f9d4b78..25dc1b014 100644
      llama_build_and_test(test-unicode.cpp)
      llama_build_and_test(test-sampling.cpp)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index b8fd66cca..60c8c74bc 100644
+index 35a3286e4..906f00ef4 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -14,6 +14,7 @@
@@ -1507,22 +1465,20 @@ index b8fd66cca..60c8c74bc 100644
 +        const llm_arch arch,
 +        const bool moe,
 +        const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
-+        const uint32_t context_length = 128,
++        const uint32_t context_length = 256,
 +        const uint32_t glm_dsa_indexer_top_k = 8) {
      gguf_context_ptr ret(gguf_init_empty());
      llama_model_saver ms(arch, ret.get());
--    const uint32_t n_ctx = 128;
+-    const uint32_t n_ctx = 256;
 +    const uint32_t n_ctx = context_length;
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -250,10 +265,20 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
-     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
-     // indexer head count is independent of the main attention head count.
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 || arch == LLM_ARCH_DEEPSEEK4 ? n_head : uint32_t(1));
--    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,   uint32_t(64));
+@@ -262,9 +277,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
+               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
+ 
 -    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,   arch == LLM_ARCH_GLM_DSA ? uint32_t(128) : uint32_t(64));
 +    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(8));
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
      ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
@@ -1539,7 +1495,7 @@ index b8fd66cca..60c8c74bc 100644
      ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
  
      if (arch == LLM_ARCH_DEEPSEEK4) {
-@@ -334,9 +359,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -345,9 +370,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -1598,7 +1554,7 @@ index b8fd66cca..60c8c74bc 100644
      GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
      llama_model_params model_params = llama_model_default_params();
      model_params.progress_callback = silent_model_load_progress;
-@@ -352,6 +425,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -363,6 +436,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      if (!encode) {
          ctx_params.n_ubatch = 64;
      }
@@ -1608,7 +1564,7 @@ index b8fd66cca..60c8c74bc 100644
  
      size_t tmp = seed;
      llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -367,6 +443,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -378,6 +454,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -1629,7 +1585,7 @@ index b8fd66cca..60c8c74bc 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -505,6 +595,13 @@ static bool arch_supported(const llm_arch arch) {
+@@ -517,6 +607,13 @@ static bool arch_supported(const llm_arch arch) {
      if (arch == LLM_ARCH_DEEPSEEK2OCR) {
          return false;
      }
@@ -1642,8 +1598,8 @@ index b8fd66cca..60c8c74bc 100644
 +
      // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
  #ifdef GGML_USE_WEBGPU
-     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE) {
-@@ -523,6 +620,20 @@ static bool arch_supported(const llm_arch arch) {
+     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP) {
+@@ -535,6 +632,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -1664,7 +1620,7 @@ index b8fd66cca..60c8c74bc 100644
  static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -688,6 +799,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
+@@ -700,6 +811,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                  std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                  char nmse_str[12] = {0};
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -1761,5 +1717,5 @@ index 0dda8770f..ec9bc8f88 100644
  // mtmd_image_preprocessor_llava_uhd
  //
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

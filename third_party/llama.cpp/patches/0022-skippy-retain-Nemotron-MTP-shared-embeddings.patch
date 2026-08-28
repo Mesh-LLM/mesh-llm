@@ -1,7 +1,7 @@
-From f7bb51aea55168ee4eec2f248a2f5b3312788a3e Mon Sep 17 00:00:00 2001
+From cf0f98eb75620ef7233968d140664b69e42a70c1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 14:59:37 +1000
-Subject: [PATCH] skippy: retain Nemotron MTP shared embeddings
+Subject: [PATCH 22/26] skippy: retain Nemotron MTP shared embeddings
 
 Keep the shared token embedding on the final staged loader only when the selected range includes the appended Nemotron-H MoE MTP block.
 ---
@@ -9,10 +9,10 @@ Keep the shared token embedding on the final staged loader only when the selecte
  1 file changed, 9 insertions(+)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 5363ee554..6d86241c3 100644
+index d0362908b..611a05e1a 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1218,6 +1218,15 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1223,6 +1223,15 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     (tn.tensor == LLM_TENSOR_ALTUP_PROJ && g_skippy_filter.include_embeddings) ||
                     (tn.tensor == LLM_TENSOR_ALTUP_UNEMBD_PROJ && g_skippy_filter.include_output);
          }
@@ -29,5 +29,5 @@ index 5363ee554..6d86241c3 100644
          if (!keep) {
              if (t_meta) {
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

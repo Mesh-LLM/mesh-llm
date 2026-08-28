@@ -1,7 +1,7 @@
-From 73ef828042db2ef5e345d9226bc2bd51098b6eb3 Mon Sep 17 00:00:00 2001
+From 7870b112f77408a825dcf256536f688f751d0ba3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 07:15:54 +1000
-Subject: [PATCH] ggml: cache compiled Metal pipelines on disk via
+Subject: [PATCH 19/26] ggml: cache compiled Metal pipelines on disk via
  MTLBinaryArchive
 
 Set GGML_METAL_PIPELINE_CACHE_DIR to a directory to persist compiled
@@ -12,11 +12,11 @@ appends newly compiled pipelines, flushing after each addition. The
 cache is disabled when the variable is unset or the archive is invalid;
 behavior is then unchanged.
 ---
- ggml/src/ggml-metal/ggml-metal-device.m | 171 +++++++++++++++++++++++-
- 1 file changed, 167 insertions(+), 4 deletions(-)
+ ggml/src/ggml-metal/ggml-metal-device.m | 173 +++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 4 deletions(-)
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 19c57820e..b5b842175 100644
+index 41ce90dc8..c2dbfc6ad 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -9,6 +9,7 @@
@@ -27,7 +27,7 @@ index 19c57820e..b5b842175 100644
  
  #ifndef TARGET_OS_VISION
  #define TARGET_OS_VISION 0
-@@ -156,6 +157,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -156,6 +157,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -166,7 +166,7 @@ index 19c57820e..b5b842175 100644
              id<MTLLibrary> lib = nil;
  
              @autoreleasepool {
-@@ -340,6 +444,18 @@ static bool ggml_metal_library_compile_all(
+@@ -340,6 +445,18 @@ static bool ggml_metal_library_compile_all(
  
      const bool ok = !atomic_load(&any_failure);
  
@@ -304,4 +304,5 @@ index 19c57820e..b5b842175 100644
  
      [lib->lock unlock];
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+

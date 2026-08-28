@@ -1,7 +1,7 @@
-From 6f6728d325cee379d4a5aff7d730f02e64fbb0cc Mon Sep 17 00:00:00 2001
+From c0a1ceed48da76f10333262f2294f6779e14c92d Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 14:54:41 +1000
-Subject: [PATCH] skippy: clamp staged Nemotron H trunk graphs
+Subject: [PATCH 21/26] skippy: clamp staged Nemotron H trunk graphs
 
 Retain the final MTP layer in the runtime slice while limiting the main Nemotron H graph to executable trunk layers.
 ---
@@ -24,5 +24,5 @@ index 2cbfe4d91..e337da107 100644
      inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
      ggml_build_forward_expand(gf, inpL);
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

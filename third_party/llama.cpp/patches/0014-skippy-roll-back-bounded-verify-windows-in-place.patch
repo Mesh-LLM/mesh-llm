@@ -1,7 +1,7 @@
-From c7e667c3e0d3e8c269018d932b042fe6fba10e49 Mon Sep 17 00:00:00 2001
+From 3962d63ee4b07f53bbddbf0178c18f8d64e1af71 Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Tue, 18 Aug 2026 16:44:10 +1000
-Subject: [PATCH 14/18] skippy: roll back bounded verify windows in place
+Subject: [PATCH 14/26] skippy: roll back bounded verify windows in place
 
 Recurrent memory supports bounded in-place rollback through the RS
 snapshot index, but the verify window copied the whole sequence state to
@@ -90,5 +90,5 @@ index 5b64b97a9..375cc7196 100644
                  session->verify_checkpoints, token_start, token_count)) {
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
 

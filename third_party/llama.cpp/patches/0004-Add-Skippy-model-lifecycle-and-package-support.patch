@@ -1,7 +1,7 @@
-From 91aa5f2931b806293af5fa40133d7f23cf8a1523 Mon Sep 17 00:00:00 2001
+From 0be718a4e401a1b36a8880f6c50283210e89c164 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
-Subject: [PATCH 04/18] Add Skippy model lifecycle and package support
+Subject: [PATCH 04/26] Add Skippy model lifecycle and package support
 
 ---
  src/skippy/devices.cpp                  | 106 +++
@@ -9,12 +9,12 @@ Subject: [PATCH 04/18] Add Skippy model lifecycle and package support
  src/skippy/model_lifecycle.cpp          | 124 ++++
  src/skippy/model_load_config.cpp        | 138 ++++
  src/skippy/model_load_config_internal.h |  22 +
- src/skippy/model_loading.cpp            | 929 ++++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 930 ++++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |  29 +
  src/skippy/model_package.cpp            | 727 ++++++++++++++++++
  src/skippy/runtime_support.h            |  28 +
  src/skippy/runtime_types.h              | 133 ++++
- 10 files changed, 2285 insertions(+)
+ 10 files changed, 2286 insertions(+)
  create mode 100644 src/skippy/devices.cpp
  create mode 100644 src/skippy/environment.h
  create mode 100644 src/skippy/model_lifecycle.cpp
@@ -497,7 +497,7 @@ index 000000000..8bd88058a
 +        llama_model_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..dd21a313f
+index 000000000..70065bdcf
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
 @@ -0,0 +1,930 @@
@@ -2373,4 +2373,5 @@ index 000000000..c20c52e71
 +};
 +
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+
