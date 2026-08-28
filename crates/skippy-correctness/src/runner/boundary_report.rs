@@ -132,6 +132,7 @@ fn probe_split(
             boundary_tensor: None,
             frame_desc: None,
             boundary_payload_sha256: None,
+            shared_kv_anchor_range: None,
             desc_matches_tensor: false,
             predicted_token: None,
             signal: None,
@@ -226,6 +227,32 @@ fn run_split_probe(
     let mut session1 = stage1
         .create_session()
         .with_context(|| format!("failed to create stage 1 session for split {split_layer}"))?;
+
+    // Shared-KV architectures (Gemma3N, Gemma4): when the split leaves the
+    // reuse anchors outside stage 1's layer range, stage 1's memory still
+    // contains their cache tensors but nothing in its graph writes them.
+    // Transport the anchor rows stage 0 produced for this token and seed them
+    // so stage 1's reuse layers read the correct K/V in place.
+    let shared_kv_anchor_range = session1.shared_kv_anchor_range().with_context(|| {
+        format!("failed to query shared-KV anchor range for split {split_layer}")
+    })?;
+    if let Some((anchor_start, anchor_end)) = shared_kv_anchor_range {
+        let anchor_page = session0
+            .export_kv_page(anchor_start, anchor_end, 0, 1)
+            .with_context(|| {
+                format!(
+                    "failed to export shared-KV anchor page {anchor_start}..{anchor_end} from stage 0 for split {split_layer}"
+                )
+            })?;
+        session1
+            .seed_shared_kv_anchor_page(&anchor_page.desc, &anchor_page.payload)
+            .with_context(|| {
+                format!(
+                    "failed to seed shared-KV anchor page {anchor_start}..{anchor_end} into stage 1 for split {split_layer}"
+                )
+            })?;
+    }
+
     let (predicted, _final_frame) = session1
         .decode_step_frame(token_id, Some(&boundary), 0)
         .with_context(|| format!("stage 1 failed to decode boundary for split {split_layer}"))?;
@@ -245,6 +272,8 @@ fn run_split_probe(
         boundary_tensor,
         frame_desc: Some(frame_desc),
         boundary_payload_sha256,
+        shared_kv_anchor_range: shared_kv_anchor_range
+            .map(|(start, end)| format!("{start}..{end}")),
         desc_matches_tensor,
         predicted_token: Some(predicted),
         signal: Some(signal),
