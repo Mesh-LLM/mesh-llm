@@ -250,6 +250,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             include_embeddings: true,
             include_output: true,
+
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
             mlock: false,
