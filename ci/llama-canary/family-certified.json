@@ -139,6 +139,15 @@
       "notes": "hybrid three-linear-to-one-attention path"
     },
     {
+      "family": "qwen4exp",
+      "profile": "full",
+      "cadences": ["llama-bump", "manual-full"],
+      "artifact": {"repo": "unsloth/Qwen3.8-Flash-Next-GGUF", "revision": "c8b5954a88c2775c546b92593eda40ea041d3176", "files": ["UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf", "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf", "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf"], "file_integrity": {"UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00001-of-00003.gguf": {"size_bytes": 10946624, "blob_id": "88a1420825a9304063e882ada29d438263617f51ac8923d438d927496693bafd"}, "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00002-of-00003.gguf": {"size_bytes": 49990818368, "blob_id": "3a62e35bbf9add4733bd1438ebd3a67649d5edd6cb0e72bb78e33c913992b2b6"}, "UD-IQ1_S/Qwen3.8-Flash-Next-UD-IQ1_S-00003-of-00003.gguf": {"size_bytes": 22544696352, "blob_id": "0e25ceaeb89b8a80aa973c6c0c7448943682f7408c2855b2ebd016b7643a861a"}}, "selector": "UD-IQ1_S"},
+      "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 10240, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
+      "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 72535436800, "startup_timeout_secs": 900},
+      "notes": "Qwen4 experimental hybrid path; four-wide hyper-connected residual boundary and QSA indexer"
+    },
+    {
       "family": "nemotron",
       "profile": "full",
       "cadences": ["llama-bump", "manual-full"],

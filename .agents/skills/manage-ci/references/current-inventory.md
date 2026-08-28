@@ -42,7 +42,8 @@ artifact revision/file in the immutable local cache. It reads only GGUF
 metadata headers, requires each artifact to have at least one metadata-bearing
 shard, and requires every shard that carries `*.block_count` and
 `*.embedding_length` to equal the planned runtime range and activation width
-before compilation. It emits
+before compilation; Qwen4 experimental artifacts derive their wider boundary
+from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
 all-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
