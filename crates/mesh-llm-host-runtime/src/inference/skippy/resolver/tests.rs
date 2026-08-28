@@ -2234,77 +2234,6 @@ draft_split_probability = 0.3
 }
 
 #[test]
-fn schema_only_speculative_fields_fail_with_field_specific_runtime_diagnostics() {
-    let cases = [
-        (
-            r#"
-[defaults.speculative]
-draft_hf_repo = "mesh/test-draft"
-draft_hf_file = "draft.gguf"
-"#,
-            "speculative.draft_hf_repo",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_device = "CUDA0"
-"#,
-            "speculative.draft_device",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_threads = 2
-"#,
-            "speculative.draft_threads",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_cache_type_k = "q8_0"
-"#,
-            "speculative.draft_cache_type_k",
-        ),
-        (
-            r#"
-[defaults.speculative]
-draft_cache_type_v = "q8_0"
-"#,
-            "speculative.draft_cache_type_v",
-        ),
-        (
-            r#"
-[defaults.speculative]
-spec_default = true
-"#,
-            "speculative.spec_default",
-        ),
-    ];
-
-    for (toml, field) in cases {
-        let mesh_config = parse_config(toml);
-        let model_file = temp_model_file();
-
-        let err = resolve_skippy_config(SkippyConfigResolveRequest {
-            mesh_config: &mesh_config,
-            model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
-            model_path: model_file.path(),
-            model_bytes: 4 * 1024 * 1024 * 1024,
-            allocatable_memory_bytes: None,
-            request_defaults: None,
-            package_generation: None,
-        })
-        .unwrap_err()
-        .to_string();
-
-        assert!(
-            err.contains(field) && err.contains("not supported by the embedded runtime"),
-            "{field} diagnostic should be explicit, got: {err}"
-        );
-    }
-}
-
-#[test]
 fn integrated_full_surface_fixture_resolves_defaults_overrides_staged_and_runtime_paths() {
     let fixture = full_surface_fixture_with_model_paths();
     let request_defaults = RequestDefaultsConfig {
@@ -2562,15 +2491,17 @@ draft_cache_type_v = "q4_0"
     let args = resolved
         .to_embedded_openai_args(4096, true)
         .expect("draft runtime controls must translate");
-    let translated = format!("{args:?}");
 
-    assert!(translated.contains("model-draft.gguf"));
-    assert!(translated.contains("0.7"));
-    assert!(translated.contains("0.8"));
-    assert!(translated.contains("CUDA0"));
-    assert!(translated.contains("threads: Some(6)"));
-    assert!(translated.contains("q8_0"));
-    assert!(translated.contains("q4_0"));
+    assert_eq!(
+        args.draft_model_path.as_deref(),
+        Some(Path::new("/tmp/model-draft.gguf"))
+    );
+    assert_eq!(args.speculative.draft_acceptance_threshold, 0.7);
+    assert_eq!(args.speculative.draft_split_probability, 0.8);
+    assert_eq!(args.speculative.draft_device.as_deref(), Some("CUDA0"));
+    assert_eq!(args.speculative.draft_threads, Some(6));
+    assert_eq!(args.speculative.draft_cache_type_k, "q8_0");
+    assert_eq!(args.speculative.draft_cache_type_v, "q4_0");
 }
 
 #[test]
@@ -2595,4 +2526,150 @@ spec_default = true
     .expect("spec_default = true must use automatic speculative defaults");
 
     assert_eq!(resolved.speculative.strategy, "auto");
+}
+
+#[test]
+fn automatic_draft_selection_chooses_a_sibling_draft_gguf() {
+    let directory = tempfile::tempdir().expect("create model directory");
+    let target = directory.path().join("qwen3-target.gguf");
+    let draft = directory.path().join("qwen3-draft.gguf");
+    std::fs::write(&target, []).expect("write target fixture");
+    std::fs::write(&draft, []).expect("write draft fixture");
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+mode = "draft"
+draft_selection_policy = "auto"
+pairing_fault = "fail_open"
+draft_max_tokens = 4
+"#,
+    );
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "qwen3-target",
+        model_path: &target,
+        model_bytes: 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("auto policy should select sibling draft");
+
+    assert_eq!(
+        resolved.speculative.draft_model_path.as_deref(),
+        Some(draft.as_path())
+    );
+}
+
+#[test]
+fn speculative_default_false_suppresses_automatic_sibling_draft_selection() {
+    let directory = tempfile::tempdir().expect("create model directory");
+    let target = directory.path().join("qwen3-target.gguf");
+    let draft = directory.path().join("qwen3-draft.gguf");
+    std::fs::write(&target, []).expect("write target fixture");
+    std::fs::write(&draft, []).expect("write draft fixture");
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+spec_default = false
+draft_selection_policy = "auto"
+"#,
+    );
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "qwen3-target",
+        model_path: &target,
+        model_bytes: 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("disabled automatic defaults should resolve");
+
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert_eq!(resolved.speculative.draft_model_path, None);
+}
+
+#[test]
+fn model_hf_draft_source_overrides_the_global_pair_as_a_unit() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+draft_hf_repo = "global/draft"
+draft_hf_file = "global.gguf"
+draft_max_tokens = 4
+pairing_fault = "fail_open"
+
+[[models]]
+model = "mesh/test-target"
+
+[models.speculative]
+draft_hf_repo = "model/draft"
+draft_hf_file = "model.gguf"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "mesh/test-target",
+        model_path: model_file.path(),
+        model_bytes: 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("model HF pair should resolve");
+
+    let draft_path = resolved
+        .speculative
+        .draft_model_path
+        .expect("model draft source");
+    assert!(
+        draft_path
+            .to_string_lossy()
+            .contains("model/draft:model.gguf")
+    );
+    assert!(!draft_path.to_string_lossy().contains("global"));
+}
+
+#[test]
+fn draft_hf_pair_becomes_the_runtime_draft_reference() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+mode = "draft"
+draft_hf_repo = "mesh/test-draft"
+draft_hf_file = "draft.gguf"
+draft_selection_policy = "manual"
+pairing_fault = "fail_open"
+draft_max_tokens = 4
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "mesh/test-target",
+        model_path: model_file.path(),
+        model_bytes: 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("HF draft pair should resolve");
+
+    assert!(
+        resolved
+            .speculative
+            .draft_model_path
+            .as_ref()
+            .is_some_and(|path| path
+                .to_string_lossy()
+                .contains("mesh/test-draft:draft.gguf"))
+    );
 }

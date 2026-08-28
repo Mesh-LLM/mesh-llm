@@ -19,7 +19,7 @@ pub(super) use standalone::{propose_configured_ngram_tokens, standalone_ngram_pr
 use suffix::{SUFFIX_MIN_SEED_LEN, SuffixNgramProposer};
 
 /// Resolved speculative decoding plan for a served model.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculativeDecodeConfig {
     pub requested_strategy: String,
@@ -28,6 +28,22 @@ pub struct SpeculativeDecodeConfig {
     pub ngram: Option<NgramProposalConfig>,
     pub extension: Option<NgramExtensionConfig>,
     pub verify_window: VerifyWindowConfig,
+    #[serde(default)]
+    pub draft_acceptance_threshold: f64,
+    #[serde(default)]
+    pub draft_split_probability: f64,
+    #[serde(default)]
+    pub draft_device: Option<String>,
+    #[serde(default)]
+    pub draft_threads: Option<usize>,
+    #[serde(default = "default_draft_cache_type")]
+    pub draft_cache_type_k: String,
+    #[serde(default = "default_draft_cache_type")]
+    pub draft_cache_type_v: String,
+}
+
+fn default_draft_cache_type() -> String {
+    "f16".to_string()
 }
 
 /// Native multi-token-prediction draft settings.
@@ -114,6 +130,12 @@ impl Default for SpeculativeDecodeConfig {
                 max_tokens: 4,
                 pipeline_depth: 1,
             },
+            draft_acceptance_threshold: 0.0,
+            draft_split_probability: 0.0,
+            draft_device: None,
+            draft_threads: None,
+            draft_cache_type_k: default_draft_cache_type(),
+            draft_cache_type_v: default_draft_cache_type(),
         }
     }
 }
@@ -173,6 +195,13 @@ impl SpeculativeDecodeConfig {
                 "verify window requires 0 < min_tokens <= max_tokens and 0 < pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
             );
         }
+        if !(0.0..=1.0).contains(&self.draft_acceptance_threshold)
+            || !(0.0..=1.0).contains(&self.draft_split_probability)
+        {
+            bail!("draft acceptance threshold and split probability must be within 0.0..=1.0");
+        }
+        skippy_runtime::parse_cache_type(&self.draft_cache_type_k)?;
+        skippy_runtime::parse_cache_type(&self.draft_cache_type_v)?;
         Ok(())
     }
 
@@ -234,6 +263,49 @@ mod standalone_speculative_config_tests {
         let rendered = serde_json::to_value(config).expect("serialize speculative plan");
         assert_eq!(rendered["draft_acceptance_threshold"], json!(0.7));
         assert_eq!(rendered["draft_split_probability"], json!(0.8));
+    }
+
+    #[test]
+    fn acceptance_threshold_rejects_a_low_acceptance_window() {
+        let decision = classify_verify_window_with_threshold(
+            &[10, 20, 30, 40],
+            &[10, 99, 30, 40],
+            0,
+            16,
+            0.5,
+            |_| Ok(false),
+        )
+        .expect("classify verify window");
+
+        assert_eq!(decision.accepted_before_reject, 0);
+        assert_eq!(decision.commit_count, 1);
+        assert!(decision.rejected());
+    }
+
+    #[test]
+    fn acceptance_threshold_accepts_exact_boundary_and_empty_window() {
+        assert!(acceptance_threshold_met(2, 4, 0.5));
+        assert!(acceptance_threshold_met(0, 0, 1.0));
+        assert!(!acceptance_threshold_met(1, 4, 0.5));
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_a_full_accept() {
+        let decision =
+            classify_verify_window_with_threshold(&[10, 20, 30], &[10, 20, 30], 0, 16, 1.0, |_| {
+                Ok(false)
+            })
+            .expect("classify full acceptance");
+
+        assert_eq!(decision.kind, VerifyWindowDecisionKind::FullAccept);
+        assert_eq!(decision.accepted_before_reject, 3);
+        assert_eq!(decision.commit_count, 3);
+    }
+
+    #[test]
+    fn split_probability_changes_the_verified_draft_length() {
+        assert_eq!(split_draft_len(8, 0.0, 7), 8);
+        assert_eq!(split_draft_len(8, 1.0, 7), 1);
     }
 
     #[test]
@@ -993,6 +1065,68 @@ where
         accepted_before_reject,
         commit_count,
     })
+}
+
+pub(super) fn classify_verify_window_with_threshold<F>(
+    draft_tokens: &[i32],
+    predicted_tokens: &[i32],
+    generated_len: usize,
+    max_new_tokens: usize,
+    acceptance_threshold: f64,
+    token_is_eog: F,
+) -> OpenAiResult<VerifyWindowDecision>
+where
+    F: FnMut(i32) -> OpenAiResult<bool>,
+{
+    let decision = classify_verify_window(
+        draft_tokens,
+        predicted_tokens,
+        generated_len,
+        max_new_tokens,
+        token_is_eog,
+    )?;
+    if acceptance_threshold_met(
+        decision.accepted_before_reject,
+        draft_tokens.len(),
+        acceptance_threshold,
+    ) {
+        return Ok(decision);
+    }
+    Ok(VerifyWindowDecision {
+        kind: VerifyWindowDecisionKind::EarlyReject,
+        accepted_before_reject: 0,
+        commit_count: 1,
+    })
+}
+
+pub(super) fn acceptance_threshold_met(
+    accepted_tokens: usize,
+    proposed_tokens: usize,
+    threshold: f64,
+) -> bool {
+    proposed_tokens == 0
+        || threshold <= 0.0
+        || accepted_tokens == proposed_tokens
+        || accepted_tokens as f64 / proposed_tokens as f64 >= threshold
+}
+
+pub(super) fn split_draft_len(token_count: usize, probability: f64, seed: usize) -> usize {
+    if token_count <= 1 || probability <= 0.0 {
+        return token_count;
+    }
+    if probability >= 1.0 {
+        return 1;
+    }
+    for index in 1..token_count {
+        let mixed = (seed as u64)
+            .wrapping_add(index as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let sample = (mixed >> 11) as f64 / ((1_u64 << 53) as f64);
+        if sample < probability {
+            return index;
+        }
+    }
+    token_count
 }
 
 pub(super) fn verify_checkpoint_no_longer_needed(

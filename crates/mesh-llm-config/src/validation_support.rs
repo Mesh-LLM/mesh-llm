@@ -224,6 +224,10 @@ pub(crate) fn validate_hf_pair(
             repo_path,
             format!("{repo_path} must be set when {file_path} is set"),
         )),
+        (true, true) => {
+            validate_safe_reference(repo.expect("presence checked"), repo_path)?;
+            validate_safe_reference(file.expect("presence checked"), file_path)
+        }
         _ => Ok(()),
     }
 }
@@ -288,7 +292,24 @@ pub(crate) fn validate_model_identifier(
                     ),
                 ));
             }
+            if !legacy_path_used {
+                validate_safe_reference(trimmed, path)?;
+            }
         }
+    }
+    Ok(())
+}
+
+fn validate_safe_reference(value: &str, path: &str) -> DiagnosticResult {
+    if value.contains('\\')
+        || value
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(validation_diagnostic(
+            path,
+            format!("{path} must not contain absolute or parent-directory path components"),
+        ));
     }
     Ok(())
 }
