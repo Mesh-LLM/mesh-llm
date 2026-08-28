@@ -91,6 +91,10 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         raw = BENCH.server_command("llama", args, *common, True)
 
         self.assertEqual(mesh[mesh.index("--generation-concurrency") + 1], "2")
+        self.assertEqual(mesh[mesh.index("--generation-queue-capacity") + 1], "256")
+        self.assertEqual(
+            mesh[mesh.index("--generation-admission-timeout-secs") + 1], "600"
+        )
         self.assertEqual(raw[raw.index("--parallel") + 1], "2")
         self.assertIn("--kv-unified", raw)
         self.assertNotIn("--no-cache-prompt", raw)

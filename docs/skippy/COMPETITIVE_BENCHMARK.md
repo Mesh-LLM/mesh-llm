@@ -101,6 +101,13 @@ beyond the active lanes exercise waiting admission, queueing, and scheduler
 behavior. The trace arms alternate raw/Mesh and Mesh/raw across the concurrency
 ladder to reduce time-order bias.
 
+Mesh arms pin `--generation-queue-capacity 256` and
+`--generation-admission-timeout-secs 600`; these are benchmark overrides, not
+production defaults. Active `--generation-concurrency` remains equal to the
+manifest's KV-backed lane count, so waiting requests do not create native/KV
+lanes. The runner also pins `SKIPPY_IDLE_ADMISSION_COALESCE_US=10000` rather
+than inheriting iteration-admission behavior from the operator environment.
+
 Do not time benchmarks while model downloads, builds, or unrelated GPU work are
 active. Record the host-isolation decision with the artifact when the hardware
 is shared.
