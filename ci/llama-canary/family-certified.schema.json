@@ -130,7 +130,8 @@
             "activation_width": {"type": "integer", "minimum": 1},
             "boundary_sweep_period": {"type": "integer", "minimum": 0},
             "speculative_policy": {"enum": ["mtp-if-present", "disabled"]},
-            "boundary_report": {"type": "boolean"}
+            "boundary_report": {"type": "boolean"},
+            "boundary_prefill": {"type": "boolean"}
           }
         },
         "resources": {

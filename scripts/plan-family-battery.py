@@ -368,6 +368,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "boundary_sweep_period",
                 "speculative_policy",
                 "boundary_report",
+                "boundary_prefill",
             },
             f"{field}.execution",
         )
@@ -389,6 +390,10 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         boundary_report = _boolean(
             execution.get("boundary_report", False),
             f"{field}.execution.boundary_report",
+        )
+        boundary_prefill = _boolean(
+            execution.get("boundary_prefill", False),
+            f"{field}.execution.boundary_prefill",
         )
         layer_end = trunk_layers + mtp_layers
         if sweep_period > layer_end:
@@ -461,6 +466,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "boundary_sweep_period": sweep_period,
                     "speculative_policy": speculative_policy,
                     "boundary_report": boundary_report,
+                    "boundary_prefill": boundary_prefill,
                 },
                 "resources": {
                     "runner_role": runner_role,

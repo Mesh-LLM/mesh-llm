@@ -158,7 +158,7 @@ fi
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$MTP_CORPUS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs\n' > "$RESOLVED_MANIFEST"
+printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|boundary_report|boundary_prefill|ngl_cap\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -223,9 +223,11 @@ fi
 
 FAILURES=()
 TOTAL=0
+BOUNDARY_TOTAL=0
 EXPECTED_TOTAL=0
 EXPECTED_FAMILY_COUNT=0
 CERT_FAILURE_COUNT=0
+BOUNDARY_FAILURE_COUNT=0
 PREFLIGHT_FAILURE_COUNT=0
 PREFLIGHT_SPEC_FAMILY=""
 PREFLIGHT_SPEC_TARGET=""
@@ -597,7 +599,7 @@ preflight_manifest() {
     return 1
   fi
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy; do
+  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy boundary_report boundary_prefill ngl_cap; do
     if [[ "$profile" != "full" ]]; then
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
@@ -692,9 +694,10 @@ preflight_manifest() {
 
     local startup_timeout
     startup_timeout="${startup_timeout_override:-$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")}"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
-      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
+      "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "${MODEL_MTP_LAYERS:-$expected_mtp_layers}" "$activation_width" "$startup_timeout" \
+      "$boundary_report" "$boundary_prefill" "$ngl_cap" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
       record_preflight_outcome "model-preflight" "$family" "$model_id" "pass" "pass" "resolved immutable snapshot $source_revision; tensor scan complete"
@@ -728,7 +731,10 @@ preflight_manifest() {
           (.resources.startup_timeout_secs // ""),
           .execution.mtp_layers,
           (.certification_lanes | join(",")),
-          .execution.speculative_policy
+          .execution.speculative_policy,
+          (.execution.boundary_report // false | if . then 1 else 0 end),
+          (.execution.boundary_prefill // false | if . then 1 else 0 end),
+          (.resources.n_gpu_layers_cap // "")
         ]
       | join("|")
     ' "$plan"
@@ -804,9 +810,87 @@ planned_certification_count() {
   printf '%s\n' "$planned"
 }
 
+run_boundary_report() {
+  # One boundary-report lane invocation per family. Passes when every probed
+  # cut matches the full-model baseline (exit code 0 and report status pass).
+  local family="$1" target="$2" model_id="$3" layer_end="$4" mtp_layers="$5" ngl_cap="$6" startup_timeout="$7" prefill_flag="$8"
+  local trunk_layers=$(( layer_end - mtp_layers ))
+  if (( trunk_layers < 1 )); then
+    echo "boundary lane requires at least one trunk layer for $family" >&2
+    FAILURES+=("$family(boundary-extent)")
+    BOUNDARY_FAILURE_COUNT=$((BOUNDARY_FAILURE_COUNT + 1))
+    return 1
+  fi
+  BOUNDARY_TOTAL=$((BOUNDARY_TOTAL + 1))
+  local run_id boundary_dir boundary_json mode_label timeout_secs ngl exit_code
+  run_id="$(printf '%03d-%s-boundary-report' "$BOUNDARY_TOTAL" "$(slugify "$family")")"
+  boundary_dir="$CERT_DIR/$run_id"
+  boundary_json="$boundary_dir/boundary-report.json"
+  mode_label="boundary-report"
+  if [[ -n "$prefill_flag" ]]; then
+    mode_label="boundary-report-prefill"
+  fi
+  timeout_secs="$(cert_timeout_for_startup "$startup_timeout")"
+  ngl="999"
+  if [[ -n "$ngl_cap" ]]; then
+    ngl="$ngl_cap"
+  fi
+  echo "==> $mode_label: family=$family splits=1..$trunk_layers layer_end=$layer_end ngl=$ngl model=$(basename "$target")"
+  local command=(
+    "$BIN_DIR/skippy-correctness" boundary-report
+    --model "$target"
+    --model-id "$model_id"
+    --layer-end "$layer_end"
+    --splits "1..$trunk_layers"
+    --n-gpu-layers "$ngl"
+    --report-out "$boundary_json"
+  )
+  if [[ -n "$prefill_flag" ]]; then
+    command+=("$prefill_flag")
+  fi
+  if (( DRY_RUN == 1 )); then
+    printf '%q ' "${command[@]}"
+    printf '\n'
+    return 0
+  fi
+  exit_code=0
+  "$ROOT/scripts/run-command-with-timeout.py" \
+    --seconds "$timeout_secs" \
+    --label "$mode_label $family" \
+    -- "${command[@]}" || exit_code=$?
+  local status="fail" outcome="harness" note=""
+  if [[ -f "$boundary_json" ]]; then
+    status="$(jq -r '.status // "fail"' "$boundary_json")"
+    outcome="report"
+    note="$(jq -r '"splits=\(.split_count // 0) mismatches=\(.mismatch_count // 0) errors=\(.error_count // 0)"' "$boundary_json")"
+  elif (( exit_code == 124 )); then
+    outcome="timeout"
+    note="boundary-report exceeded its wall-clock budget before writing a report"
+  else
+    note="boundary-report produced no report"
+  fi
+  if [[ "$status" != "pass" ]]; then
+    exit_code="${exit_code:-1}"
+  fi
+  jq -n \
+    --arg family "$family" \
+    --arg model_id "$model_id" \
+    --arg mode "$mode_label" \
+    --arg status "$status" \
+    --arg outcome "$outcome" \
+    --arg note "$note" \
+    --argjson exit_code "${exit_code:-1}" \
+    '{family:$family,model_id:$model_id,split_layer:null,outcomes:[{name:$mode,status:$status,outcome:$outcome,exit_code:$exit_code,note:$note}]}' \
+    >> "$RESULTS_JSONL"
+  if [[ "$status" != "pass" ]]; then
+    FAILURES+=("$family@boundary-report")
+    BOUNDARY_FAILURE_COUNT=$((BOUNDARY_FAILURE_COUNT + 1))
+  fi
+}
+
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout; do
+  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes mtp_layers activation_width startup_timeout boundary_report boundary_prefill ngl_cap; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
 
@@ -827,6 +911,24 @@ run_resolved_manifest() {
           cuts=$((cuts + 1))
         done
       done
+    fi
+
+    if [[ "$boundary_report" == "1" ]]; then
+      # Boundary-report lane (opt-in per family): one in-process invocation
+      # sweeps every certified cut. The extent is derived, not per-family
+      # data: cuts 1..trunk_layers are exactly the cuts where stage 1 keeps
+      # at least one trunk layer (the --splits range is end-exclusive). The
+      # MTP-only cut (trunk_layers+1..layer_end) stays out of the lane until
+      # a runner-validated probe certifies it. The n_gpu_layers_cap from the
+      # manifest applies to this lane only: the concurrent stage pair can
+      # exceed the runner's wired-memory budget at full offload, while the
+      # sequential core lanes stay at the production ngl default (999).
+      run_boundary_report "$family" "$target" "$model_id" "$layer_end" "$mtp_layers" "$ngl_cap" "$startup_timeout" ""
+    fi
+    if [[ "$boundary_prefill" == "1" ]]; then
+      # Prefill rider (opt-in, off until a multi-token ngl-capped run is
+      # certified): same sweep in multi-token prefill mode, second report.
+      run_boundary_report "$family" "$target" "$model_id" "$layer_end" "$mtp_layers" "$ngl_cap" "$startup_timeout" "--prefill"
     fi
   done < "$resolved_manifest"
 }
@@ -894,7 +996,7 @@ fi
 if (( PREFLIGHT_ONLY == 1 )); then
   echo "family battery preflight complete: $PREFLIGHT_FAILURE_COUNT failures"
 else
-  echo "family battery complete: $((TOTAL - CERT_FAILURE_COUNT))/$TOTAL certifications passed"
+  echo "family battery complete: $((TOTAL - CERT_FAILURE_COUNT))/$TOTAL certifications passed, $((BOUNDARY_TOTAL - BOUNDARY_FAILURE_COUNT))/$BOUNDARY_TOTAL boundary-report lanes passed"
 fi
 echo "artifacts: $ARTIFACT_DIR"
 if (( ${#FAILURES[@]} > 0 )); then
