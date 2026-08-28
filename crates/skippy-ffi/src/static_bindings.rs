@@ -443,6 +443,21 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_shared_kv_anchor_range(
+        session: *mut Session,
+        out_anchor_start: *mut i32,
+        out_anchor_end: *mut i32,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_seed_shared_kv_anchor_page(
+        session: *mut Session,
+        desc: *const KvPageDesc,
+        input: *const c_void,
+        input_bytes: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_export_recurrent_state(
         session: *mut Session,
         output: *mut c_void,

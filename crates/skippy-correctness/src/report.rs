@@ -156,6 +156,10 @@ pub struct BoundaryDTypeScanSplit {
     pub boundary_tensor: Option<BoundaryTensorReport>,
     pub frame_desc: Option<FrameDescReport>,
     pub boundary_payload_sha256: Option<String>,
+    /// Shared-KV anchor layers (Gemma3N/Gemma4 reuse anchors outside the
+    /// stage's own layer range) whose KV rows were transported from stage 0
+    /// and seeded into stage 1 before the boundary decode, as "start..end".
+    pub shared_kv_anchor_range: Option<String>,
     pub desc_matches_tensor: bool,
     pub predicted_token: Option<i32>,
     pub signal: Option<TokenSignalReport>,

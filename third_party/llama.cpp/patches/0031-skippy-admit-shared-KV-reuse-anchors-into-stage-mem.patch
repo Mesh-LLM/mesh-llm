@@ -1,0 +1,591 @@
+From b5ffd845251b330d95f2e30b35aecb20fd0d5cd5 Mon Sep 17 00:00:00 2001
+From: Paul Hogan
+ <5004d00b753726762516a66df75936687319095eacf0e9f7a4710f7a0ff12098@meshllm.communities.buzz.xyz>
+Date: Fri, 28 Aug 2026 22:26:14 +1000
+Subject: [PATCH] skippy: admit shared-KV reuse anchors into stage memory and
+ seed them cross-stage
+
+Gemma3N and Gemma4 alias the KV cache of every layer above
+n_layer_kv_from_start to one of two anchor layers (n-2 for SWA, n-1 for
+full attention); those reuse layers compute no K/V of their own. A stage
+slice starting above the anchors filtered them out of stage memory, so
+the reuse lookup asserted (SIGABRT) at model open - Gemma-4 E4B aborted
+at every split >= 23.
+
+- skippy_stage_memory_filter now admits the two reuse anchors into stage
+  memory (allocation only; the stage graph filter still excludes them)
+- the kv-cache reuse assert becomes a thrown runtime error, surfaced as
+  a clean stage-open failure instead of a process abort
+- stage_seed_kv_page writes anchor rows into a fresh cache without
+  marking cells or advancing position: the next decode claims the same
+  cells and reads the seeded rows in place (a plain import would
+  double-allocate the position and leave a zero row visible)
+- skippy_session_shared_kv_anchor_range +
+  skippy_session_seed_shared_kv_anchor_page expose the transport;
+  composite ISWA export tolerates zero-layer base/SWA components when
+  the anchor range selects only one of the two subcaches
+
+ABI patch 42 -> 43. Validated: Gemma-4 E4B Q4_K_M Metal 36/36 cuts 6..41
+exact parity (deep cuts 23..41 previously aborted); Qwen3.5-4B 31/31
+unchanged.
+---
+ include/skippy/common.h |   2 +-
+ include/skippy/state.h  |  31 ++++++
+ src/llama-kv-cache.cpp  | 205 +++++++++++++++++++++++++++++++++++++++-
+ src/llama-kv-cache.h    |  14 +++
+ src/llama-model.cpp     |  30 ++++--
+ src/skippy/state.cpp    | 127 ++++++++++++++++++++++++-
+ 6 files changed, 394 insertions(+), 15 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 04c1c5805..a175064a9 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -34,7 +34,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 42
++#define SKIPPY_ABI_VERSION_PATCH 43
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 1c77c5450..333e47aaf 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -153,6 +153,37 @@ LLAMA_API enum skippy_status skippy_import_kv_page(
+         size_t input_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief Reports the shared-KV anchor range the session's stage depends on.
++ *
++ * For architectures whose upper layers reuse the KV cache of two anchor
++ * layers (Gemma3N, Gemma4), a stage slice that starts above the anchors
++ * still allocates the anchor cache tensors and must have their rows seeded
++ * by the upstream stage. Outputs anchor_start = anchor_end = 0 when the
++ * model does not use shared KV or the anchors are inside this stage's own
++ * layer range (nothing to transport).
++ */
++LLAMA_API enum skippy_status skippy_session_shared_kv_anchor_range(
++        struct skippy_session * session,
++        int32_t * out_anchor_start,
++        int32_t * out_anchor_end,
++        struct skippy_error ** out_error);
++
++/** @brief Seeds shared-KV anchor rows exported by the upstream stage.
++ *
++ * Writes the anchor K/V rows into this session's cache without marking any
++ * cell or advancing the session position. Must be called on a fresh session
++ * before any decode: the next decode claims the same cells and its attention
++ * reads the seeded rows in place. `desc` must be a composite ISWA page (or a
++ * single-codec page) exported with the anchor layer range reported by
++ * skippy_session_shared_kv_anchor_range.
++ */
++LLAMA_API enum skippy_status skippy_session_seed_shared_kv_anchor_page(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error);
++
+ /** @brief Saves a session prefix into a resident cache sequence. */
+ LLAMA_API enum skippy_status skippy_session_save_prefix(
+         struct skippy_session * session,
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 8242017bd..9e99e1056 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -100,6 +100,43 @@ llama_kv_cache::llama_kv_cache(
+ 
+     const uint32_t n_layer = hparams.n_layer_all;
+ 
++    // Skippy staged slices: a KV-sharing layer (one whose `reuse` target lies
++    // outside the stage filter) must still resolve its anchor, because it
++    // aliases the anchor's K/V tensors instead of owning its own. Compute the
++    // anchor set up front — every anchor referenced by a filter-passing layer
++    // that the filter itself excludes — plus the transitive closure: an
++    // admitted anchor may itself alias another anchor (e.g. the non-SWA cache
++    // admits full-attention layer 23, which reuses nothing, while the SWA
++    // cache admits SWA anchor 22 whose own reuse is -1; conversely a hybrid
++    // pattern can chain), so follow `reuse` until it stops. Admit those
++    // layers through the primary loop, so the reuse loop below always finds a
++    // physical entry to alias.
++    // Example: Gemma-4 shares KV tensors across layers — only layers
++    // [0, n_layer_kv_from_start) own cache entries and every later layer
++    // aliases an anchor, so any stage starting at or after the first shared
++    // layer drops its anchors and crashes.
++    std::vector<int32_t> reuse_anchors;
++    if (reuse && filter) {
++        for (uint32_t il = 0; il < n_layer; il++) {
++            // note: no has_kv guard here — the reuse loop below also admits
++            // non-KV-owning sharing layers, and those are precisely the layers
++            // whose anchors may lie outside the stage filter
++            if (!filter(il)) {
++                continue;
++            }
++            int32_t il_anchor = reuse(il);
++            while (il_anchor >= 0 && !filter(il_anchor)) {
++                reuse_anchors.push_back(il_anchor);
++                il_anchor = reuse(il_anchor);
++            }
++        }
++        std::sort(reuse_anchors.begin(), reuse_anchors.end());
++        reuse_anchors.erase(std::unique(reuse_anchors.begin(), reuse_anchors.end()), reuse_anchors.end());
++    }
++    const auto is_reuse_anchor = [&reuse_anchors](int32_t il) {
++        return std::find(reuse_anchors.begin(), reuse_anchors.end(), il) != reuse_anchors.end();
++    };
++
+     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
+     struct ggml_backend_buft_comparator {
+         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
+@@ -167,11 +204,17 @@ llama_kv_cache::llama_kv_cache(
+             continue;
+         }
+ 
+-        if (filter && !filter(il)) {
++        const bool admitted_reuse_anchor = is_reuse_anchor((int32_t) il);
++
++        if (filter && !filter(il) && !admitted_reuse_anchor) {
+             LLAMA_LOG_DEBUG("%s: layer %3d: filtered\n", __func__, il);
+             continue;
+         }
+ 
++        if (admitted_reuse_anchor) {
++            LLAMA_LOG_DEBUG("%s: layer %3d: admitted as reuse anchor\n", __func__, il);
++        }
++
+         if (share && other) {
+             const int32_t il_share = share(il);
+ 
+@@ -278,9 +321,17 @@ llama_kv_cache::llama_kv_cache(
+                 continue;
+             }
+ 
+-            GGML_ASSERT(map_layer_ids.find(il_reuse) != map_layer_ids.end());
++            const auto it_reuse = map_layer_ids.find(il_reuse);
++            if (it_reuse == map_layer_ids.end()) {
++                // Skippy stage filters admit the shared-KV reuse anchors into
++                // stage memory, so this is unreachable for well-formed stages.
++                // Keep it a loud construction failure (caught and surfaced as a
++                // null context by llama_init_from_model) rather than a process
++                // abort if a future filter path regresses.
++                throw std::runtime_error(format("kv cache reuse layer %d is missing from the cache (anchor %d was filtered out)", il, il_reuse));
++            }
+ 
+-            map_layer_ids[il] = map_layer_ids[il_reuse];
++            map_layer_ids[il] = it_reuse->second;
+ 
+             LLAMA_LOG_DEBUG("%s: - layer %3d: reuse layer %d, is_swa = %d\n", __func__, il, il_reuse, hparams.is_swa(il));
+         }
+@@ -1929,6 +1980,154 @@ bool llama_kv_cache::stage_import_kv_page(
+     return src == static_cast<const char *>(input) + input_bytes;
+ }
+ 
++bool llama_kv_cache::stage_seed_kv_page(
++        llama_seq_id seq_id,
++        const skippy_kv_page_desc & desc,
++        const void * input,
++        size_t input_bytes,
++        std::string & error) const {
++    if (input == nullptr) {
++        error = "input payload is required";
++        return false;
++    }
++    if (desc.version != 1) {
++        error = "unsupported native KV page descriptor version";
++        return false;
++    }
++    if (desc.layer_start < 0 ||
++            desc.layer_end <= desc.layer_start ||
++            static_cast<uint32_t>(desc.layer_end) > hparams.n_layer_all ||
++            desc.token_count == 0) {
++        error = "invalid native KV page descriptor";
++        return false;
++    }
++    if (desc.payload_bytes != input_bytes) {
++        error = "native KV page payload size does not match descriptor";
++        return false;
++    }
++    if ((desc.flags & SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED) != (v_trans ? SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED : 0)) {
++        error = "native KV page V transposition does not match runtime";
++        return false;
++    }
++    if (seq_to_stream.empty() || v_cells.empty()) {
++        error = "KV cache has no stream";
++        return false;
++    }
++    if (seq_id < 0 || static_cast<size_t>(seq_id) >= seq_to_stream.size() || seq_id >= LLAMA_MAX_SEQ) {
++        error = "sequence id is mapped to an invalid KV stream";
++        return false;
++    }
++    const uint32_t strm = seq_to_stream[seq_id];
++    if (strm >= v_cells.size()) {
++        error = "sequence id is mapped to an invalid KV stream";
++        return false;
++    }
++    if (desc.token_start + desc.token_count > static_cast<uint64_t>(v_cells[strm].size())) {
++        error = "seeded token range exceeds KV cache capacity";
++        return false;
++    }
++    // seeding must happen before any cell is marked: the decode that follows
++    // selects and marks the same cells itself, and its writes for layers that
++    // own KV would clobber the seeded rows with their own (correct) values.
++    for (const auto & cells : v_cells) {
++        if (cells.get_used() > 0) {
++            error = "shared-KV anchor seeding requires an empty cache";
++            return false;
++        }
++    }
++
++    std::vector<const kv_layer *> selected;
++    selected.reserve(layers.size());
++    for (const auto & layer : layers) {
++        const uint32_t il = layer.il;
++        if (il < static_cast<uint32_t>(desc.layer_start) || il >= static_cast<uint32_t>(desc.layer_end)) {
++            continue;
++        }
++        if (layer.k_stream.size() <= strm || layer.k_stream[strm] == nullptr) {
++            continue;
++        }
++        const uint32_t n_embd_v = hparams.n_embd_v_gqa(il);
++        const bool has_v_stream = layer.v_stream.size() > strm && layer.v_stream[strm] != nullptr;
++        const bool has_k_idx_stream = layer.k_idx_stream.size() > strm && layer.k_idx_stream[strm] != nullptr;
++        const size_t k_row = ggml_row_size(layer.k_stream[strm]->type, hparams.n_embd_k_gqa(il));
++        const size_t v_row = has_v_stream && !v_trans ? ggml_row_size(layer.v_stream[strm]->type, n_embd_v) : 0;
++        const size_t v_el  = has_v_stream &&  v_trans ? ggml_type_size(layer.v_stream[strm]->type) : 0;
++        const size_t k_idx_row = has_k_idx_stream ? ggml_row_size(layer.k_idx_stream[strm]->type, hparams.n_embd_k_idx(il)) : 0;
++        const uint32_t layer_v_type = has_v_stream ? static_cast<uint32_t>(layer.v_stream[strm]->type) : GGML_TYPE_F32;
++        if (desc.k_type != static_cast<uint32_t>(layer.k_stream[strm]->type) ||
++                desc.v_type != layer_v_type ||
++                desc.k_row_bytes != k_row ||
++                desc.v_row_bytes != v_row ||
++                desc.v_element_bytes != v_el ||
++                desc.k_idx_row_bytes != k_idx_row) {
++            error = "seeded KV page does not match this cache's row layout";
++            return false;
++        }
++        selected.push_back(&layer);
++    }
++    if (selected.empty()) {
++        error = "no KV cache layers selected by seeded page layer range";
++        return false;
++    }
++    if (selected.size() != desc.layer_count) {
++        error = "seeded KV page layer count does not match this cache";
++        return false;
++    }
++
++    // rows are written at cell offset token_start + i for each selected layer
++    const char * src = static_cast<const char *>(input);
++    for (const auto * layer : selected) {
++        auto * k = layer->k_stream[strm];
++        const size_t run_bytes = static_cast<size_t>(desc.token_count) * desc.k_row_bytes;
++        const size_t dst_offset = static_cast<size_t>(desc.token_start) * desc.k_row_bytes;
++        ggml_backend_tensor_set(k, src, dst_offset, run_bytes);
++        src += run_bytes;
++    }
++
++    const auto & cells = v_cells[strm];
++    if (!v_trans) {
++        for (const auto * layer : selected) {
++            if (desc.v_row_bytes == 0) {
++                continue;
++            }
++            auto * v = layer->v_stream[strm];
++            const size_t run_bytes = static_cast<size_t>(desc.token_count) * desc.v_row_bytes;
++            const size_t dst_offset = static_cast<size_t>(desc.token_start) * desc.v_row_bytes;
++            ggml_backend_tensor_set(v, src, dst_offset, run_bytes);
++            src += run_bytes;
++        }
++    } else {
++        for (const auto * layer : selected) {
++            if (desc.v_element_bytes == 0) {
++                continue;
++            }
++            auto * v = layer->v_stream[strm];
++            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
++            for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
++                const size_t run_bytes = static_cast<size_t>(desc.token_count) * desc.v_element_bytes;
++                const size_t dst_offset = (static_cast<size_t>(desc.token_start) + static_cast<size_t>(j) * cells.size()) * desc.v_element_bytes;
++                ggml_backend_tensor_set(v, src, dst_offset, run_bytes);
++                src += run_bytes;
++            }
++        }
++    }
++
++    if (desc.k_idx_row_bytes > 0) {
++        for (const auto * layer : selected) {
++            if (layer->k_idx_stream.size() <= strm || layer->k_idx_stream[strm] == nullptr) {
++                break;
++            }
++            auto * k_idx = layer->k_idx_stream[strm];
++            const size_t run_bytes = static_cast<size_t>(desc.token_count) * desc.k_idx_row_bytes;
++            const size_t dst_offset = static_cast<size_t>(desc.token_start) * desc.k_idx_row_bytes;
++            ggml_backend_tensor_set(k_idx, src, dst_offset, run_bytes);
++            src += run_bytes;
++        }
++    }
++
++    return src == static_cast<const char *>(input) + input_bytes;
++}
++
+ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+     uint32_t result = 0;
+ 
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 98dbcb198..742117493 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -194,6 +194,20 @@ public:
+             std::string & error,
+             bool validate_only = false);
+ 
++    // Seeds KV rows for the shared-KV reuse anchors without marking cache
++    // cells or advancing the session position. Unlike stage_import_kv_page
++    // this does not allocate or own the cells: the next decode's find_slot
++    // deterministically selects cells [0..token_count) of a fresh cache,
++    // marks them, and the graph's attention reads the seeded rows in place.
++    // This is the cross-stage transport path for shared-KV models (Gemma3N,
++    // Gemma4) whose reuse layers compute no K/V of their own.
++    bool stage_seed_kv_page(
++            llama_seq_id seq_id,
++            const skippy_kv_page_desc & desc,
++            const void * input,
++            size_t input_bytes,
++            std::string & error) const;
++
+     //
+     // graph_build API
+     //
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 64f506ac5..c5c770dfa 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2199,6 +2199,7 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
+ }
+ 
+ static llama_memory_i::layer_filter_cb skippy_stage_memory_filter(
++        const llama_hparams & hparams,
+         llama_memory_i::layer_filter_cb filter,
+         enum llama_context_type ctx_type) {
+     const skippy_graph_filter stage_filter = skippy_graph_get_filter();
+@@ -2208,9 +2209,26 @@ static llama_memory_i::layer_filter_cb skippy_stage_memory_filter(
+ 
+     const int32_t layer_start = stage_filter.layer_start;
+     const int32_t layer_end   = stage_filter.layer_end;
+-    return [filter = std::move(filter), layer_start, layer_end](int32_t il) {
++
++    // Shared-KV models (Gemma3N, Gemma4): only the first n_layer_kv_from_start
++    // layers own KV cache tensors; every layer above aliases one of the two
++    // reuse anchors (n-2 for SWA layers, n-1 for full-attention layers) via
++    // the reuse callback in create_memory. Those layers compute no K/V of
++    // their own, so a stage slice that starts above an anchor still needs the
++    // anchor's cache tensors present: the reuse map inside llama_kv_cache
++    // resolves their attention reads through the anchor's entry, and without
++    // it the map lookup asserts (or throws) at memory creation. Admitting the
++    // anchors here only grows memory allocation - the stage graph filter is
++    // separate and still excludes them - and the anchor rows themselves are
++    // seeded cross-stage via skippy_session_seed_shared_kv_anchor_page.
++    const bool has_shared_kv = hparams.n_layer_kv_from_start >= 2;
++    const int32_t anchor_swa  = has_shared_kv ? hparams.n_layer_kv_from_start - 2 : -1;
++    const int32_t anchor_full = has_shared_kv ? hparams.n_layer_kv_from_start - 1 : -1;
++
++    return [filter = std::move(filter), layer_start, layer_end, anchor_swa, anchor_full](int32_t il) {
+         const bool in_stage = il >= layer_start && il < layer_end;
+-        return in_stage && (!filter || filter(il));
++        const bool is_anchor = il == anchor_swa || il == anchor_full;
++        return (in_stage || is_anchor) && (!filter || filter(il));
+     };
+ }
+ 
+@@ -2432,7 +2450,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                             std::max((uint32_t) 1, cparams.n_seq_max),
+                             cparams.n_seq_max,
+                             cparams.n_rs_seq,
+-                            skippy_stage_memory_filter(nullptr, params.ctx_type));
++                            skippy_stage_memory_filter(hparams, nullptr, params.ctx_type));
+                 } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen && !mtp_on_hybrid_nemotron) {
+                     // The main difference between hybrid architectures is the
+                     // layer filters, so pick the right one here
+@@ -2479,8 +2497,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                     if (!filter_recr) {
+                         filter_recr = [&](uint32_t il) { return hparams.is_recr(il); };
+                     }
+-                    filter_attn = skippy_stage_memory_filter(std::move(filter_attn), params.ctx_type);
+-                    filter_recr = skippy_stage_memory_filter(std::move(filter_recr), params.ctx_type);
++                    filter_attn = skippy_stage_memory_filter(hparams, std::move(filter_attn), params.ctx_type);
++                    filter_recr = skippy_stage_memory_filter(hparams, std::move(filter_recr), params.ctx_type);
+ 
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         // Use hybrid-iswa for hybrid models with SWA
+@@ -2553,7 +2571,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         }
+                     }
+ 
+-                    filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
++                    filter = skippy_stage_memory_filter(hparams, std::move(filter), params.ctx_type);
+ 
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         GGML_ASSERT(hparams.is_swa_any());
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 7270d2ea2..6a23a6324 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -498,14 +498,41 @@ static bool skippy_export_iswa_kv_page(
+     size_t base_bytes = 0;
+     size_t swa_bytes = 0;
+     const bool base_sized = iswa->get_base()->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, &base, nullptr, 0, &base_bytes, error);
+-    if (!base_sized && base_bytes == 0) {
++    if (!base_sized && base_bytes == 0 && !error.empty() && error != "no KV cache layers selected by layer range") {
+         return false;
+     }
+-    error.clear();
++    if (!base_sized) {
++        // partial selection: the layer range owns no full-attention KV rows
++        // (e.g. a deep stage-0 slice whose only shared-KV anchor is the SWA
++        // anchor). Emit a zero-layer base component instead of failing.
++        error.clear();
++        base = {};
++        base.version = 1;
++        base.layer_start = layer_start;
++        base.layer_end = layer_end;
++        base.token_start = token_start;
++        base.token_count = token_count;
++        base.layer_count = 0;
++        base.payload_bytes = 0;
++        base_bytes = 0;
++    }
+     const bool swa_sized = iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, nullptr, 0, &swa_bytes, error);
+-    if (!swa_sized && swa_bytes == 0) {
++    if (!swa_sized && swa_bytes == 0 && !error.empty() && error != "no KV cache layers selected by layer range") {
+         return false;
+     }
++    if (!swa_sized) {
++        // partial selection: the layer range owns no SWA KV rows
++        error.clear();
++        swa = {};
++        swa.version = 1;
++        swa.layer_start = layer_start;
++        swa.layer_end = layer_end;
++        swa.token_start = swa_start;
++        swa.token_count = swa_count;
++        swa.layer_count = 0;
++        swa.payload_bytes = 0;
++        swa_bytes = 0;
++    }
+     if (base_bytes > std::numeric_limits<size_t>::max() - swa_bytes) {
+         error = "composite KV page payload is too large";
+         return false;
+@@ -531,8 +558,13 @@ static bool skippy_export_iswa_kv_page(
+         return false;
+     }
+     char * bytes = static_cast<char *>(output);
+-    return iswa->get_base()->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, &base, bytes, base_bytes, &base_bytes, error) &&
+-           iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, bytes + base_bytes, swa_bytes, &swa_bytes, error);
++    const bool base_written = base.layer_count == 0 ||
++            iswa->get_base()->stage_export_kv_page(session->seq_id, layer_start, layer_end, token_start, token_count, &base, bytes, base_bytes, &base_bytes, error);
++    if (!base_written) {
++        return false;
++    }
++    return swa.layer_count == 0 ||
++            iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, bytes + base_bytes, swa_bytes, &swa_bytes, error);
+ }
+ 
+ enum skippy_status skippy_export_kv_page(
+@@ -654,6 +686,91 @@ enum skippy_status skippy_import_kv_page(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_session_shared_kv_anchor_range(
++        struct skippy_session * session,
++        int32_t * out_anchor_start,
++        int32_t * out_anchor_end,
++        struct skippy_error ** out_error) {
++    if (out_anchor_start != nullptr) {
++        *out_anchor_start = 0;
++    }
++    if (out_anchor_end != nullptr) {
++        *out_anchor_end = 0;
++    }
++    if (session == nullptr || session->ctx == nullptr || out_anchor_start == nullptr || out_anchor_end == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "active session and outputs are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    const llama_hparams & hparams = session->stage_model->model->hparams;
++    const int32_t n_layer_kv_from_start = hparams.n_layer_kv_from_start;
++    if (n_layer_kv_from_start < 2) {
++        // not a shared-KV architecture: nothing to transport
++        return skippy_success(out_error);
++    }
++
++    const int32_t layer_start = session->stage_model->config.layer_start;
++    const int32_t anchor_swa  = n_layer_kv_from_start - 2;
++    const int32_t anchor_full = n_layer_kv_from_start - 1;
++    if (layer_start <= anchor_swa) {
++        // the stage owns (or starts at or below) the anchors: its own forward
++        // passes write the anchor rows; no cross-stage transport is needed
++        return skippy_success(out_error);
++    }
++
++    *out_anchor_start = anchor_swa;
++    *out_anchor_end = anchor_full + 1;
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_session_seed_shared_kv_anchor_page(
++        struct skippy_session * session,
++        const struct skippy_kv_page_desc * desc,
++        const void * input,
++        size_t input_bytes,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr || desc == nullptr || input == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session, descriptor, and payload are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    session->ctx->synchronize();
++
++    std::string error;
++    bool ok = false;
++    if (desc->codec == SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1) {
++        auto * iswa = skippy_get_iswa_cache(session);
++        if (iswa == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "composite anchor page requires ISWA memory");
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++        // decompose into per-subcache single pages and seed each
++        skippy_kv_page_desc base = skippy_page_from_component(*desc, desc->components[0]);
++        skippy_kv_page_desc swa = skippy_page_from_component(*desc, desc->components[1]);
++        const char * bytes = static_cast<const char *>(input);
++        ok = true;
++        if (base.layer_count > 0) {
++            ok = iswa->get_base()->stage_seed_kv_page(session->seq_id, base, bytes, base.payload_bytes, error);
++        }
++        if (ok && swa.layer_count > 0) {
++            ok = iswa->get_swa()->stage_seed_kv_page(session->seq_id, swa, bytes + desc->components[1].payload_offset, swa.payload_bytes, error);
++        }
++    } else if (desc->codec == 0 || desc->codec == SKIPPY_KV_PAGE_CODEC_SINGLE_V1) {
++        if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++            ok = kv->stage_seed_kv_page(session->seq_id, *desc, input, input_bytes, error);
++        }
++    } else {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unsupported native KV page codec");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++
++    if (!ok) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.c_str());
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_retire_verify_checkpoint(
+         skippy_session * session,
+         uint64_t token_start,
+-- 
+2.54.0 (Apple Git-157)
+

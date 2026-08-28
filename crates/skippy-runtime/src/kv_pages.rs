@@ -259,6 +259,62 @@ impl StageSession {
         Ok(())
     }
 
+    /// Returns the shared-KV anchor layer range this stage depends on, or
+    /// `None` when the model does not share KV across layers or this stage
+    /// owns its anchors (nothing to transport cross-stage).
+    ///
+    /// Shared-KV architectures (Gemma3N, Gemma4) alias the KV cache of every
+    /// layer above `n_layer_kv_from_start` to one of two anchor layers. A
+    /// stage slice that starts above the anchors still allocates their cache
+    /// tensors and must have their rows seeded from the upstream stage via
+    /// [`Self::seed_shared_kv_anchor_page`] before the first decode.
+    pub fn shared_kv_anchor_range(&mut self) -> Result<Option<(i32, i32)>> {
+        let mut anchor_start = 0_i32;
+        let mut anchor_end = 0_i32;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_shared_kv_anchor_range(
+                self.raw,
+                &mut anchor_start,
+                &mut anchor_end,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        if anchor_start == 0 && anchor_end == 0 {
+            return Ok(None);
+        }
+        Ok(Some((anchor_start, anchor_end)))
+    }
+
+    /// Seeds shared-KV anchor rows exported by the upstream stage without
+    /// marking cache cells or advancing this session's position. The next
+    /// decode claims the same cells and reads the seeded rows in place.
+    /// Requires a fresh session.
+    pub fn seed_shared_kv_anchor_page(
+        &mut self,
+        desc: &RuntimeKvPageDesc,
+        payload: &[u8],
+    ) -> Result<()> {
+        desc.validate_payload(payload.len())?;
+        if self.token_count != 0 {
+            anyhow::bail!("shared-KV anchor seeding requires a fresh session");
+        }
+        let raw = desc.as_raw();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_seed_shared_kv_anchor_page(
+                self.raw,
+                &raw,
+                payload.as_ptr().cast(),
+                payload.len(),
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        Ok(())
+    }
+
     pub fn export_recurrent_state(&mut self) -> Result<Vec<u8>> {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
