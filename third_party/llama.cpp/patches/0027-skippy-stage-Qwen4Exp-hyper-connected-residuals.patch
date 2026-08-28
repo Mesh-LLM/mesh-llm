@@ -1,8 +1,8 @@
-From 4bfb02023f92ef159ec409b3bd0af42569271156 Mon Sep 17 00:00:00 2001
+From 67971964786884bf14aee53113d7711fd797cd81 Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 01:06:43 +1000
-Subject: [PATCH] skippy: stage Qwen4Exp hyper-connected residuals
+Subject: [PATCH 27/30] skippy: stage Qwen4Exp hyper-connected residuals
 
 Carry Qwen4Exp's hyper-connected residual through an explicit wide graph input, retain token sidebands for PLE history, and limit graph execution to the selected layer range.
 
@@ -17,9 +17,10 @@ Signed-off-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a0
  src/skippy/activation.cpp               | 17 +++++++--
  src/skippy/activation_layout.cpp        |  8 ++--
  src/skippy/activation_scopes.h          | 26 +++++++++++++
+ src/skippy/execution-batch.cpp          |  9 +++++
  tests/CMakeLists.txt                    |  2 +
  tests/test-skippy-activation-layout.cpp | 46 +++++++++++++++++++++++
- 9 files changed, 198 insertions(+), 17 deletions(-)
+ 10 files changed, 207 insertions(+), 17 deletions(-)
  create mode 100644 tests/test-skippy-activation-layout.cpp
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
@@ -337,6 +338,26 @@ index 440db0aef..dd66056ad 100644
  struct skippy_glm_dsa_top_k_scope {
      skippy_glm_dsa_top_k_scope(
              const skippy_activation_desc * desc,
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 2d771832a..9666224f0 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -515,6 +515,15 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+     };
+ 
+     skippy_activation_tokens_scope activation_tokens_scope(token_ids, request_count);
++    const bool qwen4exp_activation_input = activation_input && first->stage_model->model->arch == LLM_ARCH_QWEN4EXP;
++    const int32_t qwen4exp_hc = qwen4exp_activation_input
++        ? static_cast<int32_t>(first->stage_model->model->hparams.dsv4_hc_mult)
++        : 0;
++    skippy_qwen4exp_hc_scope qwen4exp_hc_scope(
++            qwen4exp_activation_input ? embd_storage.data() : nullptr,
++            static_cast<uint32_t>(request_count),
++            n_embd,
++            qwen4exp_hc);
+     const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
+     skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
+             glm_dsa_input_top_k_storage.empty() ? nullptr : glm_dsa_input_top_k_storage.data(),
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 index 7420978ae..376e9b09f 100644
 --- a/tests/CMakeLists.txt

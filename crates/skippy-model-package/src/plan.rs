@@ -142,8 +142,11 @@ fn tensor_in_explicit_stage(
     includes_embeddings: bool,
     includes_output: bool,
 ) -> bool {
-    if is_per_layer_token_embd(&tensor.name) {
-        return stage_retains_a_per_layer_embedding_consumer(all_tensors, layer_start, layer_end);
+    if is_per_layer_token_embd(&tensor.name)
+        && let Some(retained) =
+            sparse_per_layer_embedding_retention(all_tensors, layer_start, layer_end)
+    {
+        return retained;
     }
     matches!(
         tensor.layer_index,
@@ -162,39 +165,47 @@ fn is_per_layer_token_embd(name: &str) -> bool {
     name == PER_LAYER_TOKEN_EMBD
 }
 
-/// The per-layer token embedding table is classified as an embedding tensor, but
-/// it is gathered from by per-layer consumers rather than by the stage that owns
-/// the token embeddings. Selecting it on embedding ownership alone drops it from
-/// a stage that needs it; selecting it unconditionally ships it to every stage.
+/// Decide whether a stage must retain the shared per-layer token embedding table.
 ///
-/// Keep it exactly on the stages that retain a consumer. For qwen4exp the
-/// consumers are the PLE blocks (`blk.N.ple_*`), which are a sparse subset of
-/// layers -- `ple.layers = [1]` on Qwen3.8-Flash-Next, so only one stage of a
-/// split can ever read the 26.8 GiB table. Gemma3n/Gemma4 gather it on every
-/// block via their own per-layer projections, so their consumer tensors are
-/// present in every stage and this predicate keeps it everywhere, as they need.
-fn stage_retains_a_per_layer_embedding_consumer(
+/// The table is classified as an embedding tensor, but it is gathered from by
+/// per-layer consumers rather than by the stage that owns the token embeddings.
+/// Selecting it on embedding ownership alone drops it from a stage that needs
+/// it; selecting it unconditionally ships a very large table to every stage.
+///
+/// Only qwen4exp is known to consume it from a *sparse* subset of layers
+/// (`blk.N.ple_*`; `qwen4exp.ple.layers = [1]` on Qwen3.8-Flash-Next), so only
+/// one stage of a split can ever read it. Return `Some(retain)` for that shape.
+///
+/// Return `None` for every other artifact so the caller falls back to the
+/// ordinary embedding-ownership rule. This matters: Gemma3n/Gemma4 gather the
+/// same table through per-block tensors named `blk.N.inp_gate`, `blk.N.proj`
+/// and `blk.N.post_norm` (`llama-arch.cpp:568-570`) — *not* `per_layer_*` — so
+/// a name-based consumer scan finds nothing for them. Failing closed here would
+/// silently drop their table from every stage.
+fn sparse_per_layer_embedding_retention(
     all_tensors: &[TensorInfo],
     layer_start: u32,
     layer_end: u32,
-) -> bool {
-    all_tensors.iter().any(|tensor| {
-        matches!(tensor.layer_index, Some(layer) if layer >= layer_start && layer < layer_end)
-            && is_per_layer_embedding_consumer(&tensor.name)
-    })
+) -> Option<bool> {
+    let mut saw_sparse_consumer = false;
+    let mut retained = false;
+    for tensor in all_tensors {
+        if !is_sparse_per_layer_embedding_consumer(&tensor.name) {
+            continue;
+        }
+        saw_sparse_consumer = true;
+        if matches!(tensor.layer_index, Some(layer) if layer >= layer_start && layer < layer_end) {
+            retained = true;
+            break;
+        }
+    }
+    saw_sparse_consumer.then_some(retained)
 }
 
-fn is_per_layer_embedding_consumer(name: &str) -> bool {
-    let Some((_, suffix)) = name
-        .split_once('.')
+fn is_sparse_per_layer_embedding_consumer(name: &str) -> bool {
+    name.split_once('.')
         .and_then(|(_, rest)| rest.split_once('.'))
-    else {
-        return false;
-    };
-    // qwen4exp gathers the table in its PLE blocks (`blk.N.ple_*`); Gemma3n and
-    // Gemma4 gather it through their per-block projections (`blk.N.per_layer_*`),
-    // which exist on every block and so keep the table on every stage.
-    suffix.starts_with("ple_") || suffix.starts_with("per_layer_")
+        .is_some_and(|(_, suffix)| suffix.starts_with("ple_"))
 }
 
 pub(crate) fn parse_layer_range(layers: &str) -> Result<(u32, u32)> {
