@@ -1,11 +1,11 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
-    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
-    MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
-    TensorInfo, TokenSignal,
+    ActivationDesc, BackendDevice, BoundaryTensorInfo, Error, GenerationSignalWindow,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks,
+    MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
+    SlicePlan, Status, TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -355,6 +355,12 @@ unsafe extern "C" {
     pub fn skippy_session_last_token_signal(
         session: *mut Session,
         out_signal: *mut TokenSignal,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_boundary_tensor_info(
+        session: *mut Session,
+        out_info: *mut BoundaryTensorInfo,
         out_error: *mut *mut Error,
     ) -> Status;
 

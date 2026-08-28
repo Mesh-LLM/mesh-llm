@@ -143,6 +143,9 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         .decode_step_frame(token_id, None, 0)
         .context("full model failed to decode")?
         .0;
+    let token_signal = session
+        .last_token_signal()
+        .context("full-model baseline failed to read last token signal")?;
     let second_predicted_token = session
         .decode_step_frame(predicted_token, None, 0)
         .context("full model failed to decode second token")?
@@ -151,6 +154,7 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         token_id,
         predicted_token,
         second_predicted_token: Some(second_predicted_token),
+        token_signal,
     })
 }
 pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {

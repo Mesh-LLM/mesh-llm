@@ -17,7 +17,7 @@ use skippy_protocol::binary::{
     activation_state_flags_from_frame_flags, recv_reply, write_stage_message,
 };
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode,
+    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeLoadMode, TokenSignal,
     package::{MaterializedPackage, PackageStageRequest, materialize_layer_package_details},
 };
 
@@ -33,6 +33,7 @@ pub(in crate::runner) struct FullModelResult {
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) predicted_token: i32,
     pub(in crate::runner) second_predicted_token: Option<i32>,
+    pub(in crate::runner) token_signal: TokenSignal,
 }
 
 pub(in crate::runner) struct BinarySplitConfig {
