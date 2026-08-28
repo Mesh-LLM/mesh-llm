@@ -48,6 +48,11 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertIn('CERTIFIED_SHA="$(git rev-parse HEAD)"', wrapper)
         # Success requires the remote PR head to equal the certified commit.
         self.assertIn("verify_pr_head_is_certified", wrapper)
+        # The PR must exist before apply_pr_body runs: on a first run the PR
+        # is created lazily, and applying the agent's draft body before
+        # ensure_pr silently no-ops, leaving the generic body on the PR
+        # (live: run 33163990453 — the agent's full analysis never showed).
+        self.assertIn("ensure_pr >/dev/null\n  apply_pr_body", wrapper)
         self.assertIn("report_success", wrapper)
         # The PR-body agent turn runs only before certification; after a green
         # battery only the deterministic apply_pr_body may run.

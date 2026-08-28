@@ -342,6 +342,13 @@ report_success() {
   # publishes the certified tree, writes the status comment, and verifies the
   # PR head binding before declaring success.
   publish_repair_branch
+  # Ensure the PR exists BEFORE applying the body: on a first run no PR
+  # exists yet, ensure_pr creates it (with the generic body), and the agent's
+  # pre-certification draft is then applied on top (live: run 33163990453
+  # pushed a certified branch and opened the PR via pr_comment's ensure_pr
+  # AFTER apply_pr_body had already no-op'd, so the PR kept the generic body
+  # and the agent's 103-line analysis was never shown).
+  ensure_pr >/dev/null
   apply_pr_body
   # The literal backticks around the certified SHA are Markdown, not command
   # substitution.
