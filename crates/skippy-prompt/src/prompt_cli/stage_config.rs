@@ -133,7 +133,7 @@ fn prompt_stage_cache_payload(args: &PromptArgs, stage: &LocalStage) -> StageKvC
         .map(|capability| capability.family_id)
         .as_deref()
     {
-        Some("qwen3next" | "falcon_h1") => StageKvCachePayload::KvRecurrent,
+        Some("qwen3next" | "qwen4exp" | "falcon_h1") => StageKvCachePayload::KvRecurrent,
         Some(
             "qwen3_dense" | "llama" | "deepseek2" | "deepseek3" | "glm4" | "olmo" | "gemma2"
             | "gemma3" | "gemma4_a4b" | "gemma4_e4b" | "glm47_flash" | "minimax_m27",

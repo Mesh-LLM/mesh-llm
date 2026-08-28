@@ -381,7 +381,7 @@ impl GgufCompactMeta {
         }
         match self.architecture.as_str() {
             "falcon-h1" => vec![true; layer_count],
-            "qwen3next" | "qwen35" | "qwen35moe" => {
+            "qwen3next" | "qwen35" | "qwen35moe" | "qwen4exp" => {
                 let interval = if self.full_attention_interval == 0 {
                     4
                 } else {

@@ -297,8 +297,10 @@ fn family_policy_for_normalized_family_id(family_id: &str) -> FamilyPolicy {
         | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" | "muse_glimmer" => {
             resident_kv_policy()
         }
-        "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6" | "rwkv7"
-        | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => kv_recurrent_policy(),
+        "qwen3next" | "qwen4exp" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2"
+        | "rwkv6" | "rwkv7" | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => {
+            kv_recurrent_policy()
+        }
         _ => unknown_family_policy(),
     }
 }
@@ -830,6 +832,8 @@ mod tests {
             "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
             "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
             "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
+            "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ1_S",
+            "qwen4exp",
         ] {
             let policy = family_policy_for_model_id(model_id);
             assert!(

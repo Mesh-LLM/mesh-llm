@@ -45,7 +45,9 @@ pub(crate) fn build_plan_from_tensors(stages: usize, tensors: &[TensorInfo]) -> 
     for (stage_index, (layer_start, layer_end)) in ranges.iter().copied().enumerate() {
         let tensors_for_stage = tensors
             .iter()
-            .filter(|tensor| tensor_in_stage(tensor, stage_index, stages, layer_start, layer_end))
+            .filter(|tensor| {
+                tensor_in_stage(tensor, tensors, stage_index, stages, layer_start, layer_end)
+            })
             .collect();
         stage_tensors.insert(stage_index, tensors_for_stage);
     }
@@ -95,6 +97,7 @@ pub(crate) fn stage_plan_from_tensors(
         .filter(|tensor| {
             tensor_in_explicit_stage(
                 tensor,
+                tensors,
                 layer_start,
                 layer_end,
                 includes_embeddings,
@@ -115,6 +118,7 @@ pub(crate) fn stage_plan_from_tensors(
 
 fn tensor_in_stage(
     tensor: &TensorInfo,
+    all_tensors: &[TensorInfo],
     stage_index: usize,
     stages: usize,
     layer_start: u32,
@@ -122,6 +126,7 @@ fn tensor_in_stage(
 ) -> bool {
     tensor_in_explicit_stage(
         tensor,
+        all_tensors,
         layer_start,
         layer_end,
         stage_index == 0,
@@ -131,11 +136,15 @@ fn tensor_in_stage(
 
 fn tensor_in_explicit_stage(
     tensor: &TensorInfo,
+    all_tensors: &[TensorInfo],
     layer_start: u32,
     layer_end: u32,
     includes_embeddings: bool,
     includes_output: bool,
 ) -> bool {
+    if is_per_layer_token_embd(&tensor.name) {
+        return stage_retains_a_per_layer_embedding_consumer(all_tensors, layer_start, layer_end);
+    }
     matches!(
         tensor.layer_index,
         Some(layer) if layer >= layer_start && layer < layer_end
@@ -145,6 +154,48 @@ fn tensor_in_explicit_stage(
             tensor.role,
             TensorRole::Metadata | TensorRole::Tokenizer | TensorRole::Unknown
         )
+}
+
+pub(crate) const PER_LAYER_TOKEN_EMBD: &str = "per_layer_token_embd.weight";
+
+fn is_per_layer_token_embd(name: &str) -> bool {
+    name == PER_LAYER_TOKEN_EMBD
+}
+
+/// The per-layer token embedding table is classified as an embedding tensor, but
+/// it is gathered from by per-layer consumers rather than by the stage that owns
+/// the token embeddings. Selecting it on embedding ownership alone drops it from
+/// a stage that needs it; selecting it unconditionally ships it to every stage.
+///
+/// Keep it exactly on the stages that retain a consumer. For qwen4exp the
+/// consumers are the PLE blocks (`blk.N.ple_*`), which are a sparse subset of
+/// layers -- `ple.layers = [1]` on Qwen3.8-Flash-Next, so only one stage of a
+/// split can ever read the 26.8 GiB table. Gemma3n/Gemma4 gather it on every
+/// block via their own per-layer projections, so their consumer tensors are
+/// present in every stage and this predicate keeps it everywhere, as they need.
+fn stage_retains_a_per_layer_embedding_consumer(
+    all_tensors: &[TensorInfo],
+    layer_start: u32,
+    layer_end: u32,
+) -> bool {
+    all_tensors.iter().any(|tensor| {
+        matches!(tensor.layer_index, Some(layer) if layer >= layer_start && layer < layer_end)
+            && is_per_layer_embedding_consumer(&tensor.name)
+    })
+}
+
+fn is_per_layer_embedding_consumer(name: &str) -> bool {
+    let Some((_, suffix)) = name
+        .split_once('.')
+        .and_then(|(_, rest)| rest.split_once('.'))
+    else {
+        return false;
+    };
+    suffix.starts_with("ple_")
+        || suffix.starts_with("per_layer_model_proj")
+        || suffix.starts_with("per_layer_proj_norm")
+        || suffix.starts_with("per_layer_input_gate")
+        || suffix.starts_with("per_layer_proj")
 }
 
 pub(crate) fn parse_layer_range(layers: &str) -> Result<(u32, u32)> {

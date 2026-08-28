@@ -160,6 +160,15 @@
       "notes": "text split/cache and split multimodal serving passed with bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M plus mmproj-Qwen2-VL-2B-Instruct-f16.gguf after adding per-chunk media activation forwarding, sampled final prefill, and M-RoPE position sideband transport; f16 wire passed, q8 rejected; FullState remains blocked by M-RoPE native-position rules, so use ResidentKv for exact-prefix text cache"
     },
     {
+      "llama_model": "qwen4exp",
+      "family": "qwen4exp",
+      "status": "package_or_remote_only",
+      "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+      "include": "*UD-IQ1_S*.gguf",
+      "recurrent": "all",
+      "notes": "real Metal parity passed for monolithic versus a two-stage artifact split at layer 24 on the complete three-shard UD-IQ1_S model: predicted token 11 matched, activation width was 10240 f32 values/token, and the boundary payload was 40960 bytes/token; native runtime slicing uses a token-id PLE sideband with sticky recurrent/indexer ownership, while the roughly 68 GiB public quant keeps this package-or-remote-only for routine CI"
+    },
+    {
       "llama_model": "qwen3vl",
       "family": "qwen3vl",
       "status": "certified",
