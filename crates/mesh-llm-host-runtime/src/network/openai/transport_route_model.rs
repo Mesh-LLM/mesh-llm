@@ -104,10 +104,11 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         refreshed: false,
     };
-    // Minted once, before any attempt, so a timeout retry to a different
-    // target carries the same capsule client nonce as the first attempt
-    // instead of letting each target's frontend mint its own.
-    let forwarding_raw = request.raw_with_stable_client_nonce();
+    // `request.raw` was already stabilized at ingress (finalize_forwarded_request
+    // resolves the capsule client nonce once, before target selection), so every
+    // attempt here — including a timeout retry to a different target — forwards
+    // the identical nonce instead of letting each target's frontend mint its own.
+    let forwarding_raw = request.raw.as_slice();
     for (idx, target) in ordered.into_iter().enumerate() {
         state.attempts += 1;
         let attempt_started = Instant::now();
@@ -116,7 +117,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             &node,
             &mut tcp_stream,
             &target,
-            forwarding_raw.as_ref(),
+            forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
                 request_id: request.request_id,

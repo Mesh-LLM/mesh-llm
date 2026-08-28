@@ -14,6 +14,9 @@ use uuid::Uuid;
 
 use super::*;
 
+/// A valid UUIDv4 the frontend will now accept and forward verbatim.
+const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
+
 #[test]
 fn client_nonce_middleware_mints_and_marks_when_absent() {
     let mut request = Request::builder()
@@ -28,15 +31,36 @@ fn client_nonce_middleware_mints_and_marks_when_absent() {
         .headers()
         .get(&CLIENT_NONCE_HEADER)
         .expect("a nonce is minted when the request carried none");
-    assert!(Uuid::parse_str(nonce.to_str().unwrap()).is_ok());
+    assert_eq!(Uuid::parse_str(nonce.to_str().unwrap()).unwrap().get_version_num(), 4);
     assert_eq!(
         request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
-        Some(&HeaderValue::from_static("local_ingress"))
+        Some(&HeaderValue::from_static("frontend"))
     );
 }
 
 #[test]
-fn client_nonce_middleware_forwards_present_header_unchanged() {
+fn client_nonce_middleware_forwards_valid_uuidv4_unchanged() {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
+        .body(Body::empty())
+        .unwrap();
+
+    apply_client_nonce_headers(&mut request);
+
+    assert_eq!(
+        request.headers().get(&CLIENT_NONCE_HEADER),
+        Some(&HeaderValue::from_static(CLIENT_NONCE))
+    );
+    assert!(
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER).is_none(),
+        "forwarding a valid client nonce must not stamp an origin marker"
+    );
+}
+
+#[test]
+fn client_nonce_middleware_replaces_non_uuid_value() {
     let mut request = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
@@ -46,13 +70,39 @@ fn client_nonce_middleware_forwards_present_header_unchanged() {
 
     apply_client_nonce_headers(&mut request);
 
+    let nonce = request
+        .headers()
+        .get(&CLIENT_NONCE_HEADER)
+        .expect("a non-UUID value is replaced with a minted UUIDv4");
+    assert_ne!(nonce, HeaderValue::from_static("harness-supplied-nonce"));
+    assert_eq!(Uuid::parse_str(nonce.to_str().unwrap()).unwrap().get_version_num(), 4);
     assert_eq!(
-        request.headers().get(&CLIENT_NONCE_HEADER),
-        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
+        Some(&HeaderValue::from_static("frontend")),
+        "a replaced nonce is minted here, so it must be marked frontend"
     );
-    assert!(
-        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER).is_none(),
-        "forwarding a harness-supplied nonce must not stamp an origin marker"
+}
+
+#[test]
+fn client_nonce_middleware_rejects_duplicate_headers() {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
+        .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
+        .body(Body::empty())
+        .unwrap();
+
+    apply_client_nonce_headers(&mut request);
+
+    // HeaderMap::insert collapses to a single value; a duplicate is never trusted.
+    let mut values = request.headers().get_all(&CLIENT_NONCE_HEADER).iter();
+    let nonce = values.next().expect("a single minted nonce replaces duplicates");
+    assert!(values.next().is_none(), "duplicate nonce headers must collapse to one");
+    assert_ne!(nonce, HeaderValue::from_static(CLIENT_NONCE));
+    assert_eq!(
+        request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
+        Some(&HeaderValue::from_static("frontend"))
     );
 }
 
@@ -61,8 +111,8 @@ fn client_nonce_middleware_strips_forged_origin_marker_on_supplied_nonce() {
     let mut request = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
-        .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
-        .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "local_ingress")
+        .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
+        .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "frontend")
         .body(Body::empty())
         .unwrap();
 
@@ -70,11 +120,11 @@ fn client_nonce_middleware_strips_forged_origin_marker_on_supplied_nonce() {
 
     assert_eq!(
         request.headers().get(&CLIENT_NONCE_HEADER),
-        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+        Some(&HeaderValue::from_static(CLIENT_NONCE))
     );
     assert!(
         request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER).is_none(),
-        "a caller-forged local_ingress marker must be stripped, not preserved"
+        "a caller-forged frontend marker must be stripped, not preserved"
     );
 }
 
@@ -85,8 +135,8 @@ async fn full_router_strips_forged_origin_marker_on_supplied_nonce() {
         .oneshot(
             Request::builder()
                 .uri("/health")
-                .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
-                .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "local_ingress")
+                .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
+                .header(CLIENT_NONCE_ORIGIN_HEADER.clone(), "frontend")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -96,14 +146,14 @@ async fn full_router_strips_forged_origin_marker_on_supplied_nonce() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get(&CLIENT_NONCE_HEADER),
-        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+        Some(&HeaderValue::from_static(CLIENT_NONCE))
     );
     assert!(
         response
             .headers()
             .get(&CLIENT_NONCE_ORIGIN_HEADER)
             .is_none(),
-        "a caller-forged local_ingress marker must not survive to the response"
+        "a caller-forged frontend marker must not survive to the response"
     );
 }
 
@@ -128,7 +178,7 @@ async fn full_router_mints_and_marks_client_nonce_when_absent() {
     assert!(Uuid::parse_str(nonce.to_str().unwrap()).is_ok());
     assert_eq!(
         response.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
-        Some(&HeaderValue::from_static("local_ingress"))
+        Some(&HeaderValue::from_static("frontend"))
     );
 }
 
@@ -139,7 +189,7 @@ async fn full_router_forwards_present_client_nonce_unchanged() {
         .oneshot(
             Request::builder()
                 .uri("/health")
-                .header(CLIENT_NONCE_HEADER.clone(), "harness-supplied-nonce")
+                .header(CLIENT_NONCE_HEADER.clone(), CLIENT_NONCE)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -149,14 +199,14 @@ async fn full_router_forwards_present_client_nonce_unchanged() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get(&CLIENT_NONCE_HEADER),
-        Some(&HeaderValue::from_static("harness-supplied-nonce"))
+        Some(&HeaderValue::from_static(CLIENT_NONCE))
     );
     assert!(
         response
             .headers()
             .get(&CLIENT_NONCE_ORIGIN_HEADER)
             .is_none(),
-        "forwarding a harness-supplied nonce must not stamp an origin marker"
+        "forwarding a valid client nonce must not stamp an origin marker"
     );
 }
 

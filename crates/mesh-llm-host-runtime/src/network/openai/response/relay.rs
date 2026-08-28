@@ -3,7 +3,8 @@ use super::common::{
     retryable_quality_result,
 };
 use super::probe::{
-    ParsedResponseHeaders, ResponseProbe, read_response_chunk, try_parse_response_headers,
+    ParsedResponseHeaders, ResponseProbe, append_capsule_nonce_headers, read_response_chunk,
+    try_parse_response_headers,
 };
 use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
 use anyhow::Result;
@@ -44,12 +45,25 @@ pub(in crate::network::openai::response) fn remap_error_http_response(
     }
     let mapped_body =
         openai_frontend::map_upstream_error_body(status_code, &full_response[header_end..])?;
-    let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    // The upstream frontend echoes the capsule nonce on its error responses too;
+    // rebuilding the header from scratch would drop it, so re-append whatever the
+    // upstream sent. This keeps the nonce contract intact even when a llama.cpp
+    // error body is remapped into an OpenAI-shaped one.
+    let upstream = try_parse_response_headers(full_response).ok().flatten();
+    let mut header = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         status_code,
         reason_phrase(status_code),
         mapped_body.len()
     );
+    if let Some(parsed) = &upstream {
+        append_capsule_nonce_headers(
+            &mut header,
+            parsed.client_nonce.as_deref(),
+            parsed.nonce_origin.as_deref(),
+        );
+    }
+    header.push_str("\r\n");
     let mut response = header.into_bytes();
     response.extend_from_slice(&mapped_body);
     Some(response)
@@ -214,6 +228,37 @@ mod tests {
         assert!(remapped_text.contains("\"type\":\"invalid_request_error\""));
         assert!(remapped_text.contains("\"code\":\"model_not_found\""));
         assert!(remapped_text.contains("\"message\":\"model missing\""));
+    }
+
+    #[test]
+    fn test_remap_error_http_response_preserves_upstream_nonce_headers() {
+        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+        let origin_header = openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
+        let upstream = format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n{nonce_header}: 11111111-1111-4111-8111-111111111111\r\n{origin_header}: frontend\r\nContent-Length: 52\r\n\r\n{{\"type\":\"not_found_error\",\"message\":\"model missing\"}}"
+        );
+        let upstream = upstream.into_bytes();
+        let header_end = upstream
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|idx| idx + 4)
+            .unwrap();
+        let remapped = remap_error_http_response(404, header_end, &upstream)
+            .expect("llama error should be remapped");
+        let remapped_text = String::from_utf8(remapped).unwrap();
+
+        assert!(
+            remapped_text.contains(&format!(
+                "{nonce_header}: 11111111-1111-4111-8111-111111111111\r\n"
+            )),
+            "the upstream-echoed nonce must survive an error remap: {remapped_text}"
+        );
+        assert!(
+            remapped_text.contains(&format!("{origin_header}: frontend\r\n")),
+            "the upstream-echoed origin marker must survive an error remap: {remapped_text}"
+        );
+        // The body is still remapped to the OpenAI shape.
+        assert!(remapped_text.contains("\"code\":\"model_not_found\""));
     }
 
     #[test]

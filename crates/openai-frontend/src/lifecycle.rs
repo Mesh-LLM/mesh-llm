@@ -27,9 +27,14 @@ pub static CLIENT_NONCE_HEADER: HeaderName = HeaderName::from_static("x-capsule-
 pub static CLIENT_NONCE_ORIGIN_HEADER: HeaderName =
     HeaderName::from_static("x-capsule-nonce-origin");
 
-/// The [`CLIENT_NONCE_ORIGIN_HEADER`] value stamped when this ingress minted
+/// The [`CLIENT_NONCE_ORIGIN_HEADER`] value stamped when this frontend minted
 /// the nonce rather than forwarding one the client already supplied.
-pub const CLIENT_NONCE_ORIGIN_LOCAL_INGRESS: &str = "local_ingress";
+///
+/// The value is `frontend`, not `local_ingress`: for a remote-routed request
+/// this router is the remote host's frontend, so it cannot know whether it is
+/// the original ingress for the logical request. It can only truthfully assert
+/// "this frontend minted the value it is forwarding."
+pub const CLIENT_NONCE_ORIGIN_FRONTEND: &str = "frontend";
 
 /// Metadata that identifies a frontend request without retaining its payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -260,20 +265,66 @@ pub fn request_id_response_header(request_id: &RequestId) -> (HeaderName, Header
     (REQUEST_ID_HEADER.clone(), value)
 }
 
-/// Forward an inbound client nonce unchanged, or mint a fresh CSPRNG UUIDv4
-/// when the header is absent — never reused across requests, never derived
-/// from a counter, timestamp, or session. Returns the value to forward and,
-/// only when this call minted it, the origin-marker value to attach alongside
-/// it so a downstream reader can tell the two cases apart.
+/// Accept an inbound client nonce only when it is a single valid UUIDv4.
+///
+/// A nonce that is not a UUIDv4 is not a nonce this ingress can vouch for: a
+/// client can pin a non-UUID value to a constant, which loses the freshness
+/// property while making the value look more trustworthy than a minted one
+/// (because a forwarded value carries no origin marker). Requiring UUIDv4
+/// aligns the accepted shape with the shape this ingress mints, so downstream
+/// consumers can assume every `x-capsule-client-nonce` is a UUIDv4 regardless
+/// of whether it was forwarded or minted.
+pub fn parse_client_nonce(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value)
+        .ok()
+        .filter(|uuid| uuid.get_version_num() == 4)
+}
+
+/// Accept exactly one valid UUIDv4 client nonce from a header-like value
+/// sequence, returning it in canonical hyphenated form.
+///
+/// A missing value, malformed value, non-UUIDv4 value, or duplicate header is
+/// rejected. This mirrors [`parse_single_request_id`] so both the axum ingress
+/// and the raw host-runtime proxy agree on exactly one nonce-acceptance rule.
+pub fn parse_single_client_nonce<'a, I>(values: I) -> Option<HeaderValue>
+where
+    I: IntoIterator<Item = Option<&'a str>>,
+{
+    let mut values = values.into_iter();
+    let value = values.next()??;
+    if values.next().is_some() {
+        return None;
+    }
+    let uuid = parse_client_nonce(value)?;
+    Some(
+        HeaderValue::from_str(&uuid.hyphenated().to_string())
+            .expect("a UUID is always a valid header value"),
+    )
+}
+
+/// Generate a fresh CSPRNG UUIDv4 client nonce header value — never reused
+/// across requests, never derived from a counter, timestamp, or session.
+pub fn generate_client_nonce() -> HeaderValue {
+    HeaderValue::from_str(&Uuid::new_v4().hyphenated().to_string())
+        .expect("a UUID is always a valid header value")
+}
+
+/// Forward a single valid inbound UUIDv4 client nonce, or mint a fresh one when
+/// the header is absent, invalid, non-UUIDv4, or duplicated. Returns the value
+/// to forward and, only when this call minted it, the origin-marker value to
+/// attach alongside it so a downstream reader can tell the two cases apart.
 pub fn client_nonce_from_headers_or_generate(
     headers: &HeaderMap,
 ) -> (HeaderValue, Option<HeaderValue>) {
-    match headers.get(&CLIENT_NONCE_HEADER) {
-        Some(value) => (value.clone(), None),
+    let inbound = headers
+        .get_all(&CLIENT_NONCE_HEADER)
+        .iter()
+        .map(|value| value.to_str().ok());
+    match parse_single_client_nonce(inbound) {
+        Some(value) => (value, None),
         None => {
-            let minted = HeaderValue::from_str(&Uuid::new_v4().to_string())
-                .expect("a UUID is always a valid header value");
-            let origin = HeaderValue::from_static(CLIENT_NONCE_ORIGIN_LOCAL_INGRESS);
+            let minted = generate_client_nonce();
+            let origin = HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND);
             (minted, Some(origin))
         }
     }
@@ -365,16 +416,18 @@ mod tests {
         }
     }
 
+    const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
+
     #[test]
-    fn client_nonce_already_present_is_forwarded_unchanged() {
+    fn client_nonce_valid_uuidv4_is_forwarded_unchanged() {
         let mut headers = HeaderMap::new();
         headers.insert(
             CLIENT_NONCE_HEADER.clone(),
-            HeaderValue::from_static("harness-supplied-nonce"),
+            HeaderValue::from_static(CLIENT_NONCE),
         );
 
         let (value, origin) = client_nonce_from_headers_or_generate(&headers);
-        assert_eq!(value, HeaderValue::from_static("harness-supplied-nonce"));
+        assert_eq!(value, HeaderValue::from_static(CLIENT_NONCE));
         assert!(
             origin.is_none(),
             "forwarding a caller-supplied nonce must not add an origin marker"
@@ -382,13 +435,78 @@ mod tests {
     }
 
     #[test]
-    fn client_nonce_absent_is_minted_and_marked_local_ingress() {
-        let (value, origin) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+    fn client_nonce_non_uuid_value_is_replaced_and_marked() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static("harness-supplied-nonce"),
+        );
 
-        assert!(Uuid::parse_str(value.to_str().expect("minted nonce is ASCII")).is_ok());
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        let minted = value.to_str().expect("minted nonce is ASCII");
+        assert_ne!(minted, "harness-supplied-nonce");
+        assert!(parse_client_nonce(minted).is_some(), "a UUIDv4 is minted");
         assert_eq!(
             origin,
-            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_LOCAL_INGRESS))
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
+        );
+    }
+
+    #[test]
+    fn client_nonce_duplicate_headers_are_rejected_and_replaced() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static(CLIENT_NONCE),
+        );
+        headers.append(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static(CLIENT_NONCE),
+        );
+
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        assert_ne!(
+            value,
+            HeaderValue::from_static(CLIENT_NONCE),
+            "a duplicated nonce header must never be accepted as trusted"
+        );
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
+        );
+    }
+
+    #[test]
+    fn parse_single_client_nonce_golden_table_rejects_missing_invalid_and_duplicate_values() {
+        let valid = CLIENT_NONCE;
+        let non_v4 = "6d7d8d2e-3f4a-1b5c-8d9e-0a1b2c3d4e5f"; // version nibble = 1
+        let cases = [
+            (vec![Some(valid)], true),
+            (vec![Some("not-a-uuid")], false),
+            (vec![Some(non_v4)], false),
+            (Vec::new(), false),
+            (vec![Some(valid), Some(valid)], false),
+            (vec![None], false),
+            (vec![None, Some(valid)], false),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(
+                parse_single_client_nonce(values).is_some(),
+                expected,
+                "nonce acceptance mismatch",
+            );
+        }
+    }
+
+    #[test]
+    fn client_nonce_absent_is_minted_and_marked_frontend() {
+        let (value, origin) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+
+        assert!(parse_client_nonce(value.to_str().expect("minted nonce is ASCII")).is_some());
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
         );
     }
 

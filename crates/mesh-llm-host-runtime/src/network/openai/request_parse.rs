@@ -3,7 +3,6 @@ use crate::plugin;
 use anyhow::{Context, Result, anyhow, bail};
 use mesh_llm_events::logging::identifiers::RequestId;
 use serde::Deserialize;
-use std::borrow::Cow;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -205,37 +204,6 @@ impl BufferedHttpRequest {
             .splice(header_end + 2..header_end + 2, marker.into_bytes());
     }
 
-    /// Guarantee the raw bytes forwarded for this request carry a capsule
-    /// client nonce, minting one here (once) when absent.
-    ///
-    /// Each retry attempt in `route_model_request_inner` forwards these same
-    /// raw bytes to a (possibly different) target's frontend, which mints its
-    /// own nonce only when the request doesn't already carry one. Without
-    /// this, a request that retries across targets would get a fresh nonce
-    /// per attempt instead of one stable value for the whole logical request.
-    pub(crate) fn raw_with_stable_client_nonce(&self) -> Cow<'_, [u8]> {
-        let Some(header_end) = self.raw.windows(4).position(|window| window == b"\r\n\r\n") else {
-            return Cow::Borrowed(&self.raw);
-        };
-        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
-        let has_nonce = self.raw[..header_end]
-            .split(|byte| *byte == b'\r' || *byte == b'\n')
-            .any(|line| {
-                line.split(|byte| *byte == b':')
-                    .next()
-                    .is_some_and(|name| name.eq_ignore_ascii_case(nonce_header.as_bytes()))
-            });
-        if has_nonce {
-            return Cow::Borrowed(&self.raw);
-        }
-        let marker = format!("{nonce_header}: {}\r\n", uuid::Uuid::new_v4());
-        if header_end.saturating_add(4).saturating_add(marker.len()) > MAX_HEADER_BYTES {
-            return Cow::Borrowed(&self.raw);
-        }
-        let mut raw = self.raw.clone();
-        raw.splice(header_end + 2..header_end + 2, marker.into_bytes());
-        Cow::Owned(raw)
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -554,6 +522,13 @@ fn finalize_forwarded_request(
     let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
     let version = req.version.unwrap_or(1);
 
+    // Resolve the capsule client nonce once here, at the single point every
+    // forwarded request is rebuilt — so local, remote, plugin-endpoint, and
+    // every retry/hop path receives the identical, stabilized value regardless
+    // of which downstream code forwards `request.raw`. Mirrors how the
+    // canonical `x-request-id` is resolved and re-stamped below.
+    let (client_nonce, client_nonce_origin) = client_nonce_from_headers(req.headers);
+
     let mut rebuilt = format!("{method} {path} HTTP/1.{version}\r\n");
 
     for header in req.headers.iter() {
@@ -562,6 +537,17 @@ fn finalize_forwarded_request(
             continue;
         }
         if name.eq_ignore_ascii_case("x-request-id") {
+            continue;
+        }
+        // Strip every inbound capsule nonce header on every ingress path. A
+        // caller must never be able to smuggle a forged `x-capsule-nonce-origin`
+        // marker (which asserts *this* frontend minted the value) or a duplicate
+        // nonce through the raw proxy; both are re-stamped from the resolved,
+        // validated value below.
+        if name.eq_ignore_ascii_case(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+            || name
+                .eq_ignore_ascii_case(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str())
+        {
             continue;
         }
         if name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER) {
@@ -583,6 +569,17 @@ fn finalize_forwarded_request(
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
+    rebuilt.push_str(&format!(
+        "{}: {}\r\n",
+        openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+        client_nonce,
+    ));
+    if let Some(origin) = client_nonce_origin {
+        rebuilt.push_str(&format!(
+            "{}: {origin}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+        ));
+    }
 
     // The proxy buffers exactly one request for routing, so force a single-request
     // connection contract upstream instead of reusing the client connection blindly.
@@ -717,6 +714,37 @@ fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option
         .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"))
         .map(|header| std::str::from_utf8(header.value).ok());
     openai_frontend::parse_single_request_id(request_id_values)
+}
+
+/// Resolve the capsule client nonce for a forwarded request, using the same
+/// single-valid-UUIDv4 acceptance rule as the axum frontend ingress.
+///
+/// Returns the nonce value to stamp and, only when this ingress minted it, the
+/// trusted origin marker to stamp alongside it. A forwarded (client-supplied)
+/// nonce is returned with no origin marker, so a caller can never make a value
+/// it chose look as though this frontend minted it.
+fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
+    let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+    let inbound = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(nonce_header))
+        .map(|header| std::str::from_utf8(header.value).ok());
+    match openai_frontend::parse_single_client_nonce(inbound) {
+        Some(value) => (
+            value
+                .to_str()
+                .expect("a parsed UUIDv4 nonce is always ASCII")
+                .to_string(),
+            None,
+        ),
+        None => (
+            openai_frontend::lifecycle::generate_client_nonce()
+                .to_str()
+                .expect("a minted UUIDv4 nonce is always ASCII")
+                .to_string(),
+            Some(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND),
+        ),
+    }
 }
 
 async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<()> {
@@ -1315,43 +1343,60 @@ mod tests {
         );
     }
 
-    fn client_nonce_header_value(raw: &[u8]) -> Option<String> {
+    fn client_nonce_header_values(raw: &[u8]) -> Vec<String> {
         let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
-        std::str::from_utf8(raw).ok()?.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case(nonce_header)
-                .then(|| value.trim().to_string())
-        })
+        std::str::from_utf8(raw)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case(nonce_header)
+                    .then(|| value.trim().to_string())
+            })
+            .collect()
+    }
+
+    fn nonce_origin_header_values(raw: &[u8]) -> Vec<String> {
+        let origin_header = openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
+        std::str::from_utf8(raw)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case(origin_header)
+                    .then(|| value.trim().to_string())
+            })
+            .collect()
     }
 
     #[tokio::test]
-    async fn raw_with_stable_client_nonce_mints_once_for_every_retry_attempt() {
+    async fn ingress_mints_exactly_one_stable_nonce_when_absent() {
+        // The nonce is resolved once at ingress, so `request.raw` — the bytes
+        // every retry/hop path forwards — carries one stable UUIDv4 nonce and a
+        // trusted `frontend` origin marker.
         let request = read_request_from_parts(vec![
             b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}"
                 .to_vec(),
         ])
         .await;
 
-        // Mirrors how `route_model_request_inner` calls this once, before the
-        // retry loop, and reuses the same bytes for every attempt.
-        let forwarding_raw = request.raw_with_stable_client_nonce();
-        let first_attempt = forwarding_raw.clone().into_owned();
-        let second_attempt = forwarding_raw.clone().into_owned();
-
-        let first_nonce =
-            client_nonce_header_value(&first_attempt).expect("first attempt carries a nonce");
-        let second_nonce =
-            client_nonce_header_value(&second_attempt).expect("second attempt carries a nonce");
+        let nonces = client_nonce_header_values(&request.raw);
+        assert_eq!(nonces.len(), 1, "exactly one nonce header must be forwarded");
         assert_eq!(
-            first_nonce, second_nonce,
-            "a retried request must carry the identical nonce across attempts"
+            uuid::Uuid::parse_str(&nonces[0]).unwrap().get_version_num(),
+            4
         );
-        assert!(uuid::Uuid::parse_str(&first_nonce).is_ok());
+        assert_eq!(
+            nonce_origin_header_values(&request.raw),
+            vec![openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND.to_string()],
+            "a minted nonce carries exactly one trusted origin marker"
+        );
     }
 
     #[tokio::test]
-    async fn raw_with_stable_client_nonce_preserves_a_client_supplied_nonce() {
+    async fn ingress_preserves_a_client_supplied_valid_uuidv4_without_marker() {
         let supplied_nonce = "11111111-1111-4111-8111-111111111111";
         let request = read_request_from_parts(vec![
             format!(
@@ -1362,10 +1407,88 @@ mod tests {
         ])
         .await;
 
-        let forwarding_raw = request.raw_with_stable_client_nonce();
         assert_eq!(
-            client_nonce_header_value(&forwarding_raw),
-            Some(supplied_nonce.to_string())
+            client_nonce_header_values(&request.raw),
+            vec![supplied_nonce.to_string()]
+        );
+        assert!(
+            nonce_origin_header_values(&request.raw).is_empty(),
+            "forwarding a client-supplied nonce must not stamp a frontend marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingress_strips_forged_origin_marker_on_forwarded_nonce() {
+        // RED-before-fix: prior to normalizing at ingress, the raw proxy paths
+        // forwarded a client-supplied `x-capsule-nonce-origin: frontend` verbatim,
+        // letting a caller assert this frontend minted a nonce it chose itself.
+        let supplied_nonce = "11111111-1111-4111-8111-111111111111";
+        let request = read_request_from_parts(vec![
+            format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{}: {supplied_nonce}\r\n{}: frontend\r\nContent-Length: 2\r\n\r\n{{}}",
+                openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+                openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+            )
+            .into_bytes(),
+        ])
+        .await;
+
+        assert_eq!(
+            client_nonce_header_values(&request.raw),
+            vec![supplied_nonce.to_string()],
+            "the client-supplied nonce value is still forwarded"
+        );
+        assert!(
+            nonce_origin_header_values(&request.raw).is_empty(),
+            "a caller-forged frontend origin marker must be stripped on every ingress path"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingress_rejects_non_uuid_nonce_and_mints_a_marked_one() {
+        let request = read_request_from_parts(vec![
+            format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{}: attacker-chosen-value\r\nContent-Length: 2\r\n\r\n{{}}",
+                openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+            )
+            .into_bytes(),
+        ])
+        .await;
+
+        let nonces = client_nonce_header_values(&request.raw);
+        assert_eq!(nonces.len(), 1);
+        assert_ne!(nonces[0], "attacker-chosen-value");
+        assert_eq!(
+            uuid::Uuid::parse_str(&nonces[0]).unwrap().get_version_num(),
+            4
+        );
+        assert_eq!(
+            nonce_origin_header_values(&request.raw),
+            vec![openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn ingress_rejects_duplicate_nonce_headers_and_mints_a_single_one() {
+        let supplied_nonce = "11111111-1111-4111-8111-111111111111";
+        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+        let request = read_request_from_parts(vec![
+            format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n{nonce_header}: {supplied_nonce}\r\n{nonce_header}: {supplied_nonce}\r\nContent-Length: 2\r\n\r\n{{}}",
+            )
+            .into_bytes(),
+        ])
+        .await;
+
+        let nonces = client_nonce_header_values(&request.raw);
+        assert_eq!(nonces.len(), 1, "duplicates must collapse to one nonce");
+        assert_ne!(
+            nonces[0], supplied_nonce,
+            "a duplicated nonce is untrusted and must be replaced with a minted one"
+        );
+        assert_eq!(
+            nonce_origin_header_values(&request.raw),
+            vec![openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND.to_string()]
         );
     }
 

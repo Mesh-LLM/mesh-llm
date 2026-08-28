@@ -856,8 +856,8 @@ async fn method_not_allowed(method: Method) -> OpenAiError {
 /// as well, so the resolution is externally observable in either direction.
 fn apply_client_nonce_headers(request: &mut Request<Body>) -> (HeaderValue, Option<HeaderValue>) {
     let (nonce_value, nonce_origin) = client_nonce_from_headers_or_generate(request.headers());
-    // The origin marker asserts this ingress minted the nonce. Always remove
-    // an inbound marker first so a caller can never forge `local_ingress` on
+    // The origin marker asserts this frontend minted the nonce. Always remove
+    // an inbound marker first so a caller can never forge a `frontend` origin on
     // a nonce it supplied itself — only re-insert it when we minted the value.
     request.headers_mut().remove(&CLIENT_NONCE_ORIGIN_HEADER);
     request
