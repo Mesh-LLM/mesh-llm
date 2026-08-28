@@ -134,21 +134,23 @@ agent_turn() {
   # It also reports the newest file modification under the llama.cpp worktree,
   # so watchers can tell "agent is editing" from "turn is hung" without
   # runner access.
-  local prompt="$1" started newest
+  local prompt="$1" started heartbeat_pgid
   started="$(date +%s)"
-  (
+  env -i PATH="$PATH" setsid bash -c '
+    ROOT="$1"
+    started="$2"
     while sleep 600; do
-      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -print -quit 2>/dev/null || true)"
-      printf 'heartbeat: agent turn running for %dm; recent worktree activity: %s\n' \
+      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 1 | cut -d " " -f 2- || true)"
+      printf "heartbeat: agent turn running for %dm; recent worktree activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
-  ) &
-  local heartbeat_pid=$!
+  ' heartbeat "$ROOT" "$started" &
+  heartbeat_pgid=$!
   env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
     opencode run --model "$AGENT_MODEL" "$prompt" \
     || echo "warning: opencode turn exited non-zero" >&2
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
+  kill -- "-$heartbeat_pgid" 2>/dev/null || true
+  wait "$heartbeat_pgid" 2>/dev/null || true
 }
 
 battery_summary() {
