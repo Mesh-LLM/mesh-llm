@@ -112,11 +112,39 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("permissions:\n      contents: read", latest_job)
         self.assertIn("ref: main", latest_job)
         self.assertNotIn("queue_ref", workflow)
-        self.assertNotIn("agent repair", workflow.lower())
         self.assertNotIn("github.token", latest_job)
         self.assertIn("runs-on: ubuntu-latest", update_job)
         self.assertIn("permissions:\n      contents: write", update_job)
         self.assertIn("trusted_queue_sha", update_job)
+
+    def test_repair_loop_is_wired_for_both_failure_modes(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        queue_repair = _step_block(workflow, "Agent repair loop (patch-queue failure)")
+        self.assertIn("steps.prepare.outcome == 'failure'", queue_repair)
+        self.assertIn("scripts/llama-canary-agent-repair.sh patch-queue", queue_repair)
+        # The repair loop must not silently turn the canary green.
+        self.assertIn("continue-on-error: true", queue_repair)
+
+        battery_repair = _step_block(workflow, "Agent repair loop (battery failure)")
+        self.assertIn("steps.prepare.outcome == 'success'", battery_repair)
+        self.assertIn("steps.battery.outcome == 'failure'", battery_repair)
+        self.assertIn("scripts/llama-canary-agent-repair.sh battery", battery_repair)
+        self.assertIn("continue-on-error: true", battery_repair)
+
+        # Any repair outcome keeps the run red: the certified fix must merge
+        # through the repair PR before trusted main can certify.
+        fail_step = _step_block(workflow, "Fail when the canary needs human attention")
+        self.assertIn("steps.repair_queue.outcome", fail_step)
+        self.assertIn("steps.repair_battery.outcome", fail_step)
+        self.assertIn("exit 1", fail_step)
+
+        # The battery lane itself no longer hard-fails the job before the
+        # repair loop can run.
+        battery = _step_block(workflow, "Supported-families certification battery (parity gate)")
+        self.assertIn("continue-on-error: true", battery)
+
+        # Both repair paths use the dedicated token, never the job token.
+        self.assertNotIn("github.token", workflow[workflow.index("  latest-upstream:") : workflow.index("  update-pin:")])
 
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")

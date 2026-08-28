@@ -159,6 +159,10 @@ jobs:
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
+        # continue-on-error so the battery-failure agent repair loop below can
+        # run; the "Fail when the canary needs human attention" step keeps the
+        # job red for any battery failure the repair does not resolve.
+        continue-on-error: true
         # Preflight resolves every cached model to an immutable snapshot before
         # any certification starts. Individual certifications are bounded by
         # the script; this outer ceiling leaves room for the complete manifest.
@@ -209,14 +213,58 @@ jobs:
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Report patch-queue failure
+      - name: Agent repair loop (patch-queue failure)
+        id: repair_queue
+        # Repair the patch queue with the opencode agent before failing the
+        # run. The wrapper itself re-runs the battery and only succeeds when
+        # certification passes; it guarantees a repair PR regardless of
+        # outcome. Requires opencode + agent credentials and
+        # CANARY_REPAIR_TOKEN on the family-certify runner (see
+        # ci/llama-canary/agent-repair-prompt.md).
         if: steps.prepare.outcome == 'failure'
+        timeout-minutes: 720
+        continue-on-error: true
+        env:
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+        run: |
+          scripts/llama-canary-agent-repair.sh patch-queue "${{ github.event.inputs.upstream_sha || 'latest' }}"
+
+      - name: Agent repair loop (battery failure)
+        id: repair_battery
+        # The queue applied but a certification lane failed: hand the failing
+        # battery output to the same repair loop. Skipped when the patch-queue
+        # repair already ran or passed everything.
+        if: >
+          steps.prepare.outcome == 'success'
+          && steps.sha.outputs.certify == 'true'
+          && steps.battery.outcome == 'failure'
+        timeout-minutes: 720
+        continue-on-error: true
+        env:
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+        run: |
+          scripts/llama-canary-agent-repair.sh battery "${{ steps.sha.outputs.new_sha }}"
+
+      - name: Fail when the canary needs human attention
+        # Any repair outcome leaves the run red: if the repair loop failed,
+        # the agent is stuck; if it succeeded, the certified fix lives on the
+        # repair PR branch and a human must merge it before the trusted main
+        # queue can certify. The repair PR carries the details.
+        if: >
+          contains(fromJSON('["success", "failure"]'), steps.repair_queue.outcome)
+          || contains(fromJSON('["success", "failure"]'), steps.repair_battery.outcome)
+          || steps.battery.outcome == 'failure'
         run: |
           {
-            echo "## llama.cpp patch queue failed to apply"
+            echo "## llama.cpp canary needs human attention"
             echo
-            echo "The trusted default-branch patch queue does not apply onto the requested upstream."
-            echo "Inspect the apply log and repair the queue in a normal reviewed pull request."
+            echo "The agent repair loop ran; review and merge the repair PR on"
+            echo "\`llama-canary/patch-queue-fix\` (it contains the agent's work, the upstream"
+            echo "analysis, and — if the loop did not finish green — where it is stuck). If the"
+            echo "repair loop could not even start, check the run log for missing opencode,"
+            echo "agent credentials, or CANARY_REPAIR_TOKEN on this runner."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 

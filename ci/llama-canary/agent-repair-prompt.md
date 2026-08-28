@@ -1,8 +1,10 @@
 # llama.cpp canary patch-queue repair runbook (agent instructions)
 
 You are running on the `family-certify` self-hosted runner inside a mesh-llm
-checkout. The nightly llama-upstream canary failed to apply our patch queue in
-`third_party/llama.cpp/patches/` onto the new upstream pin. Your job:
+checkout. The nightly llama-upstream canary either failed to apply our patch
+queue in `third_party/llama.cpp/patches/` onto the new upstream pin
+(patch-queue mode) or applied the queue but failed a certification lane
+(battery mode). Your job:
 
 **Before touching the queue, read the repo skills and follow them:**
 `.agents/skills/llama-patch-changes/SKILL.md` (queue edits, upstream pin,
@@ -42,6 +44,10 @@ in those skills are hard requirements for this repair, not suggestions.
    <short-sha>` message. If a PR already exists for that branch, push to it;
    otherwise open one titled `fix(llama): rebase patch queue onto upstream
    <short-sha>` describing the conflicts hit and the resolution per patch.
+   The wrapper separately asks you to write the full PR description (key
+   upstream changes, how the patch queue evolved, risks for reviewers) — when
+   that turn arrives, write the finished Markdown to the file it names and
+   touch nothing else.
 
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`

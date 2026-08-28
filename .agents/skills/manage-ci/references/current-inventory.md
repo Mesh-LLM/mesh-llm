@@ -69,16 +69,24 @@ each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
 ceiling is 12 hours. On a
 patch-apply failure it hands the queue to a non-interactive `opencode` agent
-(`LLAMA_CANARY_AGENT_MODEL`, default `Nemotron 3 Ultra Free`) which rebases
+(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
+via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification
 battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
-on `llama-canary/patch-queue-fix`. After each agent turn the repair script
+on `llama-canary/patch-queue-fix`. The same repair loop also runs when the
+queue applies but a certification lane fails (`battery` mode). After each agent
+turn the repair script
 itself runs the battery and, on failure, loops certify -> agent fix ->
-recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the job only
+recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
 succeeds when the wrapper's own battery run passes. Every outcome (battery
 green, queue still broken, battery exhausted) posts a status comment on the
 repair PR — creating the PR (or a fallback issue) itself if the agent did
-not. The upstream pin commit to
+not — and an agent turn writes the PR description (key upstream changes,
+patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
+PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
+the canary job itself remains `contents: read`. Any repair outcome keeps the
+canary run red: the certified fix must be merged from the repair PR before
+trusted main can certify. The upstream pin commit to
 `main` is gated on the battery passing.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
