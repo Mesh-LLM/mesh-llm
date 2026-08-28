@@ -1,4 +1,4 @@
-From 67971964786884bf14aee53113d7711fd797cd81 Mon Sep 17 00:00:00 2001
+From 9cb97fdcba879b21a658239e06285a51fb145703 Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 01:06:43 +1000
@@ -17,10 +17,10 @@ Signed-off-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a0
  src/skippy/activation.cpp               | 17 +++++++--
  src/skippy/activation_layout.cpp        |  8 ++--
  src/skippy/activation_scopes.h          | 26 +++++++++++++
- src/skippy/execution-batch.cpp          |  9 +++++
+ src/skippy/execution-batch.cpp          | 34 ++++++++++++++++-
  tests/CMakeLists.txt                    |  2 +
  tests/test-skippy-activation-layout.cpp | 46 +++++++++++++++++++++++
- 10 files changed, 207 insertions(+), 17 deletions(-)
+ 10 files changed, 231 insertions(+), 18 deletions(-)
  create mode 100644 tests/test-skippy-activation-layout.cpp
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
@@ -339,10 +339,73 @@ index 440db0aef..dd66056ad 100644
      skippy_glm_dsa_top_k_scope(
              const skippy_activation_desc * desc,
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index 2d771832a..9666224f0 100644
+index 2d771832a..eaab6d31f 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
-@@ -515,6 +515,15 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+@@ -63,6 +63,14 @@ enum skippy_status skippy_iteration_batch_sampled(
+     }
+ 
+     const bool activation_input = skippy_is_filtered(first) && first->stage_model->config.layer_start > 0;
++    const bool qwen4exp_activation_input =
++            activation_input && first->stage_model->model->arch == LLM_ARCH_QWEN4EXP;
++    const int32_t qwen4exp_hc = qwen4exp_activation_input
++        ? static_cast<int32_t>(first->stage_model->model->hparams.dsv4_hc_mult)
++        : 0;
++    const size_t activation_width = qwen4exp_activation_input
++        ? static_cast<size_t>(n_embd) * static_cast<size_t>(qwen4exp_hc)
++        : static_cast<size_t>(n_embd);
+     const bool request_logits = first->stage_model->config.include_output;
+     const bool request_embeddings = skippy_emits_activation_frame(first);
+     size_t total_token_count = 0;
+@@ -160,9 +168,13 @@ enum skippy_status skippy_iteration_batch_sampled(
+     const int32_t n_tokens = static_cast<int32_t>(total_token_count);
+     std::vector<llama_token> token_storage(total_token_count);
+     std::vector<float> embd_storage;
++    std::vector<float> qwen4exp_hc_storage;
+     std::vector<int32_t> glm_dsa_input_top_k_storage;
+     if (activation_input) {
+         embd_storage.resize(total_token_count * static_cast<size_t>(n_embd_inp));
++        if (qwen4exp_activation_input) {
++            qwen4exp_hc_storage.resize(total_token_count * activation_width);
++        }
+         if ((batch_input_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+             glm_dsa_input_top_k_storage.resize(
+                     total_token_count * static_cast<size_t>(batch_input_top_k) * batch_input_streams);
+@@ -187,7 +199,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+                 float * destination = embd_storage.data() + (offset + token_index) * static_cast<size_t>(n_embd_inp);
+                 std::memcpy(
+                         destination,
+-                        input + token_index * static_cast<size_t>(n_embd),
++                        input + token_index * activation_width,
+                         static_cast<size_t>(n_embd) * sizeof(float));
+                 if (n_embd_inp > n_embd) {
+                     std::memset(
+@@ -196,6 +208,12 @@ enum skippy_status skippy_iteration_batch_sampled(
+                             static_cast<size_t>(n_embd_inp - n_embd) * sizeof(float));
+                 }
+             }
++            if (!qwen4exp_hc_storage.empty()) {
++                std::memcpy(
++                        qwen4exp_hc_storage.data() + offset * activation_width,
++                        request.input_payload,
++                        hidden_bytes);
++            }
+             if (!glm_dsa_input_top_k_storage.empty()) {
+                 const size_t sideband_values = request.token_count * static_cast<size_t>(batch_input_top_k) * batch_input_streams;
+                 const int32_t * source = reinterpret_cast<const int32_t *>(
+@@ -237,6 +255,11 @@ enum skippy_status skippy_iteration_batch_sampled(
+     };
+ 
+     skippy_activation_tokens_scope activation_tokens_scope(token_storage.data(), total_token_count);
++    skippy_qwen4exp_hc_scope qwen4exp_hc_scope(
++            qwen4exp_hc_storage.empty() ? nullptr : qwen4exp_hc_storage.data(),
++            static_cast<uint32_t>(total_token_count),
++            n_embd,
++            qwen4exp_hc);
+     const llama_pos batch_pos_start = pos_storage.empty() ? first->n_past : pos_storage[0];
+     skippy_glm_dsa_top_k_scope glm_dsa_top_k_scope(
+             glm_dsa_input_top_k_storage.empty() ? nullptr : glm_dsa_input_top_k_storage.data(),
+@@ -515,6 +538,15 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
      };
  
      skippy_activation_tokens_scope activation_tokens_scope(token_ids, request_count);
