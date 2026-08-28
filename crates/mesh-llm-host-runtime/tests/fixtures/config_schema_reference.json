@@ -378,30 +378,23 @@
       "value_schema": {
         "kind": "object"
       },
-      "support": "unwired",
+      "support": "supported",
       "control_surfaces": [
         "config_file"
       ],
       "apply_mode": "static_on_load",
       "restart_scope": "model_reload",
       "visibility": "advanced",
-      "description": "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+      "description": "defaults.request_defaults.dry",
       "presentation": {
         "label": "Dry",
-        "help": "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+        "help": "defaults.request_defaults.dry",
         "category_id": "request-defaults",
         "category_label": "Request Defaults",
         "category_summary": "Request-time sampling and reasoning defaults",
         "category_order": 40,
         "setting_order": 3084612059,
         "control_hint": "textarea"
-      },
-      "control_behavior": {
-        "availability": {
-          "enabled": false,
-          "reason": "Reserved sampler object is accepted for compatibility but not wired into the current runtime.",
-          "source": "static"
-        }
       }
     },
     {

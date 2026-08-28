@@ -43,7 +43,7 @@ never inserted into the index before target acceptance.
 
 ## Stage Protocol v11
 
-`STAGE_STATE_VERSION` is `11`, and `VerifyWindow` is message kind `21`.
+`STAGE_STATE_VERSION` is `12`, and `VerifyWindow` is message kind `21`.
 Every verification request carries:
 
 - a FIFO window ID;

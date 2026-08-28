@@ -5,11 +5,13 @@ use super::{
     invalid_data,
 };
 
-// v11 adds the Inkling MTP embedding sideband and makes the coordinator the sole owner of
-// verify-window acceptance, removing redundant tail-stage acceptance/correction fields. Stage
-// peers must be upgraded together so older readers reject the changed payload contract.
-pub const STAGE_STATE_VERSION: i32 = 11;
+// v12 extends the sampling payload with the full configurable sampler chain. Stage peers must be
+// upgraded together so older readers reject the changed payload contract.
+pub const STAGE_STATE_VERSION: i32 = 12;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
+pub const MAX_STAGE_SAMPLERS: usize = 16;
+pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
+pub const MAX_STAGE_SAMPLING_STRING_BYTES: usize = 64;
 pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
 pub const MAX_STAGE_SIDEBAND_VALUES: usize = 1_048_576;
 pub const MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES: usize = 8 * 1024 * 1024;
@@ -19,7 +21,7 @@ pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
-pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 10 * 4;
+pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 5 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
 
@@ -267,6 +269,22 @@ pub struct StageSamplingConfig {
     pub repeat_penalty: f32,
     pub penalty_last_n: i32,
     pub logit_bias: Vec<StageLogitBias>,
+    pub typical_p: f32,
+    pub top_nsigma: f32,
+    pub dynatemp_range: f32,
+    pub dynatemp_exponent: f32,
+    pub dry_multiplier: f32,
+    pub dry_base: f32,
+    pub dry_allowed_length: i32,
+    pub dry_penalty_last_n: i32,
+    pub dry_sequence_breakers: Vec<String>,
+    pub xtc_probability: f32,
+    pub xtc_threshold: f32,
+    pub mirostat_mode: i32,
+    pub mirostat_entropy: f32,
+    pub mirostat_learning_rate: f32,
+    pub samplers: Vec<String>,
+    pub ignore_eos: bool,
 }
 
 impl Default for StageSamplingConfig {
@@ -283,6 +301,32 @@ impl Default for StageSamplingConfig {
             repeat_penalty: 1.0,
             penalty_last_n: -1,
             logit_bias: Vec::new(),
+            typical_p: 1.0,
+            top_nsigma: -1.0,
+            dynatemp_range: 0.0,
+            dynatemp_exponent: 1.0,
+            dry_multiplier: 0.0,
+            dry_base: 1.75,
+            dry_allowed_length: 2,
+            dry_penalty_last_n: 64,
+            dry_sequence_breakers: vec!["\n".into(), ":".into(), "\"".into(), "*".into()],
+            xtc_probability: 0.0,
+            xtc_threshold: 0.1,
+            mirostat_mode: 0,
+            mirostat_entropy: 5.0,
+            mirostat_learning_rate: 0.1,
+            samplers: vec![
+                "penalties".into(),
+                "dry".into(),
+                "top_n_sigma".into(),
+                "top_k".into(),
+                "typical_p".into(),
+                "top_p".into(),
+                "min_p".into(),
+                "xtc".into(),
+                "temperature".into(),
+            ],
+            ignore_eos: false,
         }
     }
 }
@@ -438,6 +482,11 @@ impl StageWireMessage {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
                 + sampling.logit_bias.len().min(MAX_STAGE_LOGIT_BIAS) * STAGE_LOGIT_BIAS_WIRE_BYTES
+                + sampling_string_list_wire_bytes(
+                    &sampling.dry_sequence_breakers,
+                    MAX_STAGE_DRY_SEQUENCE_BREAKERS,
+                )
+                + sampling_string_list_wire_bytes(&sampling.samplers, MAX_STAGE_SAMPLERS)
         });
         let chat_metadata_bytes = self
             .chat_sampling_metadata
@@ -570,6 +619,14 @@ impl StageWireMessage {
             ),
         }
     }
+}
+
+fn sampling_string_list_wire_bytes(values: &[String], maximum_count: usize) -> usize {
+    values
+        .iter()
+        .take(maximum_count)
+        .map(|value| std::mem::size_of::<u32>() + value.len())
+        .sum()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

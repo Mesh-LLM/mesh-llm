@@ -715,20 +715,18 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.frequency_penalty"),
             ConfigValueSchema::Float,
         ),
-        unwired_setting(
+        basic_setting(
             &format!("{prefix}.dry"),
             ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
         ),
-        unwired_setting(
+        basic_setting(
             &format!("{prefix}.xtc"),
             ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
         ),
-        unwired_setting(
+        rejected_setting(
             &format!("{prefix}.adaptive"),
             ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+            "Adaptive sampling is reserved and rejected until it is implemented end to end.",
         ),
         basic_setting(
             &format!("{prefix}.mirostat_mode"),
@@ -791,21 +789,21 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.prefill_assistant"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::OneOf {
+                variants: vec![ConfigValueSchema::String, ConfigValueSchema::Object],
+            },
         ),
         basic_setting(
             &format!("{prefix}.system_prompt"),
             ConfigValueSchema::String,
         ),
-        rejected_setting(
+        basic_setting(
             &format!("{prefix}.grammar"),
-            ConfigValueSchema::Object,
-            "Grammar injection is explicitly rejected on the built-in config surface.",
+            ConfigValueSchema::String,
         ),
-        rejected_setting(
+        basic_setting(
             &format!("{prefix}.json_schema"),
             ConfigValueSchema::Object,
-            "JSON schema response shaping is intentionally rejected until a stable runtime contract exists.",
         ),
         rejected_setting(
             &format!("{prefix}.logprobs"),

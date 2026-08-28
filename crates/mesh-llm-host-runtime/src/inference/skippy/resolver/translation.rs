@@ -1,10 +1,11 @@
 use std::{
+    io::Read,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
@@ -36,6 +37,23 @@ use super::types::{
 /// default: long enough to confirm or reject the draft trajectory without
 /// over-committing speculative decode resources.
 const DEFAULT_NATIVE_MTP_MAX_TOKENS: usize = 3;
+const MAX_CHAT_TEMPLATE_BYTES: u64 = 1024 * 1024;
+
+fn read_chat_template(path: &str) -> Result<String> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("open request_defaults.chat_template_file {path}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CHAT_TEMPLATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read request_defaults.chat_template_file {path}"))?;
+    if bytes.len() as u64 > MAX_CHAT_TEMPLATE_BYTES {
+        bail!(
+            "request_defaults.chat_template_file {path} exceeds the {MAX_CHAT_TEMPLATE_BYTES}-byte limit"
+        );
+    }
+    String::from_utf8(bytes)
+        .with_context(|| format!("request_defaults.chat_template_file {path} is not UTF-8"))
+}
 
 impl ResolvedSkippyConfig {
     pub(crate) fn to_model_load_options(
@@ -196,6 +214,42 @@ impl ResolvedSkippyConfig {
     ) -> Result<ResolvedEmbeddedOpenAiArgs> {
         self.ensure_embedded_openai_safe(staged)?;
         let mode = self.speculative_mode_for_embedded(staged);
+        let chat_template = match (
+            self.request_defaults.chat_template.as_ref(),
+            self.request_defaults.chat_template_file.as_ref(),
+        ) {
+            (Some(template), _) => Some(template.clone()),
+            (None, Some(path)) => Some(read_chat_template(path)?),
+            (None, None) => None,
+        };
+        let chat_template_kwargs = self
+            .request_defaults
+            .chat_template_kwargs
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.chat_template_kwargs")?;
+        let prefill_assistant = self
+            .request_defaults
+            .prefill_assistant
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.prefill_assistant")?;
+        let grammar = self
+            .request_defaults
+            .grammar
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.grammar")?;
+        let json_schema = self
+            .request_defaults
+            .json_schema
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.json_schema")?;
         Ok(ResolvedEmbeddedOpenAiArgs {
             model_id: Some(self.model_id.clone()),
             default_max_tokens: self.request_defaults.max_tokens,
@@ -228,6 +282,54 @@ impl ResolvedSkippyConfig {
                     .map(resolve_request_top_k)
                     .transpose()?,
                 min_p: self.request_defaults.min_p.map(|value| value as f32),
+                typical_p: self.request_defaults.typical_p.map(|value| value as f32),
+                top_nsigma: self.request_defaults.top_nsigma.map(|value| value as f32),
+                dynatemp_range: self
+                    .request_defaults
+                    .dynatemp_range
+                    .map(|value| value as f32),
+                dynatemp_exponent: self
+                    .request_defaults
+                    .dynatemp_exponent
+                    .map(|value| value as f32),
+                dry: self.request_defaults.dry.as_ref().map(|dry| {
+                    skippy_runtime::DrySamplingConfig {
+                        multiplier: dry.multiplier.unwrap_or(0.0) as f32,
+                        base: dry.base.unwrap_or(1.75) as f32,
+                        allowed_length: dry.allowed_length.unwrap_or(2),
+                        penalty_last_n: dry.penalty_last_n.unwrap_or(64),
+                        sequence_breakers: dry.sequence_breakers.clone().unwrap_or_else(|| {
+                            vec!["\n".into(), ":".into(), "\"".into(), "*".into()]
+                        }),
+                    }
+                }),
+                xtc: self.request_defaults.xtc.as_ref().map(|xtc| {
+                    skippy_runtime::XtcSamplingConfig {
+                        probability: xtc.probability.unwrap_or(0.0) as f32,
+                        threshold: xtc.threshold.unwrap_or(0.1) as f32,
+                    }
+                }),
+                mirostat_mode: self
+                    .request_defaults
+                    .mirostat_mode
+                    .as_ref()
+                    .and_then(|mode| match mode {
+                        mesh_llm_config::IntegerOrString::Integer(value) => {
+                            i32::try_from(*value).ok()
+                        }
+                        mesh_llm_config::IntegerOrString::String(value) => value.parse().ok(),
+                    }),
+                mirostat_entropy: self
+                    .request_defaults
+                    .mirostat_entropy
+                    .map(|value| value as f32),
+                mirostat_learning_rate: self
+                    .request_defaults
+                    .mirostat_learning_rate
+                    .map(|value| value as f32),
+                samplers: self.request_defaults.samplers.clone(),
+                sampler_sequence: self.request_defaults.sampler_sequence.clone(),
+                ignore_eos: self.request_defaults.ignore_eos,
                 repeat_penalty: self
                     .request_defaults
                     .repeat_penalty
@@ -252,6 +354,14 @@ impl ResolvedSkippyConfig {
                     .reasoning_budget
                     .as_ref()
                     .and_then(resolve_reasoning_budget),
+                chat_template,
+                jinja: self.request_defaults.jinja,
+                chat_template_kwargs,
+                skip_chat_parsing: self.request_defaults.skip_chat_parsing,
+                prefill_assistant,
+                system_prompt: self.request_defaults.system_prompt.clone(),
+                grammar,
+                json_schema,
             },
             generation_concurrency: self.throughput.parallel,
             continuous_batching: self.throughput.continuous_batching != "false",

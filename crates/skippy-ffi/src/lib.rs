@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 43;
+pub const ABI_VERSION_PATCH: u32 = 44;
 
 mod abi;
 mod activation;
@@ -46,8 +46,8 @@ pub use multimodal::{
 };
 pub use runtime::{NativeRuntimeLoadError, abi_features, try_abi_features};
 pub use sampling::{
-    GenerationSignalWindow, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig,
-    TokenSignal,
+    GenerationSignalWindow, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
+    MAX_SAMPLERS, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig, TokenSignal,
 };
 pub use state::{
     KV_PAGE_CODEC_ISWA_COMPOSITE_V1, KV_PAGE_CODEC_SINGLE_V1, KV_PAGE_FLAG_HAS_K_IDX,

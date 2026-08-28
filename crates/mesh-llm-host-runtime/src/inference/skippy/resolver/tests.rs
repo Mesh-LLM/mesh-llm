@@ -4,7 +4,7 @@ use crate::inference::skippy::{SkippyTelemetryOptions, StageWireDType};
 use crate::plugin::{MeshConfig, ReasoningBudget, RequestDefaultsConfig};
 use serde_json::Value;
 use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
-use skippy_server::{EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
+use skippy_server::{EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -1652,25 +1652,45 @@ threshold = 0.12
     let openai = resolved
         .to_embedded_openai_args(4096, true)
         .expect("embedded OpenAI args should carry request defaults");
-    let translated = format!("{:?}", openai.request_defaults);
+    let defaults = openai.request_defaults;
+    assert_eq!(defaults.typical_p, Some(0.73));
+    assert_eq!(defaults.top_nsigma, Some(1.7));
+    assert_eq!(defaults.dynatemp_range, Some(0.21));
+    assert_eq!(defaults.dynatemp_exponent, Some(1.4));
+    assert_eq!(defaults.dry.as_ref().map(|dry| dry.multiplier), Some(0.8));
+    assert_eq!(defaults.xtc.as_ref().map(|xtc| xtc.probability), Some(0.24));
+    assert_eq!(defaults.mirostat_mode, Some(2));
+    assert_eq!(defaults.ignore_eos, Some(true));
+    assert_eq!(
+        defaults.reasoning_budget,
+        Some(EmbeddedReasoningBudget::Tokens(384))
+    );
+    assert_eq!(defaults.chat_template.as_deref(), Some("{{ messages }}"));
+    assert_eq!(defaults.skip_chat_parsing, Some(true));
+    assert_eq!(defaults.system_prompt.as_deref(), Some("configured system"));
+    assert_eq!(defaults.grammar, Some(serde_json::json!("root ::= 'ok'")));
+    assert_eq!(
+        defaults.json_schema,
+        Some(serde_json::json!({"type": "object"}))
+    );
+}
 
-    for expected in [
-        "typical_p: Some(0.73)",
-        "top_nsigma: Some(1.7)",
-        "dynatemp_range: Some(0.21)",
-        "mirostat_mode: Some(2)",
-        "ignore_eos: Some(true)",
-        "reasoning_budget: Some(Tokens(384))",
-        "chat_template: Some(\"{{ messages }}\")",
-        "skip_chat_parsing: Some(true)",
-        "system_prompt: Some(\"configured system\")",
-        "grammar: Some(\"root ::= 'ok'\")",
-    ] {
-        assert!(
-            translated.contains(expected),
-            "missing {expected}: {translated}"
-        );
-    }
+#[test]
+fn oversized_chat_template_file_is_rejected_before_runtime_startup() {
+    let template = NamedTempFile::new().expect("temp chat template");
+    std::fs::write(template.path(), vec![b'x'; 1024 * 1024 + 1]).expect("write chat template");
+    let mesh_config = parse_config(&format!(
+        "[defaults.request_defaults]\nchat_template_file = {:?}\n",
+        template.path().display().to_string()
+    ));
+    let model_file = temp_model_file();
+    let resolved = resolve_qwen_config_with_request_defaults(&mesh_config, model_file.path(), None);
+
+    let error = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect_err("oversized chat template must be rejected");
+
+    assert!(error.to_string().contains("1048576-byte limit"));
 }
 
 #[test]
@@ -2356,34 +2376,17 @@ placement = "auto"
 }
 
 #[test]
-fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage_staged_knobs() {
+fn integrated_invalid_fixture_accepts_request_defaults_and_rejects_single_stage_staged_knobs() {
     let repaired_batch = FULL_SURFACE_INVALID_FIXTURE.replace("batch = 0", "batch = 64");
     let repaired_device = format!(
         "{repaired_batch}\ndevice = \"CUDA0\"\n",
         repaired_batch = repaired_batch.trim_end()
     );
 
-    let unsupported_request = parse_config(&repaired_device);
+    let config = parse_config(&repaired_device);
     let model_file = temp_model_file();
-    let unsupported_error = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &unsupported_request,
-        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
-        model_path: model_file.path(),
-        model_bytes: 2 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(unsupported_error.contains("defaults.request_defaults.chat_template"));
-
-    let staged_only_config = parse_config(&repaired_device.replace(
-        "\n[defaults.request_defaults]\nchat_template = \"unsafe-template\"\n",
-        "\n",
-    ));
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &staged_only_config,
+        mesh_config: &config,
         model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
         model_path: model_file.path(),
         model_bytes: 2 * 1024 * 1024 * 1024,
@@ -2391,7 +2394,11 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         request_defaults: None,
         package_generation: None,
     })
-    .expect("staged-only config should resolve before translation gating");
+    .expect("request defaults should resolve before staged-only translation gating");
+    assert_eq!(
+        resolved.request_defaults.chat_template.as_deref(),
+        Some("unsafe-template")
+    );
     let staged_only_error = resolved
         .to_model_load_options(SkippyTelemetryOptions::off())
         .unwrap_err()

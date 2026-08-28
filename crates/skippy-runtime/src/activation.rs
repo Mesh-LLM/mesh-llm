@@ -76,8 +76,8 @@ impl StageSession {
         }
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let input_frames = requests
             .iter()
             .map(|request| raw_input_frame(request.input))
@@ -385,7 +385,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -538,7 +538,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -598,7 +598,7 @@ impl StageSession {
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -666,8 +666,8 @@ impl StageSession {
             .collect::<Vec<_>>();
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let sampling = raw_sampling
             .iter()
             .map(|sampling| {
@@ -889,7 +889,7 @@ impl StageSession {
         let mut output_token_count = 0usize;
         let mut output_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -997,7 +997,7 @@ impl StageSession {
     }
 
     pub fn sample_current(&mut self, sampling: Option<&SamplingConfig>) -> Result<i32> {
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);

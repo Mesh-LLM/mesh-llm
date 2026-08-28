@@ -134,6 +134,7 @@ pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
         reasoning_format: Some(EmbeddedReasoningFormat::Hidden),
         reasoning_enabled: Some(EmbeddedReasoningEnabled::Enabled),
         reasoning_budget: Some(EmbeddedReasoningBudget::Tokens(256)),
+        ..EmbeddedOpenAiRequestDefaults::default()
     }
 }
 

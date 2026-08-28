@@ -61,6 +61,54 @@ pub(super) fn resolve_request_defaults(
             .and_then(|value| value.min_p)
             .or_else(|| model.and_then(|value| value.min_p))
             .or_else(|| global.and_then(|value| value.min_p)),
+        typical_p: request_defaults
+            .and_then(|v| v.typical_p)
+            .or_else(|| model.and_then(|v| v.typical_p))
+            .or_else(|| global.and_then(|v| v.typical_p)),
+        top_nsigma: request_defaults
+            .and_then(|v| v.top_nsigma)
+            .or_else(|| model.and_then(|v| v.top_nsigma))
+            .or_else(|| global.and_then(|v| v.top_nsigma)),
+        dynatemp_range: request_defaults
+            .and_then(|v| v.dynatemp_range)
+            .or_else(|| model.and_then(|v| v.dynatemp_range))
+            .or_else(|| global.and_then(|v| v.dynatemp_range)),
+        dynatemp_exponent: request_defaults
+            .and_then(|v| v.dynatemp_exponent)
+            .or_else(|| model.and_then(|v| v.dynatemp_exponent))
+            .or_else(|| global.and_then(|v| v.dynatemp_exponent)),
+        dry: request_defaults
+            .and_then(|v| v.dry.clone())
+            .or_else(|| model.and_then(|v| v.dry.clone()))
+            .or_else(|| global.and_then(|v| v.dry.clone())),
+        xtc: request_defaults
+            .and_then(|v| v.xtc.clone())
+            .or_else(|| model.and_then(|v| v.xtc.clone()))
+            .or_else(|| global.and_then(|v| v.xtc.clone())),
+        mirostat_mode: request_defaults
+            .and_then(|v| v.mirostat_mode.clone())
+            .or_else(|| model.and_then(|v| v.mirostat_mode.clone()))
+            .or_else(|| global.and_then(|v| v.mirostat_mode.clone())),
+        mirostat_entropy: request_defaults
+            .and_then(|v| v.mirostat_entropy)
+            .or_else(|| model.and_then(|v| v.mirostat_entropy))
+            .or_else(|| global.and_then(|v| v.mirostat_entropy)),
+        mirostat_learning_rate: request_defaults
+            .and_then(|v| v.mirostat_learning_rate)
+            .or_else(|| model.and_then(|v| v.mirostat_learning_rate))
+            .or_else(|| global.and_then(|v| v.mirostat_learning_rate)),
+        samplers: request_defaults
+            .and_then(|v| v.samplers.clone())
+            .or_else(|| model.and_then(|v| v.samplers.clone()))
+            .or_else(|| global.and_then(|v| v.samplers.clone())),
+        sampler_sequence: request_defaults
+            .and_then(|v| v.sampler_sequence.clone())
+            .or_else(|| model.and_then(|v| v.sampler_sequence.clone()))
+            .or_else(|| global.and_then(|v| v.sampler_sequence.clone())),
+        ignore_eos: request_defaults
+            .and_then(|v| v.ignore_eos)
+            .or_else(|| model.and_then(|v| v.ignore_eos))
+            .or_else(|| global.and_then(|v| v.ignore_eos)),
         repeat_penalty: request_defaults
             .and_then(|value| value.repeat_penalty)
             .or_else(|| model.and_then(|value| value.repeat_penalty))
@@ -86,6 +134,42 @@ pub(super) fn resolve_request_defaults(
             .and_then(|value| value.reasoning_budget.clone())
             .or_else(|| model.and_then(|value| value.reasoning_budget.clone()))
             .or_else(|| global.and_then(|value| value.reasoning_budget.clone())),
+        chat_template: request_defaults
+            .and_then(|v| v.chat_template.clone())
+            .or_else(|| model.and_then(|v| v.chat_template.clone()))
+            .or_else(|| global.and_then(|v| v.chat_template.clone())),
+        chat_template_file: request_defaults
+            .and_then(|v| v.chat_template_file.clone())
+            .or_else(|| model.and_then(|v| v.chat_template_file.clone()))
+            .or_else(|| global.and_then(|v| v.chat_template_file.clone())),
+        jinja: request_defaults
+            .and_then(|v| v.jinja)
+            .or_else(|| model.and_then(|v| v.jinja))
+            .or_else(|| global.and_then(|v| v.jinja)),
+        chat_template_kwargs: request_defaults
+            .and_then(|v| v.chat_template_kwargs.clone())
+            .or_else(|| model.and_then(|v| v.chat_template_kwargs.clone()))
+            .or_else(|| global.and_then(|v| v.chat_template_kwargs.clone())),
+        skip_chat_parsing: request_defaults
+            .and_then(|v| v.skip_chat_parsing)
+            .or_else(|| model.and_then(|v| v.skip_chat_parsing))
+            .or_else(|| global.and_then(|v| v.skip_chat_parsing)),
+        prefill_assistant: request_defaults
+            .and_then(|v| v.prefill_assistant.clone())
+            .or_else(|| model.and_then(|v| v.prefill_assistant.clone()))
+            .or_else(|| global.and_then(|v| v.prefill_assistant.clone())),
+        system_prompt: request_defaults
+            .and_then(|v| v.system_prompt.clone())
+            .or_else(|| model.and_then(|v| v.system_prompt.clone()))
+            .or_else(|| global.and_then(|v| v.system_prompt.clone())),
+        grammar: request_defaults
+            .and_then(|v| v.grammar.clone())
+            .or_else(|| model.and_then(|v| v.grammar.clone()))
+            .or_else(|| global.and_then(|v| v.grammar.clone())),
+        json_schema: request_defaults
+            .and_then(|v| v.json_schema.clone())
+            .or_else(|| model.and_then(|v| v.json_schema.clone()))
+            .or_else(|| global.and_then(|v| v.json_schema.clone())),
     })
 }
 
@@ -163,35 +247,8 @@ fn reject_unsupported_request_defaults(
     };
 
     for (field, present) in [
-        ("typical_p", config.typical_p.is_some()),
-        ("top_nsigma", config.top_nsigma.is_some()),
-        ("dynatemp_range", config.dynatemp_range.is_some()),
-        ("dynatemp_exponent", config.dynatemp_exponent.is_some()),
-        ("dry", config.dry.is_some()),
-        ("xtc", config.xtc.is_some()),
         ("adaptive", config.adaptive.is_some()),
-        ("mirostat_mode", config.mirostat_mode.is_some()),
-        ("mirostat_entropy", config.mirostat_entropy.is_some()),
-        (
-            "mirostat_learning_rate",
-            config.mirostat_learning_rate.is_some(),
-        ),
-        ("samplers", config.samplers.is_some()),
-        ("sampler_sequence", config.sampler_sequence.is_some()),
-        ("ignore_eos", config.ignore_eos.is_some()),
         ("backend_sampling", config.backend_sampling.is_some()),
-        ("chat_template", config.chat_template.is_some()),
-        ("chat_template_file", config.chat_template_file.is_some()),
-        ("jinja", config.jinja.is_some()),
-        (
-            "chat_template_kwargs",
-            config.chat_template_kwargs.is_some(),
-        ),
-        ("skip_chat_parsing", config.skip_chat_parsing.is_some()),
-        ("prefill_assistant", config.prefill_assistant.is_some()),
-        ("system_prompt", config.system_prompt.is_some()),
-        ("grammar", config.grammar.is_some()),
-        ("json_schema", config.json_schema.is_some()),
         ("logprobs", config.logprobs.is_some()),
     ] {
         if present {

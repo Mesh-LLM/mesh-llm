@@ -259,7 +259,7 @@ mod tests {
         let config: MeshConfig = toml::from_str(
             r#"
 [defaults.request_defaults]
-grammar = "root ::= \"a\""
+logprobs = { enabled = true }
 "#,
         )
         .expect("config should parse");
@@ -269,9 +269,9 @@ grammar = "root ::= \"a\""
             .iter()
             .find(|d| {
                 d.path.as_ref().map(ConfigPath::render)
-                    == Some("defaults.request_defaults.grammar".to_string())
+                    == Some("defaults.request_defaults.logprobs".to_string())
             })
-            .expect("grammar should produce a diagnostic");
+            .expect("logprobs should produce a diagnostic");
         assert_eq!(diagnostic.code, ConfigDiagnosticCode::RejectedField);
         assert_eq!(diagnostic.severity, ConfigDiagnosticSeverity::Error);
     }
