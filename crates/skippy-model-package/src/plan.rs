@@ -191,11 +191,10 @@ fn is_per_layer_embedding_consumer(name: &str) -> bool {
     else {
         return false;
     };
-    suffix.starts_with("ple_")
-        || suffix.starts_with("per_layer_model_proj")
-        || suffix.starts_with("per_layer_proj_norm")
-        || suffix.starts_with("per_layer_input_gate")
-        || suffix.starts_with("per_layer_proj")
+    // qwen4exp gathers the table in its PLE blocks (`blk.N.ple_*`); Gemma3n and
+    // Gemma4 gather it through their per-block projections (`blk.N.per_layer_*`),
+    // which exist on every block and so keep the table on every stage.
+    suffix.starts_with("ple_") || suffix.starts_with("per_layer_")
 }
 
 pub(crate) fn parse_layer_range(layers: &str) -> Result<(u32, u32)> {
