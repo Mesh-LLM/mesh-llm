@@ -1,0 +1,223 @@
+From d685e9564ba5d62a023e67e5830d81f4b8323b40 Mon Sep 17 00:00:00 2001
+From: Paul Hogan
+ <5004d00b753726762516a66df75936687319095eacf0e9f7a4710f7a0ff12098@meshllm.communities.buzz.xyz>
+Date: Sat, 29 Aug 2026 08:40:47 +1000
+Subject: [PATCH] skippy: capture Gemma3N AltUp boundary at eval time into
+ persistent output buffer
+
+The Gemma3N stage boundary is the first whose export reads a graph-result
+tensor (t_skippy_gemma3n_altup, a 3D [n_embd, n_tokens, n_altup] CONT)
+rather than the persistent embeddings buffer. Reading it after decode()
+returned raced the async Metal pipeline: the graph tensor's device memory
+could still be in flight, producing prompt-independent all-zero payloads
+(sha256 of zeros) and downstream garbage predictions, with no error set.
+
+Capture the tensor during decode output extraction - while the tensor is
+guaranteed valid - into a new persistent output-buffer section
+(embd_skippy_altup, sized n_embd*n_batch*n_altup for GEMMA3N), with a
+stream-ordered async blit on the tensor's backend. The skippy activation
+export then synchronizes and reads the host capture instead of the graph
+tensor (which remains authoritative for shape validation only).
+
+Validation (gemma-3n-E2B-it Q4_K_M, all legal cuts 1..29):
+- Metal FA-on 28/28 exact (was: all-zero export, garbage preds)
+- Metal FA-off 28/28 exact (was: real export, garbage stage-1)
+- CPU 28/28, Metal prefill (10-token) 28/28 - unchanged paths stay green
+- Regressions: Qwen3.5-4B 30/30, Gemma-4 E4B 35/35 (Metal, all cuts)
+
+Co-authored-by: jy <6b90287aa37add903ef8b4200477ecbfa85ac0da1a84cf1ff51a7207d0220740@meshllm.communities.buzz.xyz>
+---
+ src/llama-context.cpp     | 60 ++++++++++++++++++++++++++++++++++++++-
+ src/llama-context.h       | 14 +++++++++
+ src/skippy/activation.cpp | 24 ++++++++++++----
+ 3 files changed, 91 insertions(+), 7 deletions(-)
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index dce2c4bf0..747a32dd0 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -970,6 +970,12 @@ float * llama_context::get_embeddings_nextn() {
+     return embd_nextn.data;
+ }
+ 
++float * llama_context::get_embeddings_skippy_altup() {
++    output_reorder();
++
++    return embd_skippy_altup.data;
++}
++
+ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
+     output_reorder();
+ 
+@@ -1969,6 +1975,42 @@ int llama_context::decode(const llama_batch & batch_inp) {
+ 
+         extract_layer_inputs(res, n_tokens_prev, ubatch.n_tokens);
+ 
++        // skippy: capture the Gemma3N AltUp stage-boundary activation while the
++        // graph-result tensor is still valid (before the scheduler reuses its
++        // compute buffers), into the persistent host view. The tensor is
++        // [n_embd][n_tokens][n_altup] and covers every token of the ubatch.
++        if (embd_skippy_altup.data) {
++            ggml_tensor * t_altup = res->get_skippy_gemma3n_altup();
++            if (t_altup != nullptr) {
++                const uint32_t n_embd = hparams.n_embd;
++                const size_t   n_rows = (size_t) ubatch.n_tokens * n_embd * hparams.n_altup;
++
++                GGML_ASSERT(n_tokens_prev * n_embd * hparams.n_altup + n_rows <= embd_skippy_altup.size);
++                float * embd_altup_out = embd_skippy_altup.data + n_tokens_prev * n_embd * hparams.n_altup;
++
++                if (ggml_nbytes(t_altup) < n_rows * sizeof(float)) {
++                    LLAMA_LOG_ERROR(
++                        "%s: skippy gemma3n altup tensor is too small: n_tokens=%u, n_embd=%u, n_altup=%u, "
++                        "want=%zu bytes, have=%zu bytes, ne=[%lld, %lld, %lld, %lld]\n",
++                        __func__, ubatch.n_tokens, n_embd, hparams.n_altup,
++                        n_rows * sizeof(float), ggml_nbytes(t_altup),
++                        (long long) t_altup->ne[0], (long long) t_altup->ne[1],
++                        (long long) t_altup->ne[2], (long long) t_altup->ne[3]);
++                    return -3;
++                }
++                ggml_backend_t backend_altup = ggml_backend_sched_get_tensor_backend(sched.get(), t_altup);
++                GGML_ASSERT(backend_altup != nullptr);
++                // Stream-ordered on purpose: decode() runs this extraction right
++                // after graph_compute_async returns, so the GPU may still be
++                // writing the tensor — a synchronous host read can beat it
++                // (observed: real values under an eval-callback sync, zeros
++                // without). Enqueue the blit on the backend stream so it runs
++                // after the compute; the skippy export synchronizes before
++                // reading the capture (see activation.cpp).
++                ggml_backend_tensor_get_async(backend_altup, t_altup, embd_altup_out, 0, n_rows * sizeof(float));
++            }
++        }
++
+         // extract nextn embeddings before
+         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
+         {
+@@ -2101,6 +2143,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+     size_t backend_float_count = 0;
+     size_t backend_token_count = 0;
+     size_t embd_layer_inp_float_count = 0;
++    size_t skippy_altup_float_count = 0;
+ 
+     logits.size     = has_logits     ? n_vocab*n_outputs_max     : 0;
+     embd.size       = has_embd       ? n_embd_out*n_outputs_max  : 0;
+@@ -2118,6 +2161,15 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+         }
+     }
+ 
++    // skippy: Gemma3N AltUp boundary capture. Sized by token capacity (n_batch),
++    // not n_outputs: the boundary frame covers every token of the ubatch (prefill
++    // mode transports the full prompt), and the capture must survive ubatch
++    // chunks whose tokens carry no logits flags. n_altup has an arch-neutral
++    // default, so gate on the arch that actually produces the boundary tensor.
++    if (model.arch == LLM_ARCH_GEMMA3N) {
++        skippy_altup_float_count = (size_t) n_embd * n_batch * hparams.n_altup;
++    }
++
+     // Allocate backend sampling output buffers if there are backend samplers configured.
+     const bool has_sampling = !sampling.samplers.empty();
+     if (has_sampling) {
+@@ -2132,7 +2184,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+ 
+     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
+     const size_t new_size  =
+-        (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
++        (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count + skippy_altup_float_count) * sizeof(float) +
+         (                                                                         backend_token_count) * sizeof(llama_token);
+ 
+     // alloc only when more than the current capacity is required
+@@ -2150,6 +2202,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+             logits.data = nullptr;
+             embd.data = nullptr;
+             embd_nextn.data = nullptr;
++            embd_skippy_altup.data = nullptr;
+             for (auto & layer_inp : embd_layer_inp) {
+                 layer_inp = {nullptr, 0};
+             }
+@@ -2193,6 +2246,11 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+         }
+     }
+ 
++    embd_skippy_altup = skippy_altup_float_count > 0
++        ? buffer_view<float>{(float *) (base + offset), skippy_altup_float_count}
++        : buffer_view<float>{nullptr, 0};
++    offset += embd_skippy_altup.size * sizeof(float);
++
+     if (has_sampling) {
+         sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
+         offset += sampling.logits.size * sizeof(float);
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 20c121b24..6b724af78 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -90,6 +90,11 @@ struct llama_context {
+     float * get_embeddings_nextn();
+     float * get_embeddings_nextn_ith(int32_t i);
+ 
++    // skippy: host copy of the Gemma3N AltUp stage-boundary activation for the
++    // most recent decode (see embd_skippy_altup). Returns nullptr when the
++    // capture is not enabled for this context.
++    float * get_embeddings_skippy_altup();
++
+     float * get_embeddings_layer_inp(uint32_t lid);
+ 
+     llama_token * get_sampled_tokens() const;
+@@ -303,6 +308,15 @@ private:
+     // sets llm_graph_result::t_h_nextn
+     buffer_view<float> embd_nextn = {nullptr, 0};
+ 
++    // skippy: Gemma3N stage-boundary activation (AltUp-tripled hidden state,
++    // [n_embd][n_tokens][n_altup]) captured at eval time into the persistent
++    // output buffer. Reading the graph-result tensor after decode() returned
++    // raced the async backend pipeline (observed all-zero payloads on Metal);
++    // like the embeddings buffer, this host copy is written during output
++    // extraction with a stream-ordered blit, and consumers synchronize before
++    // reading it.
++    buffer_view<float> embd_skippy_altup = {nullptr, 0};
++
+     // host buffers for output layer input embeddings, per layer
+     // populated when cparams.output_layer_inp[il] is true
+     std::vector<buffer_view<float>> embd_layer_inp;
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 8dfcbfc3e..5b7ea8780 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -434,18 +434,30 @@ enum skippy_status skippy_copy_output_activation_frame(
+     const size_t hidden_bytes = skippy_activation_hidden_bytes(session, token_count);
+     size_t actual_payload_bytes = hidden_bytes;
+     if ((output_flags & SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP) != 0) {
+-        llm_graph_result * res = session->ctx->get_gf_res_prev();
+-        ggml_tensor * altup = res != nullptr ? res->get_skippy_gemma3n_altup() : nullptr;
+         const size_t altup_bytes = skippy_gemma3n_altup_bytes(session, token_count);
+-        if (altup == nullptr) {
+-            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "Gemma3n AltUp activation output was not available");
++        // The graph-result tensor is only safely readable inside decode()'s
++        // extraction window; after decode() returns, a direct backend read can
++        // race the async pipeline (observed all-zero payloads on Metal). The
++        // payload is instead captured into a persistent host buffer during
++        // extraction with a stream-ordered blit (see
++        // llama_context::embd_skippy_altup). Read the data from that capture;
++        // consult the graph tensor only for shape validation.
++        llm_graph_result * res = session->ctx->get_gf_res_prev();
++        ggml_tensor * altup_tensor = res != nullptr ? res->get_skippy_gemma3n_altup() : nullptr;
++        const float * altup_captured = session->ctx->get_embeddings_skippy_altup();
++        if (altup_captured == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "Gemma3n AltUp activation output was not captured");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+-        if (ggml_nbytes(altup) < altup_bytes) {
++        if (altup_tensor == nullptr || ggml_nbytes(altup_tensor) < altup_bytes) {
+             skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "Gemma3n AltUp activation tensor is smaller than expected payload");
+             return SKIPPY_STATUS_RUNTIME_ERROR;
+         }
+-        ggml_backend_tensor_get(altup, output_payload, 0, altup_bytes);
++        // The capture blit is enqueued on the backend stream (after the compute);
++        // wait for it before reading the host copy. Without this the export can
++        // race the async decode pipeline and read a zeroed capture buffer.
++        session->ctx->synchronize();
++        std::memcpy(output_payload, altup_captured, altup_bytes);
+         if (out_output_payload_bytes != nullptr) {
+             *out_output_payload_bytes = altup_bytes;
+         }
+-- 
+2.54.0 (Apple Git-157)
+
