@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "goal": "cheap llama.cpp parity: one small GGUF representative per llama.cpp model implementation where certification is meaningful",
+  "activation_transport_note": "All production activation transport uses fixed raw f32. Historical f16/q8 wire validation references in notes fields below are research evidence only, not active dtype options.",
   "defaults": {
     "ctx_size": 128,
     "n_gpu_layers": 999,

@@ -1100,7 +1100,7 @@ Investigate only after the fixed baseline:
 | --- | --- |
 | Frontend concurrency widening | First prove whether current `serve-openai` serializes generation; widen only with correctness and cancellation coverage. |
 | Prefill chunk threshold/schedule | Sweep after a stable chunk-size baseline; promote only if chat-completions TTFT/tail improves. |
-| Activation wire | Fixed raw little-endian f32 representation; no per-model dtype policy or lower-precision fallback. |
+| Activation wire | Fixed raw little-endian f32 representation; no per-model dtype policy. Historical f16/q8 experiments are research evidence only, not active options. |
 | `--stage-async-prefill-forward` | Keep package-off unless repeated chat-completions runs beat synchronous baseline after variance. |
 | Network impairment knobs | Use downstream delay/bandwidth caps only for diagnosis, not customer baseline. |
 | Runtime parallelism | Explore critical-section shrinking, per-session locking, runtime shards, schedulers/batching, or stage replicas only after lock/session spans show material concurrency tail. |
