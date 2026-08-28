@@ -1,5 +1,9 @@
 # mesh-llm Router Evals
 
+For the pinned Mesh-versus-raw-llama.cpp scheduler matrix across CUDA, Metal,
+dense/MoE/recurrent models, llama-benchy, and Thoughtworks agent traces, see
+[`docs/skippy/COMPETITIVE_BENCHMARK.md`](../docs/skippy/COMPETITIVE_BENCHMARK.md).
+
 A/B comparison of pi agent performance through mesh-llm's multi-model router vs a frontier cloud model.
 
 ## Setup
