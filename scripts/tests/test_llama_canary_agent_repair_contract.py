@@ -117,6 +117,21 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         # The repair push URL embeds the token; its stderr is redacted.
         self.assertIn("redact_token", wrapper)
 
+    def test_battery_build_mirrors_the_workflow_arch_guard(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # The family-certify job runs under Rosetta; the wrapper's build must
+        # use the same arch -arm64 guard as the workflow's own build step,
+        # and refuse to certify a non-arm64 archive (run 33140672269 rebuilt
+        # x86_64 from a plain build-llama.sh call).
+        self.assertIn("arch -arm64 scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64", wrapper)
+        self.assertIn("refusing to certify: native archive is not arm64", wrapper)
+
+    def test_push_failure_names_the_likely_permission_cause(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # A 403 on the repair push is almost always a PAT-identity permission
+        # gap; the wrapper must say so instead of failing with a bare git error.
+        self.assertIn("identity behind CANARY_REPAIR_TOKEN lacks write access", wrapper)
+
     def test_dispatch_sha_is_validated_before_use(self) -> None:
         env = {
             **os.environ,
