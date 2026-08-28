@@ -165,7 +165,7 @@ pub(super) fn fleet_peer_with_health(
 }
 
 /// Build a node whose mesh view is `fleet`: (model, replica count) pairs.
-async fn node_with_fleet(fleet: &[(FleetModel, usize)]) -> mesh::Node {
+pub(super) async fn node_with_fleet(fleet: &[(FleetModel, usize)]) -> mesh::Node {
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
         .await
         .expect("test node");
