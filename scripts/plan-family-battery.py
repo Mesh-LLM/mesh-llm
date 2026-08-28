@@ -331,6 +331,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "cadences",
                 "artifact",
                 "draft_artifact",
+                "mmproj_artifact",
                 "execution",
                 "resources",
                 "notes",
@@ -351,6 +352,11 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         draft = None
         if "draft_artifact" in model:
             draft = _artifact(model["draft_artifact"], f"{field}.draft_artifact")
+        mmproj = None
+        if "mmproj_artifact" in model:
+            mmproj = _artifact(model["mmproj_artifact"], f"{field}.mmproj_artifact")
+        if mmproj is not None and len(mmproj["files"]) != 1:
+            raise PlanError(f"{field}.mmproj_artifact.files must name exactly one projector GGUF")
 
         execution = _object(model.get("execution"), f"{field}.execution")
         _exact_keys(
@@ -434,6 +440,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "cadences": cadences,
                 "artifact": artifact,
                 "draft_artifact": draft,
+                "mmproj_artifact": mmproj,
                 "execution": {
                     "trunk_layers": trunk_layers,
                     "mtp_layers": mtp_layers,
@@ -507,6 +514,8 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         artifacts = [("target", model["artifact"])]
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
+        if model["mmproj_artifact"] is not None:
+            artifacts.append(("mmproj", model["mmproj_artifact"]))
         for kind, artifact in artifacts:
             repo_dir = "models--" + artifact["repo"].replace("/", "--")
             blob_dir = (_cache_hub(cache_root) / repo_dir / "blobs").resolve()
@@ -540,6 +549,9 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         artifacts = [("target", model["artifact"])]
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
+        # A projector GGUF (mmproj_artifact) is deliberately excluded from
+        # this pass: it is a sidecar encoder, not a trunk model, so it carries
+        # no *.block_count / *.embedding_length trunk dimensions to check.
         for kind, artifact in artifacts:
             found_dimensions = False
             for target in _artifact_cache_paths(cache_root, artifact):
