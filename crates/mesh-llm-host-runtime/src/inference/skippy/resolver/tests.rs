@@ -1599,16 +1599,46 @@ reasoning_enabled = "on"
 }
 
 #[test]
-fn unsupported_request_defaults_fail_closed_during_resolution() {
+fn sampling_chat_and_reasoning_defaults_reach_embedded_openai_translation() {
     let mesh_config = parse_config(
         r#"
 [defaults.request_defaults]
-chat_template = "unsafe-template"
+typical_p = 0.73
+top_nsigma = 1.7
+dynatemp_range = 0.21
+dynatemp_exponent = 1.4
+mirostat_mode = 2
+mirostat_entropy = 4.5
+mirostat_learning_rate = 0.08
+samplers = ["dry", "top_k", "typical_p", "temperature"]
+sampler_sequence = "dky t"
+ignore_eos = true
+reasoning_format = "hidden"
+reasoning_budget = 384
+chat_template = "{{ messages }}"
+jinja = true
+chat_template_kwargs = { custom_mode = 7 }
+skip_chat_parsing = true
+prefill_assistant = "draft answer"
+system_prompt = "configured system"
+grammar = "root ::= 'ok'"
+json_schema = { type = "object" }
+
+[defaults.request_defaults.dry]
+multiplier = 0.8
+base = 1.9
+allowed_length = 3
+penalty_last_n = 48
+sequence_breakers = ["\\n", ":"]
+
+[defaults.request_defaults.xtc]
+probability = 0.24
+threshold = 0.12
 "#,
     );
     let model_file = temp_model_file();
 
-    let err = resolve_skippy_config(SkippyConfigResolveRequest {
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &mesh_config,
         model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
         model_path: model_file.path(),
@@ -1617,10 +1647,30 @@ chat_template = "unsafe-template"
         request_defaults: None,
         package_generation: None,
     })
-    .unwrap_err()
-    .to_string();
+    .expect("sampling, chat, and reasoning defaults should resolve");
 
-    assert!(err.contains("defaults.request_defaults.chat_template"));
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("embedded OpenAI args should carry request defaults");
+    let translated = format!("{:?}", openai.request_defaults);
+
+    for expected in [
+        "typical_p: Some(0.73)",
+        "top_nsigma: Some(1.7)",
+        "dynatemp_range: Some(0.21)",
+        "mirostat_mode: Some(2)",
+        "ignore_eos: Some(true)",
+        "reasoning_budget: Some(Tokens(384))",
+        "chat_template: Some(\"{{ messages }}\")",
+        "skip_chat_parsing: Some(true)",
+        "system_prompt: Some(\"configured system\")",
+        "grammar: Some(\"root ::= 'ok'\")",
+    ] {
+        assert!(
+            translated.contains(expected),
+            "missing {expected}: {translated}"
+        );
+    }
 }
 
 #[test]

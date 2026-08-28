@@ -627,19 +627,48 @@ fn invalid_logit_bias_returns_openai_error() {
 }
 
 #[test]
-fn unsupported_extra_generation_fields_return_openai_error() {
+fn extended_sampling_fields_reach_runtime_sampling_config() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
-        "typical_p": 0.5
+        "typical_p": 0.73,
+        "top_nsigma": 1.7,
+        "dynatemp_range": 0.21,
+        "dynatemp_exponent": 1.4,
+        "dry": {
+            "multiplier": 0.8,
+            "base": 1.9,
+            "allowed_length": 3,
+            "penalty_last_n": 48,
+            "sequence_breakers": ["\\n", ":"]
+        },
+        "xtc": {"probability": 0.24, "threshold": 0.12},
+        "mirostat_mode": 2,
+        "mirostat_entropy": 4.5,
+        "mirostat_learning_rate": 0.08,
+        "samplers": ["dry", "top_k", "typical_p", "temperature"],
+        "sampler_sequence": "dkyt",
+        "ignore_eos": true
     }))
     .unwrap();
 
-    let error = chat_sampling_config(&request).unwrap_err();
-    assert_eq!(
-        error.body().error.code.as_deref(),
-        Some("unsupported_model_feature")
-    );
+    let sampling = chat_sampling_config(&request).expect("extended sampling should normalize");
+    let normalized = format!("{sampling:?}");
+
+    for expected in [
+        "typical_p: 0.73",
+        "top_nsigma: 1.7",
+        "dynatemp_range: 0.21",
+        "dry_multiplier: 0.8",
+        "xtc_probability: 0.24",
+        "mirostat_mode: 2",
+        "ignore_eos: true",
+    ] {
+        assert!(
+            normalized.contains(expected),
+            "missing {expected}: {normalized}"
+        );
+    }
 }
 
 #[test]
