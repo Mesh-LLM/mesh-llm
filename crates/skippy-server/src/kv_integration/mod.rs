@@ -150,6 +150,9 @@ pub struct KvStageIntegration {
     pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
     pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
+    /// Durable L3 floor under the radix cache (`SKIPPY_L3_DIR`): exact-state
+    /// records write through to it and radix misses fill back from it.
+    pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

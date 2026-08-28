@@ -33,6 +33,13 @@ impl KvStageIntegration {
                 (lookup, entries)
             };
             let Some(lookup) = lookup else {
+                // Radix miss: try the durable L3 tier before giving up on
+                // this identity, and re-warm the radix on a hit.
+                if let Some(restored) =
+                    self.restore_from_l3(runtime, session_id, identity, lookup_started)?
+                {
+                    return Ok(Some(restored));
+                }
                 continue;
             };
             let lease = ExactStateLease {
@@ -250,6 +257,105 @@ impl KvStageIntegration {
                 Ok(None)
             }
         }
+    }
+}
+
+impl KvStageIntegration {
+    /// Fill a radix miss from the durable L3 tier: import the spilled state
+    /// into the session and enqueue a radix re-warm so the next lookup hits
+    /// RAM. Returns `None` when the tier is absent or holds nothing usable.
+    fn restore_from_l3(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        lookup_started: Instant,
+    ) -> Result<Option<ExactStateRestore>> {
+        let Some(l3) = &self.l3 else {
+            return Ok(None);
+        };
+        let prefix_key = skippy_cache::l3_prefix_key(&identity.namespace, &identity.token_ids);
+        let filled = match l3.fill(&prefix_key) {
+            Ok(filled) => filled,
+            Err(error) => {
+                // A corrupt or identity-mismatched entry must not fail the
+                // request: the miss path (fresh prefill) is always safe.
+                eprintln!("skippy L3 fill failed for {}: {error:#}", identity.page_id);
+                return Ok(None);
+            }
+        };
+        let Some((payload, token_count, kv_desc_json)) = filled else {
+            return Ok(None);
+        };
+        if token_count != identity.token_ids.len() as u64 {
+            return Ok(None);
+        }
+        let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = kv_desc_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
+        let mut kv_import_ms = 0.0;
+        let mut recurrent_import_ms = 0.0;
+        match payload.kind().into() {
+            StagePrefixCachePayload::FullState => {
+                let (full_state, _) = payload
+                    .full_state_bytes_timed()
+                    .context("reconstruct L3 full-state payload")?;
+                let import_started = Instant::now();
+                runtime.import_full_state_for_token_count(
+                    session_id,
+                    full_state.as_ref(),
+                    token_count,
+                )?;
+                kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            StagePrefixCachePayload::KvRecurrent => {
+                if let Some(kv) = payload.kv_bytes().context("reconstruct L3 KV payload")? {
+                    if let Some(desc) = kv_desc.as_ref() {
+                        let import_started = Instant::now();
+                        runtime.import_kv_page(session_id, desc, kv.as_ref())?;
+                        kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                    } else if !kv.is_empty() {
+                        return Ok(None);
+                    }
+                }
+                let recurrent = payload
+                    .recurrent_state_bytes()
+                    .context("reconstruct L3 recurrent payload")?;
+                let import_started = Instant::now();
+                runtime.import_recurrent_state_for_token_count(
+                    session_id,
+                    recurrent.as_ref(),
+                    token_count,
+                )?;
+                recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            _ => return Ok(None),
+        }
+        let logical_bytes = payload.byte_len();
+        let payload_kind = payload.kind();
+        // Re-warm the RAM tier off the request path; drops are fine, the L3
+        // copy stays authoritative.
+        let _ = self.enqueue_exact_state_record(PendingExactStateRecord {
+            page_id: identity.page_id.clone(),
+            payload,
+            extra: ExactStateExtra { kv_desc },
+            namespace: identity.namespace.clone(),
+            token_ids: identity.token_ids.clone(),
+        });
+        Ok(Some(ExactStateRestore {
+            page_id: identity.page_id.clone(),
+            token_count: token_count as usize,
+            payload_kind,
+            logical_bytes,
+            entries: 0,
+            reconstruct_ms: 0.0,
+            reconstruct_bytes: 0,
+            reconstruct_blocks: 0,
+            lookup_ms,
+            kv_import_ms,
+            recurrent_import_ms,
+        }))
     }
 }
 
