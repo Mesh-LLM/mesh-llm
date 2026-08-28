@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "llama_cpp_revision": "d222767c7a6516559a3f49e7721b6c6b1acc87b4",
+    "llama_benchy_version": "0.4.1.dev1+ge9be34457"
+  },
+  "concurrency": [1, 2, 4, 8, 16, 32, 64, 128, 256],
+  "synthetic": {
+    "prompt_tokens": 512,
+    "output_tokens": [8, 64, 256],
+    "runs": 1,
+    "active_lanes": 4,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "temperature": 0,
+    "seed": 42
+  },
+  "thoughtworks": {
+    "dataset": {
+      "repo": "thoughtworks/agentic-coding-trajectories",
+      "revision": "cef72d1f4d0caabf85937adf8337a14b7522c782",
+      "filename": "sessions.parquet",
+      "sha256": "3dd8ec3546cf771ce4ab2ac6c51ccefdd621197fa997a2cefb430b50df808fb6"
+    },
+    "selection": {
+      "sources": ["swe-smith-claude-3-7-sonnet"],
+      "families": 8,
+      "requests_per_family": 32,
+      "min_isl": 3072,
+      "max_isl_exclusive": 4096,
+      "min_turns": 5,
+      "order": "md5(session_id)",
+      "rows": [
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::conan-io__conan.86f29e13.pr_15699.kv86f030",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 7,
+          "max_isl": 3584,
+          "total_tokens": 3612
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::modin-project__modin.8c7799fd.pr_7225.kv86f030",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 9,
+          "max_isl": 3654,
+          "total_tokens": 3679
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::conan-io__conan.86f29e13.pr_15699.oosvj10h",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 7,
+          "max_isl": 3594,
+          "total_tokens": 3615
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::Project-MONAI__MONAI.a09c1f08.pr_4745.1zmen2ge",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 13,
+          "max_isl": 3584,
+          "total_tokens": 3590
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::facebookresearch__hydra.0f03eb60.pr_2543.kv86f030",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 11,
+          "max_isl": 4089,
+          "total_tokens": 4129
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::Project-MONAI__MONAI.a09c1f08.pr_4775.1zmen2ge",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 11,
+          "max_isl": 3918,
+          "total_tokens": 3924
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::tkrajina__gpxpy.09fc46b3.func_pm_ctrl_shuffle__c2i6nsrx.91hmylr4",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 11,
+          "max_isl": 3753,
+          "total_tokens": 3764
+        },
+        {
+          "session_id": "swe-smith-claude-3-7-sonnet::facebookresearch__hydra.0f03eb60.pr_2543.oosvj10h",
+          "source_dataset": "swe-smith-claude-3-7-sonnet",
+          "n_turns": 11,
+          "max_isl": 3818,
+          "total_tokens": 3949
+        }
+      ],
+      "manifest_sha256": "d0b0f913f3a3095453820eb0e3e1f58b102e25910ee1bc0da78d62ab0041ee15"
+    },
+    "output_tokens": 8,
+    "active_lanes": 2,
+    "context_size": 16384,
+    "warm_fractions": [0.6, 0.8],
+    "minimum_prompts": 60,
+    "temperature": 0,
+    "seed": 42
+  },
+  "models": [
+    {
+      "key": "llama32-dense",
+      "family": "Llama 3.2 1B dense",
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "filename": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "model_id": "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
+      "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+      "tokenizer_sha256": "e55040d7665f87216c2548bc5b4271a6c48e39b6592fbcee30144817428f3740",
+      "layer_end": 16,
+      "synthetic_context_size": 32768,
+      "cache_payload": "resident-kv"
+    },
+    {
+      "key": "deepseek-v2-moe",
+      "family": "DeepSeek Coder V2 Lite MoE",
+      "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+      "filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "model_id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+      "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
+      "tokenizer_sha256": "fbda111c3e0ec5645ea180ca6cb5e51f18e76945a38a5646a2205795de6df698",
+      "layer_end": 27,
+      "synthetic_context_size": 4096,
+      "cache_payload": "resident-kv"
+    },
+    {
+      "key": "falcon-h1-recurrent",
+      "family": "Falcon-H1 1.5B recurrent",
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "filename": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "model_id": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+      "tokenizer_sha256": "0f86dd5768ca8fca8c1268a887560b7d3c9e739c582fc16c150e569d132c4492",
+      "layer_end": 24,
+      "synthetic_context_size": 32768,
+      "cache_payload": "kv-recurrent"
+    }
+  ]
+}
