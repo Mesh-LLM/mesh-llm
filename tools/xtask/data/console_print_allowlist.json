@@ -1885,19 +1885,19 @@
   ],
   "crates/mesh-llm-host-runtime/src/runtime/local_split/tests.rs": [
     {
-      "line": 1669,
+      "line": 1814,
       "macro_name": "eprintln!"
     },
     {
-      "line": 1674,
+      "line": 1819,
       "macro_name": "eprintln!"
     },
     {
-      "line": 1687,
+      "line": 1832,
       "macro_name": "eprintln!"
     },
     {
-      "line": 1709,
+      "line": 1854,
       "macro_name": "eprintln!"
     }
   ],
@@ -4205,27 +4205,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 300,
+      "line": 302,
       "macro_name": "eprintln!"
     },
     {
-      "line": 310,
+      "line": 312,
       "macro_name": "println!"
     },
     {
-      "line": 333,
+      "line": 335,
       "macro_name": "eprintln!"
     },
     {
-      "line": 353,
+      "line": 355,
       "macro_name": "eprintln!"
     },
     {
-      "line": 361,
+      "line": 363,
       "macro_name": "eprintln!"
     },
     {
-      "line": 415,
+      "line": 417,
       "macro_name": "eprintln!"
     }
   ],
@@ -4313,11 +4313,11 @@
   ],
   "crates/skippy-server/src/frontend/generation/server.rs": [
     {
-      "line": 158,
+      "line": 159,
       "macro_name": "println!"
     },
     {
-      "line": 276,
+      "line": 278,
       "macro_name": "println!"
     }
   ],
