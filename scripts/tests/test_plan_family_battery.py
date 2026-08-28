@@ -339,6 +339,33 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("hyper_connection.count", result.stderr)
 
+    def test_cache_gate_rejects_qwen4exp_activation_width_overflow(self) -> None:
+        source = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source["models"] = [copy.deepcopy(source["models"][0])]
+        model = source["models"][0]
+        model["execution"]["trunk_layers"] = 3
+        model["execution"]["activation_width"] = 0x80000000
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = root / "manifest.json"
+            self._materialize_cached_artifact(
+                root,
+                model["artifact"],
+                [3],
+                embedding_length=0x40000000,
+                architecture="qwen4exp",
+                hyper_connection_count=2,
+            )
+            manifest.write_text(json.dumps(source), encoding="utf-8")
+            result = self._run(
+                manifest,
+                "--check-cache",
+                "--cache-root",
+                str(root / "cache"),
+            )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("activation width exceeds i32", result.stderr)
+
     def test_cache_gate_checks_secondary_shard_metadata_and_blob_identity(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source["models"] = [copy.deepcopy(source["models"][0])]
