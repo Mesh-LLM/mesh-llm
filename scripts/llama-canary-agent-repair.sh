@@ -129,10 +129,26 @@ fi
 agent_turn() {
   # Non-fatal: a crashed agent turn must not skip PR reporting. The model
   # runs without any GitHub token: push/PR/comment mutations are wrapper-only.
-  local prompt="$1"
+  # A heartbeat monitor prints elapsed time every 10 minutes so multi-hour
+  # repair turns show progress in the Actions log instead of looking stuck.
+  # It also reports the newest file modification under the llama.cpp worktree,
+  # so watchers can tell "agent is editing" from "turn is hung" without
+  # runner access.
+  local prompt="$1" started newest
+  started="$(date +%s)"
+  (
+    while sleep 600; do
+      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -print -quit 2>/dev/null || true)"
+      printf 'heartbeat: agent turn running for %dm; recent worktree activity: %s\n' \
+        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
+    done
+  ) &
+  local heartbeat_pid=$!
   env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
     opencode run --model "$AGENT_MODEL" "$prompt" \
     || echo "warning: opencode turn exited non-zero" >&2
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
 }
 
 battery_summary() {

@@ -71,6 +71,16 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
             wrapper,
         )
 
+    def test_agent_turns_emit_heartbeat_progress(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # Long agent turns must stay observable from the Actions log: a
+        # heartbeat subshell prints elapsed time and worktree activity every
+        # 10 minutes and is cleaned up when the turn ends.
+        self.assertIn("heartbeat: agent turn running for", wrapper)
+        self.assertIn("while sleep 600", wrapper)
+        self.assertIn('kill "$heartbeat_pid"', wrapper)
+        self.assertIn("recent worktree activity", wrapper)
+
     def test_every_github_call_is_token_scoped(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
         # The workflow job exports no ambient GH_TOKEN and checks out with
