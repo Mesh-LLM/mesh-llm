@@ -11,8 +11,8 @@ use model_ref::split_gguf_shard_info;
 use serde::Deserialize;
 use serde_json::Value;
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, IterationBatchRequest, MtpSource, RuntimeConfig, RuntimeKvPage,
-    RuntimeLoadMode, StageModel, StageSession,
+    ActivationFrame, GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, MtpSource,
+    RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
     redirect_native_logs_to_file,
 };
@@ -203,6 +203,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: None,
                 sample_last: true,
+                phase: IterationBatchPhase::Decode,
             },
             IterationBatchRequest {
                 session: long,
@@ -211,6 +212,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: None,
                 sample_last: false,
+                phase: IterationBatchPhase::Prefill,
             },
             IterationBatchRequest {
                 session: short,
@@ -219,6 +221,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: None,
                 sample_last: true,
+                phase: IterationBatchPhase::Prefill,
             },
         ];
         StageSession::iteration_batch_sampled(&mut requests)?
@@ -261,6 +264,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: Some(&mixed_stage0_output.request_outputs[0]),
                 sample_last: true,
+                phase: IterationBatchPhase::Decode,
             },
             IterationBatchRequest {
                 session: long,
@@ -269,6 +273,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: Some(&mixed_stage0_output.request_outputs[1]),
                 sample_last: false,
+                phase: IterationBatchPhase::Prefill,
             },
             IterationBatchRequest {
                 session: short,
@@ -277,6 +282,7 @@ fn run_mixed_iteration_split(
                 sampling: None,
                 input: Some(&mixed_stage0_output.request_outputs[2]),
                 sample_last: true,
+                phase: IterationBatchPhase::Prefill,
             },
         ];
         StageSession::iteration_batch_sampled(&mut requests)?
