@@ -439,6 +439,10 @@ def server_command(
             model["model_id"],
             "--generation-concurrency",
             str(lanes),
+            "--generation-queue-capacity",
+            "256",
+            "--generation-admission-timeout-secs",
+            "600",
             "--default-max-tokens",
             str(output_tokens),
             "--telemetry-level",
@@ -541,7 +545,7 @@ def running_server(
     environment["LLAMA_STAGE_BUILD_DIR"] = str(args.native_dir)
     environment["SKIPPY_TELEMETRY_STDERR"] = "1" if prompt_cache else "0"
     environment["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
-    environment.pop("SKIPPY_IDLE_ADMISSION_COALESCE_US", None)
+    environment["SKIPPY_IDLE_ADMISSION_COALESCE_US"] = "10000"
     with (output_dir / "server.log").open("wb") as server_log:
         process = subprocess.Popen(
             command, stdout=server_log, stderr=subprocess.STDOUT, env=environment

@@ -417,6 +417,10 @@ mod tests {
             generation_limit: Arc::new(Semaphore::new(1)),
             generation_queue_depth: Arc::new(AtomicUsize::new(0)),
             generation_queue_limit: 1,
+            generation_admission_timeout: std::time::Duration::from_secs(10),
+            generation_service_estimator: Arc::new(
+                crate::frontend::GenerationServiceEstimator::new(1),
+            ),
             generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
             hook_policy: None,

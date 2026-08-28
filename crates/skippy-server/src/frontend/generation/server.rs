@@ -8,6 +8,7 @@ use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
@@ -55,6 +56,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
@@ -75,9 +77,19 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
-    if args.generation_concurrency == 0 {
+    if args.generation_concurrency == Some(0) {
         bail!("--generation-concurrency must be greater than zero");
     }
+    if args.generation_admission_timeout_secs == 0 {
+        bail!("--generation-admission-timeout-secs must be greater than zero");
+    }
+    let generation_concurrency = args
+        .generation_concurrency
+        .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
+    let generation_queue_capacity = args
+        .generation_queue_capacity
+        .unwrap_or_else(|| super::default_generation_queue_capacity(generation_concurrency));
+    let generation_admission_timeout = Duration::from_secs(args.generation_admission_timeout_secs);
     let speculative = load_standalone_speculative_config(args.speculative_config.as_ref())?;
 
     let runtime = load_runtime(&config)?.ok_or_else(|| {
@@ -99,16 +111,23 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         config.clone(),
         args.telemetry_level,
     );
-    telemetry.emit("stage.openai_server_start", lifecycle_attrs(&config));
+    let mut server_start_attrs = lifecycle_attrs(&config);
+    insert_generation_admission_config_attrs(
+        &mut server_start_attrs,
+        generation_concurrency,
+        generation_queue_capacity,
+        args.generation_admission_timeout_secs,
+    );
+    telemetry.emit("stage.openai_server_start", server_start_attrs);
     if matches!(&mode, OpenAiBackendMode::LocalRuntime) {
         ensure_generation_concurrency_fits_lanes(
-            args.generation_concurrency,
+            generation_concurrency,
             config.lane_count,
             "--generation-concurrency",
         )?;
         prewarm_generation_sessions(
             &runtime,
-            args.generation_concurrency,
+            generation_concurrency,
             &telemetry,
             &config,
             "stage.openai_runtime_prewarm",
@@ -120,7 +139,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
         &config,
-        args.generation_concurrency,
+        generation_concurrency,
         telemetry.clone(),
     )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
@@ -139,9 +158,13 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         adaptive_speculative_window: false,
         ngram_max: standalone_ngram_proposal_limit(&speculative),
         speculative,
-        generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
+        generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: args.generation_concurrency,
+        generation_queue_limit: generation_queue_capacity,
+        generation_admission_timeout,
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
@@ -155,8 +178,13 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let app: Router = instrumented_openai_router(backend, tokenizer, telemetry.clone());
 
     println!(
-        "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={}",
-        args.bind_addr, model_id, mode_label, args.generation_concurrency,
+        "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+        args.bind_addr,
+        model_id,
+        mode_label,
+        generation_concurrency,
+        generation_queue_capacity,
+        args.generation_admission_timeout_secs,
     );
 
     let listener = TcpListener::bind(args.bind_addr).await?;
@@ -172,6 +200,8 @@ pub struct EmbeddedOpenAiArgs {
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -273,8 +303,12 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
     let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
     println!(
-        "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={}",
-        bind_addr, binding.model_id, binding.generation_concurrency,
+        "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+        bind_addr,
+        binding.model_id,
+        binding.generation_concurrency,
+        binding.generation_queue_capacity,
+        binding.generation_admission_timeout_secs,
     );
 
     let listener = TcpListener::bind(bind_addr).await?;
@@ -288,12 +322,16 @@ pub struct EmbeddedOpenAiRouter {
     pub router: Router,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
 }
 
 pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
 }
 
@@ -315,6 +353,8 @@ fn embedded_openai_router_with_scheduler(
         router,
         model_id: binding.model_id,
         generation_concurrency: binding.generation_concurrency,
+        generation_queue_capacity: binding.generation_queue_capacity,
+        generation_admission_timeout_secs: binding.generation_admission_timeout_secs,
     })
 }
 
@@ -331,6 +371,9 @@ fn embedded_openai_backend_with_scheduler(
     }
     if args.generation_concurrency == 0 {
         bail!("--openai-generation-concurrency must be greater than zero");
+    }
+    if args.generation_admission_timeout_secs == 0 {
+        bail!("--openai-generation-admission-timeout-secs must be greater than zero");
     }
     ensure_generation_concurrency_fits_lanes(
         args.generation_concurrency,
@@ -399,8 +442,15 @@ fn embedded_openai_backend_with_scheduler(
         lane_pool,
         prediction_returns: args.prediction_returns.clone(),
     };
+    let mut server_start_attrs = lifecycle_attrs(&args.config);
+    insert_generation_admission_config_attrs(
+        &mut server_start_attrs,
+        args.generation_concurrency,
+        args.generation_queue_capacity,
+        args.generation_admission_timeout_secs,
+    );
     args.telemetry
-        .emit("stage.openai_server_start", lifecycle_attrs(&args.config));
+        .emit("stage.openai_server_start", server_start_attrs);
     prewarm_generation_sessions(
         &args.runtime,
         args.generation_concurrency,
@@ -436,7 +486,11 @@ fn embedded_openai_backend_with_scheduler(
         speculative: args.speculative,
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: args.generation_concurrency,
+        generation_queue_limit: args.generation_queue_capacity,
+        generation_admission_timeout: Duration::from_secs(args.generation_admission_timeout_secs),
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            args.generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
@@ -460,6 +514,8 @@ fn embedded_openai_backend_with_scheduler(
         backend,
         model_id,
         generation_concurrency: args.generation_concurrency,
+        generation_queue_capacity: args.generation_queue_capacity,
+        generation_admission_timeout_secs: args.generation_admission_timeout_secs,
         openai_guardrails,
     })
 }
@@ -473,6 +529,26 @@ fn validate_generation_receipt_topology(
         bail!("generation receipts are supported only for local single-stage execution");
     }
     Ok(())
+}
+
+fn insert_generation_admission_config_attrs(
+    attrs: &mut BTreeMap<String, Value>,
+    generation_concurrency: usize,
+    generation_queue_capacity: usize,
+    generation_admission_timeout_secs: u64,
+) {
+    attrs.insert(
+        "llama_stage.generation_concurrency".to_string(),
+        json!(generation_concurrency),
+    );
+    attrs.insert(
+        "llama_stage.generation_queue_capacity".to_string(),
+        json!(generation_queue_capacity),
+    );
+    attrs.insert(
+        "llama_stage.generation_admission_timeout_secs".to_string(),
+        json!(generation_admission_timeout_secs),
+    );
 }
 
 pub(in crate::frontend) fn instrumented_openai_router(

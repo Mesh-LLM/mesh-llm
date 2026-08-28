@@ -41,6 +41,9 @@ fn admission_controller(
         generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit,
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
     }
 }
@@ -50,6 +53,46 @@ fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
         Ok(_) => panic!("expected generation admission to fail"),
         Err(error) => error,
     }
+}
+
+#[tokio::test]
+async fn predicted_wait_rejection_preserves_queue_capacity() {
+    let controller = admission_controller(1, 2);
+    let work = GenerationAdmissionWork::new(100, 100);
+    controller
+        .generation_service_estimator
+        .observe_completed(work, 100.0, 100.0);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("agent-1"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(1),
+            work,
+        )
+        .await
+        .expect("active request admission");
+
+    let error = result_error(
+        controller
+            .acquire_work(
+                &trusted_ids("agent-2"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::from_millis(199),
+                work,
+            )
+            .await,
+    );
+
+    assert!(
+        error
+            .body()
+            .error
+            .message
+            .contains("predicted generation wait")
+    );
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    drop(active);
+    assert_eq!(controller.generation_limit.available_permits(), 1);
 }
 
 #[test]

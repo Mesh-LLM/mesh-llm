@@ -35,6 +35,8 @@ pub struct EmbeddedOpenAiStageOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -57,8 +59,11 @@ impl BinaryStageOptions {
         if args.activation_width <= 0 {
             bail!("activation_width must be greater than zero");
         }
-        if args.openai_generation_concurrency == 0 {
+        if args.openai_generation_concurrency == Some(0) {
             bail!("--openai-generation-concurrency must be greater than zero");
+        }
+        if args.openai_generation_admission_timeout_secs == 0 {
+            bail!("--openai-generation-admission-timeout-secs must be greater than zero");
         }
         if args.openai_prefill_chunk_size == 0 {
             bail!("--openai-prefill-chunk-size must be greater than zero");
@@ -80,6 +85,13 @@ impl BinaryStageOptions {
             None => None,
         };
         let bind_addr = args.bind_addr.unwrap_or(config.bind_addr.parse()?);
+        let openai_generation_concurrency = args
+            .openai_generation_concurrency
+            .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
+        let openai_generation_queue_capacity =
+            args.openai_generation_queue_capacity.unwrap_or_else(|| {
+                crate::frontend::default_generation_queue_capacity(openai_generation_concurrency)
+            });
         let openai_speculative: SpeculativeDecodeConfig = args
             .openai_speculative_config
             .as_ref()
@@ -94,7 +106,9 @@ impl BinaryStageOptions {
                 bind_addr,
                 model_id: args.openai_model_id,
                 default_max_tokens: args.openai_default_max_tokens,
-                generation_concurrency: args.openai_generation_concurrency,
+                generation_concurrency: openai_generation_concurrency,
+                generation_queue_capacity: openai_generation_queue_capacity,
+                generation_admission_timeout_secs: args.openai_generation_admission_timeout_secs,
                 prefill_chunk_size: args.openai_prefill_chunk_size,
                 prefill_chunk_policy: args.openai_prefill_chunk_policy,
                 prefill_chunk_schedule: args.openai_prefill_chunk_schedule,
@@ -269,7 +283,52 @@ mod tests {
         let openai = options.openai.expect("embedded OpenAI configuration");
 
         assert!(options.native_mtp_enabled);
+        assert_eq!(openai.generation_concurrency, 1);
+        assert_eq!(openai.generation_queue_capacity, 16);
+        assert_eq!(openai.generation_admission_timeout_secs, 60);
         assert_eq!(openai.speculative, expected);
+    }
+
+    #[test]
+    fn embedded_openai_admission_overrides_are_independent() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        let mut config = stage_config();
+        config.lane_count = 4;
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&config).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            stage_path.to_str().expect("UTF-8 stage path"),
+            "--activation-width",
+            "2048",
+            "--openai-bind-addr",
+            "127.0.0.1:9337",
+            "--openai-generation-concurrency",
+            "2",
+            "--openai-generation-queue-capacity",
+            "33",
+            "--openai-generation-admission-timeout-secs",
+            "90",
+        ])
+        .expect("parse binary stage CLI");
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+        let openai = BinaryStageOptions::from_cli_args(args)
+            .expect("resolve binary stage")
+            .openai
+            .expect("embedded OpenAI configuration");
+
+        assert_eq!(openai.generation_concurrency, 2);
+        assert_eq!(openai.generation_queue_capacity, 33);
+        assert_eq!(openai.generation_admission_timeout_secs, 90);
     }
 
     #[test]

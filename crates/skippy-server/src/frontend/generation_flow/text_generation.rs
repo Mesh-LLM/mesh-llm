@@ -1,8 +1,9 @@
 use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::generation::{
-    EmbeddedStageZeroGeneration, GENERATION_ADMISSION_TIMEOUT, GeneratedText, GenerationTokenLimit,
-    LocalGeneration, OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
-    PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
+    EmbeddedStageZeroGeneration, GENERATION_TOKEN_BUDGET_TIMEOUT, GeneratedText,
+    GenerationTokenLimit, LocalGeneration, OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer,
+    PreparedGenerationPrompt, PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector,
+    emulation_generation_active,
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use openai_frontend::{ChatCompletionRequest, OpenAiError, OpenAiResult};
@@ -119,7 +120,7 @@ impl StageOpenAiBackend {
         let token_admit_timer = PhaseTimer::start();
         let token_budget_reservation = self.generation_token_budget.reserve_cancellable(
             GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
-            GENERATION_ADMISSION_TIMEOUT,
+            GENERATION_TOKEN_BUDGET_TIMEOUT,
             cancellation,
         )?;
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {

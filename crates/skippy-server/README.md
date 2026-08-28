@@ -128,8 +128,13 @@ deadline handling.
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
   `--generation-concurrency` controls how many chat generation requests may run
-  at once; keep it explicit in benchmark reports because it can serialize or
-  expose concurrent stage-chain behavior.
+  at once and defaults to the config's KV-derived `lane_count`.
+  `--generation-queue-capacity` independently bounds additional waiting
+  requests (default `clamp(8 * lanes, 16, 256)`), while
+  `--generation-admission-timeout-secs` bounds predicted and actual queue wait
+  (default 60 seconds). Embedded serving exposes the same controls with the
+  `--openai-` prefix. Keep all three explicit in benchmark reports because
+  they determine active execution, overload behavior, and tail latency.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface
   telemetry when `--metrics-otlp-grpc` and `--telemetry-level debug` are set.
   The spans account for the full request path visible to the backend:

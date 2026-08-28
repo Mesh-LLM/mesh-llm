@@ -92,10 +92,20 @@ pub struct ServeBinaryArgs {
     pub openai_default_max_tokens: u32,
     #[arg(
         long,
-        default_value_t = 1,
-        help = "Maximum number of concurrent OpenAI chat generation requests hosted by this stage."
+        help = "Maximum number of concurrent OpenAI chat generation requests hosted by this stage. Defaults to the KV-derived lane count."
     )]
-    pub openai_generation_concurrency: usize,
+    pub openai_generation_concurrency: Option<usize>,
+    #[arg(
+        long,
+        help = "Maximum number of additional OpenAI generation requests allowed to wait. Defaults to clamp(8 * resolved generation concurrency, 16, 256)."
+    )]
+    pub openai_generation_queue_capacity: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 60,
+        help = "Maximum seconds an OpenAI generation request may wait for admission."
+    )]
+    pub openai_generation_admission_timeout_secs: u64,
     #[arg(long, default_value_t = 256)]
     pub openai_prefill_chunk_size: usize,
     #[arg(
@@ -169,10 +179,20 @@ pub struct ServeOpenAiArgs {
     pub default_max_tokens: u32,
     #[arg(
         long,
-        default_value_t = 1,
-        help = "Maximum number of concurrent chat generation requests."
+        help = "Maximum number of concurrent chat generation requests. Defaults to the KV-derived lane count."
     )]
-    pub generation_concurrency: usize,
+    pub generation_concurrency: Option<usize>,
+    #[arg(
+        long,
+        help = "Maximum number of additional generation requests allowed to wait. Defaults to clamp(8 * resolved generation concurrency, 16, 256)."
+    )]
+    pub generation_queue_capacity: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 60,
+        help = "Maximum seconds a generation request may wait for admission."
+    )]
+    pub generation_admission_timeout_secs: u64,
     #[arg(
         long,
         help = "Deprecated and unsupported. Direct prediction return requires embedded stage-0 OpenAI serving via serve-binary --openai-bind-addr."
@@ -247,6 +267,9 @@ mod tests {
         assert_eq!(args.openai_prefill_adaptive_step, 128);
         assert_eq!(args.openai_prefill_adaptive_max, 384);
         assert_eq!(args.openai_prefill_adaptive_target_ms, 100.0);
+        assert_eq!(args.openai_generation_concurrency, None);
+        assert_eq!(args.openai_generation_queue_capacity, None);
+        assert_eq!(args.openai_generation_admission_timeout_secs, 60);
 
         let cli = Cli::try_parse_from(["skippy-server", "serve-openai", "--config", "stage.json"])
             .unwrap();
@@ -259,6 +282,9 @@ mod tests {
         assert_eq!(args.prefill_adaptive_step, 128);
         assert_eq!(args.prefill_adaptive_max, 384);
         assert_eq!(args.prefill_adaptive_target_ms, 100.0);
+        assert_eq!(args.generation_concurrency, None);
+        assert_eq!(args.generation_queue_capacity, None);
+        assert_eq!(args.generation_admission_timeout_secs, 60);
         assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Metrics);
     }
 
