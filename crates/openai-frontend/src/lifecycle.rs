@@ -275,9 +275,13 @@ pub fn request_id_response_header(request_id: &RequestId) -> (HeaderName, Header
 /// consumers can assume every `x-capsule-client-nonce` is a UUIDv4 regardless
 /// of whether it was forwarded or minted.
 pub fn parse_client_nonce(value: &str) -> Option<Uuid> {
-    Uuid::parse_str(value)
-        .ok()
-        .filter(|uuid| uuid.get_version_num() == 4)
+    Uuid::parse_str(value).ok().filter(|uuid| {
+        // Require both the version *and* the RFC 4122 variant: a value whose
+        // version nibble is 4 but whose variant is NCS/Microsoft/future (e.g.
+        // `...-0d9e-...`) is not a UUIDv4 this ingress would ever mint, so a
+        // client must not be able to pass one off as a minted-shaped nonce.
+        uuid.get_version_num() == 4 && uuid.get_variant() == uuid::Variant::RFC4122
+    })
 }
 
 /// Accept exactly one valid UUIDv4 client nonce from a header-like value
@@ -480,10 +484,13 @@ mod tests {
     fn parse_single_client_nonce_golden_table_rejects_missing_invalid_and_duplicate_values() {
         let valid = CLIENT_NONCE;
         let non_v4 = "6d7d8d2e-3f4a-1b5c-8d9e-0a1b2c3d4e5f"; // version nibble = 1
+        // version nibble = 4 but variant nibble = 0 (NCS, not RFC 4122).
+        let v4_non_rfc4122_variant = "6d7d8d2e-3f4a-4b5c-0d9e-0a1b2c3d4e5f";
         let cases = [
             (vec![Some(valid)], true),
             (vec![Some("not-a-uuid")], false),
             (vec![Some(non_v4)], false),
+            (vec![Some(v4_non_rfc4122_variant)], false),
             (Vec::new(), false),
             (vec![Some(valid), Some(valid)], false),
             (vec![None], false),
