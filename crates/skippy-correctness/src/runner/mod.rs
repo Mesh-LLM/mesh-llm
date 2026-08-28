@@ -7,6 +7,7 @@ mod split_prefix_hit;
 mod stage_execution;
 mod stage_fa_parity;
 mod state_handoff;
+mod wired_preflight;
 
 pub use boundary_report::boundary_report;
 pub use single_step::single_step;

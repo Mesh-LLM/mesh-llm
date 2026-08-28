@@ -179,6 +179,26 @@ fn run_split_probe(
     split_layer: u32,
     mode: BoundaryProbeMode,
 ) -> Result<BoundaryDTypeScanSplit> {
+    // Patch 0036(b): refuse to open the concurrent stage pair when its
+    // estimated wired demand cannot fit the GPU budget. Before this check,
+    // budget-overflowing splits failed with silent numeric corruption
+    // (kIOGPU OOM swallowed by the sched synchronize). Skipped on CPU-only
+    // runs and disableable for deliberate overflow probes.
+    if runtime.n_gpu_layers > 0 && std::env::var_os("SKIPPY_SKIP_WIRED_PREFLIGHT").is_none() {
+        let metal = crate::runner::wired_preflight::metal_device_budget()
+            .context("failed to query GPU memory budget for wired preflight")?;
+        if let Some((memory_free, wired_limit_mb)) = metal {
+            crate::runner::wired_preflight::preflight_stage_pair(
+                &runtime.model,
+                runtime.layer_end as usize,
+                split_layer as usize,
+                u64::try_from(runtime.n_gpu_layers.max(0)).unwrap_or(0),
+                memory_free,
+                wired_limit_mb,
+            )
+            .with_context(|| format!("wired-memory preflight failed for split {split_layer}"))?;
+        }
+    }
     let stage0_spec = PackageStageSpec {
         topology_id: "correctness-boundary-dtype",
         stage_id: "stage-0",

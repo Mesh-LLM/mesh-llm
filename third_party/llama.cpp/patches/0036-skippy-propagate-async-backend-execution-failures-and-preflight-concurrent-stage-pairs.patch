@@ -1,0 +1,574 @@
+From fd95d8ad3bd84aa7856b29ca24c7d7978a18f025 Mon Sep 17 00:00:00 2001
+From: Paul Hogan
+ <5004d00b753726762516a66df75936687319095eacf0e9f7a4710f7a0ff12098@meshllm.communities.buzz.xyz>
+Date: Sat, 29 Aug 2026 16:21:37 +1000
+Subject: [PATCH] skippy: propagate async backend execution failures +
+ wired-memory preflight for concurrent stage pairs
+
+---
+ ggml/include/ggml-backend.h              |  5 ++++
+ ggml/src/ggml-backend-impl.h             |  5 ++++
+ ggml/src/ggml-backend-meta.cpp           |  1 +
+ ggml/src/ggml-backend.cpp                | 28 ++++++++++++++++++
+ ggml/src/ggml-blas/ggml-blas.cpp         |  1 +
+ ggml/src/ggml-cann/ggml-cann.cpp         |  1 +
+ ggml/src/ggml-cpu/ggml-cpu.cpp           |  1 +
+ ggml/src/ggml-cuda/ggml-cuda.cu          |  1 +
+ ggml/src/ggml-et/ggml-et.cpp             |  1 +
+ ggml/src/ggml-hexagon/ggml-hexagon.cpp   |  1 +
+ ggml/src/ggml-metal/ggml-metal-context.h |  4 +++
+ ggml/src/ggml-metal/ggml-metal-context.m |  9 ++++++
+ ggml/src/ggml-metal/ggml-metal.cpp       |  9 ++++++
+ ggml/src/ggml-opencl/ggml-opencl.cpp     |  1 +
+ ggml/src/ggml-openvino/ggml-openvino.cpp |  1 +
+ ggml/src/ggml-rpc/ggml-rpc.cpp           |  1 +
+ ggml/src/ggml-sycl/ggml-sycl.cpp         |  1 +
+ ggml/src/ggml-virtgpu/ggml-backend.cpp   |  1 +
+ ggml/src/ggml-vulkan/ggml-vulkan.cpp     |  1 +
+ ggml/src/ggml-webgpu/ggml-webgpu.cpp     |  1 +
+ ggml/src/ggml-zdnn/ggml-zdnn.cpp         |  1 +
+ ggml/src/ggml-zendnn/ggml-zendnn.cpp     |  1 +
+ include/llama.h                          |  6 ++++
+ src/llama-context.cpp                    | 36 ++++++++++++++++++++++++
+ src/llama-context.h                      | 13 +++++++++
+ src/skippy/activation.cpp                | 14 +++++++++
+ src/skippy/execution-batch.cpp           | 16 +++++++++++
+ src/skippy/execution-single.cpp          |  8 ++++++
+ 28 files changed, 169 insertions(+)
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index cc3f8cd36..91fc82ca1 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -97,6 +97,11 @@ extern "C" {
+ 
+     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
+ 
++    // skippy: true if the backend entered an error state during previously
++    // submitted (async) work; call after ggml_backend_synchronize. Backends
++    // that execute synchronously always report false.
++    GGML_API bool ggml_backend_get_error(ggml_backend_t backend);
++
+     GGML_API ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph);
+     GGML_API void                      ggml_backend_graph_plan_free  (ggml_backend_t backend, ggml_backend_graph_plan_t plan);
+ 
+diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
+index 40cea024c..232a0063d 100644
+--- a/ggml/src/ggml-backend-impl.h
++++ b/ggml/src/ggml-backend-impl.h
+@@ -118,6 +118,11 @@ extern "C" {
+         // (optional) complete all pending operations (required if the backend supports async operations)
+         void (*synchronize)(ggml_backend_t backend);
+ 
++        // (optional) skippy: report whether the backend entered an error state during
++        // previously submitted (async) work. Backends that execute synchronously
++        // (e.g. CPU) may leave this NULL - their graph_compute status is final.
++        bool (*get_error)(ggml_backend_t backend);
++
+         // (optional) graph plans (not used currently)
+         // compute graph with a plan
+         ggml_backend_graph_plan_t (*graph_plan_create) (ggml_backend_t backend, const struct ggml_cgraph * cgraph);
+diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
+index 3ec40fb1a..36cd7c1ce 100644
+--- a/ggml/src/ggml-backend-meta.cpp
++++ b/ggml/src/ggml-backend-meta.cpp
+@@ -2473,6 +2473,7 @@ static const ggml_backend_i ggml_backend_meta_i = {
+     /* .get_tensor_2d_async     = */ nullptr,
+     /* .cpy_tensor_async        = */ nullptr,
+     /* .synchronize             = */ ggml_backend_meta_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ nullptr,
+     /* .graph_plan_free         = */ nullptr,
+     /* .graph_plan_update       = */ nullptr,
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index e519bdf50..85beec739 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -422,6 +422,19 @@ void ggml_backend_synchronize(ggml_backend_t backend) {
+     backend->iface.synchronize(backend);
+ }
+ 
++// skippy: after synchronization, an async backend's graph_compute status is
++// final. Surface an execution-time failure (e.g. Metal command-buffer error)
++// that was discovered by the synchronize above, so callers that capture the
++// enqueue-time status do not read stale results as success.
++bool ggml_backend_get_error(ggml_backend_t backend) {
++    GGML_ASSERT(backend);
++    if (backend->iface.get_error == NULL) {
++        return false;
++    }
++
++    return backend->iface.get_error(backend);
++}
++
+ ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+     GGML_ASSERT(backend);
+     GGML_ASSERT(backend->iface.graph_plan_create != NULL);
+@@ -446,6 +459,10 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
+ enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+     enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
+     ggml_backend_synchronize(backend);
++    // skippy: same execution-time failure propagation as the sched wrapper
++    if (err == GGML_STATUS_SUCCESS && ggml_backend_get_error(backend)) {
++        return GGML_STATUS_FAILED;
++    }
+     return err;
+ }
+ 
+@@ -1957,6 +1974,17 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
+ enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+     enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
+     ggml_backend_sched_synchronize(sched);
++    // skippy: an async backend (e.g. Metal) reports success at enqueue while
++    // execution may still fail afterwards. The synchronize above discovers
++    // that failure in the backend's error state - propagate it instead of
++    // returning the stale enqueue-time status.
++    if (err == GGML_STATUS_SUCCESS) {
++        for (int i = 0; i < sched->n_backends; i++) {
++            if (ggml_backend_get_error(sched->backends[i])) {
++                return GGML_STATUS_FAILED;
++            }
++        }
++    }
+     return err;
+ }
+ 
+diff --git a/ggml/src/ggml-blas/ggml-blas.cpp b/ggml/src/ggml-blas/ggml-blas.cpp
+index e4b5bd254..6f8dc0a54 100644
+--- a/ggml/src/ggml-blas/ggml-blas.cpp
++++ b/ggml/src/ggml-blas/ggml-blas.cpp
+@@ -268,6 +268,7 @@ static struct ggml_backend_i blas_backend_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ NULL,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-cann/ggml-cann.cpp b/ggml/src/ggml-cann/ggml-cann.cpp
+index 5e5541aac..8527e6549 100644
+--- a/ggml/src/ggml-cann/ggml-cann.cpp
++++ b/ggml/src/ggml-cann/ggml-cann.cpp
+@@ -2753,6 +2753,7 @@ static const ggml_backend_i ggml_backend_cann_interface = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ ggml_backend_cann_cpy_tensor_async,
+     /* .synchronize             = */ ggml_backend_cann_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 8cece71f1..969ab51b2 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -199,6 +199,7 @@ static const struct ggml_backend_i ggml_backend_cpu_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ NULL,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ ggml_backend_cpu_graph_plan_create,
+     /* .graph_plan_free         = */ ggml_backend_cpu_graph_plan_free,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 2456f7dcc..60e67fd80 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -4581,6 +4581,7 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
+     /* .get_tensor_2d_async     = */ ggml_backend_cuda_get_tensor_2d_async,
+     /* .cpy_tensor_async        = */ ggml_backend_cuda_cpy_tensor_async,
+     /* .synchronize             = */ ggml_backend_cuda_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-et/ggml-et.cpp b/ggml/src/ggml-et/ggml-et.cpp
+index b87b189a5..a95153746 100644
+--- a/ggml/src/ggml-et/ggml-et.cpp
++++ b/ggml/src/ggml-et/ggml-et.cpp
+@@ -1603,6 +1603,7 @@ static const struct ggml_backend_i ggml_backend_et_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ ggml_backend_et_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
+index 53e860755..a4c6f1db6 100644
+--- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
++++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
+@@ -5244,6 +5244,7 @@ static struct ggml_backend_i hexagon_backend_i = {
+     /* .get_tensor_2d_async     = */ ggml_backend_hexagon_get_tensor_2d_async,
+     /* .cpy_tensor_async        = */ ggml_backend_hexagon_cpy_tensor_async,
+     /* .synchronize             = */ ggml_backend_hexagon_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.h b/ggml/src/ggml-metal/ggml-metal-context.h
+index abf4b06ed..1450ea063 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.h
++++ b/ggml/src/ggml-metal/ggml-metal-context.h
+@@ -35,6 +35,10 @@ void ggml_metal_set_n_cb            (ggml_metal_t ctx, int n_cb);
+ void ggml_metal_set_abort_callback  (ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data);
+ bool ggml_metal_supports_family     (ggml_metal_t ctx, int family);
+ void ggml_metal_capture_next_compute(ggml_metal_t ctx);
++// skippy: true if a previously submitted command buffer failed at execution
++// time (discovered by ggml_metal_synchronize); the backend stays poisoned
++// until recreated.
++bool ggml_metal_has_error           (ggml_metal_t ctx);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
+index 1227ed39a..9849a003c 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.m
++++ b/ggml/src/ggml-metal/ggml-metal-context.m
+@@ -238,6 +238,10 @@ void ggml_metal_free(ggml_metal_t ctx) {
+     return ctx->name;
+ }
+ 
++bool ggml_metal_has_error(ggml_metal_t ctx) {
++    return ctx->has_error;
++}
++
+ void ggml_metal_synchronize(ggml_metal_t ctx) {
+     // wait for any backend operations to finish
+     if (ctx->cmd_buf_last) {
+@@ -261,6 +265,11 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
+                 if (status == MTLCommandBufferStatusError) {
+                     GGML_LOG_ERROR("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
+                 }
++                // skippy: release the failed buffer now that its error has been
++                // reported - without this every later synchronize re-logs the same
++                // failure and the retained buffer set grows until reset.
++                [cmd_buf release];
++                ctx->cmd_bufs[cb_idx].obj = nil;
+                 ctx->has_error = true;
+                 return;
+             }
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index 9756d4705..c6e18725f 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -499,6 +499,14 @@ static void ggml_backend_metal_free(ggml_backend_t backend) {
+     free(backend);
+ }
+ 
++static bool ggml_backend_metal_get_error(ggml_backend_t backend) {
++    GGML_ASSERT(ggml_backend_is_metal(backend));
++
++    ggml_metal_t ctx = (ggml_metal_t)backend->context;
++
++    return ggml_metal_has_error(ctx);
++}
++
+ static void ggml_backend_metal_synchronize(ggml_backend_t backend) {
+     ggml_metal_t ctx = (ggml_metal_t)backend->context;
+ 
+@@ -581,6 +589,7 @@ static ggml_backend_i ggml_backend_metal_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ ggml_backend_metal_cpy_tensor_async, // only needed for multi-GPU setups
+     /* .synchronize             = */ ggml_backend_metal_synchronize,
++    /* .get_error               = */ ggml_backend_metal_get_error, // skippy: expose execution-time cmd-buffer failure
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index 6ae83449b..a1c46b57f 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -8004,6 +8004,7 @@ static ggml_backend_i ggml_backend_opencl_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,  /* ggml_backend_opencl_cpy_tensor_async */
+     /* .synchronize             = */ ggml_backend_opencl_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-openvino/ggml-openvino.cpp b/ggml/src/ggml-openvino/ggml-openvino.cpp
+index 4b1789713..26afda7db 100644
+--- a/ggml/src/ggml-openvino/ggml-openvino.cpp
++++ b/ggml/src/ggml-openvino/ggml-openvino.cpp
+@@ -745,6 +745,7 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ NULL,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-rpc/ggml-rpc.cpp b/ggml/src/ggml-rpc/ggml-rpc.cpp
+index 9aa5883d8..6244a971d 100644
+--- a/ggml/src/ggml-rpc/ggml-rpc.cpp
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
+@@ -1047,6 +1047,7 @@ static ggml_backend_i ggml_backend_rpc_interface = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ ggml_backend_rpc_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+index 0573643d8..d825a5fdd 100644
+--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+@@ -5837,6 +5837,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
+                                            // // TODO: update for the new
+                                            // interface
+     /* .synchronize             = */ ggml_backend_sycl_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-virtgpu/ggml-backend.cpp b/ggml/src/ggml-virtgpu/ggml-backend.cpp
+index 12756c928..46f6d4dd7 100644
+--- a/ggml/src/ggml-virtgpu/ggml-backend.cpp
++++ b/ggml/src/ggml-virtgpu/ggml-backend.cpp
+@@ -38,6 +38,7 @@ static ggml_backend_i ggml_backend_remoting_interface = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,  // ggml_backend_remoting_cpy_tensor_async,
+     /* .synchronize             = */ NULL,  // ggml_backend_remoting_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 72e844aeb..ef06ea0e3 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -18092,6 +18092,7 @@ static ggml_backend_i ggml_backend_vk_interface = {
+     /* .get_tensor_2d_async     = */ ggml_backend_vk_get_tensor_2d_async,
+     /* .cpy_tensor_async        = */ ggml_backend_vk_cpy_tensor_async,
+     /* .synchronize             = */ ggml_backend_vk_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-webgpu/ggml-webgpu.cpp b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+index 2434848a5..99778f0f0 100644
+--- a/ggml/src/ggml-webgpu/ggml-webgpu.cpp
++++ b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+@@ -3613,6 +3613,7 @@ static ggml_backend_i ggml_backend_webgpu_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ ggml_backend_webgpu_synchronize,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/ggml/src/ggml-zdnn/ggml-zdnn.cpp b/ggml/src/ggml-zdnn/ggml-zdnn.cpp
+index 4007ac9df..d51ffe437 100644
+--- a/ggml/src/ggml-zdnn/ggml-zdnn.cpp
++++ b/ggml/src/ggml-zdnn/ggml-zdnn.cpp
+@@ -427,6 +427,7 @@ static ggml_backend_i ggml_backend_zdnn_i = {
+     /* .get_tensor_2d_async    = */ NULL,
+     /* .cpy_tensor_async       = */ NULL,
+     /* .synchronize            = */ NULL,
++    /* .get_error              = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create      = */ NULL,
+     /* .graph_plan_free        = */ NULL,
+     /* .graph_plan_update      = */ NULL,
+diff --git a/ggml/src/ggml-zendnn/ggml-zendnn.cpp b/ggml/src/ggml-zendnn/ggml-zendnn.cpp
+index ec7ce2331..8368a110c 100644
+--- a/ggml/src/ggml-zendnn/ggml-zendnn.cpp
++++ b/ggml/src/ggml-zendnn/ggml-zendnn.cpp
+@@ -575,6 +575,7 @@ static struct ggml_backend_i ggml_backend_zendnn_i = {
+     /* .get_tensor_2d_async     = */ NULL,
+     /* .cpy_tensor_async        = */ NULL,
+     /* .synchronize             = */ NULL,
++    /* .get_error               = */ NULL, // skippy: optional iface member (patch 0036)
+     /* .graph_plan_create       = */ NULL,
+     /* .graph_plan_free         = */ NULL,
+     /* .graph_plan_update       = */ NULL,
+diff --git a/include/llama.h b/include/llama.h
+index 4aef38850..bcb2dae39 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1033,6 +1033,12 @@ extern "C" {
+     // and is not necessary to call it explicitly in most cases
+     LLAMA_API void llama_synchronize(struct llama_context * ctx);
+ 
++    // skippy: returns true if a backend failed during execution of previously
++    // submitted work (discovered at synchronize). Outputs from earlier decodes
++    // are then invalid and further decodes are refused - callers must treat
++    // the context as poisoned and recreate it.
++    LLAMA_API bool llama_ctx_has_backend_error(struct llama_context * ctx);
++
+     // Token logits obtained from the last call to llama_decode()
+     // The logits for which llama_batch.logits[i] != 0 are stored contiguously
+     // in the order they have appeared in the batch.
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 287fd3155..451cd8127 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -746,6 +746,24 @@ void llama_context::synchronize() {
+     }
+ 
+     ggml_backend_sched_synchronize(sched.get());
++    // skippy: the sched synchronize above is where an async backend's
++    // execution-time failure is discovered. Record it - the enqueue-time
++    // status the caller captured (e.g. from decode's async graph compute)
++    // already reported success, so this is the only place the failure
++    // becomes visible to llama callers.
++    if (!backend_execution_error) {
++        const int n_backends = ggml_backend_sched_get_n_backends(sched.get());
++        for (int i = 0; i < n_backends; i++) {
++            ggml_backend_t backend = ggml_backend_sched_get_backend(sched.get(), i);
++            if (ggml_backend_get_error(backend)) {
++                LLAMA_LOG_ERROR("%s: backend '%s' failed during execution (async command buffer error) - context is now in error state\n",
++                        __func__, ggml_backend_name(backend));
++                backend_execution_error = true;
++                break;
++            }
++        }
++    }
++
+ 
+     // FIXME: if multiple single tokens are evaluated without a synchronization,
+     // the stats will be added to the prompt evaluation stats
+@@ -1442,6 +1460,16 @@ int llama_context::encode(const llama_batch & batch_inp) {
+     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
+     // so accept either present rather than requiring exactly one.
+     GGML_ASSERT(batch_inp.token || batch_inp.embd);
++    // skippy: refuse to run on a poisoned context. A backend that failed at
++    // execution time (discovered at a previous synchronize) left this context
++    // in an error state; decoding further would silently return stale
++    // outputs. This check also fires when the caller never noticed the
++    // failure because graph_compute reported the enqueue-time success.
++    if (backend_execution_error) {
++        LLAMA_LOG_ERROR("%s: backend execution error detected in a previous synchronize - refusing to decode\n", __func__);
++        return -1;
++    }
++
+ 
+     if (batch_inp.n_tokens == 0) {
+         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
+@@ -3895,6 +3923,14 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
+ void llama_synchronize(llama_context * ctx) {
+     ctx->synchronize();
+ }
++// skippy: true if any backend entered an error state during execution of
++// previously submitted work (see llama_context::synchronize). A true return
++// means outputs from earlier decodes on this context are invalid and further
++// decodes will be refused.
++bool llama_ctx_has_backend_error(llama_context * ctx) {
++    return ctx->has_backend_error();
++}
++
+ 
+ float * llama_get_logits(llama_context * ctx) {
+     ctx->synchronize();
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 6b724af78..74e371c20 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -59,6 +59,12 @@ struct llama_context {
+ 
+     void synchronize();
+ 
++    // skippy: true if a backend entered an error state during execution of
++    // previously submitted (async) work; discovered at synchronize(). Once
++    // true, outputs from earlier decodes are invalid and decode() refuses
++    // further work.
++    bool has_backend_error() const { return backend_execution_error; }
++
+     const llama_model   & get_model()   const;
+     const llama_cparams & get_cparams() const;
+ 
+@@ -362,6 +368,13 @@ private:
+ 
+     bool sched_need_reserve = true;
+ 
++    // skippy: sticky execution-failure flag. An async backend (Metal) can fail
++    // at execution time after graph_compute already returned success at
++    // enqueue; the failure is only discovered by a later synchronize. Once
++    // set, the context is poisoned - decode() refuses further work so stale
++    // outputs are never mistaken for results.
++    bool backend_execution_error = false;
++
+     ggml_backend_t backend_cpu = nullptr;
+     std::vector<ggml_backend_ptr> backends;
+ 
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index cf781ea53..100f9573b 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -380,6 +380,20 @@ enum skippy_status skippy_decode_batch(
+     }
+ 
+     session->n_past += static_cast<int32_t>(token_count);
++    // skippy: llama_decode (and its async graph compute) reports the
++    // enqueue-time status; an async backend can still fail at execution time.
++    // Synchronize now so this decode's execution result is final, and fail
++    // hard if a backend entered an error state - otherwise callers would read
++    // stale/unwritten outputs as valid results (observed on Metal as a
++    // kIOGPU OutOfMemory command-buffer failure surfacing as garbage logits
++    // with error_count = 0).
++    llama_synchronize(session->ctx);
++    if (llama_ctx_has_backend_error(session->ctx)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                "backend execution failed (async command buffer error) - outputs are invalid, recreate the context");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     return skippy_success(out_error);
+ }
+ 
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 0124f2f6d..3d4164288 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -276,6 +276,14 @@ enum skippy_status skippy_iteration_batch_sampled(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+ 
++    // skippy: surface execution-time backend failure before embeddings are
++    // extracted below (llama_get_embeddings synchronizes internally)
++    if (llama_ctx_has_backend_error(first->ctx)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                "backend execution failed (async command buffer error) - outputs are invalid, recreate the context");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     float * embeddings = request_embeddings ? llama_get_embeddings(first->ctx) : nullptr;
+     if (request_embeddings && embeddings == nullptr) {
+         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "llama embeddings output was not available");
+@@ -580,6 +588,14 @@ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+ 
++    // skippy: surface execution-time backend failure before embeddings are
++    // extracted below (llama_get_embeddings synchronizes internally)
++    if (llama_ctx_has_backend_error(first->ctx)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                "backend execution failed (async command buffer error) - outputs are invalid, recreate the context");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     float * embeddings = nullptr;
+     if (skippy_emits_activation_frame(first)) {
+         embeddings = llama_get_embeddings(first->ctx);
+diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
+index d899f0c17..8ea12e153 100644
+--- a/src/skippy/execution-single.cpp
++++ b/src/skippy/execution-single.cpp
+@@ -228,6 +228,14 @@ enum skippy_status skippy_decode_batch_sampled(
+     }
+     llama_batch_free(batch);
+ 
++    // skippy: surface execution-time backend failure before sampling reads
++    // logits (the sample calls below synchronize internally)
++    if (llama_ctx_has_backend_error(first->ctx)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                "backend execution failed (async command buffer error) - outputs are invalid, recreate the context");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
+     for (int32_t i = 0; i < n_tokens; ++i) {
+         skippy_session * session = sessions[i];
+         session->n_past += 1;
+-- 
+2.54.0 (Apple Git-157)
+
