@@ -940,6 +940,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_preserves_multimodal_and_glm_dsa_native_controls() {
+        let config: StageConfig = serde_json::from_value(serde_json::json!({
+            "run_id": "run-a",
+            "topology_id": "topology-a",
+            "model_id": "model-a",
+            "model_path": "/tmp/model.gguf",
+            "projector_path": "/tmp/mmproj.gguf",
+            "projector_use_gpu": false,
+            "media_marker": "<media>",
+            "image_min_tokens": 32,
+            "image_max_tokens": 1536,
+            "batch_max_tokens": 384,
+            "glm_dsa_policy": "v1",
+            "generation_signal_window": 20,
+            "stage_id": "stage-0",
+            "stage_index": 0,
+            "layer_start": 0,
+            "layer_end": 24,
+            "ctx_size": 512,
+            "lane_count": 1,
+            "n_gpu_layers": -1,
+            "cache_type_k": "f16",
+            "cache_type_v": "f16",
+            "native_mtp_enabled": true,
+            "load_mode": "runtime-slice",
+            "bind_addr": "127.0.0.1:0"
+        }))
+        .expect("stage config should deserialize");
+
+        let runtime_config =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
+                .expect("runtime config should build");
+        let debug = format!("{runtime_config:?}");
+
+        assert!(debug.contains("projector_use_gpu: Some(false)"));
+        assert!(debug.contains("media_marker: Some(\"<media>\")"));
+        assert!(debug.contains("image_min_tokens: Some(32)"));
+        assert!(debug.contains("image_max_tokens: Some(1536)"));
+        assert!(debug.contains("batch_max_tokens: Some(384)"));
+        assert!(debug.contains("glm_dsa_policy: V1"));
+    }
+
+    #[test]
     fn runtime_config_rejects_unsupported_cache_type_before_launch() {
         let config = StageConfig {
             run_id: "run-a".to_string(),
