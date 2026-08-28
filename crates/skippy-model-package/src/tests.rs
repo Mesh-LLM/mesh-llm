@@ -302,6 +302,93 @@ fn activation_width_rejects_too_deep_metadata_arrays() {
 }
 
 #[test]
+fn activation_width_for_qwen4exp_is_the_wide_hyper_connected_boundary() {
+    // QWEN4EXP moves hc parallel residual streams across a stage boundary, so a
+    // stage exchanges hc*embedding_length floats per token. embedding_length
+    // alone would under-size every activation frame by a factor of hc.
+    let dir = unique_test_dir("activation-width-qwen4exp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(3);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 8192);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_accepts_a_matching_declared_output_width() {
+    let dir = unique_test_dir("activation-width-qwen4exp-declared");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(4);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length_out", 8192);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 8192);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_rejects_a_contradictory_declared_output_width() {
+    let dir = unique_test_dir("activation-width-qwen4exp-mismatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(4);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length_out", 2048);
+    std::fs::write(&model, bytes).unwrap();
+
+    let error = activation_width(&model).unwrap_err().to_string();
+    assert!(
+        error.contains("disagrees with hyper_connection.count"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_requires_the_hyper_connection_count() {
+    // Failing loudly is the point: silently falling back to embedding_length
+    // would produce a package whose manifest under-sizes every stage boundary.
+    let dir = unique_test_dir("activation-width-qwen4exp-missing-hc");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(2);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    std::fs::write(&model, bytes).unwrap();
+
+    let error = activation_width(&model).unwrap_err().to_string();
+    assert!(error.contains("hyper_connection.count"), "{error}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_other_architectures_is_unchanged_by_a_stray_hc_count() {
+    // The hyper-connected derivation must be scoped to qwen4exp only.
+    let dir = unique_test_dir("activation-width-non-qwen4exp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(3);
+    push_string_kv(&mut bytes, "general.architecture", "qwen2");
+    push_u32_kv(&mut bytes, "qwen2.embedding_length", 3584);
+    push_u32_kv(&mut bytes, "qwen2.hyper_connection.count", 4);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 3584);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn resumes_only_existing_artifacts_when_requested() {
     let dir = unique_test_dir("resume-artifact");
     std::fs::create_dir_all(&dir).unwrap();

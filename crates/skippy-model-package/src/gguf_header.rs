@@ -34,11 +34,21 @@ pub(crate) fn activation_width(model_path: &Path) -> Result<u32> {
 
     let mut architecture = None;
     let mut embedding_lengths = BTreeMap::<String, u32>::new();
+    let mut embedding_lengths_out = BTreeMap::<String, u32>::new();
+    let mut hyper_connection_counts = BTreeMap::<String, u32>::new();
     for _ in 0..kv_count {
         let key = read_gguf_string(&mut file)?;
         let value_type = GgufValueType::from_u32(read_gguf_u32(&mut file)?)?;
         if key == "general.architecture" {
             architecture = read_gguf_string_value(&mut file, value_type)?;
+        } else if let Some(arch) = key.strip_suffix(".embedding_length_out") {
+            if let Some(value) = read_gguf_u32_value(&mut file, value_type)? {
+                embedding_lengths_out.insert(arch.to_string(), value);
+            }
+        } else if let Some(arch) = key.strip_suffix(".hyper_connection.count") {
+            if let Some(value) = read_gguf_u32_value(&mut file, value_type)? {
+                hyper_connection_counts.insert(arch.to_string(), value);
+            }
         } else if let Some(arch) = key.strip_suffix(".embedding_length") {
             if let Some(value) = read_gguf_u32_value(&mut file, value_type)? {
                 embedding_lengths.insert(arch.to_string(), value);
@@ -67,6 +77,62 @@ pub(crate) fn activation_width(model_path: &Path) -> Result<u32> {
         model_path.display(),
         architecture
     );
+
+    if architecture == QWEN4EXP_ARCH {
+        return qwen4exp_activation_width(
+            model_path,
+            width,
+            hyper_connection_counts.remove(&architecture),
+            embedding_lengths_out.remove(&architecture),
+        );
+    }
+
+    Ok(width)
+}
+
+const QWEN4EXP_ARCH: &str = "qwen4exp";
+
+/// QWEN4EXP carries `hyper_connection.count` parallel residual streams across a
+/// stage boundary, so a stage exchanges `hc * embedding_length` floats per token
+/// rather than `embedding_length`. Derive that width here instead of letting
+/// callers assume the hidden size is the boundary width.
+fn qwen4exp_activation_width(
+    model_path: &Path,
+    embedding_length: u32,
+    hyper_connection_count: Option<u32>,
+    embedding_length_out: Option<u32>,
+) -> Result<u32> {
+    let hc = hyper_connection_count.with_context(|| {
+        format!(
+            "GGUF metadata for {} does not contain {QWEN4EXP_ARCH}.hyper_connection.count, \
+             which is required to size the hyper-connected stage boundary",
+            model_path.display()
+        )
+    })?;
+    ensure!(
+        hc > 0,
+        "GGUF metadata for {} has invalid {QWEN4EXP_ARCH}.hyper_connection.count 0",
+        model_path.display()
+    );
+    let width = embedding_length.checked_mul(hc).with_context(|| {
+        format!(
+            "qwen4exp activation width {embedding_length} * {hc} overflows u32 in {}",
+            model_path.display()
+        )
+    })?;
+
+    // llama.cpp derives n_embd_out the same way (src/models/qwen4exp.cpp), so when
+    // the artifact also states it explicitly the two must agree.
+    if let Some(declared) = embedding_length_out {
+        ensure!(
+            declared == width,
+            "GGUF metadata for {} declares {QWEN4EXP_ARCH}.embedding_length_out {declared}, \
+             which disagrees with hyper_connection.count {hc} * embedding_length \
+             {embedding_length} = {width}",
+            model_path.display()
+        );
+    }
+
     Ok(width)
 }
 
