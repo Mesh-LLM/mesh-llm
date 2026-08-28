@@ -37,7 +37,7 @@ default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
 `scripts/plan-family-battery.py` validates the versioned JSON family policy,
-the mandatory four-lane contract for every certified profile, and every exact
+the mandatory three-lane contract for every certified profile, and every exact
 artifact revision/file in the immutable local cache. It reads only GGUF
 metadata headers, requires each artifact to have at least one metadata-bearing
 shard, and requires every shard that carries `*.block_count` and

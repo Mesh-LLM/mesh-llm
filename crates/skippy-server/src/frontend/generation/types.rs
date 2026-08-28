@@ -31,7 +31,6 @@ use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -79,7 +78,6 @@ pub(in crate::frontend) enum OpenAiBackendMode {
     LocalRuntime,
     EmbeddedStageZero {
         config: StageConfig,
-        wire_dtype: WireActivationDType,
         prefill_chunk_policy: PrefillChunkPolicy,
         activation_width: i32,
         downstream_wire_condition: WireCondition,
@@ -152,7 +150,6 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
 
 pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) config: &'a StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) prefill_chunk_policy: &'a PrefillChunkPolicy,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
@@ -183,7 +180,6 @@ pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
     pub(in crate::frontend) cancellation: Option<&'a openai_frontend::CancellationToken>,
     pub(in crate::frontend) ids: OpenAiGenerationIds,
     pub(in crate::frontend) config: StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
     pub(in crate::frontend) lane_pool: Arc<PersistentStageLanePool>,

@@ -255,7 +255,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                         "required_lanes": [
                             "single-step",
                             "chain",
-                            "dtype-matrix",
                             "state-handoff",
                         ],
                     },
@@ -265,7 +264,6 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
                         "required_lanes": [
                             "single-step",
                             "chain",
-                            "dtype-matrix",
                             "state-handoff",
                         ],
                     },
@@ -364,15 +362,16 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
             commands[0]
             .strip()
             .endswith(
-                "--require-lanes --wire-dtypes f16 --strict-dtype --skip-build --skip-speculative"
+                "--require-lanes --skip-build --skip-speculative"
             )
         )
 
-    def test_family_battery_certifies_only_the_shipping_f16_wire_dtype(self) -> None:
+    def test_family_battery_has_no_activation_wire_dtype_switches(self) -> None:
         script = BATTERY.read_text(encoding="utf-8")
 
-        self.assertIn("--wire-dtypes f16", script)
-        self.assertIn("--strict-dtype", script)
+        self.assertNotIn("--wire-dtype", script)
+        self.assertNotIn("--wire-dtypes", script)
+        self.assertNotIn("--strict-dtype", script)
 
     def test_dry_run_reconciles_every_planned_family(self) -> None:
         first = self._model()

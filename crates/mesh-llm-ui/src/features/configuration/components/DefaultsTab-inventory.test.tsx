@@ -107,7 +107,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
         threads: '12',
         temperature: '0.8',
         'top-k': '55',
-        'activation-wire-dtype': 'q8',
         'binary-stage-transport': 'on',
         'image-min-tokens': '64',
         'mmproj-offload': 'on',
@@ -136,7 +135,7 @@ describe('DefaultsTab visual inventory and metadata', () => {
     await user.click(rail.getByRole('button', { name: /skippy transport/i }))
     expect(rail.getByRole('button', { name: /skippy transport/i })).toHaveAttribute('aria-current', 'true')
     expect(screen.getByRole('heading', { name: 'Skippy Transport' })).toBeInTheDocument()
-    expect(screen.getByText('Activation wire dtype')).toBeInTheDocument()
+    expect(screen.getByText('Binary stage transport')).toBeInTheDocument()
 
     await user.click(rail.getByRole('button', { name: /multimodal/i }))
     expect(rail.getByRole('button', { name: /multimodal/i })).toHaveAttribute('aria-current', 'true')
@@ -151,7 +150,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     expect(previewSource().value).toContain('temperature = 0.8')
     expect(previewSource().value).toContain('top_k = 55')
     expect(previewSource().value).toContain('[defaults.skippy]')
-    expect(previewSource().value).toContain('activation_wire_dtype = "q8"')
     expect(previewSource().value).toContain('binary_stage_transport = "on"')
     expect(previewSource().value).toContain('mlock = true')
     expect(previewSource().value).toContain('[defaults.multimodal]')
@@ -167,7 +165,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
           threads: '12',
           temperature: '0.8',
           'top-k': '55',
-          'activation-wire-dtype': 'q8',
           'binary-stage-transport': 'on',
           'image-min-tokens': '64',
           'mmproj-offload': 'on',
@@ -205,17 +202,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     const liveHydratedDefaults = {
       ...CONFIGURATION_DEFAULTS,
       settings: CONFIGURATION_DEFAULTS.settings.map((setting) => {
-        if (setting.id === 'activation-wire-dtype') {
-          return {
-            ...setting,
-            baselineValue: setting.control.value,
-            control: {
-              ...setting.control,
-              value: 'q8'
-            }
-          }
-        }
-
         if (setting.id === 'image-min-tokens') {
           return {
             ...setting,
@@ -248,8 +234,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     })
 
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
-    expect(previewSource().value).toContain('[defaults.skippy]')
-    expect(previewSource().value).toContain('activation_wire_dtype = "q8"')
     expect(previewSource().value).toContain('[defaults.multimodal]')
     expect(previewSource().value).toContain('image_min_tokens = 64')
     expect(previewSource().value).toContain('[defaults.advanced.server]')

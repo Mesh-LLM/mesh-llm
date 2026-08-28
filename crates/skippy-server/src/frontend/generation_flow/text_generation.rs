@@ -174,7 +174,6 @@ impl StageOpenAiBackend {
             )?,
             OpenAiBackendMode::EmbeddedStageZero {
                 config,
-                wire_dtype,
                 prefill_chunk_policy,
                 activation_width,
                 downstream_wire_condition,
@@ -184,7 +183,6 @@ impl StageOpenAiBackend {
             } => self.generate_embedded_stage_zero_tokens(
                 EmbeddedStageZeroGeneration {
                     config: &config,
-                    wire_dtype,
                     prefill_chunk_policy: &prefill_chunk_policy,
                     activation_width,
                     downstream_wire_condition,

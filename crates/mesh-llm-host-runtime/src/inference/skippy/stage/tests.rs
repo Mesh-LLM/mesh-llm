@@ -85,7 +85,6 @@ fn load_request() -> StageLoadRequest {
         }),
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
-        wire_dtype: StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 3,
         n_batch: Some(2048),

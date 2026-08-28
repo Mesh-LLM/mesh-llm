@@ -76,7 +76,6 @@ tensor_split = []
 parallel = 3
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 
 [defaults.speculative]
 mode = "auto"

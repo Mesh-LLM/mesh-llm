@@ -76,7 +76,6 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)
             })?;
         let message = retire_verify_window_message(
-            request.wire_dtype,
             retirement.request_id,
             retirement.session_id,
             retirement.token_start,
@@ -86,7 +85,6 @@ impl StageOpenAiBackend {
             forwarder
                 .send_tracked(
                     message,
-                    request.wire_dtype,
                     request.downstream_wire_condition,
                     self.openai_attrs(request.ids),
                 )
@@ -97,7 +95,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 downstream,
                 &message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -221,7 +218,6 @@ impl StageOpenAiBackend {
             request.config,
             message,
             &output.output,
-            request.wire_dtype,
             request.activation_width,
         )
         .map_err(openai_backend_error)?;
@@ -232,7 +228,6 @@ impl StageOpenAiBackend {
                 forwarder
                     .send_tracked(
                         forwarded.message,
-                        request.wire_dtype,
                         request.downstream_wire_condition,
                         self.openai_attrs(request.ids),
                     )
@@ -242,7 +237,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 &mut *downstream,
                 &forwarded.message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -506,7 +500,7 @@ fn receive_downstream_stage_reply_one_of(
 mod tests {
     use super::*;
     use crate::binary_transport::PredictionReturnHub;
-    use skippy_protocol::binary::{StageStateHeader, WireActivationDType};
+    use skippy_protocol::binary::StageStateHeader;
     use std::net::TcpListener;
     use std::sync::Arc;
 
@@ -545,10 +539,7 @@ mod tests {
                         kind: WireMessageKind::PredictionReturnOpen,
                         pos_start: 0,
                         token_count: 0,
-                        state: StageStateHeader::new(
-                            WireMessageKind::PredictionReturnOpen,
-                            WireActivationDType::F32,
-                        ),
+                        state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
                         request_id,
                         session_id,
                         sampling: None,

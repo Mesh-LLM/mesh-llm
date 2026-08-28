@@ -39,7 +39,7 @@ flowchart LR
 Benchmarks should be read through the staged data path: prompt/control bytes are
 small, predicted-token replies are small, and boundary activation frames
 dominate transfer volume. Prefill experiments usually focus on layer balance,
-chunk size, activation wire dtype, credit settings, and optional async
+chunk size, credit settings, and optional async
 prefill-forward overlap. Decode is measured too, but current optimization work
 should not assume decode is the bottleneck until the report says so.
 

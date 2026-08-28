@@ -49,7 +49,6 @@ pub(in crate::runner) struct BinarySplitConfig {
     pub(in crate::runner) flash_attn: FlashAttentionArg,
     pub(in crate::runner) prompt: String,
     pub(in crate::runner) stage1_bind_addr: SocketAddr,
-    pub(in crate::runner) activation_wire_dtype: String,
     pub(in crate::runner) child_logs: bool,
     pub(in crate::runner) startup_timeout_secs: u64,
     pub(in crate::runner) max_inflight: usize,
@@ -64,7 +63,6 @@ pub(in crate::runner) struct BinarySplitResult {
     pub(in crate::runner) native_mtp: NativeMtpSidebandReport,
     pub(in crate::runner) native_mtp_verification_compute_us: Option<i64>,
     pub(in crate::runner) activation_width: i32,
-    pub(in crate::runner) wire_dtype: String,
     pub(in crate::runner) boundary_producer_stage_index: i32,
     pub(in crate::runner) boundary_layer_start: i32,
     pub(in crate::runner) boundary_layer_end: i32,
@@ -92,7 +90,6 @@ pub(in crate::runner) struct BinaryStateHandoffConfig {
     pub(in crate::runner) source_bind_addr: SocketAddr,
     pub(in crate::runner) restore_bind_addr: SocketAddr,
     pub(in crate::runner) activation_width: i32,
-    pub(in crate::runner) activation_wire_dtype: String,
     pub(in crate::runner) state_payload_kind: StatePayloadKind,
     pub(in crate::runner) prefix_token_count: Option<usize>,
     pub(in crate::runner) cache_hit_repeats: usize,
@@ -109,7 +106,6 @@ pub(in crate::runner) struct BinaryStateHandoffConfig {
 }
 
 pub(in crate::runner) struct BinaryDecodeMessageArgs<'a> {
-    pub(in crate::runner) wire_dtype: skippy_protocol::binary::WireActivationDType,
     pub(in crate::runner) token_id: i32,
     pub(in crate::runner) decode_step: i32,
     pub(in crate::runner) source_stage_index: i32,
@@ -122,14 +118,13 @@ pub(in crate::runner) struct BinaryDecodeMessageArgs<'a> {
 pub(in crate::runner) fn binary_decode_message(
     args: BinaryDecodeMessageArgs<'_>,
 ) -> Result<StageWireMessage> {
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, args.wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.prompt_token_count = 0;
     state.decode_step = args.decode_step;
     state.current_token = args.token_id;
     state.source_stage_index = args.source_stage_index;
     state.flags |= activation_state_flags(args.boundary);
     let activation = skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
-        args.wire_dtype,
         1,
         args.activation_width,
         &args.boundary.payload,
@@ -194,20 +189,18 @@ pub(in crate::runner) fn correctness_topology(
 
 pub(in crate::runner) fn send_generation_config(
     stream: &mut std::net::TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
 ) -> Result<()> {
     let message = StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
         None,
         None,
     );
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    write_stage_message(&mut *stream, &message).context("send configure-generation")?;
     let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
     if reply.kind != WireReplyKind::Ack {
         bail!("expected configure-generation ACK, got {:?}", reply.kind);
@@ -273,7 +266,6 @@ pub(in crate::runner) fn split_report(
         native_mtp: result.native_mtp,
         native_mtp_verification,
         activation_width: result.activation_width,
-        wire_dtype: result.wire_dtype,
         boundary: BoundaryReport {
             producer_stage_index: result.boundary_producer_stage_index,
             layer_start: result.boundary_layer_start,

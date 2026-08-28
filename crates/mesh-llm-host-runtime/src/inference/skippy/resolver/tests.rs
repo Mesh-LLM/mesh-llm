@@ -1,6 +1,6 @@
 use super::test_support::*;
 use super::*;
-use crate::inference::skippy::{SkippyTelemetryOptions, StageWireDType};
+use crate::inference::skippy::SkippyTelemetryOptions;
 use crate::plugin::{MeshConfig, ReasoningBudget, RequestDefaultsConfig};
 use serde_json::Value;
 use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
@@ -248,9 +248,6 @@ mlock = false
 [defaults.throughput]
 parallel = 2
 
-[defaults.skippy]
-activation_wire_dtype = "q8"
-
 [defaults.request_defaults]
 temperature = 0.2
 max_tokens = 128
@@ -270,9 +267,6 @@ mlock = true
 
 [models.throughput]
 parallel = 3
-
-[models.skippy]
-activation_wire_dtype = "f32"
 
 [models.request_defaults]
 temperature = 0.4
@@ -304,7 +298,6 @@ temperature = 0.4
     assert_eq!(resolved.hardware.mmap, Some(false));
     assert!(resolved.hardware.mlock);
     assert_eq!(resolved.throughput.parallel, 3);
-    assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
     assert_eq!(resolved.request_defaults.max_tokens, 256);
     assert_eq!(resolved.request_defaults.temperature, Some(0.7));
     assert_eq!(
@@ -699,23 +692,7 @@ chat_template = "unsafe-template"
 }
 
 #[test]
-fn family_policy_beats_builtin_wire_dtype_when_config_is_unset() {
-    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &MeshConfig::default(),
-        model_id: "ggml-org/gemma-3-270m-it-GGUF:Q8_0",
-        model_path: Path::new("/models/gemma.gguf"),
-        model_bytes: 2 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-    })
-    .unwrap();
-
-    assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
-}
-
-#[test]
-fn inkling_family_defaults_to_f32_wire_and_q4_kv() {
+fn inkling_family_defaults_to_q4_kv() {
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &MeshConfig::default(),
         model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
@@ -727,7 +704,6 @@ fn inkling_family_defaults_to_f32_wire_and_q4_kv() {
     })
     .unwrap();
 
-    assert_eq!(resolved.skippy.activation_wire_dtype, StageWireDType::F32);
     assert_eq!(resolved.model_fit.cache_type_k, "q4_0");
     assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
 }
@@ -883,7 +859,6 @@ shared_record_limit = 3
 payload_mode = "resident-kv"
 
 [defaults.skippy]
-activation_wire_dtype = "q8"
 prefill_chunking = "schedule"
 prefill_chunk_size = 128
 prefill_chunk_schedule = "128,256,384"
@@ -934,10 +909,6 @@ draft_max_tokens = 8
     assert_eq!(
         openai.draft_model_path.as_deref(),
         Some(Path::new("/models/qwen3-draft.gguf"))
-    );
-    assert_eq!(
-        openai.wire_dtype,
-        skippy_protocol::binary::WireActivationDType::Q8
     );
 }
 

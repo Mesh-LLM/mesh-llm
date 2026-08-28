@@ -4,7 +4,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     } else {
         suppress_native_logs();
     }
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
     let requested_tokenizer_path = args
         .tokenizer_model_path
         .as_deref()
@@ -184,7 +183,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 chat_template_model: chat_template_model.as_ref(),
                 draft: draft.as_mut(),
                 interrupt: &interrupt,
-                wire_dtype,
                 session_id: &prompt_session_id,
                 wire_session_id,
                 prompt_index,
@@ -211,7 +209,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 stop_live_prompt_session(
                     &mut live_session,
                     &args,
-                    wire_dtype,
                     prompt_index,
                     default_wire_session_id,
                 )?;
@@ -248,7 +245,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 chat_template_model: chat_template_model.as_ref(),
                 draft: draft.as_mut(),
                 interrupt: &interrupt,
-                wire_dtype,
                 session_id: &default_session_id,
                 wire_session_id: default_wire_session_id,
                 prompt_index,
@@ -267,7 +263,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             chat_template_model: chat_template_model.as_ref(),
             draft: draft.as_mut(),
             interrupt: &interrupt,
-            wire_dtype,
             session_id: &default_session_id,
             wire_session_id: default_wire_session_id,
             prompt_index,
@@ -284,7 +279,6 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
     stop_live_prompt_session(
         &mut live_session,
         &args,
-        wire_dtype,
         prompt_index,
         default_wire_session_id,
     )?;

@@ -13,7 +13,7 @@ pub(super) fn apply_skippy_behavior(setting: &mut ConfigSettingSchema, prefix: &
         "stage_role" | "stage_topology" | "binary_stage_transport" => {
             push_non_empty_constraint(setting);
         }
-        "activation_wire_dtype" | "prefill_chunking" => set_static_options(setting),
+        "prefill_chunking" => set_static_options(setting),
         "openai_frontend_mode" => set_static_unavailable(
             setting,
             "OpenAI frontend override wiring is intentionally rejected on the built-in schema surface.",

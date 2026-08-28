@@ -56,7 +56,6 @@ impl StageOpenAiBackend {
         match self.mode.clone() {
             OpenAiBackendMode::EmbeddedStageZero {
                 config,
-                wire_dtype,
                 activation_width,
                 downstream_wire_condition,
                 lane_pool,
@@ -81,7 +80,6 @@ impl StageOpenAiBackend {
                         cancellation,
                         ids,
                         config,
-                        wire_dtype,
                         activation_width,
                         downstream_wire_condition,
                         lane_pool,
@@ -591,7 +589,6 @@ impl StageOpenAiBackend {
             });
 
             let message = generation_config_message(
-                request.wire_dtype,
                 request_id,
                 session_id,
                 prefill.token_count,
@@ -601,7 +598,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 &mut lane.stream,
                 &message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -629,25 +625,21 @@ impl StageOpenAiBackend {
             let mut downstream_wait_ms = 0.0;
             for (chunk_index, chunk) in media_chunks.iter().enumerate() {
                 let is_final_chunk = chunk_index + 1 == media_chunks.len();
-                let message = multimodal_prefill_message(
-                    request.wire_dtype,
-                    MultimodalPrefillArgs {
-                        request_id,
-                        session_id,
-                        prompt_token_count: prefill.token_count,
-                        pos_start: prefill_pos_start,
-                        token_count: chunk.token_count,
-                        tokens: chunk.tokens.clone(),
-                        positions: chunk.positions.clone(),
-                        sampling: is_final_chunk.then_some(wire_sampling.clone()).flatten(),
-                        final_chunk: is_final_chunk,
-                    },
-                )?;
+                let message = multimodal_prefill_message(MultimodalPrefillArgs {
+                    request_id,
+                    session_id,
+                    prompt_token_count: prefill.token_count,
+                    pos_start: prefill_pos_start,
+                    token_count: chunk.token_count,
+                    tokens: chunk.tokens.clone(),
+                    positions: chunk.positions.clone(),
+                    sampling: is_final_chunk.then_some(wire_sampling.clone()).flatten(),
+                    final_chunk: is_final_chunk,
+                })?;
                 let forwarded = forwarded_stage_message_timed(
                     &request.config,
                     &message,
                     &chunk.output,
-                    request.wire_dtype,
                     request.activation_width,
                 )
                 .map_err(openai_backend_error)?;
@@ -655,7 +647,6 @@ impl StageOpenAiBackend {
                 write_stage_message_conditioned(
                     &mut lane.stream,
                     &forwarded.message,
-                    request.wire_dtype,
                     request.downstream_wire_condition,
                 )
                 .map_err(openai_io_error)?;
@@ -724,17 +715,14 @@ impl StageOpenAiBackend {
             let mut decode_downstream_wait_ms = 0.0;
             let mut decode_output_activation_bytes = 0usize;
             let mut decode_forward_activation_bytes = 0usize;
-            let mut decode_message = ReusableDecodeMessage::new(
-                request.wire_dtype,
-                ReusableDecodeMessageArgs {
-                    request_id,
-                    session_id,
-                    prompt_token_count: prefill.token_count,
-                    base_pos_start: prefill.token_count,
-                    sampling: wire_sampling.clone(),
-                    sideband_capacity: 1,
-                },
-            )?;
+            let mut decode_message = ReusableDecodeMessage::new(ReusableDecodeMessageArgs {
+                request_id,
+                session_id,
+                prompt_token_count: prefill.token_count,
+                base_pos_start: prefill.token_count,
+                sampling: wire_sampling.clone(),
+                sideband_capacity: 1,
+            })?;
 
             while decoded_tokens < max_tokens as usize {
                 if request
@@ -807,7 +795,6 @@ impl StageOpenAiBackend {
                     &request.config,
                     message,
                     &output,
-                    request.wire_dtype,
                     request.activation_width,
                 )
                 .map_err(openai_backend_error)?;
@@ -819,7 +806,6 @@ impl StageOpenAiBackend {
                 write_stage_message_conditioned(
                     &mut lane.stream,
                     &forwarded.message,
-                    request.wire_dtype,
                     request.downstream_wire_condition,
                 )
                 .map_err(openai_io_error)?;
@@ -933,8 +919,7 @@ impl StageOpenAiBackend {
 
         let stop_result = write_stage_message(
             &mut lane.stream,
-            &StageWireMessage::stop_with_identity(request.wire_dtype, request_id, session_id),
-            request.wire_dtype,
+            &StageWireMessage::stop_with_identity(request_id, session_id),
         )
         .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
         .and_then(|kind| {

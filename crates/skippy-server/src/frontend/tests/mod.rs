@@ -28,10 +28,7 @@ pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
     LoadMode, MessageBase, PeerConfig, SCHEMA_VERSION, StageConfig, StageKvCacheConfig,
     StageKvCacheMode, StageKvCachePayload,
-    binary::{
-        LLAMA_TOKEN_NULL, StageReplyStats, WireActivationDType, WireMessageKind,
-        write_stage_message,
-    },
+    binary::{LLAMA_TOKEN_NULL, StageReplyStats, WireMessageKind, write_stage_message},
 };
 pub(super) use skippy_runtime::{
     ChatReasoningFormat, ChatTemplateOptions, GenerationSignalWindow, ModelInfo,

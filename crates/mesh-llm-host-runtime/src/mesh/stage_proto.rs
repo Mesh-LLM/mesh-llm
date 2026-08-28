@@ -58,7 +58,6 @@ pub(super) fn stage_runtime_status_from_snapshot(
         state: status.state,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device,
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -95,7 +94,6 @@ pub(super) fn stage_snapshot_from_runtime_status(
         state,
         bind_addr: status.bind_addr.clone(),
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device.clone(),
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -217,7 +215,6 @@ pub(super) fn stage_load_to_proto(
         selected_device: load.selected_device.map(stage_device_to_proto),
         bind_addr: load.bind_addr,
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: stage_wire_dtype_to_proto(load.wire_dtype) as i32,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
         n_batch: load.n_batch,
@@ -392,7 +389,6 @@ pub(super) fn stage_load_from_proto(
         bind_addr: load.bind_addr,
         activation_width: i32::try_from(load.activation_width)
             .context("stage activation_width exceeds i32")?,
-        wire_dtype: stage_wire_dtype_from_proto(load.wire_dtype),
         ctx_size: load.ctx_size,
         lane_count: if load.lane_count == 0 {
             4
@@ -484,23 +480,6 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> skippy_protocol::LoadMod
     }
 }
 
-pub(super) fn stage_wire_dtype_from_proto(value: i32) -> crate::inference::skippy::StageWireDType {
-    match skippy_stage_proto::StageWireDType::try_from(value)
-        .unwrap_or(skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified)
-    {
-        skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified
-        | skippy_stage_proto::StageWireDType::StageWireDtypeF16 => {
-            crate::inference::skippy::StageWireDType::F16
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeF32 => {
-            crate::inference::skippy::StageWireDType::F32
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeQ8 => {
-            crate::inference::skippy::StageWireDType::Q8
-        }
-    }
-}
-
 pub(super) fn stage_control_unavailable_response(
     request: crate::inference::skippy::StageControlRequest,
 ) -> crate::inference::skippy::StageControlResponse {
@@ -538,7 +517,6 @@ pub(super) fn stage_control_unavailable_response(
                 state: crate::inference::skippy::StageRuntimeState::Failed,
                 bind_addr: String::new(),
                 activation_width: 0,
-                wire_dtype: crate::inference::skippy::StageWireDType::F16,
                 selected_device: None,
                 ctx_size: 0,
                 lane_count: 0,
@@ -636,7 +614,6 @@ pub(super) fn stage_status_from_load(
         state,
         bind_addr: load.bind_addr.clone(),
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -1058,7 +1035,6 @@ pub(super) fn stage_status_to_proto(
         state: stage_runtime_state_to_proto(status.state) as i32,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_to_proto(status.wire_dtype) as i32,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
         selected_device: status.selected_device.map(stage_device_to_proto),
@@ -1096,7 +1072,6 @@ pub(super) fn stage_status_from_proto(
         state: stage_runtime_state_from_proto(status.state),
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_from_proto(status.wire_dtype),
         selected_device: status
             .selected_device
             .map(stage_device_from_proto)
@@ -1267,22 +1242,6 @@ pub(super) fn stage_preparation_state_to_proto(
         }
         crate::inference::skippy::StagePreparationState::Cancelled => {
             skippy_stage_proto::StagePreparationState::Cancelled
-        }
-    }
-}
-
-pub(super) fn stage_wire_dtype_to_proto(
-    dtype: crate::inference::skippy::StageWireDType,
-) -> skippy_stage_proto::StageWireDType {
-    match dtype {
-        crate::inference::skippy::StageWireDType::F32 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF32
-        }
-        crate::inference::skippy::StageWireDType::F16 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF16
-        }
-        crate::inference::skippy::StageWireDType::Q8 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeQ8
         }
     }
 }

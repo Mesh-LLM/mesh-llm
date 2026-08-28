@@ -313,17 +313,6 @@ describe('buildTOML defaults and scalar serialization', () => {
     const liveHydratedDefaults = {
       ...CONFIGURATION_DEFAULTS,
       settings: CONFIGURATION_DEFAULTS.settings.map((setting) => {
-        if (setting.id === 'activation-wire-dtype') {
-          return {
-            ...setting,
-            baselineValue: setting.control.value,
-            control: {
-              ...setting.control,
-              value: 'q8'
-            }
-          }
-        }
-
         if (setting.id === 'image-min-tokens') {
           return {
             ...setting,
@@ -355,8 +344,6 @@ describe('buildTOML defaults and scalar serialization', () => {
       defaultsValues: {}
     })
 
-    expect(toml).toContain('[defaults.skippy]')
-    expect(toml).toContain('activation_wire_dtype = "q8"')
     expect(toml).toContain('[defaults.multimodal]')
     expect(toml).toContain('image_min_tokens = 64')
     expect(toml).toContain('[defaults.advanced.server]')

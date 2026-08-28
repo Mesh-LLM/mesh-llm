@@ -3,7 +3,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{
     StageConfig,
-    binary::{StageWireMessage, WireActivationDType, activation_state_flags_from_frame_flags},
+    binary::{StageWireMessage, activation_state_flags_from_frame_flags},
 };
 use skippy_runtime::{ActivationFrame, RuntimeActivationDType};
 
@@ -11,13 +11,9 @@ pub(crate) fn forwarded_stage_message(
     config: &StageConfig,
     incoming: &StageWireMessage,
     output: &ActivationFrame,
-    wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> Result<StageWireMessage> {
-    Ok(
-        forwarded_stage_message_timed(config, incoming, output, wire_dtype, activation_width)?
-            .message,
-    )
+    Ok(forwarded_stage_message_timed(config, incoming, output, activation_width)?.message)
 }
 
 pub(crate) struct ForwardedStageMessage {
@@ -29,7 +25,6 @@ pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,
     output: &ActivationFrame,
-    wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> Result<ForwardedStageMessage> {
     // A stage with a downstream consumer must compute the *full* incoming token
@@ -42,7 +37,7 @@ pub(crate) fn forwarded_stage_message_timed(
     // wrong tokens.
     //
     // Today the payload-size check inside the encoder happens to catch this,
-    // but it fails for the wrong reason and only for some dtypes. Assert the
+    // but it fails for the wrong reason. Assert the
     // invariant directly so a future change to the restore path fails loudly
     // and specifically instead of silently corrupting output.
     if config.layer_start != 0
@@ -60,14 +55,13 @@ pub(crate) fn forwarded_stage_message_timed(
     }
     let mut state = incoming.state;
     state.source_stage_index = config.stage_index as i32;
-    state.reserved = wire_dtype as i32;
     state.flags |= activation_state_flags_from_frame_flags(output.desc.flags);
     let encode_started = Instant::now();
     let activation =
-        encode_output_activation_payload(wire_dtype, incoming, output, activation_width, state.flags)
+        encode_output_activation_payload(incoming, output, activation_width, state.flags)
             .with_context(|| {
                 format!(
-                    "encode output activation payload; wire_dtype={wire_dtype:?} frame_dtype={:?} incoming_tokens={} output_tokens={} activation_width={} payload_bytes={} frame_payload_bytes={} state_flags={}",
+                    "encode f32 output activation payload; frame_dtype={:?} incoming_tokens={} output_tokens={} activation_width={} payload_bytes={} frame_payload_bytes={} state_flags={}",
                     output.desc.dtype,
                     incoming.token_count,
                     output.desc.token_count,
@@ -97,52 +91,24 @@ pub(crate) fn forwarded_stage_message_timed(
 }
 
 fn encode_output_activation_payload(
-    wire_dtype: WireActivationDType,
     incoming: &StageWireMessage,
     output: &ActivationFrame,
     activation_width: i32,
     state_flags: i32,
 ) -> Result<Vec<u8>> {
-    match (output.desc.dtype, wire_dtype) {
-        (RuntimeActivationDType::F32, _) => Ok(
+    match output.desc.dtype {
+        RuntimeActivationDType::F32 => Ok(
             skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
-                wire_dtype,
                 incoming.token_count,
                 activation_width,
                 &output.payload,
                 state_flags,
             )?,
         ),
-        (RuntimeActivationDType::F16, WireActivationDType::F16) => {
-            validate_f16_passthrough_payload(incoming, output, activation_width, state_flags)?;
-            Ok(output.payload.clone())
-        }
-        (dtype, wire_dtype) => {
-            bail!("unsupported activation dtype conversion: {dtype:?} to {wire_dtype:?}")
+        dtype => {
+            bail!("unsupported activation dtype conversion: {dtype:?} to f32")
         }
     }
-}
-
-fn validate_f16_passthrough_payload(
-    incoming: &StageWireMessage,
-    output: &ActivationFrame,
-    activation_width: i32,
-    state_flags: i32,
-) -> Result<()> {
-    if output.payload.len() as u64 != output.desc.payload_bytes {
-        bail!("F16 activation payload length does not match frame descriptor");
-    }
-    let expected = skippy_protocol::binary::activation_wire_bytes_with_state_flags(
-        WireActivationDType::F16,
-        incoming.token_count,
-        activation_width,
-        state_flags,
-    )
-    .context("compute expected F16 activation payload size")?;
-    if output.payload.len() != expected {
-        bail!("F16 activation payload size mismatch");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -204,7 +170,7 @@ mod tests {
             kind: WireMessageKind::DecodeEmbd,
             pos_start: 7,
             token_count: 1,
-            state: StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32),
+            state: StageStateHeader::new(WireMessageKind::DecodeEmbd),
             request_id: 42,
             session_id: 99,
             sampling: None,
@@ -246,31 +212,12 @@ mod tests {
         )
     }
 
-    fn f16_frame() -> ActivationFrame {
-        ActivationFrame {
-            desc: ActivationDesc {
-                version: 1,
-                dtype: RuntimeActivationDType::F16,
-                layout: RuntimeActivationLayout::TokenMajor,
-                producer_stage_index: 1,
-                layer_start: 4,
-                layer_end: 8,
-                token_count: 2,
-                sequence_count: 1,
-                payload_bytes: 8,
-                flags: 0,
-            },
-            payload: vec![0, 1, 2, 3, 4, 5, 6, 7],
-        }
-    }
-
     #[test]
     fn forwarded_stage_message_preserves_rwkv7_sideband_shape() {
         let forwarded = forwarded_stage_message_timed(
             &stage_config(),
             &incoming_message(),
             &rwkv7_sideband_frame(),
-            WireActivationDType::F32,
             2,
         )
         .unwrap();
@@ -284,67 +231,6 @@ mod tests {
             activation_frame_flags_from_state_flags(forwarded.message.state.flags),
             skippy_protocol::binary::ACTIVATION_FLAG_RWKV7_V_FIRST
         );
-    }
-
-    #[test]
-    fn forwarded_stage_message_reencodes_rwkv7_sideband_for_wire_dtype() {
-        let forwarded = forwarded_stage_message_timed(
-            &stage_config(),
-            &incoming_message(),
-            &rwkv7_sideband_frame(),
-            WireActivationDType::Q8,
-            2,
-        )
-        .unwrap();
-
-        assert_eq!(forwarded.message.activation.len(), 12);
-        assert_ne!(
-            forwarded.message.state.flags & state_flags::RWKV7_V_FIRST_SIDEBAND,
-            0
-        );
-    }
-
-    #[test]
-    fn forwarded_stage_message_passes_through_f16_activation_for_f16_wire() {
-        let mut incoming = incoming_message();
-        incoming.token_count = 2;
-
-        let forwarded = forwarded_stage_message_timed(
-            &stage_config(),
-            &incoming,
-            &f16_frame(),
-            WireActivationDType::F16,
-            2,
-        )
-        .unwrap();
-
-        assert_eq!(forwarded.message.activation, vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(
-            forwarded.message.state.reserved,
-            WireActivationDType::F16 as i32
-        );
-    }
-
-    #[test]
-    fn forwarded_stage_message_rejects_bad_f16_passthrough_size() {
-        let mut incoming = incoming_message();
-        incoming.token_count = 2;
-        let mut output = f16_frame();
-        output.payload.pop();
-        output.desc.payload_bytes = output.payload.len() as u64;
-
-        let error = match forwarded_stage_message_timed(
-            &stage_config(),
-            &incoming,
-            &output,
-            WireActivationDType::F16,
-            2,
-        ) {
-            Ok(_) => panic!("expected bad F16 passthrough payload to fail"),
-            Err(error) => error,
-        };
-
-        assert!(format!("{error:#}").contains("F16 activation payload size mismatch"));
     }
 
     /// A non-first stage must execute the full incoming token range.
@@ -363,10 +249,9 @@ mod tests {
         // execution after a 3-token restore would produce.
         let output = f32_frame(0, 1, &[1.0, 2.0, 3.0, 4.0]);
 
-        let error =
-            forwarded_stage_message_timed(&config, &incoming, &output, WireActivationDType::F32, 4)
-                .err()
-                .expect("short frame from a non-first stage must be rejected");
+        let error = forwarded_stage_message_timed(&config, &incoming, &output, 4)
+            .err()
+            .expect("short frame from a non-first stage must be rejected");
 
         let text = format!("{error:#}");
         assert!(
@@ -388,14 +273,8 @@ mod tests {
         // Keep the encoded payload valid for the four-token wire header while
         // the frame descriptor exercises the first-stage short-frame branch.
         assert!(
-            forwarded_stage_message_timed(
-                &config,
-                &incoming,
-                &f32_frame(0, 1, &[1.0; 16]),
-                WireActivationDType::F32,
-                4,
-            )
-            .is_ok()
+            forwarded_stage_message_timed(&config, &incoming, &f32_frame(0, 1, &[1.0; 16]), 4,)
+                .is_ok()
         );
     }
 }

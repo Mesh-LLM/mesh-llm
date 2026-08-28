@@ -575,7 +575,7 @@ fn explicit_recurrent_transfer_policy_is_loud() {
 }
 
 #[test]
-fn qwen3_family_defaults_to_f16_and_records_q8_rejection() {
+fn qwen3_family_uses_f32_wire_payloads() {
     let request = TopologyPlanRequest {
         topology_id: "qwen3-wire".to_string(),
         model_id: "qwen3".to_string(),
@@ -590,14 +590,8 @@ fn qwen3_family_defaults_to_f16_and_records_q8_rejection() {
     assert_eq!(plan.family_id.as_deref(), Some("qwen3_dense"));
     assert_eq!(plan.boundaries.len(), 1);
     assert_eq!(plan.boundaries[0].decision, BoundaryDecision::Accepted);
-    assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 4096);
-    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 2048);
-    assert!(
-        plan.boundaries[0]
-            .reason_codes
-            .contains(&PlanReasonCode::Q8WireRejected)
-    );
+    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 4096);
 }
 
 #[test]
@@ -627,7 +621,7 @@ fn accepted_dense_families_emit_exact_state_mobility_reason() {
 }
 
 #[test]
-fn untested_dense_family_blocks_q8_but_has_no_split_constraints() {
+fn dense_family_uses_f32_without_split_constraints() {
     let request = TopologyPlanRequest {
         topology_id: "olmo".to_string(),
         model_id: "olmo".to_string(),
@@ -641,45 +635,18 @@ fn untested_dense_family_blocks_q8_but_has_no_split_constraints() {
 
     assert_eq!(plan.family_id.as_deref(), Some("olmo"));
     assert_eq!(plan.boundaries[0].decision, BoundaryDecision::Accepted);
-    assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
-    assert!(
-        plan.boundaries[0]
-            .reason_codes
-            .contains(&PlanReasonCode::DefaultWireDtypeF16)
-    );
-    assert!(
-        !plan.boundaries[0]
-            .reason_codes
-            .contains(&PlanReasonCode::Q8WireValidated)
-    );
-    assert!(
-        !plan.boundaries[0]
-            .reason_codes
-            .contains(&PlanReasonCode::Q8WireRejected)
-    );
+    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 16384);
 }
 
 #[test]
-fn measured_dense_family_q8_policy_is_recorded() {
+fn dense_family_f32_wire_bytes_are_recorded() {
     let families = [
-        (
-            gemma2_capability(26, 2304),
-            PlanReasonCode::Q8WireValidated,
-            4608,
-        ),
-        (
-            gemma3_capability(26, 1152),
-            PlanReasonCode::Q8WireRejected,
-            2304,
-        ),
-        (
-            glm4_capability(40, 4096),
-            PlanReasonCode::Q8WireRejected,
-            8192,
-        ),
+        (gemma2_capability(26, 2304), 9216),
+        (gemma3_capability(26, 1152), 4608),
+        (glm4_capability(40, 4096), 16384),
     ];
 
-    for (family, expected_reason, expected_f16_wire_bytes) in families {
+    for (family, expected_f32_wire_bytes) in families {
         let request = TopologyPlanRequest {
             topology_id: family.family_id.clone(),
             model_id: family.family_id.clone(),
@@ -690,13 +657,10 @@ fn measured_dense_family_q8_policy_is_recorded() {
         };
 
         let plan = plan_even_contiguous(&request).expect("plan");
-
-        assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
         assert_eq!(
             plan.boundaries[0].wire_payload_bytes_per_token,
-            expected_f16_wire_bytes
+            expected_f32_wire_bytes
         );
-        assert!(plan.boundaries[0].reason_codes.contains(&expected_reason));
     }
 }
 
@@ -750,18 +714,12 @@ fn gemma4_e4b_accepts_validated_boundary_with_sideband() {
 
     assert_eq!(plan.boundaries[0].layer_boundary, 21);
     assert_eq!(plan.boundaries[0].decision, BoundaryDecision::Accepted);
-    assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 10240);
-    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 5120);
+    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 10240);
     assert!(
         plan.boundaries[0]
             .reason_codes
             .contains(&PlanReasonCode::TokenSidebandRequired)
-    );
-    assert!(
-        plan.boundaries[0]
-            .reason_codes
-            .contains(&PlanReasonCode::Q8WireRejected)
     );
 }
 
@@ -779,9 +737,8 @@ fn rwkv7_boundary_accounts_for_v_first_sideband() {
     let plan = plan_even_contiguous(&request).expect("plan");
 
     assert_eq!(plan.boundaries[0].layer_boundary, 4);
-    assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 6144);
-    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 3072);
+    assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 6144);
     assert!(
         plan.boundaries[0]
             .reason_codes
@@ -850,8 +807,8 @@ fn gemma3n_requires_altup_sideband_and_reviewed_kv_boundary() {
             })
             .collect::<Vec<_>>(),
         vec![
-            (10, BoundaryDecision::Accepted, 32768, 16384),
-            (20, BoundaryDecision::Rejected, 32768, 16384)
+            (10, BoundaryDecision::Accepted, 32768, 32768),
+            (20, BoundaryDecision::Rejected, 32768, 32768)
         ]
     );
     assert!(even_plan.boundaries.iter().all(|boundary| {
@@ -918,7 +875,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("reviewed llama");
     assert_eq!(llama.family_id, "llama");
-    assert_eq!(llama.q8_wire_validation, WireValidation::Validated);
     assert_eq!(llama.exact_state_mobility, ExactStateMobility::Accepted);
 
     let laguna = infer_family_capability(
@@ -928,8 +884,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("reviewed Poolside Laguna S 2.1 Q4_K_M");
     assert_eq!(laguna.family_id, "laguna");
-    assert_eq!(laguna.default_wire_dtype, WireDType::F16);
-    assert_eq!(laguna.q8_wire_validation, WireValidation::Untested);
 
     let gemma4_e4b = infer_family_capability(
             "unsloth/gemma-4-E4B-it-GGUF@315e03409eb1cdde302488d66e586dea1e82aad1/gemma-4-E4B-it-Q4_K_M.gguf",
@@ -938,7 +892,6 @@ fn infers_known_family_capabilities_from_model_identity() {
         )
         .expect("reviewed gemma4 e4b");
     assert_eq!(gemma4_e4b.family_id, "gemma4_e4b");
-    assert_eq!(gemma4_e4b.q8_wire_validation, WireValidation::Rejected);
     assert!(!gemma4_e4b.split_constraints.is_empty());
     assert!(!gemma4_e4b.sidebands.is_empty());
 
@@ -963,8 +916,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     let inkling =
         infer_family_capability("meshllm/inkling-UD-Q2_K_XL-layers", 66, 6144).expect("inkling");
     assert_eq!(inkling.family_id, "inkling");
-    assert_eq!(inkling.default_wire_dtype, WireDType::F32);
-    assert_eq!(inkling.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         inkling.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -977,7 +928,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     let rwkv6 =
         infer_family_capability("latestissue/rwkv-6-finch-1b6-gguf:Q4_K", 24, 2048).expect("rwkv6");
     assert_eq!(rwkv6.family_id, "rwkv6");
-    assert_eq!(rwkv6.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         rwkv6.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -1034,7 +984,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     let qwen2moe = infer_family_capability("mradermacher/Qwen2-1.5B-2x-MoE-GGUF:Q4_K_S", 28, 1536)
         .expect("qwen2moe");
     assert_eq!(qwen2moe.family_id, "qwen2moe");
-    assert_eq!(qwen2moe.q8_wire_validation, WireValidation::Rejected);
     let qwen3moe = infer_family_capability(
         "mradermacher/Qwen3-MOE-4x0.6B-2.4B-Writing-Thunder-GGUF:Q4_K_M",
         28,
@@ -1042,7 +991,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("qwen3moe");
     assert_eq!(qwen3moe.family_id, "qwen3moe");
-    assert_eq!(qwen3moe.q8_wire_validation, WireValidation::Validated);
     for identity in [
         "laguna",
         "poolside/Laguna-XS-2.1-GGUF:Q4_K_M",
@@ -1053,7 +1001,6 @@ fn infers_known_family_capabilities_from_model_identity() {
         let laguna = infer_family_capability(identity, 48, 3072)
             .unwrap_or_else(|| panic!("failed to infer {identity}"));
         assert_eq!(laguna.family_id, "laguna", "{identity}");
-        assert_eq!(laguna.q8_wire_validation, WireValidation::Untested);
         assert_eq!(laguna.exact_state_mobility, ExactStateMobility::Untested);
         assert!(laguna.recurrent_ranges.is_empty());
     }
@@ -1061,7 +1008,6 @@ fn infers_known_family_capabilities_from_model_identity() {
         infer_family_capability("ggml-org/gpt-oss-20b-GGUF:gpt-oss-20b-mxfp4", 24, 2880)
             .expect("openai_moe/gpt-oss");
     assert_eq!(openai_moe.family_id, "openai_moe");
-    assert_eq!(openai_moe.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         openai_moe.exact_state_mobility,
         ExactStateMobility::Accepted
@@ -1073,7 +1019,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("llama4 package");
     assert_eq!(llama4.family_id, "llama4");
-    assert_eq!(llama4.q8_wire_validation, WireValidation::Untested);
     assert_eq!(llama4.exact_state_mobility, ExactStateMobility::Untested);
     let mistral4 = infer_family_capability(
         "bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS",
@@ -1082,7 +1027,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("mistral4 package");
     assert_eq!(mistral4.family_id, "mistral4");
-    assert_eq!(mistral4.q8_wire_validation, WireValidation::Untested);
     assert_eq!(mistral4.exact_state_mobility, ExactStateMobility::Untested);
     let qwen3_coder_package = infer_family_capability(
         "unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:UD-Q4_K_XL",
@@ -1091,10 +1035,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("qwen3 coder package");
     assert_eq!(qwen3_coder_package.family_id, "qwen3moe");
-    assert_eq!(
-        qwen3_coder_package.q8_wire_validation,
-        WireValidation::Untested
-    );
     let qwen3_coder_30b =
         infer_family_capability("unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M", 48, 2048)
             .expect("qwen3 coder 30b");
@@ -1104,10 +1044,6 @@ fn infers_known_family_capabilities_from_model_identity() {
             .expect("exaone-moe package");
     assert_eq!(exaone_moe_package.family_id, "exaone_moe");
     assert_eq!(
-        exaone_moe_package.q8_wire_validation,
-        WireValidation::Untested
-    );
-    assert_eq!(
         exaone_moe_package.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
     );
@@ -1115,23 +1051,19 @@ fn infers_known_family_capabilities_from_model_identity() {
         infer_family_capability("lmstudio-community/gemma-3n-E2B-it-GGUF:Q4_K_M", 30, 2048)
             .expect("gemma3n");
     assert_eq!(gemma3n.family_id, "gemma3n");
-    assert_eq!(gemma3n.q8_wire_validation, WireValidation::Validated);
     assert_eq!(gemma3n.exact_state_mobility, ExactStateMobility::Accepted);
     assert_eq!(gemma3n.sidebands[0].kind, SidebandKind::Gemma3nAltup);
     let qwen2vl = infer_family_capability("bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M", 28, 1536)
         .expect("qwen2vl");
     assert_eq!(qwen2vl.family_id, "qwen2vl");
-    assert_eq!(qwen2vl.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(qwen2vl.exact_state_mobility, ExactStateMobility::Untested);
     let qwen3vl = infer_family_capability("Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M", 28, 2048)
         .expect("qwen3vl");
     assert_eq!(qwen3vl.family_id, "qwen3vl");
-    assert_eq!(qwen3vl.q8_wire_validation, WireValidation::Validated);
     assert_eq!(qwen3vl.exact_state_mobility, ExactStateMobility::Untested);
     let deepseek2ocr =
         infer_family_capability("ggml-org/DeepSeek-OCR-GGUF:Q8_0", 12, 1280).expect("deepseek2ocr");
     assert_eq!(deepseek2ocr.family_id, "deepseek2ocr");
-    assert_eq!(deepseek2ocr.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         deepseek2ocr.exact_state_mobility,
         ExactStateMobility::Accepted
@@ -1139,7 +1071,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     let hunyuan_vl =
         infer_family_capability("ggml-org/HunyuanOCR-GGUF:Q8_0", 24, 1024).expect("hunyuan_vl");
     assert_eq!(hunyuan_vl.family_id, "hunyuan_vl");
-    assert_eq!(hunyuan_vl.q8_wire_validation, WireValidation::Untested);
     assert_eq!(
         hunyuan_vl.exact_state_mobility,
         ExactStateMobility::Untested
@@ -1151,7 +1082,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("qwen3vlmoe");
     assert_eq!(qwen3vlmoe.family_id, "qwen3vlmoe");
-    assert_eq!(qwen3vlmoe.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         qwen3vlmoe.exact_state_mobility,
         ExactStateMobility::Accepted
@@ -1160,18 +1090,14 @@ fn infers_known_family_capabilities_from_model_identity() {
         infer_family_capability("unsloth/Apertus-8B-Instruct-2509-GGUF:UD-IQ2_M", 32, 4096)
             .expect("apertus");
     assert_eq!(apertus.family_id, "apertus");
-    assert_eq!(apertus.default_wire_dtype, WireDType::F32);
-    assert_eq!(apertus.q8_wire_validation, WireValidation::Rejected);
     let bitnet =
         infer_family_capability("Sarverott/bitnet_b1_58-large-Q4_K_M-GGUF:Q4_K_M", 24, 1536)
             .expect("bitnet");
     assert_eq!(bitnet.family_id, "bitnet");
-    assert_eq!(bitnet.q8_wire_validation, WireValidation::Validated);
     assert_eq!(bitnet.exact_state_mobility, ExactStateMobility::Accepted);
     let plamo =
         infer_family_capability("QuantFactory/plamo-13b-GGUF:Q2_K", 40, 5120).expect("plamo");
     assert_eq!(plamo.family_id, "plamo");
-    assert_eq!(plamo.q8_wire_validation, WireValidation::Validated);
     assert_eq!(plamo.exact_state_mobility, ExactStateMobility::Accepted);
     let starcoder = infer_family_capability(
         "RichardErkhov/bigcode_-_tiny_starcoder_py-gguf:Q2_K",
@@ -1180,23 +1106,19 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("starcoder");
     assert_eq!(starcoder.family_id, "starcoder");
-    assert_eq!(starcoder.q8_wire_validation, WireValidation::Validated);
     assert_eq!(starcoder.exact_state_mobility, ExactStateMobility::Accepted);
     let llada =
         infer_family_capability("mradermacher/LLaDA-1.5-Tiny-GGUF:Q2_K", 6, 512).expect("llada");
     assert_eq!(llada.family_id, "llada");
-    assert_eq!(llada.q8_wire_validation, WireValidation::Validated);
     assert_eq!(llada.exact_state_mobility, ExactStateMobility::Untested);
     let plamo2 = infer_family_capability("mmnga/plamo-2-1b-gguf:Q4_K_M", 16, 2048).expect("plamo2");
     assert_eq!(plamo2.family_id, "plamo2");
-    assert_eq!(plamo2.q8_wire_validation, WireValidation::Validated);
     assert_eq!(plamo2.exact_state_mobility, ExactStateMobility::Accepted);
     assert_eq!(plamo2.recurrent_ranges.len(), 1);
     let ernie4_5 =
         infer_family_capability("lmstudio-community/ERNIE-4.5-0.3B-GGUF:Q4_K_M", 18, 1024)
             .expect("ernie4_5");
     assert_eq!(ernie4_5.family_id, "ernie4_5");
-    assert_eq!(ernie4_5.q8_wire_validation, WireValidation::Validated);
     assert_eq!(ernie4_5.exact_state_mobility, ExactStateMobility::Accepted);
     let ernie4_5_moe = infer_family_capability(
         "lmstudio-community/ERNIE-4.5-21B-A3B-PT-GGUF:Q4_K_M",
@@ -1205,7 +1127,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("ernie4_5_moe");
     assert_eq!(ernie4_5_moe.family_id, "ernie4_5_moe");
-    assert_eq!(ernie4_5_moe.q8_wire_validation, WireValidation::Validated);
     assert_eq!(
         ernie4_5_moe.exact_state_mobility,
         ExactStateMobility::Accepted
@@ -1213,23 +1134,19 @@ fn infers_known_family_capabilities_from_model_identity() {
     let qwen =
         infer_family_capability("zhangtao103239/Qwen-1.8B-GGUF:q5_k_m", 24, 2048).expect("qwen");
     assert_eq!(qwen.family_id, "qwen");
-    assert_eq!(qwen.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(qwen.exact_state_mobility, ExactStateMobility::Accepted);
     let jais = infer_family_capability("mradermacher/Jais-family-256m-GGUF:Q4_K_M", 14, 1088)
         .expect("jais");
     assert_eq!(jais.family_id, "jais");
-    assert_eq!(jais.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(jais.exact_state_mobility, ExactStateMobility::Accepted);
     let jais2 =
         infer_family_capability("mradermacher/JAIS2-IT-0.3-GGUF:Q4_K_M", 32, 3328).expect("jais2");
     assert_eq!(jais2.family_id, "jais2");
-    assert_eq!(jais2.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(jais2.exact_state_mobility, ExactStateMobility::Accepted);
     let nemotron_h =
         infer_family_capability("nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M", 42, 3136)
             .expect("nemotron_h");
     assert_eq!(nemotron_h.family_id, "nemotron_h");
-    assert_eq!(nemotron_h.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         nemotron_h.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -1242,7 +1159,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("nemotron_h_moe package");
     assert_eq!(nemotron_h_moe.family_id, "nemotron_h_moe");
-    assert_eq!(nemotron_h_moe.q8_wire_validation, WireValidation::Untested);
     assert_eq!(
         nemotron_h_moe.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -1255,12 +1171,10 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("llada_moe");
     assert_eq!(llada_moe.family_id, "llada_moe");
-    assert_eq!(llada_moe.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(llada_moe.exact_state_mobility, ExactStateMobility::Untested);
     let dream = infer_family_capability("mradermacher/DreamOn-v0-7B-i1-GGUF:IQ2_XS", 28, 3584)
         .expect("dream");
     assert_eq!(dream.family_id, "dream");
-    assert_eq!(dream.q8_wire_validation, WireValidation::Validated);
     assert_eq!(dream.exact_state_mobility, ExactStateMobility::Untested);
     let nemotron = infer_family_capability(
         "mradermacher/nemotron-3-8b-chat-4k-sft-hf-i1-GGUF:IQ2_XS",
@@ -1269,7 +1183,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("nemotron");
     assert_eq!(nemotron.family_id, "nemotron");
-    assert_eq!(nemotron.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(nemotron.exact_state_mobility, ExactStateMobility::Accepted);
     let seed_oss = infer_family_capability(
         "lmstudio-community/Seed-OSS-36B-Instruct-GGUF:Q4_K_M",
@@ -1278,12 +1191,10 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("seed_oss package");
     assert_eq!(seed_oss.family_id, "seed_oss");
-    assert_eq!(seed_oss.q8_wire_validation, WireValidation::Untested);
     assert_eq!(seed_oss.exact_state_mobility, ExactStateMobility::Untested);
     let lfm2moe =
         infer_family_capability("noctrex/LFM2-8B-A1B-MXFP4_MOE-GGUF", 24, 2048).expect("lfm2moe");
     assert_eq!(lfm2moe.family_id, "lfm2moe");
-    assert_eq!(lfm2moe.q8_wire_validation, WireValidation::Validated);
     assert_eq!(lfm2moe.exact_state_mobility, ExactStateMobility::Accepted);
     assert_eq!(lfm2moe.recurrent_ranges.len(), 1);
     let kimi = infer_family_capability(
@@ -1293,7 +1204,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     )
     .expect("kimi_linear");
     assert_eq!(kimi.family_id, "kimi_linear");
-    assert_eq!(kimi.q8_wire_validation, WireValidation::Validated);
     assert_eq!(
         kimi.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -1325,12 +1235,10 @@ fn infers_known_family_capabilities_from_model_identity() {
     let deepseek3 = infer_family_capability("unsloth/DeepSeek-V3.2-GGUF:UD-Q4_K_XL", 61, 7168)
         .expect("reviewed deepseek3");
     assert_eq!(deepseek3.family_id, "deepseek3");
-    assert_eq!(deepseek3.q8_wire_validation, WireValidation::Untested);
     assert_eq!(deepseek3.exact_state_mobility, ExactStateMobility::Accepted);
     let qwen35moe = infer_family_capability("unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL", 40, 2048)
         .expect("reviewed qwen35moe");
     assert_eq!(qwen35moe.family_id, "qwen35moe");
-    assert_eq!(qwen35moe.q8_wire_validation, WireValidation::Untested);
     assert_eq!(
         qwen35moe.exact_state_mobility,
         ExactStateMobility::RejectedTooLarge
@@ -1370,8 +1278,6 @@ fn infers_known_family_capabilities_from_model_identity() {
     let gemma =
         infer_family_capability("ggml-org/gemma-3-270m-it-GGUF:Q8_0", 18, 640).expect("gemma");
     assert_eq!(gemma.family_id, "gemma");
-    assert_eq!(gemma.default_wire_dtype, WireDType::F32);
-    assert_eq!(gemma.q8_wire_validation, WireValidation::Rejected);
     assert_eq!(
         infer_family_capability("google-gemma-4-26B-A4B-it", 30, 2816)
             .expect("gemma4a4b")
@@ -1538,33 +1444,10 @@ fn reviewed_supported_families_smoke_plan_with_expected_policy_signals() {
             "unexpected boundary count for {identity}"
         );
         assert_eq!(
-            plan.boundaries[0].wire_dtype, family.default_wire_dtype,
-            "supported family default wire mismatch for {identity}"
+            plan.boundaries[0].wire_payload_bytes_per_token,
+            plan.boundaries[0].raw_activation_bytes_per_token,
+            "f32 wire payload mismatch for {identity}"
         );
-        if family.default_wire_dtype == WireDType::F16 {
-            assert!(
-                plan.boundaries[0]
-                    .reason_codes
-                    .contains(&PlanReasonCode::DefaultWireDtypeF16),
-                "missing f16 reason for {identity}"
-            );
-        }
-
-        match family.q8_wire_validation {
-            WireValidation::Validated => assert!(
-                plan.boundaries[0]
-                    .reason_codes
-                    .contains(&PlanReasonCode::Q8WireValidated),
-                "missing q8 validated signal for {identity}"
-            ),
-            WireValidation::Rejected => assert!(
-                plan.boundaries[0]
-                    .reason_codes
-                    .contains(&PlanReasonCode::Q8WireRejected),
-                "missing q8 rejected signal for {identity}"
-            ),
-            WireValidation::Untested => {}
-        }
 
         if family.recurrent_ranges.is_empty() {
             assert!(

@@ -1,14 +1,11 @@
 use std::io;
 
-use super::{
-    activation::{decode_f16_to_f32_bytes, decode_q8_to_f32_bytes_with_state_flags},
-    invalid_data,
-};
+use super::invalid_data;
 
-// v11 adds the Inkling MTP embedding sideband and makes the coordinator the sole owner of
-// verify-window acceptance, removing redundant tail-stage acceptance/correction fields. Stage
-// peers must be upgraded together so older readers reject the changed payload contract.
-pub const STAGE_STATE_VERSION: i32 = 11;
+// v12 makes raw F32 the only activation wire representation and removes the dtype selector from
+// the state header. Stage peers must be upgraded together so older readers reject the changed
+// payload contract.
+pub const STAGE_STATE_VERSION: i32 = 12;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
 pub const MAX_STAGE_SIDEBAND_VALUES: usize = 1_048_576;
@@ -18,31 +15,10 @@ pub const MAX_STAGE_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
-pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
+pub const STAGE_STATE_HEADER_BYTES: usize = 9 * 4;
 pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 10 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 5 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum WireActivationDType {
-    F32 = 0,
-    F16 = 1,
-    Q8 = 2,
-}
-
-impl TryFrom<i32> for WireActivationDType {
-    type Error = io::Error;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::F32),
-            1 => Ok(Self::F16),
-            2 => Ok(Self::Q8),
-            _ => Err(invalid_data("unknown activation wire dtype")),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -236,7 +212,6 @@ pub struct StageStateHeader {
     pub decode_step: i32,
     pub current_token: i32,
     pub source_stage_index: i32,
-    pub reserved: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -294,7 +269,7 @@ impl StageSamplingConfig {
 }
 
 impl StageStateHeader {
-    pub fn new(kind: WireMessageKind, dtype: WireActivationDType) -> Self {
+    pub fn new(kind: WireMessageKind) -> Self {
         let mut header = Self {
             version: STAGE_STATE_VERSION,
             seq_id: 0,
@@ -305,7 +280,6 @@ impl StageStateHeader {
             decode_step: -1,
             current_token: LLAMA_TOKEN_NULL,
             source_stage_index: -1,
-            reserved: dtype as i32,
         };
         if matches!(
             kind,
@@ -317,10 +291,6 @@ impl StageStateHeader {
             header.flags |= state_flags::LIGHT_CONTEXT;
         }
         header
-    }
-
-    pub fn dtype(self) -> io::Result<WireActivationDType> {
-        WireActivationDType::try_from(self.reserved)
     }
 
     pub fn matches_kind(self, kind: WireMessageKind) -> bool {
@@ -349,7 +319,7 @@ impl StageStateHeader {
 
 impl Default for StageStateHeader {
     fn default() -> Self {
-        Self::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32)
+        Self::new(WireMessageKind::PrefillEmbd)
     }
 }
 
@@ -474,20 +444,16 @@ impl StageWireMessage {
         }
     }
 
-    pub fn stop(dtype: WireActivationDType) -> Self {
-        Self::stop_with_identity(dtype, 0, 0)
+    pub fn stop() -> Self {
+        Self::stop_with_identity(0, 0)
     }
 
-    pub fn stop_with_identity(
-        dtype: WireActivationDType,
-        request_id: u64,
-        session_id: u64,
-    ) -> Self {
+    pub fn stop_with_identity(request_id: u64, session_id: u64) -> Self {
         Self {
             kind: WireMessageKind::Stop,
             pos_start: 0,
             token_count: 0,
-            state: StageStateHeader::new(WireMessageKind::Stop, dtype),
+            state: StageStateHeader::new(WireMessageKind::Stop),
             request_id,
             session_id,
             sampling: None,
@@ -500,14 +466,13 @@ impl StageWireMessage {
     }
 
     pub fn configure_generation(
-        dtype: WireActivationDType,
         request_id: u64,
         session_id: u64,
         prompt_token_count: i32,
         sampling: Option<StageSamplingConfig>,
         chat_sampling_metadata: Option<String>,
     ) -> Self {
-        let mut state = StageStateHeader::new(WireMessageKind::ConfigureGeneration, dtype);
+        let mut state = StageStateHeader::new(WireMessageKind::ConfigureGeneration);
         state.prompt_token_count = prompt_token_count;
         Self {
             kind: WireMessageKind::ConfigureGeneration,
@@ -525,50 +490,28 @@ impl StageWireMessage {
         }
     }
 
-    pub fn activation_f32_payload(&self, n_embd: i32) -> io::Result<Vec<u8>> {
+    pub fn activation_f32_payload(&self) -> io::Result<Vec<u8>> {
         if self.activation.is_empty() {
             return Ok(Vec::new());
         }
-        match self.state.dtype()? {
-            WireActivationDType::F32 => {
-                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-                    return Err(invalid_data(
-                        "decoded activation payload byte count exceeds maximum",
-                    ));
-                }
-                Ok(self.activation.clone())
-            }
-            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
-            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
-                &self.activation,
-                self.token_count,
-                n_embd,
-                self.state.flags,
-            ),
+        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+            return Err(invalid_data(
+                "decoded activation payload byte count exceeds maximum",
+            ));
         }
+        Ok(self.activation.clone())
     }
 
-    pub fn take_activation_f32_payload(&mut self, n_embd: i32) -> io::Result<Vec<u8>> {
+    pub fn take_activation_f32_payload(&mut self) -> io::Result<Vec<u8>> {
         if self.activation.is_empty() {
             return Ok(Vec::new());
         }
-        match self.state.dtype()? {
-            WireActivationDType::F32 => {
-                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-                    return Err(invalid_data(
-                        "decoded activation payload byte count exceeds maximum",
-                    ));
-                }
-                Ok(std::mem::take(&mut self.activation))
-            }
-            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
-            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
-                &self.activation,
-                self.token_count,
-                n_embd,
-                self.state.flags,
-            ),
+        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+            return Err(invalid_data(
+                "decoded activation payload byte count exceeds maximum",
+            ));
         }
+        Ok(std::mem::take(&mut self.activation))
     }
 }
 

@@ -232,17 +232,14 @@ impl StageOpenAiBackend {
                     let chunk = &prefill_tokens[pos_start..end];
                     prefill_min_chunk_size = prefill_min_chunk_size.min(chunk.len());
                     prefill_max_chunk_size = prefill_max_chunk_size.max(chunk.len());
-                    let message = embedded_prefill_message(
-                        request.wire_dtype,
-                        OpenAiPrefillChunk {
-                            seq_id: chunk_index,
-                            pos_start,
-                            prefill_token_count,
-                            tokens: chunk,
-                            request_id,
-                            session_id,
-                        },
-                    )?;
+                    let message = embedded_prefill_message(OpenAiPrefillChunk {
+                        seq_id: chunk_index,
+                        pos_start,
+                        prefill_token_count,
+                        tokens: chunk,
+                        request_id,
+                        session_id,
+                    })?;
                     let stage0_timer = PhaseTimer::start();
                     let pending_prefill_replies_before = pending_prefill_replies;
                     let mut output = if prefix_restore_allowed {
@@ -343,7 +340,6 @@ impl StageOpenAiBackend {
                         request.config,
                         &message,
                         &output,
-                        request.wire_dtype,
                         request.activation_width,
                     )
                     .map_err(openai_backend_error)?;
@@ -355,7 +351,6 @@ impl StageOpenAiBackend {
                     write_stage_message_conditioned(
                         &mut *downstream,
                         &forwarded,
-                        request.wire_dtype,
                         request.downstream_wire_condition,
                     )
                     .map_err(openai_io_error)?;
@@ -635,7 +630,6 @@ impl StageOpenAiBackend {
                 super::prefix_cache::chain_prefix_cache_savings(
                     &prefill_chain_cache_stats,
                     prefill_chain_restored_tokens,
-                    request.wire_dtype,
                     request.activation_width,
                 ),
             );
@@ -643,7 +637,6 @@ impl StageOpenAiBackend {
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
             let message = generation_config_message(
-                request.wire_dtype,
                 request_id,
                 session_id,
                 request.prompt_token_ids.len(),
@@ -653,7 +646,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 &mut *downstream,
                 &message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -689,17 +681,14 @@ impl StageOpenAiBackend {
                 .expect("checked non-empty prompt");
             let mut context_tokens = request.prompt_token_ids.to_vec();
             let mut exact_replay_tokens = Vec::new();
-            let mut decode_message = ReusableDecodeMessage::new(
-                request.wire_dtype,
-                ReusableDecodeMessageArgs {
-                    request_id,
-                    session_id,
-                    prompt_token_count: request.prompt_token_ids.len(),
-                    base_pos_start: prefill_token_count,
-                    sampling: wire_sampling.clone(),
-                    sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
-                },
-            )?;
+            let mut decode_message = ReusableDecodeMessage::new(ReusableDecodeMessageArgs {
+                request_id,
+                session_id,
+                prompt_token_count: request.prompt_token_ids.len(),
+                base_pos_start: prefill_token_count,
+                sampling: wire_sampling.clone(),
+                sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
+            })?;
             let mut native_mtp = NativeMtpVerifier::default();
             let effective_speculative =
                 speculation_after_prefix_restore(request.speculative, prefill_chain_cache_restored);
@@ -1027,9 +1016,8 @@ impl StageOpenAiBackend {
                             let window = verify_window_scheduler
                                 .open(layout.pos_start, layout.decode_step)?;
                             let input_tokens = layout.input_tokens;
-                            let message = embedded_verify_window_message(
-                                request.wire_dtype,
-                                VerifyWindowMessageArgs {
+                            let message =
+                                embedded_verify_window_message(VerifyWindowMessageArgs {
                                     window_id: window.id,
                                     request_id,
                                     session_id,
@@ -1038,8 +1026,7 @@ impl StageOpenAiBackend {
                                     decode_step: window.decode_step,
                                     tokens: &input_tokens,
                                     sampling: wire_sampling.clone(),
-                                },
-                            )?;
+                                })?;
                             let dispatched = self.dispatch_embedded_stage_message(
                                 &request,
                                 downstream,
@@ -1399,20 +1386,17 @@ impl StageOpenAiBackend {
                     speculative_stats.draft_propose_ms += draft_propose_ms;
                     if !draft_tokens.is_empty() {
                         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
-                        let message = embedded_verify_window_message(
-                            request.wire_dtype,
-                            VerifyWindowMessageArgs {
-                                window_id: i32::try_from(decoded_tokens)
-                                    .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?,
-                                request_id,
-                                session_id,
-                                prompt_token_count: request.prompt_token_ids.len(),
-                                pos_start: prefill_token_count + decoded_tokens,
-                                decode_step: decoded_tokens,
-                                tokens: &verify_inputs,
-                                sampling: wire_sampling.clone(),
-                            },
-                        )?;
+                        let message = embedded_verify_window_message(VerifyWindowMessageArgs {
+                            window_id: i32::try_from(decoded_tokens)
+                                .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?,
+                            request_id,
+                            session_id,
+                            prompt_token_count: request.prompt_token_ids.len(),
+                            pos_start: prefill_token_count + decoded_tokens,
+                            decode_step: decoded_tokens,
+                            tokens: &verify_inputs,
+                            sampling: wire_sampling.clone(),
+                        })?;
                         let verify = self.execute_embedded_stage_message(
                             &request,
                             downstream,
@@ -1668,7 +1652,6 @@ impl StageOpenAiBackend {
                     request.config,
                     message,
                     &output,
-                    request.wire_dtype,
                     request.activation_width,
                 )
                 .map_err(openai_backend_error)?;
@@ -1681,7 +1664,6 @@ impl StageOpenAiBackend {
                 write_stage_message_conditioned(
                     &mut *downstream,
                     &forwarded.message,
-                    request.wire_dtype,
                     request.downstream_wire_condition,
                 )
                 .map_err(openai_io_error)?;

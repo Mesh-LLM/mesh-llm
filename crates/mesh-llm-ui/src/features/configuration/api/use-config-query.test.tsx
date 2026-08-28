@@ -60,15 +60,6 @@ const CONFIG_SCHEMA_REFERENCE: RuntimeConfigSchemaReference = {
       setting_order: 20,
       unit: 'tokens'
     }),
-    schemaSetting(
-      'defaults.skippy.activation_wire_dtype',
-      { kind: 'enum', values: ['f16', 'q8'] },
-      'Skippy Transport',
-      {
-        control_hint: 'segmented',
-        setting_order: 10
-      }
-    ),
     schemaSetting('defaults.multimodal.image_min_tokens', { kind: 'integer' }, 'Multimodal', {
       control_hint: 'range',
       setting_order: 10,
@@ -312,9 +303,6 @@ describe('useConfigQuery', () => {
                   top_k: applySucceeded ? 55 : 40
                 },
                 speculative: applySucceeded ? { mode: 'draft', draft_max_tokens: 20 } : { draft_max_tokens: 16 },
-                skippy: {
-                  activation_wire_dtype: applySucceeded ? 'q8' : 'f16'
-                },
                 multimodal: {
                   image_min_tokens: applySucceeded ? 64 : 32
                 },
@@ -358,9 +346,6 @@ describe('useConfigQuery', () => {
               mode: 'draft',
               draft_max_tokens: 20
             },
-            skippy: {
-              activation_wire_dtype: 'q8'
-            },
             multimodal: {
               image_min_tokens: 64
             },
@@ -398,7 +383,6 @@ describe('useConfigQuery', () => {
     nextDefaults['defaults.request_defaults.top_k'] = '55'
     nextDefaults['defaults.speculative.mode'] = 'draft'
     nextDefaults['defaults.speculative.draft_max_tokens'] = '20'
-    nextDefaults['defaults.skippy.activation_wire_dtype'] = 'q8'
     nextDefaults['defaults.multimodal.image_min_tokens'] = '64'
     nextDefaults['defaults.advanced.server.alias'] = 'carrack-mesh'
 
@@ -421,7 +405,6 @@ describe('useConfigQuery', () => {
       expect(readSettingValue(result.current.data!, 'defaults.request_defaults.reasoning_format')).toBe('qwen')
     )
     expect(readSettingValue(result.current.data!, 'defaults.request_defaults.top_k')).toBe('55')
-    expect(readSettingValue(result.current.data!, 'defaults.skippy.activation_wire_dtype')).toBe('q8')
     expect(readSettingValue(result.current.data!, 'defaults.multimodal.image_min_tokens')).toBe('64')
     expect(readSettingValue(result.current.data!, 'defaults.advanced.server.alias')).toBe('carrack-mesh')
     expect(result.current.controlConfigQuery.data?.snapshot?.revision).toBe(8)

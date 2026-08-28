@@ -438,7 +438,6 @@ impl StageControlState {
             topology: None,
             bind_addr,
             activation_width: effective_load.activation_width,
-            wire_dtype: effective_load.wire_dtype.into(),
             metrics_otlp_grpc: self.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: self.telemetry.queue_capacity,
             telemetry_level: self.telemetry.level,
@@ -927,7 +926,6 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         state,
         bind_addr: server.bind_addr.to_string(),
         activation_width: stage.load.activation_width.max(0) as u32,
-        wire_dtype: stage.load.wire_dtype,
         selected_device: stage.load.selected_device.clone(),
         ctx_size: stage.load.ctx_size,
         lane_count: stage.load.lane_count,
@@ -963,7 +961,6 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         state: StageRuntimeState::Stopped,
         bind_addr: String::new(),
         activation_width: 0,
-        wire_dtype: StageWireDType::F32,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,
@@ -999,7 +996,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         state: StageRuntimeState::Failed,
         bind_addr: load.bind_addr.clone(),
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -1063,15 +1059,5 @@ fn preparation_status_from_cancel(cancel: StageCancelPrepareRequest) -> StagePre
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
-    }
-}
-
-impl From<StageWireDType> for skippy_protocol::binary::WireActivationDType {
-    fn from(value: StageWireDType) -> Self {
-        match value {
-            StageWireDType::F32 => Self::F32,
-            StageWireDType::F16 => Self::F16,
-            StageWireDType::Q8 => Self::Q8,
-        }
     }
 }

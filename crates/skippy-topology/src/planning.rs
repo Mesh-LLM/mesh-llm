@@ -4,7 +4,7 @@ use crate::{
     BoundaryDecision, BoundaryPlan, DiagnosticSeverity, ExactStateMobility, FamilyCapabilityRecord,
     LayerSpec, MigrationPolicy, NodePlacementSignal, NodeSpec, PlanDiagnostic, PlanReasonCode,
     PlannerPolicy, SidebandKind, SplitConstraintKind, StagePlan, StageRole, StateAffinity,
-    TopologyPlan, TopologyPlanRequest, WireDType, WireValidation, artifact_diagnostics, edge_order,
+    TopologyPlan, TopologyPlanRequest, artifact_diagnostics, edge_order,
 };
 
 pub fn plan_even_contiguous(request: &TopologyPlanRequest) -> Result<TopologyPlan, PlanError> {
@@ -441,7 +441,7 @@ fn boundaries_for(
                 );
             }
 
-            let (wire_dtype, raw_activation_bytes_per_token, wire_payload_bytes_per_token) =
+            let (raw_activation_bytes_per_token, wire_payload_bytes_per_token) =
                 if let Some(family) = family {
                     apply_family_boundary_rules(
                         family,
@@ -453,13 +453,11 @@ fn boundaries_for(
                     let payload_multiplier =
                         activation_payload_multiplier_for_boundary(family, layer_boundary);
                     let raw = u64::from(family.activation_width) * 4 * payload_multiplier;
-                    let wire = wire_payload_bytes_per_token(
-                        family.activation_width,
-                        family.default_wire_dtype,
-                    ) * payload_multiplier;
-                    (family.default_wire_dtype, raw, wire)
+                    let wire = wire_payload_bytes_per_token(family.activation_width)
+                        * payload_multiplier;
+                    (raw, wire)
                 } else {
-                    (WireDType::F16, 0, 0)
+                    (0, 0)
                 };
 
             BoundaryPlan {
@@ -467,7 +465,6 @@ fn boundaries_for(
                 consumer_stage_index: consumer.stage_index,
                 layer_boundary,
                 decision,
-                wire_dtype,
                 raw_activation_bytes_per_token,
                 wire_payload_bytes_per_token,
                 reason_codes,
@@ -484,16 +481,6 @@ fn apply_family_boundary_rules(
     reason_codes: &mut Vec<PlanReasonCode>,
     messages: &mut Vec<String>,
 ) {
-    if family.default_wire_dtype == WireDType::F16 {
-        reason_codes.push(PlanReasonCode::DefaultWireDtypeF16);
-    }
-
-    match family.q8_wire_validation {
-        WireValidation::Validated => reason_codes.push(PlanReasonCode::Q8WireValidated),
-        WireValidation::Rejected => reason_codes.push(PlanReasonCode::Q8WireRejected),
-        WireValidation::Untested => {}
-    }
-
     for constraint in &family.split_constraints {
         if constraint.forbidden_boundaries.contains(&layer_boundary)
             || (constraint.reject_boundary_inside
@@ -539,12 +526,8 @@ fn activation_payload_multiplier_for_boundary(
     if has_rwkv7_v_first_sideband { 2 } else { 1 }
 }
 
-pub fn wire_payload_bytes_per_token(activation_width: u32, dtype: WireDType) -> u64 {
-    match dtype {
-        WireDType::F32 => u64::from(activation_width) * 4,
-        WireDType::F16 => u64::from(activation_width) * 2,
-        WireDType::Q8 => u64::from(activation_width) + 4,
-    }
+pub fn wire_payload_bytes_per_token(activation_width: u32) -> u64 {
+    u64::from(activation_width) * 4
 }
 
 fn diagnostics_for(

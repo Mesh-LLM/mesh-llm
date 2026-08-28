@@ -1368,9 +1368,6 @@ model_runtime = "cuda"
 [defaults.throughput]
 parallel = 2
 
-[defaults.skippy]
-activation_wire_dtype = "f16"
-
 [defaults.speculative]
 mode = "disabled"
 
@@ -1397,10 +1394,6 @@ model = "Qwen3-8B-Q4_K_M"
             Some(ModelRuntimeKind::Cuda)
         );
         assert_eq!(defaults.throughput.and_then(|v| v.parallel), Some(2));
-        assert_eq!(
-            defaults.skippy.and_then(|v| v.activation_wire_dtype),
-            Some("f16".into())
-        );
         assert_eq!(
             defaults.speculative.and_then(|v| v.mode),
             Some("disabled".into())
@@ -1453,7 +1446,6 @@ numa = "auto"
 cpu_affinity = []
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 prefill_chunking = "auto"
 prefill_chunk_size = 0
 binary_stage_transport = "auto"

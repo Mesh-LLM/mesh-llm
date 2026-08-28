@@ -58,7 +58,6 @@ use serde_json::json;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageWireMessage;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -80,7 +79,6 @@ pub(super) fn handle_binary_connection(
     upstream: &mut TcpStream,
     downstream: Option<TcpStream>,
     activation_width: i32,
-    wire_dtype: WireActivationDType,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -100,7 +98,6 @@ pub(super) fn handle_binary_connection(
         upstream,
         downstream,
         activation_width,
-        wire_dtype,
         max_inflight,
         reply_credit_limit,
         async_prefill_forward,
@@ -130,7 +127,6 @@ fn handle_binary_connection_messages(
     upstream: &mut TcpStream,
     mut downstream: Option<TcpStream>,
     activation_width: i32,
-    wire_dtype: WireActivationDType,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -199,7 +195,6 @@ fn handle_binary_connection_messages(
                 telemetry,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -219,7 +214,6 @@ fn handle_binary_connection_messages(
             handle_verify_retirement(
                 iteration_scheduler,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -233,7 +227,6 @@ fn handle_binary_connection_messages(
                 iteration_scheduler,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -251,7 +244,6 @@ fn handle_binary_connection_messages(
                 iteration_scheduler,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 downstream_connect_timeout_secs,
                 &message,
@@ -274,7 +266,6 @@ fn handle_binary_connection_messages(
                 telemetry,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 downstream_connect_timeout_secs,
                 activation_width,
@@ -413,7 +404,7 @@ fn handle_binary_connection_messages(
             } else {
                 let input_decode_started = Instant::now();
                 let input = suffix_activation_frame(
-                    input_activation_frame(config, topology, &mut message, activation_width)?,
+                    input_activation_frame(config, topology, &mut message)?,
                     executable_prefill_start,
                 )?;
                 input_activation_decode_ms = if input_activation_bytes == 0 {
@@ -689,13 +680,8 @@ fn handle_binary_connection_messages(
             if output.payload.is_empty() {
                 bail!("stage has downstream but produced an empty activation payload");
             }
-            let forwarded = forwarded_stage_message_timed(
-                config,
-                &message,
-                &output,
-                wire_dtype,
-                activation_width,
-            )?;
+            let forwarded =
+                forwarded_stage_message_timed(config, &message, &output, activation_width)?;
             forward_activation_encode_ms += forwarded.activation_encode_ms;
             forward_activation_bytes = forwarded.message.activation.len();
             let mut downstream_write_attrs = BTreeMap::new();
@@ -735,7 +721,6 @@ fn handle_binary_connection_messages(
                 forwarder
                     .send(
                         forwarded.message,
-                        wire_dtype,
                         downstream_wire_condition,
                         downstream_write_attrs,
                     )
@@ -754,7 +739,6 @@ fn handle_binary_connection_messages(
                 write_stage_message_conditioned(
                     &mut *downstream,
                     &forwarded.message,
-                    wire_dtype,
                     downstream_wire_condition,
                 )
                 .context("forward activation frame downstream")?;

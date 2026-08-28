@@ -23,7 +23,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "ci" / "llama-canary" / "family-certified.json"
-CORE_LANES = ("single-step", "chain", "dtype-matrix", "state-handoff")
+CORE_LANES = ("single-step", "chain", "state-handoff")
 PROFILE_NAMES = ("full", "package-oracle", "graph-only")
 CERTIFIED_PROFILES = ("full", "package-oracle")
 CERTIFICATION_STATUSES = ("certified", "provisional")
@@ -273,7 +273,7 @@ def _validate_policy(value: object) -> dict[str, Any]:
         if name in CERTIFIED_PROFILES:
             if status != "certified" or tuple(lanes) != CORE_LANES:
                 raise PlanError(
-                    f"certified profile {name} must require exactly the four core lanes"
+                    f"certified profile {name} must require exactly the three core lanes"
                 )
         elif status != "provisional" or oracle != "none":
             raise PlanError("graph-only must remain provisional and oracle-free")

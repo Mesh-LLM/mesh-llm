@@ -60,7 +60,6 @@ pub(crate) struct StageLoadRequest {
     pub(crate) selected_device: Option<StageDevice>,
     pub(crate) bind_addr: String,
     pub(crate) activation_width: i32,
-    pub(crate) wire_dtype: StageWireDType,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
     pub(crate) n_batch: Option<u32>,
@@ -156,13 +155,6 @@ pub(crate) struct StagePeerDescriptor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StageWireDType {
-    F32,
-    F16,
-    Q8,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StageRuntimeState {
     Starting,
     Ready,
@@ -211,7 +203,6 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) state: StageRuntimeState,
     pub(crate) bind_addr: String,
     pub(crate) activation_width: u32,
-    pub(crate) wire_dtype: StageWireDType,
     pub(crate) selected_device: Option<StageDevice>,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,

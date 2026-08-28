@@ -209,15 +209,15 @@ Initial outcome:
 - `skippy-bench` now rejects stage ranges whose lengths differ by more
   than one layer.
 
-### 5. Activation Wire Dtype Sweep
+### 5. Activation Wire Dtype Sweep (Archived)
 
 Hypothesis: boundary activation transfer may be significant for prefill. `f16`
 or `q8` wire payloads can reduce transfer time, but they are only acceptable if
 correctness stays inside the tolerance already used by `skippy-correctness`.
 
-Trial support already existed:
+The removed trial support exposed:
 
-- `skippy-bench run --activation-wire-dtype f32|f16|q8`
+- `skippy-bench run --activation-wire-dtype f32|f16|q8` (no longer accepted)
 - debug spans include activation byte counts and forwarding/wait timing
 
 Initial outcome:

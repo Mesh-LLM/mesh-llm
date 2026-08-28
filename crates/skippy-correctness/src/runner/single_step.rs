@@ -10,8 +10,7 @@ use crate::{
     cli::{RuntimeArgs, ServerArgs, SingleStepArgs},
     report::SingleStepReport,
     support::{
-        ChildGuard, activation_width, connect_ready_child, generate_run_id, parse_wire_dtype,
-        temp_config_path_for,
+        ChildGuard, activation_width, connect_ready_child, generate_run_id, temp_config_path_for,
     },
 };
 
@@ -44,7 +43,6 @@ pub fn single_step(args: SingleStepArgs) -> Result<()> {
         SingleStepCase {
             split_layer: args.split_layer,
             stage1_bind_addr: args.stage1_bind_addr,
-            activation_wire_dtype: args.activation_wire_dtype,
             native_mtp,
         },
     )?;
@@ -55,7 +53,6 @@ pub fn single_step(args: SingleStepArgs) -> Result<()> {
 pub(in crate::runner) struct SingleStepCase {
     pub(in crate::runner) split_layer: u32,
     pub(in crate::runner) stage1_bind_addr: SocketAddr,
-    pub(in crate::runner) activation_wire_dtype: String,
     pub(in crate::runner) native_mtp: NativeMtpRequirement,
 }
 
@@ -80,7 +77,6 @@ pub(in crate::runner) fn run_single_step_with_baseline(
         flash_attn: runtime.flash_attn,
         prompt: runtime.prompt.clone(),
         stage1_bind_addr: case.stage1_bind_addr,
-        activation_wire_dtype: case.activation_wire_dtype,
         child_logs: server.child_logs,
         startup_timeout_secs: server.startup_timeout_secs,
         max_inflight: server.max_inflight,
@@ -161,7 +157,6 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     if args.split_layer == 0 || args.split_layer >= args.layer_end {
         bail!("split_layer must be greater than zero and less than layer_end");
     }
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
     let stage0_spec = PackageStageSpec {
         topology_id: "correctness-single-step",
         stage_id: "stage-0",
@@ -308,8 +303,6 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
             .context("topology path is not valid UTF-8")?,
         "--activation-width",
         &activation_width.to_string(),
-        "--activation-wire-dtype",
-        &args.activation_wire_dtype,
         "--max-inflight",
         &args.max_inflight.to_string(),
     ]);
@@ -324,10 +317,9 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
     .context("stage 1 binary server did not become ready")?;
     let request_id = 1;
     let session_id = 1;
-    send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
+    send_generation_config(&mut stream, request_id, session_id, 1)
         .context("send binary generation config")?;
     let message = binary_decode_message(BinaryDecodeMessageArgs {
-        wire_dtype,
         token_id,
         decode_step: 0,
         source_stage_index: 0,
@@ -336,40 +328,38 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         request_id,
         session_id,
     })?;
-    write_stage_message(&mut stream, &message, wire_dtype).context("send binary decode")?;
+    write_stage_message(&mut stream, &message).context("send binary decode")?;
     let reply = recv_reply(&mut stream).context("receive binary prediction reply")?;
     ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
     let native_mtp = native_mtp_sideband_report(&reply);
-    let (second_predicted_token, native_mtp_verification_compute_us) =
-        if args.native_mtp_verification {
-            let verification_timer = Instant::now();
-            let (_boundary_prediction, second_boundary) = session0
-                .decode_step_frame(reply.predicted, None, 0)
-                .context("stage 0 failed to produce second activation frame")?;
-            let second_message = binary_decode_message(BinaryDecodeMessageArgs {
-                wire_dtype,
-                token_id: reply.predicted,
-                decode_step: 1,
-                source_stage_index: 0,
-                boundary: &second_boundary,
-                activation_width,
-                request_id,
-                session_id,
-            })?;
-            write_stage_message(&mut stream, &second_message, wire_dtype)
-                .context("send second binary decode")?;
-            let second_reply =
-                recv_reply(&mut stream).context("receive second binary prediction reply")?;
-            ensure_reply_kind(&second_reply, WireReplyKind::PredictedToken)?;
-            (
-                Some(second_reply.predicted),
-                Some(elapsed_us(verification_timer)),
-            )
-        } else {
-            (None, None)
-        };
-    write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
-        .context("send binary stop")?;
+    let (second_predicted_token, native_mtp_verification_compute_us) = if args
+        .native_mtp_verification
+    {
+        let verification_timer = Instant::now();
+        let (_boundary_prediction, second_boundary) = session0
+            .decode_step_frame(reply.predicted, None, 0)
+            .context("stage 0 failed to produce second activation frame")?;
+        let second_message = binary_decode_message(BinaryDecodeMessageArgs {
+            token_id: reply.predicted,
+            decode_step: 1,
+            source_stage_index: 0,
+            boundary: &second_boundary,
+            activation_width,
+            request_id,
+            session_id,
+        })?;
+        write_stage_message(&mut stream, &second_message).context("send second binary decode")?;
+        let second_reply =
+            recv_reply(&mut stream).context("receive second binary prediction reply")?;
+        ensure_reply_kind(&second_reply, WireReplyKind::PredictedToken)?;
+        (
+            Some(second_reply.predicted),
+            Some(elapsed_us(verification_timer)),
+        )
+    } else {
+        (None, None)
+    };
+    write_stage_message(&mut stream, &StageWireMessage::stop()).context("send binary stop")?;
 
     Ok(BinarySplitResult {
         token_id,
@@ -378,7 +368,6 @@ pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<Bin
         native_mtp,
         native_mtp_verification_compute_us,
         activation_width,
-        wire_dtype: args.activation_wire_dtype,
         boundary_producer_stage_index: boundary.desc.producer_stage_index,
         boundary_layer_start: boundary.desc.layer_start,
         boundary_layer_end: boundary.desc.layer_end,

@@ -23,9 +23,8 @@ use skippy_protocol::{
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage,
-        WireActivationDType, WireMessageKind, WireReplyKind,
-        activation_frame_flags_from_state_flags, send_ready,
+        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
+        WireReplyKind, activation_frame_flags_from_state_flags, send_ready,
     },
 };
 use skippy_runtime::{
@@ -380,12 +379,8 @@ pub(crate) fn stage_output_activation_capacity(
     if config.downstream.is_none() || token_count <= 0 {
         return Ok(0);
     }
-    skippy_protocol::binary::activation_wire_bytes(
-        WireActivationDType::F32,
-        token_count,
-        activation_width,
-    )
-    .context("estimate output activation capacity")
+    skippy_protocol::binary::activation_wire_bytes(token_count, activation_width)
+        .context("estimate output activation capacity")
 }
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
@@ -791,13 +786,12 @@ pub(in crate::binary_transport) fn input_activation_frame(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &mut StageWireMessage,
-    activation_width: i32,
 ) -> Result<Option<ActivationFrame>> {
     if message.activation.is_empty() {
         return Ok(None);
     }
     let payload = message
-        .take_activation_f32_payload(activation_width)
+        .take_activation_f32_payload()
         .context("decode wire activation payload")?;
     let (layer_start, layer_end) = upstream_layer_range(config, topology, message);
     Ok(Some(ActivationFrame {
@@ -969,7 +963,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
 #[cfg(test)]
 pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideband()
 -> StageWireMessage {
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F16);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.prompt_token_count = 4;
     state.decode_step = 0;
     state.current_token = 104;
@@ -998,9 +992,7 @@ mod tests {
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
     };
-    use skippy_protocol::binary::{
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    };
+    use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
         io,
         net::{Shutdown, TcpListener, TcpStream},
@@ -1237,7 +1229,7 @@ mod tests {
             kind,
             pos_start: 0,
             token_count,
-            state: StageStateHeader::new(kind, WireActivationDType::F16),
+            state: StageStateHeader::new(kind),
             request_id: 11,
             session_id: 13,
             sampling: None,

@@ -350,8 +350,6 @@ def inventory(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "local_path": str(path) if path else None,
                 "download": "" if path else download_command(entry),
                 "notes": entry.get("notes", ""),
-                "wire_dtype": entry.get("wire_dtype"),
-                "wire_dtypes": entry.get("wire_dtypes"),
             }
             row["priority"] = row_priority(row, priorities)
             if path:
@@ -558,10 +556,6 @@ def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> 
             str(ctx_size),
             "--n-gpu-layers",
             str(args.n_gpu_layers if args.n_gpu_layers is not None else defaults.get("n_gpu_layers", 999)),
-            "--wire-dtype",
-            str(row.get("wire_dtype") or defaults.get("wire_dtype", "f16")),
-            "--wire-dtypes",
-            str(row.get("wire_dtypes") or defaults.get("wire_dtypes", "f32,f16,q8")),
             "--prompt",
             str(defaults.get("prompt", "Hello")),
             "--run-id",
@@ -590,8 +584,6 @@ def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> 
             cmd.append("--skip-build")
         if args.skip_state:
             cmd.append("--skip-state")
-        if args.skip_dtype:
-            cmd.append("--skip-dtype")
         state_payload_kind = args.state_payload_kind
         if not state_payload_kind and args.prefix_token_count:
             state_payload_kind = (
@@ -652,7 +644,6 @@ def main() -> int:
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--skip-build", action="store_true")
     run_parser.add_argument("--skip-state", action="store_true")
-    run_parser.add_argument("--skip-dtype", action="store_true")
     run_parser.add_argument("--state-payload-kind")
     run_parser.add_argument("--prefix-token-count", type=int)
     run_parser.add_argument("--cache-hit-repeats", type=int)

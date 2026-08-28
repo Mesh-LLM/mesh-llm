@@ -499,7 +499,6 @@ fn health_test_stage_status(
         state,
         bind_addr: "127.0.0.1:9000".to_string(),
         activation_width: 1,
-        wire_dtype: crate::inference::skippy::StageWireDType::F16,
         selected_device: None,
         ctx_size: 128,
         lane_count: 1,

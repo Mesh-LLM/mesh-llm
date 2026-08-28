@@ -11,7 +11,7 @@ GGUF writing.
 
 Mesh, benchmark, and correctness flows ask this crate whether a split plan is
 acceptable before slicing models or starting servers. The returned plan carries
-stage ranges, peer/device placement, boundary decisions, wire dtype policy, and
+stage ranges, peer/device placement, boundary decisions, payload sizing, and
 diagnostics.
 
 ```mermaid
@@ -23,7 +23,7 @@ flowchart LR
     S["requested splits"] --> P
     P --> Plan["TopologyPlan"]
     Plan --> Stages["StagePlan<br/>layer ranges + nodes"]
-    Plan --> Bounds["BoundaryPlan<br/>accepted/rejected<br/>wire dtype"]
+    Plan --> Bounds["BoundaryPlan<br/>accepted/rejected<br/>f32 payload size"]
     Plan --> Diag["diagnostics<br/>reason codes"]
     Stages --> Mesh["mesh coordinator<br/>LoadStage downstream-to-upstream"]
     Bounds --> Mesh
@@ -56,7 +56,7 @@ Reviewed capability records live in
 - produce even contiguous plans or explicit split plans
 - classify stages as stateless, attention-KV, recurrent, or mixed
 - reject family-forbidden boundaries such as shared KV producer/consumer cuts
-- report activation wire dtype and payload sizing
+- report fixed-f32 activation payload sizing
 - infer capabilities for reviewed and known dense/recurrent families
 
 Use this crate before `skippy-model-package`, mesh stage deployment,

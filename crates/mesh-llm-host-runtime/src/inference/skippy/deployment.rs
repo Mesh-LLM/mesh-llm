@@ -51,7 +51,6 @@ pub(crate) fn remote_stage_load_request(
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: context.activation_width,
-        wire_dtype: context.family_policy.activation_wire_dtype,
         ctx_size: context.ctx_size,
         lane_count: context.lane_count,
         n_batch: context.n_batch,

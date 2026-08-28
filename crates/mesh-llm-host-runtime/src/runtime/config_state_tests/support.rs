@@ -245,7 +245,6 @@ tensor_split = []
 parallel = 3
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 
 [defaults.speculative]
 mode = "auto"
@@ -301,7 +300,6 @@ pub(super) fn assert_representative_nested_fields(config: &MeshConfig) {
     assert_eq!(json["defaults"]["model_fit"]["kv_unified"], "auto");
     assert_eq!(json["defaults"]["hardware"]["gpu_layers"], "auto");
     assert_eq!(json["defaults"]["throughput"]["parallel"], 3);
-    assert_eq!(json["defaults"]["skippy"]["activation_wire_dtype"], "auto");
     assert_eq!(json["defaults"]["speculative"]["mode"], "auto");
     assert_eq!(
         json["defaults"]["request_defaults"]["reasoning_budget"],

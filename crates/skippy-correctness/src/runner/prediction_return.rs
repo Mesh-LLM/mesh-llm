@@ -194,8 +194,7 @@ fn client_ready_hello_enabled() -> bool {
 mod tests {
     use super::*;
     use skippy_protocol::binary::{
-        StageStateHeader, StageWireMessage, WireActivationDType, send_reply_predicted,
-        write_stage_message,
+        StageStateHeader, StageWireMessage, send_reply_predicted, write_stage_message,
     };
 
     #[test]
@@ -214,7 +213,7 @@ mod tests {
                 kind,
                 pos_start: 0,
                 token_count: 0,
-                state: StageStateHeader::new(kind, WireActivationDType::F32),
+                state: StageStateHeader::new(kind),
                 request_id: 11,
                 session_id: 13,
                 sampling: None,
@@ -224,7 +223,7 @@ mod tests {
                 activation: Vec::new(),
                 raw_bytes: Vec::new(),
             };
-            write_stage_message(&mut stream, &open, WireActivationDType::F32).unwrap();
+            write_stage_message(&mut stream, &open).unwrap();
             send_reply_predicted(&mut stream, 674).unwrap();
         });
 
@@ -273,7 +272,7 @@ mod tests {
                 kind,
                 pos_start: 0,
                 token_count: 0,
-                state: StageStateHeader::new(kind, WireActivationDType::F32),
+                state: StageStateHeader::new(kind),
                 request_id: 17,
                 session_id: 19,
                 sampling: None,
@@ -283,7 +282,7 @@ mod tests {
                 activation: Vec::new(),
                 raw_bytes: Vec::new(),
             };
-            write_stage_message(&mut stream, &open, WireActivationDType::F32).unwrap();
+            write_stage_message(&mut stream, &open).unwrap();
         });
 
         let error = listener

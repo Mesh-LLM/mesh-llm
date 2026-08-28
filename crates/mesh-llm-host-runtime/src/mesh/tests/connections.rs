@@ -300,7 +300,6 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
-        wire_dtype: crate::inference::skippy::StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 2,
         n_batch: Some(1024),

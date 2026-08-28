@@ -880,8 +880,8 @@ A published repository SHOULD include a short `README.md` with:
 - package generation defaults such as native MTP strategy id and prediction
   depth, when declared;
 - validation command and result;
-- any model-family certification notes, such as supported activation wire dtype
-  or exact-cache policy.
+- any model-family certification notes, such as exact-cache policy or required
+  activation sidebands.
 
 ## Consumer Validation
 

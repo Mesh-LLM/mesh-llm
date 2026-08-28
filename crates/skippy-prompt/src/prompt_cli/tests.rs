@@ -314,15 +314,6 @@ fn recv_ready_until_deadline(stream: &mut TcpStream, deadline: Instant) -> io::R
     Ok(())
 }
 
-fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
-    }
-}
-
 fn unix_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

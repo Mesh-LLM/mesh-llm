@@ -367,11 +367,6 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
         config.stage_model_path.as_deref(),
         &format!("{base_path}.stage_model_path"),
     )?;
-    validate_optional_enum(
-        config.activation_wire_dtype.as_deref(),
-        &["auto", "f16", "f32", "q8"],
-        &format!("{base_path}.activation_wire_dtype"),
-    )?;
     if config.openai_frontend_mode.is_some() {
         return Err(validation_diagnostic(
             &format!("{base_path}.openai_frontend_mode"),

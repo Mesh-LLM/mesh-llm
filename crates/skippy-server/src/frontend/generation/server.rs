@@ -48,7 +48,6 @@ use serde_json::Value;
 use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::StageTopology;
-use skippy_protocol::binary::WireActivationDType;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -189,7 +188,6 @@ pub struct EmbeddedOpenAiArgs {
     pub native_mtp_max_tokens: usize,
     pub native_mtp_min_tokens: usize,
     pub activation_width: i32,
-    pub wire_dtype: WireActivationDType,
     pub reply_credit_limit: Option<usize>,
     pub downstream_connect_timeout_secs: u64,
     pub downstream_wire_condition: WireCondition,
@@ -383,7 +381,6 @@ fn embedded_openai_backend_with_scheduler(
     let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
     let mode = OpenAiBackendMode::EmbeddedStageZero {
         config: args.config.clone(),
-        wire_dtype: args.wire_dtype,
         prefill_chunk_policy: PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
             policy: &args.prefill_chunk_policy,
             schedule: args.prefill_chunk_schedule.as_deref(),

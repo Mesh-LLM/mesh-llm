@@ -16,8 +16,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
-        StageReply, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-        WireReplyKind, read_stage_message, recv_ready, recv_reply, send_ready, send_reply_message,
+        StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+        read_stage_message, recv_ready, recv_reply, send_ready, send_reply_message,
         write_stage_message,
     },
 };
@@ -359,7 +359,6 @@ fn open_return_sink_once(
     source_ip: Option<IpAddr>,
     request_id: u64,
     session_id: u64,
-    wire_dtype: WireActivationDType,
     not_ready_context: &'static str,
 ) -> Result<TcpStream> {
     let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
@@ -385,7 +384,6 @@ fn open_return_sink_once(
     write_stage_message(
         &mut stream,
         &prediction_return_open_message(request_id, session_id),
-        wire_dtype,
     )
     .context("open prediction return stream")?;
     Ok(stream)
@@ -396,7 +394,6 @@ pub(crate) fn open_prediction_return_stream(
     topology: Option<&StageTopology>,
     request_id: u64,
     session_id: u64,
-    wire_dtype: WireActivationDType,
     _timeout_secs: u64,
 ) -> Result<TcpStream> {
     let endpoint = driver_stage_endpoint(config, topology)?;
@@ -407,7 +404,6 @@ pub(crate) fn open_prediction_return_stream(
         source_ip,
         request_id,
         session_id,
-        wire_dtype,
         "prediction return sink did not become ready",
     )
     .with_context(|| format!("connect direct prediction return sink at {endpoint}"))
@@ -417,7 +413,6 @@ pub(crate) fn open_downstream_prediction_return_stream(
     config: &StageConfig,
     request_id: u64,
     session_id: u64,
-    wire_dtype: WireActivationDType,
 ) -> Result<TcpStream> {
     let downstream = config
         .downstream
@@ -431,7 +426,6 @@ pub(crate) fn open_downstream_prediction_return_stream(
         source_ip,
         request_id,
         session_id,
-        wire_dtype,
         "downstream prediction return sink did not become ready",
     )
     .with_context(|| format!("connect downstream prediction return sink at {endpoint}"))
@@ -479,10 +473,7 @@ fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWire
         kind: WireMessageKind::PredictionReturnOpen,
         pos_start: 0,
         token_count: 0,
-        state: StageStateHeader::new(
-            WireMessageKind::PredictionReturnOpen,
-            WireActivationDType::F32,
-        ),
+        state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
         request_id,
         session_id,
         sampling: None,

@@ -160,8 +160,6 @@ struct CandidateRow {
     #[serde(default)]
     prompt: Option<String>,
     #[serde(default)]
-    wire_dtype: Option<String>,
-    #[serde(default)]
     n_gpu_layers: Option<i32>,
 }
 
@@ -686,8 +684,6 @@ fn run_correctness_chain(layout: &TestLayout, spec: FamilySpec, splits: (u32, u3
             &stage_server_bin.to_string_lossy(),
             "--prompt",
             case_prompt(manifest_row(spec)?),
-            "--activation-wire-dtype",
-            case_wire_dtype(manifest_row(spec)?),
         ])
         .output()
         .with_context(|| {
@@ -725,10 +721,6 @@ fn run_correctness_chain(layout: &TestLayout, spec: FamilySpec, splits: (u32, u3
 
 fn case_prompt(row: &CandidateRow) -> &str {
     row.prompt.as_deref().unwrap_or("Hello")
-}
-
-fn case_wire_dtype(row: &CandidateRow) -> &str {
-    row.wire_dtype.as_deref().unwrap_or("f16")
 }
 
 fn case_n_gpu_layers(row: &CandidateRow) -> i32 {

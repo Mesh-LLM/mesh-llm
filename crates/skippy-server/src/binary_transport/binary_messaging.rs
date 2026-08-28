@@ -172,7 +172,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         topology,
         bind_addr,
         activation_width,
-        wire_dtype,
         metrics_otlp_grpc,
         telemetry_queue_capacity,
         telemetry_level,
@@ -280,7 +279,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
                         native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
                         activation_width,
-                        wire_dtype,
                         reply_credit_limit,
                         downstream_connect_timeout_secs,
                         downstream_wire_condition,
@@ -308,13 +306,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         .transpose()
         .context("spawn downstream preconnector")?;
     println!(
-        "skippy-server listening: binary={} stage_id={} layer_range={}..{} activation_width={} dtype={:?}",
-        bind_addr,
-        config.stage_id,
-        config.layer_start,
-        config.layer_end,
-        activation_width,
-        wire_dtype,
+        "skippy-server listening: binary={} stage_id={} layer_range={}..{} activation_width={}",
+        bind_addr, config.stage_id, config.layer_start, config.layer_end, activation_width,
     );
 
     let accept_result = (|| -> Result<()> {
@@ -394,7 +387,6 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         &mut upstream,
                         downstream,
                         activation_width,
-                        wire_dtype,
                         max_inflight,
                         reply_credit_limit,
                         async_prefill_forward,

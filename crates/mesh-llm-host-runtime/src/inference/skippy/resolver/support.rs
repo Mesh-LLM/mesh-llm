@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
 
-use super::super::{KvCachePolicy, StageWireDType};
+use super::super::KvCachePolicy;
 use super::types::{
     BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_UBATCH, ResolvedStageKvCache,
     ResolvedStageKvCacheTemplate,
@@ -234,19 +234,6 @@ pub(super) fn throughput_macro_defaults(policy: &str) -> ThroughputMacroDefaults
             parallel: Some(BUILTIN_PARALLEL),
             continuous_batching: Some("auto".to_string()),
         },
-    }
-}
-
-pub(super) fn resolve_wire_dtype(
-    model_value: Option<&str>,
-    global_value: Option<&str>,
-    policy_value: StageWireDType,
-) -> StageWireDType {
-    match pick_string(model_value, global_value, Some("auto")) {
-        "f32" => StageWireDType::F32,
-        "q8" => StageWireDType::Q8,
-        "f16" => StageWireDType::F16,
-        _ => policy_value,
     }
 }
 

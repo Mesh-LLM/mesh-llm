@@ -22,7 +22,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 
 | Doc | What it covers |
 |---|---|
-| [skippy/FAMILY_STATUS.md](skippy/FAMILY_STATUS.md) | Certified family/split/wire-dtype status |
+| [skippy/FAMILY_STATUS.md](skippy/FAMILY_STATUS.md) | Certified family and split status |
 | [skippy/NEW_MODEL_ONBOARDING.md](skippy/NEW_MODEL_ONBOARDING.md) | New-model split/certification intake checklist |
 | [skippy/FAMILY_CERTIFY.md](skippy/FAMILY_CERTIFY.md) | Certification workflow for new families |
 | [skippy/TOPOLOGY_PLANNER.md](skippy/TOPOLOGY_PLANNER.md) | Stage topology planning behavior |

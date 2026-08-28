@@ -31,7 +31,7 @@ use crate::{
         GlmDsaTimingReport, GlmDsaTopKComparisonReport, GlmDsaTraceKeyReport,
         GlmDsaTraceParityMismatchReport, GlmDsaTraceParityReport, GlmDsaTraceVariantReport,
     },
-    support::{ChildGuard, parse_wire_dtype},
+    support::ChildGuard,
 };
 
 #[derive(Debug, Clone)]
@@ -185,7 +185,6 @@ pub fn glm_dsa_stage0_trace(args: GlmDsaStage0TraceArgs) -> Result<()> {
         case_root: case_root.to_string_lossy().into_owned(),
         stage_layer_end: args.stage_layer_end,
         activation_width: args.activation_width,
-        activation_wire_dtype: args.activation_wire_dtype,
         prefill_chunk_size: args.prefill_chunk_size,
         max_new_tokens: args.max_new_tokens,
         trace_filter: args.trace_filter,
@@ -218,7 +217,6 @@ fn ensure_supported_args(args: &GlmDsaStage0TraceArgs) -> Result<()> {
     if args.stage_layer_end == 0 {
         bail!("--stage-layer-end must be greater than zero");
     }
-    parse_wire_dtype(&args.activation_wire_dtype)?;
     Ok(())
 }
 
@@ -691,8 +689,6 @@ fn start_stage0(
             path_str(config_path)?,
             "--activation-width",
             &args.activation_width.to_string(),
-            "--activation-wire-dtype",
-            &args.activation_wire_dtype,
             "--max-inflight",
             &args.server.max_inflight.to_string(),
         ])
@@ -749,8 +745,6 @@ fn run_prompt(
             "0",
             "--activation-width",
             &args.activation_width.to_string(),
-            "--activation-wire-dtype",
-            &args.activation_wire_dtype,
             "--prefill-chunk-size",
             &args.prefill_chunk_size.to_string(),
             "--max-new-tokens",
@@ -869,8 +863,7 @@ impl FakeDownstreamGuard {
                                     return Err(anyhow!(error).context("read stage message"));
                                 }
                             };
-                            let activation_f32_payload =
-                                message.activation_f32_payload(activation_width).ok();
+                            let activation_f32_payload = message.activation_f32_payload().ok();
                             let summary = FakeDownstreamMessage {
                                 kind: message.kind,
                                 pos_start: message.pos_start,

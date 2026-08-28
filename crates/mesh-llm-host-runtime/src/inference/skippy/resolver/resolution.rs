@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::super::{KvCachePolicy, StageWireDType, family_policy_for_model_path};
+use super::super::{KvCachePolicy, family_policy_for_model_path};
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
@@ -10,7 +10,7 @@ use super::support::{
     effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
     pick_owned, pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
     reject_unsupported_model_fit_controls, resolve_field_string, resolve_field_value,
-    resolve_prefix_cache, resolve_wire_dtype, throughput_macro_defaults,
+    resolve_prefix_cache, throughput_macro_defaults,
 };
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
@@ -37,7 +37,7 @@ pub(crate) fn resolve_skippy_config(
     );
     let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
     let throughput = resolve_throughput_config(&context);
-    let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
+    let skippy = resolve_execution_config(&context);
     let speculative = resolve_speculative_config(
         context
             .model_entry
@@ -529,18 +529,10 @@ fn resolve_continuous_batching(
     )
 }
 
-fn resolve_execution_config(
-    context: &ResolverContext<'_>,
-    family_wire_dtype: StageWireDType,
-) -> ResolvedSkippyExecutionConfig {
+fn resolve_execution_config(context: &ResolverContext<'_>) -> ResolvedSkippyExecutionConfig {
     let model_skippy = context.model_entry.and_then(|entry| entry.skippy.as_ref());
     let global_skippy = context.defaults.and_then(|value| value.skippy.as_ref());
 
-    let activation_wire_dtype = resolve_wire_dtype(
-        model_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()),
-        global_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()),
-        family_wire_dtype,
-    );
     let binary_stage_transport = pick_string_owned(
         model_skippy.and_then(|skippy| skippy.binary_stage_transport.as_deref()),
         global_skippy.and_then(|skippy| skippy.binary_stage_transport.as_deref()),
@@ -561,16 +553,10 @@ fn resolve_execution_config(
         model_skippy.and_then(|skippy| skippy.prefill_chunk_schedule.clone()),
         global_skippy.and_then(|skippy| skippy.prefill_chunk_schedule.clone()),
     );
-    let activation_wire_dtype_explicit = model_skippy
-        .and_then(|skippy| skippy.activation_wire_dtype.as_deref())
-        .or_else(|| global_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()))
-        .is_some_and(|value| !value.eq_ignore_ascii_case("auto"));
     let prefill_controls_explicit = model_skippy.is_some_and(has_explicit_prefill_controls)
         || global_skippy.is_some_and(has_explicit_prefill_controls);
 
     ResolvedSkippyExecutionConfig {
-        activation_wire_dtype,
-        activation_wire_dtype_explicit,
         binary_stage_transport,
         prefill_chunking,
         prefill_chunk_size,

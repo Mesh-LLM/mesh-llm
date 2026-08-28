@@ -2,21 +2,21 @@
 
 Validates staged execution against full-model execution.
 
-This is the correctness gate for new model families, split boundaries, load
-modes, and activation wire dtypes. It intentionally focuses on exactness and
+This is the correctness gate for new model families, split boundaries, and load
+modes. It intentionally focuses on exactness and
 diagnostics rather than throughput.
 
 ## Architecture Role
 
 `skippy-correctness` compares staged execution against a full-model
 baseline before performance results are trusted. It validates the same split
-boundaries, load modes, activation wire dtypes, and binary-chain behavior used
+boundaries, load modes, raw-f32 transport, and binary-chain behavior used
 by `skippy-server`.
 
 ```mermaid
 flowchart LR
     P["prompt tokens"] --> Full["full model baseline"]
-    P --> Plan["skippy-topology<br/>split + dtype policy"]
+    P --> Plan["skippy-topology<br/>split policy"]
     Plan --> Staged["staged chain<br/>stage-0 -> ... -> final"]
     Package["layer package or direct GGUF<br/>fake package materialization"] --> Staged
     Full --> Compare["token / activation comparison"]
@@ -25,7 +25,7 @@ flowchart LR
 ```
 
 Use this crate when adding model-family support, changing split boundaries,
-touching activation dtype conversion, or validating KV import/export behavior
+touching activation framing, or validating KV import/export behavior
 against recompute.
 
 ## Commands
@@ -66,12 +66,6 @@ skippy-correctness split-scan \
   --splits 1..30 \
   --layer-end 30
 
-skippy-correctness dtype-matrix \
-  --model model.gguf \
-  --model-id org/repo:Q4_K_M \
-  --split-layer 15 \
-  --dtypes f16
-
 skippy-correctness state-handoff \
   --model model.gguf \
   --model-id org/repo:Q4_K_M \
@@ -95,7 +89,6 @@ skippy-correctness native-mtp-open-ai-ab \
   --n-ubatch 128 \
   --n-gpu-layers 999 \
   --activation-width 2048 \
-  --activation-wire-dtype f16 \
   --max-tokens 12 \
   --report-out reports/native-mtp-openai-ab.json
 

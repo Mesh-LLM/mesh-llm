@@ -33,7 +33,7 @@ pub use validation::{
     STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL,
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL, STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
     validate_stage_control_request, validate_stage_control_response, validate_stage_transport_open,
@@ -49,11 +49,10 @@ mod tests {
         StageArtifactTransferRequest, StageArtifactTransferResponse, StageControlRequest,
         StageControlResponse, StagePreparationState, StagePreparationStatus, StageReady,
         StageRuntimeState, StageStatus, StageStatusAck, StageStatusList, StageStatusUpdate,
-        StageTransportOpen, StageWireDType, StopStage, stage_control_request,
-        stage_control_response,
+        StageTransportOpen, StopStage, stage_control_request, stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
         StageFrameError, validate_stage_artifact_transfer_request,
         validate_stage_artifact_transfer_response, validate_stage_control_request,
         validate_stage_control_response, validate_stage_transport_open,
@@ -62,7 +61,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -223,7 +222,6 @@ mod tests {
                     state: StageRuntimeState::Ready as i32,
                     bind_addr: "127.0.0.1:0".to_string(),
                     activation_width: 4096,
-                    wire_dtype: StageWireDType::StageWireDtypeF16 as i32,
                     shutdown_generation: 7,
                     ctx_size: 8192,
                     lane_count: 2,
@@ -320,7 +318,6 @@ mod tests {
                         state: StageRuntimeState::Ready as i32,
                         bind_addr: "127.0.0.1:51234".to_string(),
                         activation_width: 4096,
-                        wire_dtype: StageWireDType::StageWireDtypeF16 as i32,
                         shutdown_generation: 7,
                         ctx_size: 8192,
                         lane_count: 2,

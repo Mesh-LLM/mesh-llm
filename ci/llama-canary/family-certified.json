@@ -5,12 +5,12 @@
       "full": {
         "status": "certified",
         "oracle": "local-monolithic",
-        "required_lanes": ["single-step", "chain", "dtype-matrix", "state-handoff"]
+        "required_lanes": ["single-step", "chain", "state-handoff"]
       },
       "package-oracle": {
         "status": "certified",
         "oracle": "independent-trace",
-        "required_lanes": ["single-step", "chain", "dtype-matrix", "state-handoff"]
+        "required_lanes": ["single-step", "chain", "state-handoff"]
       },
       "graph-only": {
         "status": "provisional",

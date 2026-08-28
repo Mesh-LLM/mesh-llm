@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{
-    WireActivationDType, activation_payload_multiplier_from_state_flags,
-    activation_state_flags_from_frame_flags, recv_ready,
+    activation_payload_multiplier_from_state_flags, activation_state_flags_from_frame_flags,
+    recv_ready,
 };
 
 pub struct ChildGuard {
@@ -115,15 +115,6 @@ pub fn activation_width(frame: &skippy_runtime::ActivationFrame) -> Result<i32> 
         bail!("activation payload is not F32 aligned");
     }
     i32::try_from(bytes_per_hidden_token / 4).context("activation width exceeds i32")
-}
-
-pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
-    }
 }
 
 pub fn generate_run_id() -> String {

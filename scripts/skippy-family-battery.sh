@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Supported-families certification battery (issue #1434; tiers dropped 2026-08-25).
 #
-# Every row of the single manifest gets core certification: parity oracle +
-# dtype/state lanes; models with MTP/NextN tensors additionally run the
+# Every row of the single manifest gets core certification: single-step,
+# chain, and state-handoff lanes; models with MTP/NextN tensors additionally run the
 # speculative lane. Hybrid/recurrent rows (sweep_period > 0) also run a
 # boundary sweep — one representative split layer for every cut offset modulo
 # the family's interleaving period.
@@ -16,7 +16,7 @@ set -euo pipefail
 # their normal user cache.
 #
 # Policy is owned by the versioned JSON manifest and resolved by
-# scripts/plan-family-battery.py. The planner enforces the four-lane minimum,
+# scripts/plan-family-battery.py. The planner enforces the three-lane minimum,
 # exact artifact revisions, and deterministic shards before this script loads
 # any model.
 #
@@ -196,13 +196,13 @@ from pathlib import Path
 manifest_path, plan_path, shard_index = sys.argv[1:]
 manifest_sha = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
 plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
-core = ["single-step", "chain", "dtype-matrix", "state-handoff"]
+core = ["single-step", "chain", "state-handoff"]
 if plan.get("schema_version") != 1:
     raise SystemExit("policy plan has an unsupported schema_version")
 if plan.get("manifest_sha256") != manifest_sha:
     raise SystemExit("policy plan does not match the checked-in manifest bytes")
 if plan.get("required_certification_lanes") != core:
-    raise SystemExit("policy plan does not preserve the four-lane certification contract")
+    raise SystemExit("policy plan does not preserve the three-lane certification contract")
 if not plan.get("selected_models"):
     raise SystemExit("policy plan selected no models")
 if shard_index:
@@ -516,8 +516,6 @@ run_certify() {
     --cert-root "$cert_run_dir"
     --run-id certification
     --require-lanes
-    --wire-dtypes f16
-    --strict-dtype
     --skip-build
   )
   if (( native_mtp == 1 )); then
@@ -604,8 +602,8 @@ preflight_manifest() {
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
     fi
-    if [[ "$lane_csv" != "single-step,chain,dtype-matrix,state-handoff" ]]; then
-      echo "certified family $family does not preserve the four-lane contract" >&2
+    if [[ "$lane_csv" != "single-step,chain,state-handoff" ]]; then
+      echo "certified family $family does not preserve the three-lane contract" >&2
       exit 1
     fi
 
@@ -812,7 +810,7 @@ run_resolved_manifest() {
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
 
-    # Fixed mid-range split for the base parity + dtype lanes.
+    # Fixed mid-range split for the base parity lanes.
     local base_split=$(( layer_end / 2 ))
     run_certify "$family" "$target" "$model_id" "$source_revision" "$base_split" "$layer_end" "$draft" "$draft_revision" "$native_mtp" "$native_mtp" "$startup_timeout" "$model_size_bytes" "$activation_width"
 

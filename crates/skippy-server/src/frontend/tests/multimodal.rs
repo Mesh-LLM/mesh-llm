@@ -339,7 +339,6 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             topology: None,
             bind_addr: stage1_addr,
             activation_width: fixture.activation_width,
-            wire_dtype: WireActivationDType::F16,
             metrics_otlp_grpc: None,
             telemetry_queue_capacity: 1,
             telemetry_level: crate::telemetry::TelemetryLevel::Off,
@@ -383,7 +382,6 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         ctx_size,
         mode: OpenAiBackendMode::EmbeddedStageZero {
             config: stage0_config,
-            wire_dtype: WireActivationDType::F16,
             prefill_chunk_policy: PrefillChunkPolicy::Fixed { chunk_size: 64 },
             activation_width: fixture.activation_width,
             downstream_wire_condition: WireCondition::new(0.0, None)?,

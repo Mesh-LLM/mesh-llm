@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
-    recv_ready, recv_reply, write_stage_message,
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_ready, recv_reply,
+    write_stage_message,
 };
 
 #[derive(Debug)]
@@ -57,7 +57,7 @@ fn message(
     token_ids: Vec<i32>,
     activation_width: usize,
 ) -> StageWireMessage {
-    let mut state = StageStateHeader::new(kind, WireActivationDType::F32);
+    let mut state = StageStateHeader::new(kind);
     state.seq_id = 0;
     state.prompt_token_count = 1;
     state.decode_step = 0;
@@ -103,8 +103,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
         vec![1],
         activation_width,
     );
-    write_stage_message(&mut stream, &decode, WireActivationDType::F32)
-        .context("write native-MTP decode")?;
+    write_stage_message(&mut stream, &decode).context("write native-MTP decode")?;
     stream.flush().ok();
     let decode_reply = recv_reply(&mut stream).context("receive native-MTP decode")?;
     if decode_reply.kind != WireReplyKind::PredictedToken {
@@ -127,8 +126,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
             activation_width,
         );
         verify.state.seq_id = 1;
-        write_stage_message(&mut stream, &verify, WireActivationDType::F32)
-            .context("write native-MTP verify")?;
+        write_stage_message(&mut stream, &verify).context("write native-MTP verify")?;
         stream.flush().ok();
         let verify_reply = recv_reply(&mut stream).context("receive native-MTP verify")?;
         if verify_reply.kind != WireReplyKind::PredictedTokens {
@@ -147,8 +145,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
         retire.tokens.clear();
         retire.activation.clear();
         retire.state.source_stage_index = -1;
-        write_stage_message(&mut stream, &retire, WireActivationDType::F32)
-            .context("retire native-MTP verify window")?;
+        write_stage_message(&mut stream, &retire).context("retire native-MTP verify window")?;
         stream.flush().ok();
     }
     let stop = message(
@@ -159,8 +156,7 @@ fn run_request(addr: &str, index: usize, activation_width: usize) -> Result<serd
         Vec::new(),
         activation_width,
     );
-    write_stage_message(&mut stream, &stop, WireActivationDType::F32)
-        .context("write stage stop")?;
+    write_stage_message(&mut stream, &stop).context("write stage stop")?;
     stream.flush().ok();
     let stop_reply = recv_reply(&mut stream).context("receive stage stop")?;
     if stop_reply.kind != WireReplyKind::Ack {

@@ -44,7 +44,6 @@ threads_batch = 4
 tuning_profile = "balanced"
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 binary_stage_transport = "auto"
 
 [defaults.speculative]
@@ -96,7 +95,6 @@ threads = 10
 threads_batch = 6
 
 [models.skippy]
-activation_wire_dtype = "q8"
 prefill_chunking = "schedule"
 prefill_chunk_size = 128
 prefill_chunk_schedule = "128,256,384"

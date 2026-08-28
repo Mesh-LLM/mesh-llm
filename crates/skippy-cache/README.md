@@ -392,8 +392,9 @@ cargo test -p skippy-topology reviewed_supported_families_smoke --lib
 ```
 
 That smoke does not execute model files. It verifies that every reviewed
-supported family can be inferred, planned with `f16` serving wire, and emits the
-expected recurrent/sticky, q8 validation, and sideband policy signals.
+supported family can be inferred and emits the expected recurrent/sticky and
+sideband policy signals. Activation transport is fixed raw f32 and is not a
+family capability.
 
 Server/runtime integration tests belong in `skippy-server`,
 `skippy-runtime`, and `skippy-correctness`.

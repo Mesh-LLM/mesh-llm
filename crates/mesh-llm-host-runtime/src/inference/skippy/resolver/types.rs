@@ -4,7 +4,6 @@ use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload}
 use skippy_runtime::package::PackageGenerationInfo;
 use skippy_server::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
 
-use super::super::StageWireDType;
 use crate::plugin::{MeshConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig};
 
 pub(super) const BUILTIN_CTX_SIZE: u32 = 4096;
@@ -77,8 +76,6 @@ pub(crate) struct ResolvedThroughputConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedSkippyExecutionConfig {
-    pub(crate) activation_wire_dtype: StageWireDType,
-    pub(crate) activation_wire_dtype_explicit: bool,
     pub(crate) binary_stage_transport: String,
     pub(crate) prefill_chunking: String,
     pub(crate) prefill_chunk_size: usize,
@@ -162,7 +159,6 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) native_mtp_max_tokens: usize,
     pub(crate) native_mtp_min_tokens: usize,
     pub(crate) activation_width: i32,
-    pub(crate) wire_dtype: skippy_protocol::binary::WireActivationDType,
     pub(crate) reply_credit_limit: Option<usize>,
     pub(crate) downstream_connect_timeout_secs: u64,
 }

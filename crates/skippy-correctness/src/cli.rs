@@ -15,7 +15,6 @@ pub enum CommandKind {
     SingleStep(SingleStepArgs),
     Chain(ChainArgs),
     SplitScan(SplitScanArgs),
-    DtypeMatrix(DtypeMatrixArgs),
     StateHandoff(StateHandoffArgs),
     SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
@@ -109,8 +108,6 @@ pub struct SingleStepArgs {
     pub split_layer: u32,
     #[arg(long, default_value = "127.0.0.1:19021")]
     pub stage1_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub allow_mismatch: bool,
 }
@@ -131,8 +128,6 @@ pub struct ChainArgs {
     pub stage1_bind_addr: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:19032")]
     pub stage2_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub allow_mismatch: bool,
 }
@@ -151,28 +146,6 @@ pub struct SplitScanArgs {
     pub splits: String,
     #[arg(long, default_value = "127.0.0.1:19041")]
     pub stage1_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
-    #[arg(long)]
-    pub allow_mismatch: bool,
-}
-
-#[derive(Args)]
-pub struct DtypeMatrixArgs {
-    #[command(flatten)]
-    pub runtime: RuntimeArgs,
-    #[command(flatten)]
-    pub server: ServerArgs,
-    #[command(flatten)]
-    pub native_mtp: NativeMtpArgs,
-    #[command(flatten)]
-    pub output: OutputArgs,
-    #[arg(long, default_value_t = 15)]
-    pub split_layer: u32,
-    #[arg(long, default_value = "127.0.0.1:19051")]
-    pub stage1_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f32,f16,q8")]
-    pub dtypes: String,
     #[arg(long)]
     pub allow_mismatch: bool,
 }
@@ -191,8 +164,6 @@ pub struct StateHandoffArgs {
     pub restore_bind_addr: SocketAddr,
     #[arg(long, default_value_t = 2048)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 0)]
     pub state_layer_start: u32,
     #[arg(long)]
@@ -298,8 +269,6 @@ pub struct NativeMtpOpenAiAbArgs {
     pub batched_port_offset: u16,
     #[arg(long, default_value_t = 2048)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 12)]
     pub max_tokens: u32,
     #[arg(long, default_value_t = 60)]
@@ -328,8 +297,6 @@ pub struct GlmDsaStage0TraceArgs {
     pub stage_layer_end: u32,
     #[arg(long, default_value_t = 6144)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 128)]
     pub prefill_chunk_size: u32,
     #[arg(long, default_value_t = 1)]

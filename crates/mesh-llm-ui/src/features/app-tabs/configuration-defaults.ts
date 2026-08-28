@@ -44,7 +44,7 @@ export const CONFIGURATION_DEFAULTS = {
     {
       id: 'skippy-transport',
       label: 'Skippy Transport',
-      summary: 'Activation wire dtype, prefill chunking, and lifecycle timing.',
+      summary: 'Prefill chunking, stage transport, and lifecycle timing.',
       help: 'Stage transport, chunking, and lifecycle defaults',
       tomlSection: SKIPPY_TRANSPORT_TOML_SECTION
     },

@@ -73,7 +73,7 @@ pub(crate) use stage::{
     StageCoordinatorClaimAck, StageInventoryRequest, StageLayerInventory, StageLoadRequest,
     StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
     StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse, StageRuntimeState,
-    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest, StageWireDType,
+    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
     spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
@@ -486,7 +486,6 @@ fn embedded_openai_args_from(
         native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
         native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
         activation_width: embedded_args.activation_width,
-        wire_dtype: embedded_args.wire_dtype,
         reply_credit_limit: embedded_args.reply_credit_limit,
         downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
         downstream_wire_condition: benchmark_downstream_wire_condition()?,
@@ -597,13 +596,11 @@ impl SkippyModelHandle {
         );
         let serving_hooks =
             resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
-        let family_policy = family_policy_for_stage_config(&stage_config);
         let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
                 options.model_id.clone(),
                 options.default_max_tokens,
                 options.generation_concurrency,
-                family_policy.activation_wire_dtype.into(),
                 options.native_mtp_enabled,
             )
         });
@@ -684,13 +681,11 @@ impl SkippyModelHandle {
         );
         let serving_hooks =
             resolve_serving_hooks(options.serving_hooks_factory.as_ref(), &runtime)?;
-        let family_policy = family_policy_for_stage_config(&stage_config);
         let embedded_args = options.embedded_openai.clone().unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
                 options.model_id.clone(),
                 options.default_max_tokens,
                 options.generation_concurrency,
-                family_policy.activation_wire_dtype.into(),
                 options.native_mtp_enabled,
             )
         });
@@ -738,9 +733,6 @@ impl SkippyModelHandle {
         guardrails: SkippyOpenAiGuardrailOptions,
     ) -> Result<Self> {
         let model_id = config.model_id.clone();
-        let wire_dtype = family_policy_for_stage_config(&config)
-            .activation_wire_dtype
-            .into();
         let native_mtp_enabled = config.native_mtp_enabled;
         Self::load_stage0_config_with_openai_args(
             config,
@@ -749,7 +741,6 @@ impl SkippyModelHandle {
                 default_max_tokens,
                 generation_concurrency,
                 activation_width,
-                wire_dtype,
                 native_mtp_enabled,
             ),
             hook_policy,

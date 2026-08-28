@@ -36,7 +36,6 @@ use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 use skippy_protocol::binary::StageWireMessage;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -56,12 +55,11 @@ pub(super) struct ChainPrefixCacheSavings {
 pub(super) fn chain_prefix_cache_savings(
     stats: &StageReplyStats,
     restored_tokens: usize,
-    wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> ChainPrefixCacheSavings {
     let hit_stage_count = prefix_cache_hit_stage_count(stats.kv_hit_stage_mask);
     let stage0_activation_bytes_avoided =
-        estimated_activation_bytes(wire_dtype, restored_tokens, activation_width);
+        estimated_activation_bytes(restored_tokens, activation_width);
     let interstage_activation_bytes_avoided_estimate =
         stage0_activation_bytes_avoided.saturating_mul(hit_stage_count.saturating_sub(1) as usize);
     ChainPrefixCacheSavings {
@@ -96,16 +94,11 @@ fn prefix_cache_hit_stage_count(hit_stage_mask: i64) -> u32 {
     (hit_stage_mask as u64).count_ones()
 }
 
-fn estimated_activation_bytes(
-    wire_dtype: WireActivationDType,
-    token_count: usize,
-    activation_width: i32,
-) -> usize {
+fn estimated_activation_bytes(token_count: usize, activation_width: i32) -> usize {
     let Ok(token_count) = i32::try_from(token_count) else {
         return 0;
     };
-    skippy_protocol::binary::activation_wire_bytes(wire_dtype, token_count, activation_width)
-        .unwrap_or(0)
+    skippy_protocol::binary::activation_wire_bytes(token_count, activation_width).unwrap_or(0)
 }
 
 pub(super) fn request_allows_exact_replay(request: &EmbeddedStageZeroGeneration<'_>) -> bool {
@@ -787,7 +780,6 @@ impl StageOpenAiBackend {
                 chain_prefix_cache_savings(
                     &restore.stats,
                     checkpoint_tokens.len(),
-                    request.wire_dtype,
                     request.activation_width,
                 ),
             );
@@ -864,7 +856,6 @@ impl StageOpenAiBackend {
             chain_prefix_cache_savings(
                 &restore.stats,
                 restore.restored_tokens,
-                request.wire_dtype,
                 request.activation_width,
             ),
         );
@@ -932,7 +923,6 @@ impl StageOpenAiBackend {
         restore_stats.kv_hit_stage_mask |= openai_stage_mask(request.config.stage_index);
         let restore = embedded_prefix_cache_message(
             WireMessageKind::TryRestorePrefill,
-            request.wire_dtype,
             &prefill_tokens[..restored_tokens],
             request.ids.request_id,
             request.ids.session_id,
@@ -940,7 +930,6 @@ impl StageOpenAiBackend {
         write_stage_message_conditioned(
             &mut *downstream,
             &restore,
-            request.wire_dtype,
             request.downstream_wire_condition,
         )
         .map_err(openai_io_error)?;
@@ -979,12 +968,7 @@ impl StageOpenAiBackend {
         );
         insert_chain_prefix_cache_savings_attrs(
             &mut attrs,
-            chain_prefix_cache_savings(
-                &restore_stats,
-                restored_tokens,
-                request.wire_dtype,
-                request.activation_width,
-            ),
+            chain_prefix_cache_savings(&restore_stats, restored_tokens, request.activation_width),
         );
         self.telemetry
             .emit("stage.openai_kv_lookup_decision", attrs);
@@ -1014,18 +998,15 @@ impl StageOpenAiBackend {
         let identity = kv.prefill_identity(request.config, &base, 0, prefill_tokens);
         let mut reply_stats = StageReplyStats::default();
         let stage0_timer = PhaseTimer::start();
-        let decode_message = embedded_decode_message(
-            request.wire_dtype,
-            DecodeMessageArgs {
-                request_id: request.ids.request_id,
-                session_id: request.ids.session_id,
-                prompt_token_count: request.prompt_token_ids.len(),
-                pos_start: prefill_tokens.len(),
-                decode_step: 0,
-                current,
-                sampling: wire_sampling.clone(),
-            },
-        )?;
+        let decode_message = embedded_decode_message(DecodeMessageArgs {
+            request_id: request.ids.request_id,
+            session_id: request.ids.session_id,
+            prompt_token_count: request.prompt_token_ids.len(),
+            pos_start: prefill_tokens.len(),
+            decode_step: 0,
+            current,
+            sampling: wire_sampling.clone(),
+        })?;
         let output_capacity = stage_output_activation_capacity(
             request.config,
             decode_message.token_count,
@@ -1097,9 +1078,8 @@ impl StageOpenAiBackend {
         reply_stats.kv_hit_stage_mask |= openai_stage_mask(request.config.stage_index);
         let stage0_compute_ms = stage0_timer.elapsed_ms();
 
-        let fused_message = embedded_restore_prefill_decode_message(
-            request.wire_dtype,
-            RestorePrefillDecodeMessageArgs {
+        let fused_message =
+            embedded_restore_prefill_decode_message(RestorePrefillDecodeMessageArgs {
                 request_id: request.ids.request_id,
                 session_id: request.ids.session_id,
                 prompt_token_count: request.prompt_token_ids.len(),
@@ -1109,13 +1089,11 @@ impl StageOpenAiBackend {
                 current,
                 sampling: wire_sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
-            },
-        )?;
+            })?;
         let forwarded = forwarded_stage_message_timed(
             request.config,
             &fused_message,
             &output,
-            request.wire_dtype,
             request.activation_width,
         )
         .map_err(openai_backend_error)?;
@@ -1123,7 +1101,6 @@ impl StageOpenAiBackend {
         write_stage_message_conditioned(
             &mut *downstream,
             &forwarded.message,
-            request.wire_dtype,
             request.downstream_wire_condition,
         )
         .map_err(openai_io_error)?;
@@ -1166,7 +1143,6 @@ impl StageOpenAiBackend {
             chain_prefix_cache_savings(
                 &reply_stats,
                 prefill_tokens.len(),
-                request.wire_dtype,
                 request.activation_width,
             ),
         );
@@ -1218,15 +1194,11 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)
             },
         );
-        let stop = StageWireMessage::stop_with_identity(
-            request.wire_dtype,
-            request.ids.request_id,
-            request.ids.session_id,
-        );
+        let stop =
+            StageWireMessage::stop_with_identity(request.ids.request_id, request.ids.session_id);
         if write_stage_message_conditioned(
             &mut *downstream,
             &stop,
-            request.wire_dtype,
             request.downstream_wire_condition,
         )
         .is_ok()
@@ -1254,30 +1226,30 @@ mod tests {
             ..Default::default()
         };
 
-        let savings = chain_prefix_cache_savings(&stats, 256, WireActivationDType::F16, 5120);
+        let savings = chain_prefix_cache_savings(&stats, 256, 5120);
 
         assert_eq!(savings.hit_stage_count, 4);
-        assert_eq!(savings.stage0_activation_bytes_avoided, 2_621_440);
+        assert_eq!(savings.stage0_activation_bytes_avoided, 5_242_880);
         assert_eq!(
             savings.interstage_activation_bytes_avoided_estimate,
-            7_864_320
+            15_728_640
         );
     }
 
     #[test]
-    fn chain_prefix_cache_savings_uses_wire_dtype() {
+    fn chain_prefix_cache_savings_uses_f32_wire_size() {
         let stats = StageReplyStats {
             kv_hit_stage_mask: openai_stage_mask(0) | openai_stage_mask(1),
             ..Default::default()
         };
 
-        let q8 = chain_prefix_cache_savings(&stats, 256, WireActivationDType::Q8, 5120);
-        let f32 = chain_prefix_cache_savings(&stats, 256, WireActivationDType::F32, 5120);
+        let savings = chain_prefix_cache_savings(&stats, 256, 5120);
 
-        assert_eq!(q8.stage0_activation_bytes_avoided, 1_311_744);
-        assert_eq!(q8.interstage_activation_bytes_avoided_estimate, 1_311_744);
-        assert_eq!(f32.stage0_activation_bytes_avoided, 5_242_880);
-        assert_eq!(f32.interstage_activation_bytes_avoided_estimate, 5_242_880);
+        assert_eq!(savings.stage0_activation_bytes_avoided, 5_242_880);
+        assert_eq!(
+            savings.interstage_activation_bytes_avoided_estimate,
+            5_242_880
+        );
     }
 
     #[test]

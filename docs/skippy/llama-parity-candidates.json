@@ -4,8 +4,6 @@
   "defaults": {
     "ctx_size": 128,
     "n_gpu_layers": 999,
-    "wire_dtype": "f16",
-    "wire_dtypes": "f32,f16,q8",
     "prompt": "Hello"
   },
   "support_priority": {
@@ -283,7 +281,6 @@
       "include": "*Q4_K_M.gguf",
       "split_layer": 15,
       "splits": "10,15",
-      "wire_dtype": "f32",
       "n_gpu_layers": 0,
       "notes": "certified with lmstudio-community/gemma-3n-E2B-it-GGUF Q4_K_M in llama-parity-gemma3n-cpu-20260507d; Gemma3n carries AltUp sideband state across activation frames and split topologies must keep KV-reuse layers with their KV-owner layers, so the reviewed three-stage split is 0..10,10..15,15..30 rather than an even 0..10,10..20,20..30 split. The local parity representative runs CPU-only because Metal on the M1 Ultra diverges for split Gemma3n AltUp handoff while CPU matches the full-model baseline."
     },
@@ -638,8 +635,7 @@
       "llama_model": "apertus",
       "family": "apertus",
       "status": "certified",
-      "wire_dtype": "f32",
-      "notes": "selected public apertus GGUF for split execution and ResidentKv certification; text split, chain, dtype matrix, and ResidentKv handoff passed in llama-parity-apertus-f32-20260507; f32 activation wire is required because f16 and q8 alter the next-token argmax for the sampled boundary",
+      "notes": "selected public apertus GGUF for split execution and ResidentKv certification; text split, chain, and ResidentKv handoff passed in llama-parity-apertus-f32-20260507. The current raw-f32 protocol matches that transport evidence; historical f16 and q8 failures remain useful compression research evidence.",
       "repo": "unsloth/Apertus-8B-Instruct-2509-GGUF",
       "include": "Apertus-8B-Instruct-2509-UD-IQ2_M.gguf"
     },

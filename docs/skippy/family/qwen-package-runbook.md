@@ -54,7 +54,7 @@ bind address, downstream endpoint, and traffic path behave the same.
 | stage0 | `studio54`, `192.168.0.2`, layers `0..14` |
 | stage1 | `build`, `192.168.0.4`, layers `14..27` |
 | stage2 | `black`, `192.168.0.3`, layers `27..40` |
-| activation wire dtype | `f16` |
+| activation wire format | raw little-endian `f32` |
 | OpenAI surface | embedded in stage0 |
 | OpenAI bind | `192.168.0.2:20680` in the soak gate |
 | generation concurrency | `1` for current package gates |

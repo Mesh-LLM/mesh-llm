@@ -446,7 +446,6 @@ priority               = "normal"  # scheduler priority hint (integer or string)
 
 # --- Skippy staged serving -----------------------------------------------
 [defaults.skippy]
-activation_wire_dtype           = "auto"    # auto f16 f32 bf16 q8 q4 q2
 binary_stage_transport          = "auto"    # auto on off
 prefill_chunking                = "fixed"   # fixed schedule none
 prefill_chunk_size              = 512       # tokens per prefill chunk
@@ -635,7 +634,6 @@ threads             = 16
 threads_batch       = 8
 
 [models.skippy]
-activation_wire_dtype  = "f16"
 prefill_chunking       = "schedule"
 prefill_chunk_size     = 256
 prefill_chunk_schedule = "128,256,512,1024"
@@ -845,9 +843,9 @@ Config precedence:
   runtime-loaded models.
 - `mmproj` is optional and only used when that startup model needs a projector
   sidecar.
-- `skippy.*` staged-serving controls stay staged-only. `activation_wire_dtype`,
-  prefill controls, speculative draft controls, and manual stage layer ranges
-  apply only when the model is started in staged mode.
+- `skippy.*` staged-serving controls stay staged-only. Prefill controls,
+  speculative draft controls, and manual stage layer ranges apply only when
+  the model is started in staged mode. Activation frames always use raw f32.
 - `safety_margin_gb` resolves to `hardware.fit_target_mib` by subtracting the
   reserved MiB from detected allocatable memory, and the derived target is not
   written back into TOML.

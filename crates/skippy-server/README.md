@@ -104,7 +104,7 @@ deadline handling.
 
 - `serve-binary` is the tuned binary stage-to-stage path.
 - `serve-binary` participates in the breaking generation-4 stage protocol.
-  Stage compatibility requires `stage-generation-4`; direct prediction return and
+  Stage compatibility requires `stage-generation-5`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
   generation-4 topology.
@@ -240,9 +240,8 @@ sequenceDiagram
 ```
 
 This is topology dependent; use `--no-async-prefill-forward` to benchmark the
-synchronous baseline on a target link. The conservative exact default is `f16`;
-`q8` should stay per-family/per-split opt-in until a correctness smoke validates
-it.
+synchronous baseline on a target link. Activation frames use raw little-endian
+`f32`; compression is not selected per family or split.
 
 Debug telemetry includes middle-out timing spans:
 
@@ -254,8 +253,8 @@ Debug telemetry includes middle-out timing spans:
   compute, downstream write, downstream wait, upstream reply, credit, and
   deferred-reply timestamps. It also carries runtime lock wait and session
   counts for the executable message. Activation conversion is reported with
-  `input_activation_decode_ms` for wire-to-f32 materialization and
-  `activation_encode_ms` for f32-to-wire forwarding so transfer cost can be
+  `input_activation_decode_ms` for wire materialization and
+  `activation_encode_ms` for f32 wire framing so transfer cost can be
   separated from compute and socket write time.
 - `stage.binary_session_stop` records logical session reset timing when a
   persistent lane receives `Stop`; the TCP stream remains open after the reset.

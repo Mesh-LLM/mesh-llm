@@ -652,13 +652,6 @@
       }
     },
     {
-      "canonical_path": "defaults.skippy.activation_wire_dtype",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.skippy.binary_stage_transport",
       "support": "supported",
       "source": {

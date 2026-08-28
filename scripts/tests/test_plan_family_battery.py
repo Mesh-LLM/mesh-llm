@@ -94,7 +94,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         plan = json.loads(result.stdout)
         self.assertEqual(32, plan["selected_family_count"])
         self.assertEqual(
-            ["single-step", "chain", "dtype-matrix", "state-handoff"],
+            ["single-step", "chain", "state-handoff"],
             plan["required_certification_lanes"],
         )
         glm47 = next(
@@ -138,7 +138,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             path.write_text(json.dumps(manifest), encoding="utf-8")
             result = self._run(path)
         self.assertEqual(2, result.returncode)
-        self.assertIn("must require exactly the four core lanes", result.stderr)
+        self.assertIn("must require exactly the three core lanes", result.stderr)
 
     def test_certified_profile_cannot_add_or_reorder_core_lanes(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -150,7 +150,7 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
             path.write_text(json.dumps(manifest), encoding="utf-8")
             result = self._run(path)
         self.assertEqual(2, result.returncode)
-        self.assertIn("must require exactly the four core lanes", result.stderr)
+        self.assertIn("must require exactly the three core lanes", result.stderr)
 
     def test_duplicate_family_is_rejected(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

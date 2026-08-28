@@ -73,7 +73,7 @@ use self::status::{
     OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
     RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
     build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
-    runtime_stage_state_label, runtime_stage_wire_dtype_label,
+    runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -622,7 +622,6 @@ impl MeshApi {
                     "state": runtime_stage_state_label(status.state),
                     "bind_addr": status.bind_addr.clone(),
                     "activation_width": status.activation_width,
-                    "wire_dtype": runtime_stage_wire_dtype_label(status.wire_dtype),
                     "selected_device": status.selected_device.as_ref().map(|device| {
                         serde_json::json!({
                             "backend_device": device.backend_device,
