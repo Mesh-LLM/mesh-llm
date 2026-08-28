@@ -1,6 +1,63 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use model_artifact::ModelIdentity;
+
+#[derive(Debug, Serialize)]
+pub struct RemoteHandoffReport {
+    pub mode: &'static str,
+    pub status: &'static str,
+    pub role: &'static str,
+    pub model_identity: ModelIdentity,
+    pub matches: bool,
+    pub tokens_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_matches: Option<bool>,
+    pub state_payload_kind: &'static str,
+    pub prompt_token_count: usize,
+    pub decode_token_count: usize,
+    pub continuation_token: i32,
+    pub source_tokens: Vec<i32>,
+    pub restored_tokens: Vec<i32>,
+    pub state_bytes: usize,
+    pub state_bytes_per_prompt_token: f64,
+    pub kv_bytes: usize,
+    pub recurrent_bytes: usize,
+    pub segment_count: usize,
+    pub segment_bytes: usize,
+    pub payload_digest: String,
+    pub model_load_ms: f64,
+    pub tokenize_ms: f64,
+    pub source_prefill_ms: f64,
+    pub state_export_ms: f64,
+    pub transfer_ms: f64,
+    pub transfer_gbps: f64,
+    pub source_decode_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlap_wall_ms: Option<f64>,
+    pub receiver: RemoteHandoffReceiverTimings,
+    pub ttft_disaggregated_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_local_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_speedup: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteHandoffReceiverTimings {
+    pub model_load_ms: f64,
+    pub transfer_receive_ms: f64,
+    pub kv_attach_ms: f64,
+    #[serde(default)]
+    pub store_ms: f64,
+    #[serde(default)]
+    pub attach_residual_ms: f64,
+    pub first_decode_ms: f64,
+    pub decode_ms: f64,
+    pub baseline_prefill_ms: f64,
+    pub baseline_first_decode_ms: f64,
+}
 
 #[derive(Debug, Serialize)]
 pub struct BaselineReport {
