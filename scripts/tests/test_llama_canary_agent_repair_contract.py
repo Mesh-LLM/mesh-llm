@@ -119,6 +119,12 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
             'rm -f "$ROOT/.deps/llama-canary-pr-body.md"', wrapper
         )
         self.assertIn('if [[ "$MODE" == "patch-queue" ]]; then\n  rm -f "$BATTERY_LOG"', wrapper)
+        # Scratch worktrees under /tmp and their registrations survive across
+        # runs on the persistent runner and make the agent's own
+        # `git worktree add` fail; the wrapper prunes them up front (live:
+        # run 33158798988 aborted its turn on a stale /tmp/llama-old-pin).
+        self.assertIn('git -C "$ROOT/.deps/llama.cpp" worktree prune', wrapper)
+        self.assertIn("rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-*", wrapper)
         # The repair push URL embeds the token; its stderr is redacted.
         self.assertIn("redact_token", wrapper)
 
@@ -137,6 +143,10 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertIn('gh_repair gh api user --jq .login', wrapper)
         self.assertIn('gh_repair gh api --method POST "repos/${GITHUB_REPOSITORY:?}/git/refs"', wrapper)
         self.assertIn('gh_repair gh api --method DELETE', wrapper)
+        # The probe ref must actually be cleaned up: the delete URL uses the
+        # percent-encoded branch name under /git/refs/ (a refs/-prefixed path
+        # 404s and leaves the probe branch behind; live: run 33158798988).
+        self.assertIn('git/refs/heads%2Fcanary-repair-token-preflight', wrapper)
         # It runs unconditionally before the repair loop starts.
         preflight_call = wrapper.index("check_repair_token_permissions\n\n# Run-scope")
         self.assertGreater(preflight_call, wrapper.index("gh_repair()"))

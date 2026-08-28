@@ -135,8 +135,10 @@ check_repair_token_permissions() {
     echo "preflight: identity '${login}' cannot write refs on ${GITHUB_REPOSITORY}: the fine-grained PAT must include this repository with Contents: Read and write (account-level write is not enough). Edit the PAT's permissions or mint one with Contents: RW, then re-save CANARY_REPAIR_TOKEN." >&2
     return 1
   fi
+  # The delete URL uses the branch name only (slashes percent-encoded); the
+  # refs/ prefix is part of the path, not the ref identifier.
   if ! gh_repair gh api --method DELETE \
-      "repos/${GITHUB_REPOSITORY:?}/git/refs/${probe_ref//\//%2F}" >/dev/null 2>&1; then
+      "repos/${GITHUB_REPOSITORY:?}/git/refs/heads%2Fcanary-repair-token-preflight" >/dev/null 2>&1; then
     echo "preflight: WARNING: write probe succeeded but the temporary ref ${probe_ref} could not be deleted; delete it manually" >&2
   fi
   echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
@@ -158,6 +160,17 @@ if [[ "$MODE" == "patch-queue" ]]; then
   rm -f "$BATTERY_LOG"
 fi
 rm -f "$ROOT/.deps/llama-canary-pr-body.md"
+
+# Repair turns routinely build scratch worktrees under /tmp (e.g.
+# /tmp/llama-old-pin, /tmp/llama-repair). On this persistent runner those
+# directories and their registrations in .deps/llama.cpp/.git/worktrees
+# survive across runs, and a later `git worktree add` for the same path
+# fails ("missing but already registered" / stale admin files) — the agent
+# treats that as fatal and ends its turn early (live: run 33158798988
+# aborted at `rm -rf /tmp/llama-old-pin && git worktree add ...`). Prune
+# stale registrations and clear the known scratch paths up front.
+git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
+rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
 
 # The agent reuses the open repair PR on $BRANCH if one exists, so repeated
 # canary failures amend a single PR instead of stacking duplicates. Surface
