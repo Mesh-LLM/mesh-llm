@@ -134,23 +134,31 @@ agent_turn() {
   # It also reports the newest file modification under the llama.cpp worktree,
   # so watchers can tell "agent is editing" from "turn is hung" without
   # runner access.
-  local prompt="$1" started heartbeat_pgid
+  local prompt="$1" started heartbeat_pid
   started="$(date +%s)"
-  env -i PATH="$PATH" setsid bash -c '
+  # Job control makes the heartbeat its own process group (portable on both
+  # the macOS family-certify runner and Linux CI); env -i keeps the monitor
+  # credential-free. GNU find's printf action and util-linux's session
+  # utility are not portable to macOS, hence the plain find and the
+  # set -m process group.
+  set -m
+  # shellcheck disable=SC2016  # heartbeat script takes its inputs as $1/$2
+  env -i PATH="$PATH" bash -c '
     ROOT="$1"
     started="$2"
     while sleep 600; do
-      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -n 1 | cut -d " " -f 2- || true)"
+      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -print -quit 2>/dev/null || true)"
       printf "heartbeat: agent turn running for %dm; recent worktree activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
   ' heartbeat "$ROOT" "$started" &
-  heartbeat_pgid=$!
+  heartbeat_pid=$!
+  set +m
   env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
     opencode run --model "$AGENT_MODEL" "$prompt" \
     || echo "warning: opencode turn exited non-zero" >&2
-  kill -- "-$heartbeat_pgid" 2>/dev/null || true
-  wait "$heartbeat_pgid" 2>/dev/null || true
+  kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
 }
 
 battery_summary() {

@@ -75,14 +75,19 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         wrapper = REPAIR.read_text(encoding="utf-8")
         # Long agent turns must stay observable from the Actions log: a
         # heartbeat monitor prints elapsed time and worktree activity every
-        # 10 minutes, runs without ambient credentials, and has its whole
-        # dedicated process group signaled before the monitor is reaped.
+        # 10 minutes, runs without ambient credentials, and is killed as a
+        # whole process group when the turn ends. set -m (not setsid) makes
+        # the group portable to the macOS family-certify runner, and plain
+        # find -print (not -printf) is used for the same reason.
         self.assertIn("heartbeat: agent turn running for", wrapper)
         self.assertIn("while sleep 600", wrapper)
-        self.assertIn('env -i PATH="$PATH" setsid bash -c', wrapper)
+        self.assertIn('env -i PATH="$PATH" bash -c', wrapper)
         self.assertIn('heartbeat "$ROOT" "$started"', wrapper)
-        self.assertIn('kill -- "-$heartbeat_pgid"', wrapper)
-        self.assertIn('wait "$heartbeat_pgid"', wrapper)
+        self.assertIn("set -m", wrapper)
+        self.assertNotIn("setsid", wrapper)
+        self.assertNotIn("-printf", wrapper)
+        self.assertIn('kill -- "-$heartbeat_pid"', wrapper)
+        self.assertIn('wait "$heartbeat_pid"', wrapper)
         self.assertIn("recent worktree activity", wrapper)
 
     def test_every_github_call_is_token_scoped(self) -> None:
