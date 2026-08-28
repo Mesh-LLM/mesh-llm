@@ -267,6 +267,10 @@ fn scheduler_generation_driver_eligible(
         && !hooks_enabled
 }
 
+fn resident_suffix_sampling_enabled(resident_kv: bool, max_tokens: u32) -> bool {
+    resident_kv && max_tokens > 0
+}
+
 impl StageOpenAiBackend {
     pub(in crate::frontend) fn generate_local_tokens(
         &self,
@@ -846,7 +850,9 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::ResidentKv);
-        let prompt_prefill_sample = if resident_suffix_deferred {
+        let resident_suffix_sampled =
+            resident_suffix_sampling_enabled(resident_suffix_deferred, max_tokens);
+        let prompt_prefill_sample = if resident_suffix_sampled {
             let suffix_start = restored_prefill_tokens.min(prefill_tokens.len());
             let mut suffix = prefill_tokens[suffix_start..].to_vec();
             suffix.push(final_prompt_token);
@@ -859,8 +865,8 @@ impl StageOpenAiBackend {
             None
         };
         let mut decoded_prefill_suffix =
-            resident_suffix_deferred && restored_prefill_tokens < prefill_tokens.len();
-        if !resident_suffix_deferred && restored_prefill_tokens < prefill_tokens.len() {
+            resident_suffix_sampled && restored_prefill_tokens < prefill_tokens.len();
+        if !resident_suffix_sampled && restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
             if let Some(checkpoint_tokens) =
                 recurrent_cache_prefix_token_ids.filter(|checkpoint_tokens| {
@@ -1707,6 +1713,14 @@ fn default_local_text_serving_selects_iteration_scheduler() {
     assert!(!scheduler_generation_driver_eligible(
         0, false, false, false, false, "disabled", false,
     ));
+}
+
+#[cfg(test)]
+#[test]
+fn resident_suffix_sampling_requires_a_nonzero_generation_budget() {
+    assert!(resident_suffix_sampling_enabled(true, 1));
+    assert!(!resident_suffix_sampling_enabled(true, 0));
+    assert!(!resident_suffix_sampling_enabled(false, 1));
 }
 
 #[cfg(test)]
