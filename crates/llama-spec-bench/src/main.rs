@@ -237,6 +237,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             n_threads_batch: None,
             n_gpu_layers,
             cache_type_k: skippy_runtime::GGML_TYPE_F16,
+
             cache_type_v: skippy_runtime::GGML_TYPE_F16,
             selected_backend_device: None,
             flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
