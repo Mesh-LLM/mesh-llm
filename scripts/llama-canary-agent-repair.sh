@@ -103,7 +103,31 @@ gh_repair() {
   GH_TOKEN="$CANARY_REPAIR_TOKEN" "$@"
 }
 
+check_repair_token_permissions() {
+  # Preflight (issue #1434 follow-up): fail in seconds when the identity behind
+  # CANARY_REPAIR_TOKEN cannot actually write to this repository, instead of
+  # discovering it via a git 403 after hours of repair work (seen live: a
+  # token minted by an account without repo write). The token is used only
+  # in scoped single commands, never exported, and never echoed.
+  local login perms
+  if ! login="$(gh_repair gh api user --jq .login 2>/dev/null)"; then
+    echo "preflight: CANARY_REPAIR_TOKEN does not authenticate (gh api user failed); check the secret value" >&2
+    return 1
+  fi
+  perms="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}" --jq '.permissions.push' 2>/dev/null)"
+  if [[ "$perms" != "true" ]]; then
+    echo "preflight: identity '${login}' behind CANARY_REPAIR_TOKEN lacks push permission on ${GITHUB_REPOSITORY}; grant it Contents write (fine-grained PAT: repository access + Contents: Read and write) and re-save the secret, or mint the PAT from an account with write" >&2
+    return 1
+  fi
+  echo "preflight: repair token identity '${login}' has push access to ${GITHUB_REPOSITORY}"
+}
+
 cd "$ROOT"
+
+# Preflight the repair token before any repair work: a permission gap here
+# fails the run in seconds with the exact fix, instead of surfacing as a git
+# 403 after a potentially hours-long certified repair (seen live, run 33151501701).
+check_repair_token_permissions
 
 # Run-scope the persistent-runner artifacts before anything else can fail and
 # leave a previous run's state behind. The PR-body file is always cleared. The

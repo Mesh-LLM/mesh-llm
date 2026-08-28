@@ -122,6 +122,22 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         # The repair push URL embeds the token; its stderr is redacted.
         self.assertIn("redact_token", wrapper)
 
+    def test_token_permissions_are_preflighted_before_repair_work(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # A permission gap on CANARY_REPAIR_TOKEN must fail the run in
+        # seconds, before any repair work — not as a git 403 after a
+        # potentially hours-long certified repair (live: run 33151501701,
+        # "denied to i386").
+        self.assertIn("check_repair_token_permissions", wrapper)
+        # The preflight authenticates the token and asserts push permission
+        # on the target repo via scoped gh calls (never exporting the token).
+        self.assertIn('gh_repair gh api user --jq .login', wrapper)
+        self.assertIn("gh api \"repos/${GITHUB_REPOSITORY:?}\" --jq '.permissions.push'", wrapper)
+        # It runs unconditionally before the repair loop starts.
+        preflight_call = wrapper.index("check_repair_token_permissions\n\n# Run-scope")
+        self.assertGreater(preflight_call, wrapper.index("gh_repair()"))
+        self.assertLess(preflight_call, wrapper.index("agent_turn"))
+
     def test_battery_build_mirrors_the_workflow_arch_guard(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
         # The family-certify job runs under Rosetta; the wrapper's build must
