@@ -191,6 +191,7 @@ pub fn split_scan(args: SplitScanArgs) -> Result<()> {
                 predicted_token: baseline.predicted_token,
                 second_predicted_token: baseline.second_predicted_token,
                 token_signal: baseline.token_signal,
+                prompt_token_count: baseline.prompt_token_count,
             },
             SingleStepCase {
                 split_layer,

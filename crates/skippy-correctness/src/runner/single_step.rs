@@ -155,6 +155,59 @@ pub(in crate::runner) fn run_full_model_decode(args: &RuntimeArgs) -> Result<Ful
         predicted_token,
         second_predicted_token: Some(second_predicted_token),
         token_signal,
+        prompt_token_count: 1,
+    })
+}
+
+/// Full-model prefill baseline for the multi-token boundary lane: the entire
+/// prompt is prefilled in one `prefill_chunk_frame` call and the oracle is the
+/// final token's prediction and signal.
+pub(in crate::runner) fn run_full_model_prefill(args: &RuntimeArgs) -> Result<FullModelResult> {
+    let config = RuntimeConfig {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: args.layer_end,
+        ctx_size: args.ctx_size,
+        lane_count: 1,
+        n_batch: args.n_batch,
+        n_ubatch: args.n_ubatch,
+        n_threads: None,
+        n_threads_batch: None,
+        n_gpu_layers: args.n_gpu_layers,
+        mmap: None,
+        mlock: false,
+        selected_backend_device: None,
+        load_mode: RuntimeLoadMode::RuntimeSlice,
+        projector_path: None,
+        include_embeddings: true,
+        include_output: true,
+        mtp_source: MtpSource::Disabled,
+        filter_tensors_on_load: false,
+        cache_type_k: GGML_TYPE_F16,
+        cache_type_v: GGML_TYPE_F16,
+        flash_attn_type: runtime_flash_attn(args.flash_attn),
+    };
+    let model = StageModel::open(&args.model, &config).context("failed to open full model")?;
+    let tokens = model
+        .tokenize(&args.prompt, true)
+        .context("failed to tokenize prompt with full model")?;
+    let token_id = *tokens.first().context("prompt produced no tokens")?;
+    let mut session = model
+        .create_session()
+        .context("failed to create full-model session")?;
+    let (predicted_token, _frame) = session
+        .prefill_chunk_frame_sampled(&tokens, None, None, 0)
+        .context("full model failed to prefill prompt")?;
+    let token_signal = session
+        .last_token_signal()
+        .context("full-model prefill baseline failed to read last token signal")?;
+    Ok(FullModelResult {
+        token_id,
+        predicted_token,
+        second_predicted_token: None,
+        token_signal,
+        prompt_token_count: u32::try_from(tokens.len())
+            .context("prompt token count exceeds u32")?,
     })
 }
 pub(in crate::runner) fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
