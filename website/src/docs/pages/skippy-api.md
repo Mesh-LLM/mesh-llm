@@ -624,7 +624,7 @@ LLAMA_API enum skippy_status skippy_slice_plan_free(
 <a id="skippy-fn-skippy-slice-plan-add-layer-range"></a>
 #### `skippy_slice_plan_add_layer_range`
 
-Adds a stage layer range and its embedding/output ownership to a plan.
+Adds a stage layer range and its shared-tensor ownership to a plan.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
@@ -634,6 +634,7 @@ LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
         int32_t layer_end,
         bool include_embeddings,
         bool include_output,
+        bool include_per_layer_token_embd,
         struct skippy_error ** out_error);
 ```
 
@@ -1301,7 +1302,7 @@ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 41`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 42`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`

@@ -319,6 +319,7 @@ fn write_single_source_stage_artifact(
         stage.layer_end,
         stage.includes_embeddings,
         stage.includes_output,
+        stage.includes_per_layer_token_embd,
     )?;
     info.write_slice_gguf(&plan, stage.stage_index as u32, out)
         .with_context(|| format!("write GGUF slice {}", out.display()))

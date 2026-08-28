@@ -566,6 +566,7 @@ unsafe extern "C" {
         layer_end: i32,
         include_embeddings: bool,
         include_output: bool,
+        include_per_layer_token_embd: bool,
         out_error: *mut *mut Error,
     ) -> Status;
 

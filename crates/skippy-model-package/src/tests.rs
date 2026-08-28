@@ -485,8 +485,7 @@ fn per_layer_token_embd_is_kept_by_every_stage_for_a_gemma_shaped_artifact() {
     // `blk.N.inp_gate` / `blk.N.proj` / `blk.N.post_norm` (llama-arch.cpp:568-570)
     // -- none of which carry a `ple_` or `per_layer_` prefix. A name-based
     // consumer scan therefore finds nothing for them, and the qwen4exp rule must
-    // NOT fail closed: it must defer to ordinary embedding ownership, which keeps
-    // the table wherever these artifacts already put it.
+    // NOT fail closed: every stage must retain the shared table.
     let mut tensors = vec![
         sized_tensor("token_embd.weight", None, TensorRole::Embedding, 100),
         sized_tensor(
@@ -512,18 +511,68 @@ fn per_layer_token_embd_is_kept_by_every_stage_for_a_gemma_shaped_artifact() {
     }
 
     let plan = crate::plan::build_plan_from_tensors(4, &tensors).unwrap();
-    let stage0 = &plan.stages[0];
-    assert!(
-        stage_selects(
-            &tensors,
-            stage0.layer_start,
-            stage0.layer_end,
-            stage0.includes_embeddings,
-            stage0.includes_output
+    for stage in &plan.stages {
+        assert!(
+            stage.includes_per_layer_token_embd
+                && stage_selects(
+                    &tensors,
+                    stage.layer_start,
+                    stage.layer_end,
+                    stage.includes_embeddings,
+                    stage.includes_output
+                ),
+            "gemma-shaped stage {} must retain per_layer_token_embd.weight",
+            stage.stage_index
+        );
+    }
+}
+
+#[test]
+fn cross_shard_ple_ownership_uses_complete_source_tensor_counts_and_bytes() {
+    // The shared table is in shard 0 while the only sparse PLE consumer is in
+    // shard 1. Planning joins both inventories before it decides which stage
+    // owns the table, and the resulting ownership bit is passed to every
+    // shard-local native slice plan.
+    let table_bytes = 28_800_138_240;
+    let table_shard = vec![
+        sized_tensor("token_embd.weight", None, TensorRole::Embedding, 100),
+        sized_tensor(
+            "per_layer_token_embd.weight",
+            None,
+            TensorRole::Embedding,
+            table_bytes,
         ),
-        "a gemma-shaped artifact must fall back to embedding ownership, not be \
-         silently stripped of its per-layer table by the qwen4exp rule"
-    );
+    ];
+    let mut consumer_shard = Vec::new();
+    for layer in 0..4u32 {
+        consumer_shard.push(sized_tensor(
+            &format!("blk.{layer}.attn_norm.weight"),
+            Some(layer),
+            TensorRole::Layer,
+            10,
+        ));
+    }
+    consumer_shard.push(sized_tensor(
+        "blk.1.ple_mlp.weight",
+        Some(1),
+        TensorRole::Layer,
+        7,
+    ));
+
+    let tensors = table_shard
+        .into_iter()
+        .chain(consumer_shard)
+        .collect::<Vec<_>>();
+    let plan = crate::plan::build_plan_from_tensors(2, &tensors).unwrap();
+    let stage0 = &plan.stages[0];
+    let stage1 = &plan.stages[1];
+
+    assert!(stage0.includes_per_layer_token_embd);
+    assert!(!stage1.includes_per_layer_token_embd);
+    assert_eq!(stage0.tensor_count, 5);
+    assert_eq!(stage0.tensor_bytes, table_bytes + 127);
+    assert_eq!(stage1.tensor_count, 2);
+    assert_eq!(stage1.tensor_bytes, 20);
 }
 
 fn stage_selects(

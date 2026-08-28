@@ -23,6 +23,8 @@ pub(crate) struct StagePlan {
     pub(crate) layer_end: u32,
     pub(crate) includes_embeddings: bool,
     pub(crate) includes_output: bool,
+    #[serde(skip_serializing)]
+    pub(crate) includes_per_layer_token_embd: bool,
     pub(crate) tensor_count: usize,
     pub(crate) tensor_bytes: u64,
 }
@@ -67,6 +69,9 @@ pub(crate) fn build_plan_from_tensors(stages: usize, tensors: &[TensorInfo]) -> 
                     layer_end,
                     includes_embeddings: stage_index == 0,
                     includes_output: stage_index + 1 == stages,
+                    includes_per_layer_token_embd: tensors
+                        .iter()
+                        .any(|tensor| is_per_layer_token_embd(&tensor.name)),
                     tensor_count: tensors.len(),
                     tensor_bytes: tensors.iter().map(|tensor| tensor.byte_size).sum(),
                 }
@@ -111,6 +116,9 @@ pub(crate) fn stage_plan_from_tensors(
         layer_end,
         includes_embeddings,
         includes_output,
+        includes_per_layer_token_embd: selected
+            .iter()
+            .any(|tensor| is_per_layer_token_embd(&tensor.name)),
         tensor_count: selected.len(),
         tensor_bytes: selected.iter().map(|tensor| tensor.byte_size).sum(),
     }
@@ -142,11 +150,8 @@ fn tensor_in_explicit_stage(
     includes_embeddings: bool,
     includes_output: bool,
 ) -> bool {
-    if is_per_layer_token_embd(&tensor.name)
-        && let Some(retained) =
-            sparse_per_layer_embedding_retention(all_tensors, layer_start, layer_end)
-    {
-        return retained;
+    if is_per_layer_token_embd(&tensor.name) {
+        return per_layer_embedding_retained(all_tensors, layer_start, layer_end);
     }
     matches!(
         tensor.layer_index,
@@ -174,19 +179,19 @@ fn is_per_layer_token_embd(name: &str) -> bool {
 ///
 /// Only qwen4exp is known to consume it from a *sparse* subset of layers
 /// (`blk.N.ple_*`; `qwen4exp.ple.layers = [1]` on Qwen3.8-Flash-Next), so only
-/// one stage of a split can ever read it. Return `Some(retain)` for that shape.
+/// one stage of a split can ever read it. Retain it only with those consumers.
 ///
-/// Return `None` for every other artifact so the caller falls back to the
-/// ordinary embedding-ownership rule. This matters: Gemma3n/Gemma4 gather the
-/// same table through per-block tensors named `blk.N.inp_gate`, `blk.N.proj`
+/// Retain the table on every stage for every other artifact. This matters:
+/// Gemma3n/Gemma4 gather the same table through per-block tensors named
+/// `blk.N.inp_gate`, `blk.N.proj`
 /// and `blk.N.post_norm` (`llama-arch.cpp:568-570`) — *not* `per_layer_*` — so
 /// a name-based consumer scan finds nothing for them. Failing closed here would
 /// silently drop their table from every stage.
-fn sparse_per_layer_embedding_retention(
+fn per_layer_embedding_retained(
     all_tensors: &[TensorInfo],
     layer_start: u32,
     layer_end: u32,
-) -> Option<bool> {
+) -> bool {
     let mut saw_sparse_consumer = false;
     let mut retained = false;
     for tensor in all_tensors {
@@ -199,7 +204,7 @@ fn sparse_per_layer_embedding_retention(
             break;
         }
     }
-    saw_sparse_consumer.then_some(retained)
+    !saw_sparse_consumer || retained
 }
 
 fn is_sparse_per_layer_embedding_consumer(name: &str) -> bool {
