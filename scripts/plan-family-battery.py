@@ -278,10 +278,39 @@ def _load_manifest(path: Path) -> tuple[dict[str, Any], str]:
 
 def _validate_policy(value: object) -> dict[str, Any]:
     policy = _object(value, "policy")
-    _exact_keys(policy, {"profiles", "cadences"}, "policy")
+    _exact_keys(policy, {"profiles", "cadences", "runner_budgets"}, "policy")
     cadences = _string_list(policy.get("cadences"), "policy.cadences")
     if tuple(cadences) != CADENCES:
         raise PlanError("policy.cadences must list the complete supported cadence order")
+
+    runner_budgets: dict[str, Any] = {}
+    if "runner_budgets" in policy:
+        budgets = _object(policy["runner_budgets"], "policy.runner_budgets")
+        for name, budget in budgets.items():
+            entry = _object(budget, f"policy.runner_budgets.{name}")
+            _exact_keys(
+                entry,
+                {"wired_budget_bytes", "expected_hw_mem_bytes", "note"},
+                f"policy.runner_budgets.{name}",
+            )
+            wired = _integer(
+                entry.get("wired_budget_bytes"),
+                f"policy.runner_budgets.{name}.wired_budget_bytes",
+                1,
+            )
+            hw_mem = _integer(
+                entry.get("expected_hw_mem_bytes"),
+                f"policy.runner_budgets.{name}.expected_hw_mem_bytes",
+                1,
+            )
+            if wired >= hw_mem:
+                raise PlanError(
+                    f"policy.runner_budgets.{name}.wired_budget_bytes must be below the expected hardware memory"
+                )
+            runner_budgets[name] = {
+                "wired_budget_bytes": wired,
+                "expected_hw_mem_bytes": hw_mem,
+            }
 
     profiles = _object(policy.get("profiles"), "policy.profiles")
     if set(profiles) != set(PROFILE_NAMES):
@@ -318,7 +347,9 @@ def _validate_policy(value: object) -> dict[str, Any]:
         raise PlanError("full profile must use the local-monolithic oracle")
     if normalized["package-oracle"]["oracle"] != "independent-trace":
         raise PlanError("package-oracle must use an independent trace")
-    return {"profiles": normalized, "cadences": cadences}
+    if "runner_budgets" not in policy:
+        return {"profiles": normalized, "cadences": cadences}
+    return {"profiles": normalized, "cadences": cadences, "runner_budgets": runner_budgets}
 
 
 def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -413,6 +444,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "estimated_model_bytes",
                 "startup_timeout_secs",
                 "n_gpu_layers_cap",
+                "runner_budget_class",
             },
             f"{field}.resources",
         )
@@ -446,6 +478,21 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 f"{field}.resources.n_gpu_layers_cap",
                 0,
             )
+        runner_budget_class = None
+        if "runner_budget_class" in resources:
+            runner_budget_class = _string(
+                resources["runner_budget_class"],
+                f"{field}.resources.runner_budget_class",
+            )
+            if runner_budget_class not in policy.get("runner_budgets", {}):
+                raise PlanError(
+                    f"{field}.resources.runner_budget_class {runner_budget_class!r} is not defined in policy.runner_budgets"
+                )
+        if n_gpu_layers_cap is not None and runner_budget_class is None:
+            raise PlanError(
+                f"{field}.resources.n_gpu_layers_cap requires runner_budget_class "
+                "(the cap is a runner-budget claim; name the class it was derived against)"
+            )
         notes = _string(model.get("notes"), f"{field}.notes")
         profile_policy = policy["profiles"][profile]
         models.append(
@@ -474,6 +521,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "estimated_model_bytes": estimated_model_bytes,
                     "startup_timeout_secs": startup_timeout_secs,
                     "n_gpu_layers_cap": n_gpu_layers_cap,
+                    "runner_budget_class": runner_budget_class,
                 },
                 "notes": notes,
                 "manifest_index": index,
@@ -632,6 +680,7 @@ def build_plan(
         "manifest": manifest_source,
         "manifest_sha256": manifest_sha256,
         "required_certification_lanes": list(CORE_LANES),
+        "runner_budgets": policy.get("runner_budgets", {}),
         "selected_family_count": len(models),
         "selected_models": models,
         "shards": shards,

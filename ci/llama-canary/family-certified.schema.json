@@ -13,6 +13,19 @@
       "additionalProperties": false,
       "required": ["profiles", "cadences"],
       "properties": {
+        "runner_budgets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["wired_budget_bytes", "expected_hw_mem_bytes"],
+            "properties": {
+              "wired_budget_bytes": {"type": "integer", "minimum": 1},
+              "expected_hw_mem_bytes": {"type": "integer", "minimum": 1},
+              "note": {"type": "string"}
+            }
+          }
+        },
         "profiles": {
           "type": "object",
           "additionalProperties": false,
@@ -143,7 +156,8 @@
             "cache_policy": {"const": "immutable-local"},
             "estimated_model_bytes": {"type": "integer", "minimum": 1},
             "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 900},
-            "n_gpu_layers_cap": {"type": "integer", "minimum": 0}
+            "n_gpu_layers_cap": {"type": "integer", "minimum": 0},
+            "runner_budget_class": {"type": "string", "minLength": 1}
           }
         },
         "notes": {"$ref": "#/$defs/singleLine"}

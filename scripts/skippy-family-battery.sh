@@ -158,7 +158,7 @@ fi
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$MTP_CORPUS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|boundary_report|boundary_prefill|ngl_cap\n' > "$RESOLVED_MANIFEST"
+printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|boundary_report|boundary_prefill|ngl_cap|runner_budget_class\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -599,7 +599,7 @@ preflight_manifest() {
     return 1
   fi
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy boundary_report boundary_prefill ngl_cap; do
+  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy boundary_report boundary_prefill ngl_cap runner_budget_class; do
     if [[ "$profile" != "full" ]]; then
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
@@ -692,12 +692,35 @@ preflight_manifest() {
       fi
     fi
 
+    if [[ -n "$runner_budget_class" && -n "$ngl_cap" ]] && (( DRY_RUN == 0 )); then
+      # The ngl cap is a claim derived against a named runner budget class;
+      # verify this machine matches the class before certifying against the cap.
+      local expected_mem
+      expected_mem="$(jq -r --arg class "$runner_budget_class" '.runner_budgets[$class].expected_hw_mem_bytes // empty' "$POLICY_PLAN_COPY")"
+      if [[ -z "$expected_mem" ]]; then
+        echo "policy plan does not define runner budget class $runner_budget_class required by $family" >&2
+        FAILURES+=("$family(runner-budget-class)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "harness" "plan is missing runner budget class $runner_budget_class"
+        continue
+      fi
+      local actual_mem
+      actual_mem="$(sysctl -n hw.memsize 2>/dev/null || true)"
+      if [[ "$actual_mem" != "$expected_mem" ]]; then
+        echo "runner memory mismatch for $family: class $runner_budget_class expects ${expected_mem} bytes, this machine has ${actual_mem:-unknown}" >&2
+        FAILURES+=("$family(runner-budget-class)")
+        PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+        record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "harness" "runner does not match budget class $runner_budget_class (expected ${expected_mem} bytes hw mem, found ${actual_mem:-unknown})"
+        continue
+      fi
+    fi
+
     local startup_timeout
     startup_timeout="${startup_timeout_override:-$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")}"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
       "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "${MODEL_MTP_LAYERS:-$expected_mtp_layers}" "$activation_width" "$startup_timeout" \
-      "$boundary_report" "$boundary_prefill" "$ngl_cap" \
+      "$boundary_report" "$boundary_prefill" "$ngl_cap" "$runner_budget_class" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
       record_preflight_outcome "model-preflight" "$family" "$model_id" "pass" "pass" "resolved immutable snapshot $source_revision; tensor scan complete"
@@ -734,7 +757,8 @@ preflight_manifest() {
           .execution.speculative_policy,
           (.execution.boundary_report // false | if . then 1 else 0 end),
           (.execution.boundary_prefill // false | if . then 1 else 0 end),
-          (.resources.n_gpu_layers_cap // "")
+          (.resources.n_gpu_layers_cap // ""),
+          (.resources.runner_budget_class // "")
         ]
       | join("|")
     ' "$plan"
@@ -890,7 +914,7 @@ run_boundary_report() {
 
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes mtp_layers activation_width startup_timeout boundary_report boundary_prefill ngl_cap; do
+  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes mtp_layers activation_width startup_timeout boundary_report boundary_prefill ngl_cap runner_budget_class; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
 
