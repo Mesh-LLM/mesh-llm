@@ -38,13 +38,52 @@ echo "=== MeshLLM Hugging Face/Xet portability smoke ==="
 echo "  binary:  $binary"
 echo "  fixture: $fixture_ref"
 echo "  cache:   $smoke_root"
+echo "  architecture: $(uname -m)"
+if [[ -r /proc/cpuinfo ]]; then
+  while IFS= read -r cpu_line; do
+    case "$cpu_line" in
+      Features* | flags*)
+        echo "  cpu $cpu_line"
+        break
+        ;;
+    esac
+  done </proc/cpuinfo
+elif command -v sysctl >/dev/null 2>&1; then
+  echo "  arm_sha512_sysctl: $(sysctl -n hw.optional.armv8_2_sha512 2>/dev/null || echo unavailable)"
+fi
 
 command=("$binary" --log-format json models download --direct --json "$fixture_ref")
-if command -v timeout >/dev/null 2>&1; then
-  timeout 180 "${command[@]}" >"$output_file"
-else
-  echo "timeout command is required for the bounded Hugging Face/Xet smoke" >&2
-  exit 2
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "::warning::Hugging Face/Xet advisory smoke skipped: timeout is unavailable" >&2
+  exit 0
+fi
+
+error_file="$smoke_root/download-error"
+download_succeeded=false
+for attempt in 1 2 3; do
+  echo "Hugging Face/Xet advisory smoke attempt $attempt/3" >&2
+  set +e
+  timeout 180 "${command[@]}" >"$output_file" 2>"$error_file"
+  status=$?
+  set -e
+  if [[ $status -eq 0 ]]; then
+    download_succeeded=true
+    break
+  fi
+  if [[ $status -eq 132 ]]; then
+    cat "$error_file" >&2
+    echo "Hugging Face/Xet portability smoke failed with SIGILL" >&2
+    exit 132
+  fi
+  if [[ $attempt -lt 3 ]]; then
+    sleep "$attempt"
+  fi
+done
+
+if [[ $download_succeeded != true ]]; then
+  cat "$error_file" >&2
+  echo "::warning::Hugging Face/Xet advisory smoke skipped after three failed live download attempts (last status: $status)" >&2
+  exit 0
 fi
 
 python3 - "$output_file" "$smoke_root" <<'PY'

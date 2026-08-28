@@ -57,9 +57,11 @@ Before constructing a Hub or Xet client, this crate checks the native AArch64
 SHA-512 capability. On Linux/Android it reads `AT_HWCAP`; on Apple platforms it
 uses the ARM SHA-512 sysctl. If an application provider is already installed,
 it keeps that provider. Otherwise, it installs rustls' `ring` provider on
-AArch64 without SHA-512 and the AWS-LC provider everywhere else. This explicit
-choice avoids rustls' ambiguity when both provider features are present. Xet
-remains enabled and TLS certificate/hostname verification is unchanged.
+AArch64 without SHA-512 and leaves reqwest's normal provider selection
+unchanged everywhere else. If another provider was already installed on an
+affected AArch64 CPU, the crate preserves it but warns that its safety cannot
+be verified. Xet remains enabled and TLS certificate/hostname verification is
+unchanged.
 
 ## Responsibilities
 
