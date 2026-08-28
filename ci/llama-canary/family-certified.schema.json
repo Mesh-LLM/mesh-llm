@@ -130,6 +130,7 @@
             "activation_width": {"type": "integer", "minimum": 1},
             "boundary_sweep_period": {"type": "integer", "minimum": 0},
             "speculative_policy": {"enum": ["mtp-if-present", "disabled"]}
+          , "boundary_report": {"type": "boolean"}
           }
         },
         "resources": {
@@ -141,6 +142,7 @@
             "cache_policy": {"const": "immutable-local"},
             "estimated_model_bytes": {"type": "integer", "minimum": 1},
             "startup_timeout_secs": {"type": "integer", "minimum": 180, "maximum": 900}
+          , "n_gpu_layers_cap": {"type": "integer", "minimum": 0}
           }
         },
         "notes": {"$ref": "#/$defs/singleLine"}

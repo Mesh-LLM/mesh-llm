@@ -162,6 +162,12 @@ def _exact_keys(value: dict[str, Any], allowed: set[str], field: str) -> None:
         raise PlanError(f"{field} contains unknown fields: {', '.join(unknown)}")
 
 
+def _boolean(value: object, field: str) -> bool:
+    if type(value) is not bool:
+        raise PlanError(f"{field} must be a boolean")
+    return value
+
+
 def _string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value or any(char in value for char in "\r\n\t|"):
         raise PlanError(f"{field} must be a non-empty single-line string")
@@ -361,6 +367,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "activation_width",
                 "boundary_sweep_period",
                 "speculative_policy",
+                "boundary_report",
             },
             f"{field}.execution",
         )
@@ -379,6 +386,10 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
             execution.get("boundary_sweep_period"),
             f"{field}.execution.boundary_sweep_period",
         )
+        boundary_report = _boolean(
+            execution.get("boundary_report", False),
+            f"{field}.execution.boundary_report",
+        )
         layer_end = trunk_layers + mtp_layers
         if sweep_period > layer_end:
             raise PlanError(f"{field}.execution.boundary_sweep_period exceeds layer range")
@@ -396,6 +407,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "cache_policy",
                 "estimated_model_bytes",
                 "startup_timeout_secs",
+                "n_gpu_layers_cap",
             },
             f"{field}.resources",
         )
@@ -422,6 +434,13 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 180,
                 900,
             )
+        n_gpu_layers_cap = None
+        if "n_gpu_layers_cap" in resources:
+            n_gpu_layers_cap = _integer(
+                resources["n_gpu_layers_cap"],
+                f"{field}.resources.n_gpu_layers_cap",
+                0,
+            )
         notes = _string(model.get("notes"), f"{field}.notes")
         profile_policy = policy["profiles"][profile]
         models.append(
@@ -441,12 +460,14 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                     "layer_end": layer_end,
                     "boundary_sweep_period": sweep_period,
                     "speculative_policy": speculative_policy,
+                    "boundary_report": boundary_report,
                 },
                 "resources": {
                     "runner_role": runner_role,
                     "cache_policy": cache_policy,
                     "estimated_model_bytes": estimated_model_bytes,
                     "startup_timeout_secs": startup_timeout_secs,
+                    "n_gpu_layers_cap": n_gpu_layers_cap,
                 },
                 "notes": notes,
                 "manifest_index": index,
