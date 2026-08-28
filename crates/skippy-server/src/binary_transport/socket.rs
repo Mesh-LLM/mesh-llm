@@ -1,12 +1,13 @@
 use std::{
     io,
     net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    sync::atomic::{AtomicBool, Ordering},
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::StageConfig;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
@@ -26,15 +27,88 @@ pub(crate) fn downstream_source_ip(config: &StageConfig) -> Result<Option<IpAddr
     }
 }
 
-pub(crate) fn resolve_downstream_endpoint(endpoint: &str) -> Result<SocketAddr> {
-    endpoint
+pub(crate) fn resolve_downstream_endpoint(
+    endpoint: &str,
+    source_ip: Option<IpAddr>,
+) -> Result<SocketAddr> {
+    if let Ok(addr) = endpoint.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    let addrs = endpoint
         .to_socket_addrs()
         .with_context(|| format!("resolve downstream binary stage endpoint {endpoint}"))?
-        .find(SocketAddr::is_ipv4)
-        .or_else(|| endpoint.to_socket_addrs().ok()?.next())
-        .with_context(|| {
-            format!("downstream binary stage endpoint resolved no addresses: {endpoint}")
+        .collect::<Vec<_>>();
+    select_downstream_address(&addrs, source_ip).with_context(|| {
+        format!("downstream binary stage endpoint resolved no addresses: {endpoint}")
+    })
+}
+
+fn select_downstream_address(
+    addrs: &[SocketAddr],
+    source_ip: Option<IpAddr>,
+) -> Option<SocketAddr> {
+    source_ip
+        .and_then(|source_ip| {
+            addrs
+                .iter()
+                .find(|addr| addr.is_ipv4() == source_ip.is_ipv4())
         })
+        .or_else(|| addrs.iter().find(|addr| addr.is_ipv4()))
+        .or_else(|| addrs.first())
+        .copied()
+}
+
+pub(crate) fn resolve_downstream_endpoint_cancellable(
+    endpoint: &str,
+    source_ip: Option<IpAddr>,
+    deadline: Instant,
+    shutdown: &AtomicBool,
+) -> Result<SocketAddr> {
+    if shutdown.load(Ordering::Acquire) {
+        bail!("downstream endpoint resolution cancelled during shutdown");
+    }
+    if let Ok(addr) = endpoint.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    let endpoint = endpoint.to_string();
+    let (tx, rx) = mpsc::sync_channel(1);
+    // The system resolver has no cancellation API. Detach only that call so the
+    // join-owned connection worker can still honor its deadline and shutdown;
+    // the resolver exits when libc returns and drops its result if we moved on.
+    thread::Builder::new()
+        .name("skippy-downstream-resolver".to_string())
+        .spawn(move || {
+            let result = resolve_downstream_endpoint(&endpoint, source_ip);
+            let _ = tx.send(result);
+        })
+        .context("spawn downstream endpoint resolver")?;
+    wait_for_downstream_resolution(rx, deadline, shutdown)
+}
+
+fn wait_for_downstream_resolution(
+    rx: mpsc::Receiver<Result<SocketAddr>>,
+    deadline: Instant,
+    shutdown: &AtomicBool,
+) -> Result<SocketAddr> {
+    const POLL: Duration = Duration::from_millis(50);
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            bail!("downstream endpoint resolution cancelled during shutdown");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("downstream endpoint resolution timed out");
+        }
+        match rx.recv_timeout(remaining.min(POLL)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!(
+                    "downstream endpoint resolver stopped without a result"
+                ));
+            }
+        }
+    }
 }
 
 pub(crate) fn connect_downstream_socket(
@@ -42,10 +116,34 @@ pub(crate) fn connect_downstream_socket(
     source_ip: Option<IpAddr>,
     timeout: Duration,
 ) -> io::Result<TcpStream> {
+    connect_downstream_socket_inner(downstream_addr, source_ip, timeout, None)
+}
+
+pub(crate) fn connect_downstream_socket_cancellable(
+    downstream_addr: SocketAddr,
+    source_ip: Option<IpAddr>,
+    timeout: Duration,
+    shutdown: &AtomicBool,
+) -> io::Result<TcpStream> {
+    connect_downstream_socket_inner(downstream_addr, source_ip, timeout, Some(shutdown))
+}
+
+fn connect_downstream_socket_inner(
+    downstream_addr: SocketAddr,
+    source_ip: Option<IpAddr>,
+    timeout: Duration,
+    shutdown: Option<&AtomicBool>,
+) -> io::Result<TcpStream> {
     let mut errors = Vec::new();
 
     macro_rules! try_connect {
-        ($mode:literal, $connect:expr_2021) => {
+        ($mode:literal, $connect:expr_2021) => {{
+            if shutdown.is_some_and(|shutdown| shutdown.load(Ordering::Acquire)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "downstream connection cancelled during shutdown",
+                ));
+            }
             match $connect {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
@@ -56,7 +154,7 @@ pub(crate) fn connect_downstream_socket(
                     errors.push(format!("{} failed: {error}", $mode));
                 }
             }
-        };
+        }};
     }
 
     try_connect!(
@@ -71,14 +169,19 @@ pub(crate) fn connect_downstream_socket(
         "source-bound",
         connect_bound_with_timeout(downstream_addr, source_ip, timeout, false)
     );
-    try_connect!(
-        "blocking-source-bound",
-        connect_blocking_with_timeout(downstream_addr, source_ip, timeout, false)
-    );
-    try_connect!(
-        "blocking-route-selected",
-        connect_route_selected_blocking_with_timeout(downstream_addr, source_ip, timeout)
-    );
+    // The blocking fallbacks spawn helper threads that cannot be interrupted.
+    // Keep them only on the legacy non-cancellable path so shutdown never
+    // returns while a downstream acquisition helper is still running.
+    if shutdown.is_none() {
+        try_connect!(
+            "blocking-source-bound",
+            connect_blocking_with_timeout(downstream_addr, source_ip, timeout, false)
+        );
+        try_connect!(
+            "blocking-route-selected",
+            connect_route_selected_blocking_with_timeout(downstream_addr, source_ip, timeout)
+        );
+    }
 
     Err(io::Error::other(errors.join("; ")))
 }
@@ -289,5 +392,73 @@ pub(super) fn sockaddr_ip(addr: *const libc::sockaddr) -> Option<IpAddr> {
             Some(IpAddr::V6(addr.sin6_addr.s6_addr.into()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        connect_downstream_socket_cancellable, select_downstream_address,
+        wait_for_downstream_resolution,
+    };
+    use std::{
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+        sync::{atomic::AtomicBool, mpsc},
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn cancelled_downstream_connect_does_not_start_an_attempt() {
+        let shutdown = AtomicBool::new(true);
+        let error = connect_downstream_socket_cancellable(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 9)),
+            None,
+            Duration::from_secs(30),
+            &shutdown,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn downstream_resolution_observes_its_deadline() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let shutdown = AtomicBool::new(false);
+        let error = wait_for_downstream_resolution(
+            rx,
+            Instant::now() + Duration::from_millis(10),
+            &shutdown,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn downstream_resolution_prefers_source_address_family() {
+        let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9337);
+        let ipv6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 9337);
+
+        assert_eq!(
+            select_downstream_address(&[ipv4, ipv6], Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            Some(ipv6)
+        );
+        assert_eq!(
+            select_downstream_address(&[ipv6, ipv4], Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            Some(ipv4)
+        );
+    }
+
+    #[test]
+    fn downstream_resolution_preserves_generic_ipv4_preference() {
+        let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9337);
+        let ipv6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 9337);
+
+        assert_eq!(select_downstream_address(&[ipv6, ipv4], None), Some(ipv4));
+        assert_eq!(
+            select_downstream_address(&[ipv4], Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            Some(ipv4)
+        );
     }
 }

@@ -571,6 +571,7 @@ jobs:
     env:
       LLAMA_STAGE_BACKEND: cuda
       MESH_NATIVE_RUNTIME_TARGET: aarch64-unknown-linux-gnu
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
       SCCACHE_GHA_ENABLED: "false"
     steps:
@@ -640,6 +641,7 @@ jobs:
       LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_architectures }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-dynamic-cuda-sm${{ matrix.cuda_architectures_cache }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-unknown-linux-gnu
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
       MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}
       SCCACHE_GHA_ENABLED: "false"
     steps:
@@ -1517,6 +1519,7 @@ jobs:
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
+      MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
       WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-${{ matrix.backend }}
       MESH_NATIVE_RUNTIME_TARGET: x86_64-pc-windows-msvc

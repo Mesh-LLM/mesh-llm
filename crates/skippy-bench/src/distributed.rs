@@ -24,7 +24,7 @@ use skippy_runtime::{
 use crate::{
     cli::{DEFAULT_RUN_MAX_NEW_TOKENS, FocusedRuntimeArgs, RunArgs},
     model_identity::model_identity_for_path,
-    support::{ChildGuard, ensure_release_skippy_server_bin, parse_wire_dtype, retry},
+    support::{ChildGuard, ensure_release_skippy_server_bin, retry},
 };
 
 #[path = "deployment.rs"]
@@ -366,7 +366,6 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
         .stages
         .first()
         .context("deployment plan has no stages")?;
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
     let prompt_cases = prompt_cases(args)?;
     if prompt_cases.is_empty() {
         bail!("prompt corpus is empty");
@@ -390,8 +389,7 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
                 .expect("tokenizer is present without explicit prompt tokens")
                 .tokenize(&prompt_case.prompt)?
         };
-        let mut result =
-            run_remote_prompt_case(args, first, wire_dtype, prompt_case, token_ids, index)?;
+        let mut result = run_remote_prompt_case(args, first, prompt_case, token_ids, index)?;
         result.elapsed_ms = started.elapsed().as_millis();
         results.push(result);
     }
@@ -496,7 +494,6 @@ fn ensure_reply_kind(
 fn run_remote_prompt_case(
     args: &RunArgs,
     first: &StageAssignment,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     prompt_case: &PromptCase,
     token_ids: Vec<i32>,
     prompt_index: usize,
@@ -516,14 +513,8 @@ fn run_remote_prompt_case(
     let wire_started = Instant::now();
     let request_id = 10_000_u64 + prompt_index as u64;
     let session_id = 20_000_u64 + prompt_index as u64;
-    send_generation_config(
-        &mut stream,
-        wire_dtype,
-        request_id,
-        session_id,
-        token_ids.len(),
-    )
-    .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
+    send_generation_config(&mut stream, request_id, session_id, token_ids.len())
+        .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
     let prefill_token_count = token_ids.len().saturating_sub(1);
     let mut prefill_chunk_count = 0usize;
     let mut effective_chunk_size = None;
@@ -539,7 +530,6 @@ fn run_remote_prompt_case(
                 .context("prefill chunk position overflow")?;
             send_prefill_chunk(
                 &mut stream,
-                wire_dtype,
                 PrefillChunk {
                     prompt_index,
                     request_id,
@@ -559,7 +549,7 @@ fn run_remote_prompt_case(
     let decode_started = Instant::now();
     let mut ttft_ms = 0;
     for decode_step in 0..max_new_tokens {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
         state.prompt_token_count =
             i32::try_from(token_ids.len()).context("prompt token count exceeds i32")?;
@@ -582,7 +572,7 @@ fn run_remote_prompt_case(
             activation: Vec::new(),
             raw_bytes: Vec::new(),
         };
-        write_stage_message(&mut stream, &message, wire_dtype).with_context(|| {
+        write_stage_message(&mut stream, &message).with_context(|| {
             format!("send remote decode step {decode_step} for prompt {prompt_index}")
         })?;
         let reply = recv_reply(&mut stream).with_context(|| {
@@ -599,8 +589,7 @@ fn run_remote_prompt_case(
 
     write_stage_message(
         &mut stream,
-        &StageWireMessage::stop_with_identity(wire_dtype, request_id, session_id),
-        wire_dtype,
+        &StageWireMessage::stop_with_identity(request_id, session_id),
     )
     .context("send remote stop")?;
     let wire_elapsed_ms = wire_started.elapsed().as_millis();
@@ -663,20 +652,18 @@ fn adaptive_prefill_chunk_size(args: &RunArgs, prefill_token_count: usize) -> Op
 
 fn send_generation_config(
     stream: &mut TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
 ) -> Result<()> {
     let message = StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
         None,
         None,
     );
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    write_stage_message(&mut *stream, &message).context("send configure-generation")?;
     let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
     if reply.kind != WireReplyKind::Ack {
         bail!("expected configure-generation ACK, got {:?}", reply.kind);
@@ -693,12 +680,8 @@ struct PrefillChunk<'a> {
     tokens: &'a [i32],
 }
 
-fn send_prefill_chunk(
-    stream: &mut TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
-    chunk: PrefillChunk<'_>,
-) -> Result<()> {
-    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd, wire_dtype);
+fn send_prefill_chunk(stream: &mut TcpStream, chunk: PrefillChunk<'_>) -> Result<()> {
+    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
     state.seq_id = i32::try_from(chunk.prompt_index).context("prompt index exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(chunk.prefill_token_count).context("prompt token count exceeds i32")?;
@@ -722,7 +705,7 @@ fn send_prefill_chunk(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype).with_context(|| {
+    write_stage_message(&mut *stream, &message).with_context(|| {
         format!(
             "send remote prefill chunk for prompt {}",
             chunk.prompt_index
@@ -1052,7 +1035,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,

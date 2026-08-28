@@ -23,7 +23,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 use serde_json::Value;
 use skippy_protocol::binary::{
     LLAMA_TOKEN_NULL, READY_MAGIC, StageReply, StageReplyStats, StageStateHeader, StageWireMessage,
-    WireActivationDType, WireMessageKind, WireReplyKind, recv_reply, write_stage_message,
+    WireMessageKind, WireReplyKind, recv_reply, write_stage_message,
 };
 use skippy_protocol::{
     FlashAttentionType as StageFlashAttentionType, LoadMode, PeerConfig, StageConfig,
@@ -36,8 +36,8 @@ use skippy_runtime::{
     restore_native_logs, suppress_native_logs,
 };
 use skippy_topology::{
-    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, dense_attention_layers,
+    infer_family_capability, plan_contiguous_with_splits,
 };
 
 const DEFAULT_MESH_CTX_SIZE: u32 = 4096;

@@ -120,6 +120,8 @@ pub struct RuntimeKvPageComponentDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    #[serde(default)]
+    pub k_idx_row_bytes: u32,
     pub payload_offset: u64,
     pub payload_bytes: u64,
     pub flags: u64,
@@ -138,6 +140,7 @@ impl RuntimeKvPageComponentDesc {
             k_row_bytes: self.k_row_bytes,
             v_row_bytes: self.v_row_bytes,
             v_element_bytes: self.v_element_bytes,
+            k_idx_row_bytes: self.k_idx_row_bytes,
             payload_offset: self.payload_offset,
             payload_bytes: self.payload_bytes,
             flags: self.flags,
@@ -157,6 +160,7 @@ impl From<RawKvPageComponentDesc> for RuntimeKvPageComponentDesc {
             k_row_bytes: raw.k_row_bytes,
             v_row_bytes: raw.v_row_bytes,
             v_element_bytes: raw.v_element_bytes,
+            k_idx_row_bytes: raw.k_idx_row_bytes,
             payload_offset: raw.payload_offset,
             payload_bytes: raw.payload_bytes,
             flags: raw.flags,
@@ -177,6 +181,8 @@ pub struct RuntimeKvPageDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    #[serde(default)]
+    pub k_idx_row_bytes: u32,
     pub payload_bytes: u64,
     pub flags: u64,
     #[serde(default)]
@@ -193,22 +199,32 @@ impl RuntimeKvPageDesc {
         if self.payload_bytes != payload_len {
             return Err(anyhow!("KV page payload length does not match descriptor"));
         }
+        let has_k_idx_flag = self.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+        if (self.k_idx_row_bytes > 0) != (has_k_idx_flag != 0) {
+            return Err(anyhow!(
+                "KV page k_idx flag does not match its indexer row size"
+            ));
+        }
         match self.codec {
             0 | skippy_ffi::KV_PAGE_CODEC_SINGLE_V1 if self.component_count == 0 => Ok(()),
             skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1
                 if self.version == 2 && self.component_count == 2 =>
             {
                 let [base, swa] = *self.components;
+                let base_k_idx_flag = base.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+                let swa_k_idx_flag = swa.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
                 if base.version != 1
                     || base.role != 1
                     || base.payload_offset != 0
                     || base.token_start != self.token_start
                     || base.token_count != self.token_count
+                    || (base.k_idx_row_bytes > 0) != (base_k_idx_flag != 0)
                     || swa.version != 1
                     || swa.role != 2
                     || swa.token_start < self.token_start
                     || swa.token_start.checked_add(swa.token_count)
                         != self.token_start.checked_add(self.token_count)
+                    || (swa.k_idx_row_bytes > 0) != (swa_k_idx_flag != 0)
                     || swa.payload_offset != base.payload_bytes
                     || swa.payload_offset.checked_add(swa.payload_bytes) != Some(payload_len)
                 {
@@ -233,6 +249,7 @@ impl RuntimeKvPageDesc {
             k_row_bytes: self.k_row_bytes,
             v_row_bytes: self.v_row_bytes,
             v_element_bytes: self.v_element_bytes,
+            k_idx_row_bytes: self.k_idx_row_bytes,
             payload_bytes: self.payload_bytes,
             flags: self.flags,
             codec: self.codec,
@@ -259,6 +276,7 @@ impl From<RawKvPageDesc> for RuntimeKvPageDesc {
             k_row_bytes: raw.k_row_bytes,
             v_row_bytes: raw.v_row_bytes,
             v_element_bytes: raw.v_element_bytes,
+            k_idx_row_bytes: raw.k_idx_row_bytes,
             payload_bytes: raw.payload_bytes,
             flags: raw.flags,
             codec: raw.codec,
@@ -561,6 +579,7 @@ mod kv_page_descriptor_tests {
             k_row_bytes: 0,
             v_row_bytes: 0,
             v_element_bytes: 0,
+            k_idx_row_bytes: 0,
             flags: 0,
         }
     }
@@ -583,6 +602,7 @@ mod kv_page_descriptor_tests {
                 k_row_bytes: 0,
                 v_row_bytes: 0,
                 v_element_bytes: 0,
+                k_idx_row_bytes: 0,
                 flags: 0,
                 components: Box::default(),
             };

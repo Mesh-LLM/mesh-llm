@@ -186,7 +186,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: static-abi-artifact-output
-          key: ${{ format('{0}-{1}-skippy-abi-{2}-{3}-{4}-{5}', env.CACHE_NAMESPACE, runner.os, inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/restore-static-abi-input.sh', 'scripts/safe-extract-tar.py', 'scripts/verify-checksum-sidecar.py', 'scripts/verify-static-abi-build-stamp.py', '.github/actions/prepare-static-abi-input/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt')) }}
+          key: ${{ format('{0}-{1}-skippy-abi-{2}-{3}-{4}-{5}', env.CACHE_NAMESPACE, runner.os, inputs.backend, inputs.target, steps.native_toolchain.outputs.epoch, hashFiles('scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'scripts/restore-static-abi-input.sh', 'scripts/safe-extract-tar.py', 'scripts/verify-checksum-sidecar.py', 'scripts/verify-static-abi-build-stamp.py', '.github/actions/prepare-static-abi-input/action.yml', '.github/actions/resolve-native-toolchain-epoch/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt')) }}
 
       - name: Restore and verify cached portable static ABI
         if: ${{ steps.static_abi_cache.outputs.cache-hit == 'true' }}

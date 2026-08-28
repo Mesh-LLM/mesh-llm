@@ -209,7 +209,6 @@ target/debug/skippy-correctness single-step \
   --ctx-size 4096 \
   --n-gpu-layers -1 \
   --prompt "Explain why staged execution must preserve the next token." \
-  --activation-wire-dtype f16 \
   --report-out "$RUN_ROOT/correctness-single-step-14.json"
 
 target/debug/skippy-correctness single-step \
@@ -222,7 +221,6 @@ target/debug/skippy-correctness single-step \
   --ctx-size 4096 \
   --n-gpu-layers -1 \
   --prompt "Explain why staged execution must preserve the next token." \
-  --activation-wire-dtype f16 \
   --report-out "$RUN_ROOT/correctness-single-step-27.json"
 
 target/debug/skippy-correctness chain \
@@ -235,21 +233,8 @@ target/debug/skippy-correctness chain \
   --ctx-size 4096 \
   --n-gpu-layers -1 \
   --prompt "Explain why staged execution must preserve the next token." \
-  --activation-wire-dtype f16 \
   --report-out "$RUN_ROOT/correctness-chain-14-27.json"
 
-target/debug/skippy-correctness dtype-matrix \
-  --model "$QWEN_MODEL_PATH" \
-  --model-id "$QWEN_MODEL_ID" \
-  --stage-load-mode layer-package \
-  --stage-model "$QWEN_PACKAGE_PATH" \
-  --split-layer 14 \
-  --layer-end 40 \
-  --ctx-size 4096 \
-  --n-gpu-layers -1 \
-  --prompt "Explain why staged execution must preserve the next token." \
-  --dtypes f32,f16,q8 \
-  --report-out "$RUN_ROOT/correctness-dtype-matrix-14.json"
 ```
 
 Launch the fixed three-node stage chain over the private LAN and keep it alive
@@ -265,7 +250,6 @@ skippy-bench run \
   --ctx-size 8192 \
   --max-new-tokens 1 \
   --n-gpu-layers -1 \
-  --activation-wire-dtype f16 \
   --stage-telemetry-level summary \
   --metrics-otlp-grpc-addr 192.168.0.2:14317 \
   --metrics-otlp-grpc-url http://192.168.0.2:14317 \
@@ -287,7 +271,6 @@ skippy-server serve-openai \
   --model-id "$QWEN_MODEL_ID" \
   --default-max-tokens 512 \
   --generation-concurrency 1 \
-  --activation-wire-dtype f16
 ```
 
 Smoke the product path:
@@ -355,7 +338,6 @@ skippy-bench run \
   --ctx-size 8192 \
   --max-new-tokens 1 \
   --n-gpu-layers -1 \
-  --activation-wire-dtype f16 \
   --stage-telemetry-level summary \
   --stage-async-prefill-forward \
   --execute-remote \
@@ -621,8 +603,8 @@ customer's desired topology reproducibly:
 - optional draft model identity and GGUF artifact;
 - layer ranges and host count, including whether the package is single-node or
   multi-node;
-- activation wire dtype, expected context size, max tokens, GPU offload policy,
-  and prefill chunk policy;
+- expected context size, max tokens, GPU offload policy, and prefill chunk
+  policy;
 - KV/full-state cache policy and whether it is disabled, diagnostic, or
   production-ready for this family;
 - n-gram pool policy, speculative window policy, and draft-model mode;
@@ -850,14 +832,14 @@ before trying to make the numbers pretty.
 | Phase | Run | Exit Gate |
 | --- | --- | --- |
 | 1. Corpus freeze | Generate `smoke`, `long`, `coding-loop`, and `long-context` with `just bench-corpus ...`. Record each `manifest.json`, row count, source revisions, seed, and Qwen3.6-tokenized prompt length distribution. | All corpus generators complete. Manifests record pinned source revisions and row counts. `prompt-lengths.tsv` and summary JSON are available for the 8k readiness and 32k stress lanes. No row where `prompt_tokens + generation_limit > ctx_size` is silently included. |
-| 2. Correctness | Run `skippy-correctness` against the full GGUF and the same layer package that will be benchmarked: `single-step` at split `14`, `single-step` at split `27`, `chain` at splits `14,27`, and `dtype-matrix` at split `14`. Validate package tensor ownership before promoting the result. Keep speculation off and Qwen3.6 KV-only cache disabled. | The package validates with source checksum, layer coverage, artifact checksums, and no missing or duplicate owned tensors. Correctness JSON exists for both split boundaries, the full `14,27` chain, and dtype behavior. Promoted reports do not use `--allow-mismatch`. `f16` is exact for the topology; `q8` is either exact or explicitly recorded package-off. |
+| 2. Correctness | Run `skippy-correctness` against the full GGUF and the same layer package that will be benchmarked: `single-step` at split `14`, `single-step` at split `27`, and `chain` at splits `14,27`. Validate package tensor ownership before promoting the result. Keep speculation off and Qwen3.6 KV-only cache disabled. | The package validates with source checksum, layer coverage, artifact checksums, and no missing or duplicate owned tensors. Correctness JSON exists for both split boundaries and the full `14,27` chain. Promoted reports do not use `--allow-mismatch`; raw-f32 staged parity is exact for the topology. |
 | 3. Local references | Run the same customer-readiness corpus through the chat-completions frontend against vanilla llama and single-node full-stage Qwen3.6 before spending more time on the three-node long run. Use this to separate model/runtime cost, frontend cost, corpus shape, and generation-limit cost from LAN stage cost. End M3 by setting the explicit three-node performance classification and the projection window used to short-circuit M4 if the run is clearly too slow. | Local reference runs use the same corpus manifest, tokenizer, context, generation cap, served model id, thinking policy, and package identity. Comparison tables include elapsed p50/p95/p99, decode tok/s, total tok/s, error counts, and prompt token distribution. M3 must produce a single-node full-stage projection, then classify M4 relative to it: green is `<= 2x`, yellow is `<= 3x`, red is `> 3x`. If local references are already too slow for the full long corpus, define the smaller calibration subset before resuming three-node optimization. |
 | 4. Three-node baseline | After local references identify the realistic target envelope, run `scripts/qwen-lab-preflight.sh --kill --clean-tmp --min-free-gb 20 --out "$RUN_ROOT/preflight.txt"`, then run chat-completions smoke with `--ctx-size 4096`, `max_tokens=64`. Before committing to the full long run, execute the M3-defined projection window on the customer-readiness long corpus or calibrated long subset through the chat-completions frontend with `--ctx-size 8192`, `max_tokens=512`. If the projection is performance-red, stop the run and record a stable-but-too-slow baseline instead of letting it run for hours. | Preflight reports no stale model/stage/Mesh processes, no occupied lab ports, and at least 20 GB free on `/` and `/tmp` for each host. Smoke passes with zero request errors. Stability and performance are separate gates: stability requires zero request errors, no API error bodies, no silent truncation, no unexplained crashes, reconnects, telemetry drops, or queue runaway; performance is classified green/yellow/red against the M3 single-node full-stage projection. A red projection short-circuits the full corpus and records elapsed time, completed rows, projected full-corpus wall clock, token throughput, error count, and stage telemetry. |
 | 5. Speculation | Run n-gram modes on `long` and `coding-loop` through the chat-completions frontend. Certify draft pairs with `llama-spec-bench` as a diagnostic gate. Run `baseline`, `draft-fixed`, `draft-adaptive`, `ngram`, and `ngram-adaptive` through the staged chat-completions path. Add two separate follow-up lanes: upstream checkpoint-backed n-gram speculation from llama.cpp PR #19493, and DFlash through the DFlash llama.cpp fork before any stage-runtime port. | Each enabled speculative mode beats the non-speculative staged chat-completions baseline on its target corpus after repair/recovery, checkpoint, draft-proposal, and frontend costs are included. Modes that do not win are recorded as package-off knobs with the reason. Checkpoint-backed n-gram and DFlash stay package-off until they run through the chat-completions benchmark path with correctness evidence and positive end-to-end throughput. |
 | 6. Concurrent-depth investigation | Run parallel request depths `1`, `2`, and `4` through the chat-completions frontend first. Increase only if stage queues, telemetry, and memory remain stable. Keep session IDs distinct. | Depths `1`, `2`, and `4` complete without cross-session contamination, request-id/session-id collapse, queue runaway, telemetry drops, or memory growth that continues after the run ends. The promoted report includes the depth table. |
 | 7. Frontend concurrency investigation | Confirm whether `serve-openai` serializes generation, then decide whether package concurrency is limited at the frontend or whether the frontend/backend adapter needs a configurable concurrency limit. | The report names the effective frontend generation concurrency limit. If the limit is `1`, depth results are interpreted as frontend-serialized and not as true stage-chain parallelism. |
 | 8. Runtime parallelism investigation | Use the runtime lock/session spans from depth runs to decide whether to prototype runtime shards, per-session locking, or an explicit scheduler/batcher. Start with a smoke subset before touching the long corpus. | A parallelism option is promoted only if it improves depth `2` or `4` chat-completions throughput or tail latency without correctness regressions, cross-session contamination, memory runaway, native runtime crashes, or GPU fallback. Otherwise it stays diagnostic/package-off. |
-| 9. Transport and prefill knobs | After the stable baseline, sweep only one knob family at a time: prefill chunk size, chunk threshold/schedule, activation wire dtype, `stage-max-inflight`, reply credit, and async prefill-forward. | A knob is promoted only if it improves the chat-completions readiness run after variance, queueing, telemetry drops, and error rate are included. Async prefill-forward must also prove bounded background writer queues and clean cancellation/recovery. Otherwise it remains diagnostic/package-off. |
+| 9. Transport and prefill knobs | After the stable baseline, sweep only one knob family at a time: prefill chunk size, chunk threshold/schedule, `stage-max-inflight`, reply credit, and async prefill-forward. | A knob is promoted only if it improves the chat-completions readiness run after variance, queueing, telemetry drops, and error rate are included. Async prefill-forward must also prove bounded background writer queues and clean cancellation/recovery. Otherwise it remains diagnostic/package-off. |
 | 10. Full-state cache investigation | Inventory Qwen3.6 recurrent/SSM state, prototype exact export/restore, test on the three-node `14,27` topology, and measure economics against recompute. Keep KV-only cache disabled throughout. Use the Marconi/Prompt Cache direction: exact hybrid-state prefix identity first, canonical reusable chunks second, locality-aware scheduling only after local cache economics are known. | Full-state cache is either proven exact and beneficial enough to become a package knob, or explicitly recorded as diagnostic/package-off. KV-only lookup/record remains disabled for Qwen3.6. The report must include hit/miss counts, import/export bytes, cache residency bytes, span-derived wall saved, and whether payloads are layer-range-minimal or duplicated whole-state blobs. |
 | 11. Package | Capture model identities, split `14,27`, LAN endpoint mapping, context, generation limits, frontend concurrency, prefill chunk policy, speculative knobs, cache policy, shared artifact locations, and report locations. | The package manifest is reproducible from a clean lab checkout, names all customer-facing knobs, reuses the same model slice/package cache across prompt, benchmark, and OpenAI launchers, includes conservative fallbacks, and links to the promoted summary plus raw artifact directory. |
 
@@ -997,7 +979,6 @@ Reason: one or two sentences.
 | single-step split 14 | `correctness-single-step-14.json` | pass/fail | |
 | single-step split 27 | `correctness-single-step-27.json` | pass/fail | |
 | chain 14,27 | `correctness-chain-14-27.json` | pass/fail | |
-| dtype matrix | `correctness-dtype-matrix-14.json` | pass/fail | record q8 as package-on or package-off |
 
 ## Headline Results
 
@@ -1105,7 +1086,6 @@ Must record for every run:
 | Streaming mode | Streaming and non-streaming measure different frontend behavior. |
 | request `max_tokens` / `--default-max-tokens` | Generation length changes decode cost and queue pressure. |
 | `--ctx-size` | Controls capacity and memory pressure. |
-| `--activation-wire-dtype` | Changes activation bandwidth and exactness policy. |
 | `--prefill-chunk-size` | Changes prefill frame count, TTFT, and downstream idle time. |
 | `--n-gpu-layers` | Controls offload and memory residency. |
 | sampling and seed | Temperature/top-p/top-k/seed/logit-bias must be stable for comparisons. |
@@ -1120,7 +1100,7 @@ Investigate only after the fixed baseline:
 | --- | --- |
 | Frontend concurrency widening | First prove whether current `serve-openai` serializes generation; widen only with correctness and cancellation coverage. |
 | Prefill chunk threshold/schedule | Sweep after a stable chunk-size baseline; promote only if chat-completions TTFT/tail improves. |
-| `f32` vs `f16` activation wire | Keep exactness first; treat `q8` as opt-in only after family certification proves it. |
+| Activation wire | Fixed raw little-endian f32 representation; no per-model dtype policy. Historical f16/q8 experiments are research evidence only, not active options. |
 | `--stage-async-prefill-forward` | Keep package-off unless repeated chat-completions runs beat synchronous baseline after variance. |
 | Network impairment knobs | Use downstream delay/bandwidth caps only for diagnosis, not customer baseline. |
 | Runtime parallelism | Explore critical-section shrinking, per-session locking, runtime shards, schedulers/batching, or stage replicas only after lock/session spans show material concurrency tail. |

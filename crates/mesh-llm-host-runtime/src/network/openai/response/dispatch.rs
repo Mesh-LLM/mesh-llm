@@ -8,11 +8,11 @@ use super::stream_translation::{
     relay_normalized_chat_completion_stream, relay_translated_responses_stream,
 };
 use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Result, anyhow};
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::AsyncRead;
-use tokio::net::TcpStream;
 
 pub(in crate::network::openai::response) struct RelayAttemptContext<'a> {
     pub(in crate::network::openai::response) request_id: RequestId,
@@ -22,7 +22,7 @@ pub(in crate::network::openai::response) struct RelayAttemptContext<'a> {
 }
 
 pub(in crate::network::openai::response) async fn relay_probed_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     _request_id: RequestId,
@@ -64,7 +64,7 @@ pub(in crate::network::openai::response) async fn relay_probed_response<R: Async
 }
 
 async fn relay_adapted_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
@@ -117,7 +117,7 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
 }
 
 pub(in crate::network::openai::response) async fn relay_attempted_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     context: RelayAttemptContext<'_>,

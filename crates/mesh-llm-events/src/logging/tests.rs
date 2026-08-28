@@ -4,7 +4,7 @@ use super::envelope::{
     CanonicalEnvelope, CanonicalEnvelopeParseError, CanonicalPresentationContext, SCHEMA_VERSION,
     UnsupportedSchemaVersion,
 };
-use super::events::LifecycleEvent;
+use super::events::{LifecycleEvent, TokenUsage};
 use super::identifiers::{AttemptId, EventId, RequestId};
 use super::lifecycle::{LifecycleGuard, LifecycleState, LifecycleTransitionError};
 use super::replay::ReplayChannel;
@@ -134,6 +134,24 @@ fn test_usage_event_is_numeric_only_and_roundtrips() {
     assert_eq!(
         serde_json::from_value::<LifecycleEvent>(wire).unwrap(),
         event
+    );
+}
+
+#[test]
+fn cached_prompt_tokens_cannot_exceed_prompt_tokens() {
+    let usage = TokenUsage::from_counts(Some(8), Some(3), Some(11)).unwrap();
+
+    assert_eq!(
+        usage
+            .with_cached_prompt_tokens(Some(8))
+            .cached_prompt_tokens,
+        Some(8)
+    );
+    assert_eq!(
+        usage
+            .with_cached_prompt_tokens(Some(9))
+            .cached_prompt_tokens,
+        None
     );
 }
 

@@ -120,74 +120,74 @@ export function LogCleanupWindow({
 
   return (
     <section aria-labelledby="cleanup-window-title" className="space-y-3">
-      <div>
-        <h3 className="type-panel-title text-foreground" id="cleanup-window-title">
-          Select a time window
-        </h3>
-        <p className="mt-1 type-caption text-fg-dim">
+      <h3 className="type-panel-title text-foreground" id="cleanup-window-title">
+        Select a time window
+      </h3>
+
+      <div className="space-y-1">
+        <div className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/55 px-3 pb-3 pt-3.5">
+          <div aria-hidden="true" className="flex h-20 items-end gap-px">
+            {buckets.map((bucket) => {
+              const selected = bucket.end >= window.start && bucket.start <= window.end
+              return (
+                <div
+                  className="flex h-full min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-t-[2px]"
+                  key={bucket.start}
+                  style={{ opacity: selected ? 1 : 0.2 }}
+                >
+                  {LOG_EVENT_CATEGORIES.map((category) => {
+                    const count = selectedCategories.has(category) ? bucket.counts[category] : 0
+                    if (count === 0) return null
+                    return (
+                      <span
+                        className="block min-h-px w-full"
+                        key={category}
+                        style={{
+                          background: categoryColors[category],
+                          height: `${(count / maxBucketTotal) * 100}%`
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+
+          <SliderPrimitive.Root
+            aria-label="Cleanup time window"
+            className="relative mt-1 flex h-11 w-full touch-none select-none items-center"
+            max={bounds.end}
+            min={bounds.start}
+            minStepsBetweenThumbs={1}
+            onValueChange={([start = bounds.start, end = bounds.end]) => onWindowChange({ start, end })}
+            step={step}
+            value={[window.start, window.end]}
+          >
+            <SliderPrimitive.Track className="relative h-1.5 grow overflow-hidden rounded-full bg-border">
+              <SliderPrimitive.Range className="absolute h-full bg-accent" />
+            </SliderPrimitive.Track>
+            <SliderPrimitive.Thumb
+              aria-label="Window start"
+              aria-valuetext={formatWindowInstant(window.start)}
+              className="relative block size-[3.15rem] rounded-full bg-transparent outline-none after:absolute after:left-1/2 after:top-1/2 after:size-4 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:border-2 after:border-panel after:bg-accent after:shadow-[var(--shadow-slider-thumb)] after:transition-transform hover:after:scale-110 focus-visible:after:ring-2 focus-visible:after:ring-accent focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-panel"
+              ref={startThumbRef}
+            />
+            <SliderPrimitive.Thumb
+              aria-label="Window end"
+              aria-valuetext={formatWindowInstant(window.end)}
+              className="relative block size-[3.15rem] rounded-full bg-transparent outline-none after:absolute after:left-1/2 after:top-1/2 after:size-4 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:border-2 after:border-panel after:bg-accent after:shadow-[var(--shadow-slider-thumb)] after:transition-transform hover:after:scale-110 focus-visible:after:ring-2 focus-visible:after:ring-accent focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-panel"
+            />
+          </SliderPrimitive.Root>
+
+          <div className="flex items-start justify-between gap-4 font-mono text-[length:var(--density-type-annotation)] tabular-nums text-fg-dim">
+            <span>{formatWindowInstant(window.start)}</span>
+            <span className="text-right">{formatWindowInstant(window.end)}</span>
+          </div>
+        </div>
+        <p className="type-caption text-fg-dim">
           Drag either edge to narrow the loaded history. The server preview confirms what can be removed.
         </p>
-      </div>
-
-      <div className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/55 px-3 pb-3 pt-3.5">
-        <div aria-hidden="true" className="flex h-20 items-end gap-px">
-          {buckets.map((bucket) => {
-            const selected = bucket.end >= window.start && bucket.start <= window.end
-            return (
-              <div
-                className="flex h-full min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-t-[2px]"
-                key={bucket.start}
-                style={{ opacity: selected ? 1 : 0.2 }}
-              >
-                {LOG_EVENT_CATEGORIES.map((category) => {
-                  const count = selectedCategories.has(category) ? bucket.counts[category] : 0
-                  if (count === 0) return null
-                  return (
-                    <span
-                      className="block min-h-px w-full"
-                      key={category}
-                      style={{
-                        background: categoryColors[category],
-                        height: `${(count / maxBucketTotal) * 100}%`
-                      }}
-                    />
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
-
-        <SliderPrimitive.Root
-          aria-label="Cleanup time window"
-          className="relative mt-1 flex h-11 w-full touch-none select-none items-center"
-          max={bounds.end}
-          min={bounds.start}
-          minStepsBetweenThumbs={1}
-          onValueChange={([start = bounds.start, end = bounds.end]) => onWindowChange({ start, end })}
-          step={step}
-          value={[window.start, window.end]}
-        >
-          <SliderPrimitive.Track className="relative h-1.5 grow overflow-hidden rounded-full bg-border">
-            <SliderPrimitive.Range className="absolute h-full bg-accent" />
-          </SliderPrimitive.Track>
-          <SliderPrimitive.Thumb
-            aria-label="Window start"
-            aria-valuetext={formatWindowInstant(window.start)}
-            className="relative block size-[3.15rem] rounded-full bg-transparent outline-none after:absolute after:left-1/2 after:top-1/2 after:size-4 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:border-2 after:border-panel after:bg-accent after:shadow-[var(--shadow-slider-thumb)] after:transition-transform hover:after:scale-110 focus-visible:after:ring-2 focus-visible:after:ring-accent focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-panel"
-            ref={startThumbRef}
-          />
-          <SliderPrimitive.Thumb
-            aria-label="Window end"
-            aria-valuetext={formatWindowInstant(window.end)}
-            className="relative block size-[3.15rem] rounded-full bg-transparent outline-none after:absolute after:left-1/2 after:top-1/2 after:size-4 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:border-2 after:border-panel after:bg-accent after:shadow-[var(--shadow-slider-thumb)] after:transition-transform hover:after:scale-110 focus-visible:after:ring-2 focus-visible:after:ring-accent focus-visible:after:ring-offset-2 focus-visible:after:ring-offset-panel"
-          />
-        </SliderPrimitive.Root>
-
-        <div className="flex items-start justify-between gap-4 font-mono text-[length:var(--density-type-annotation)] tabular-nums text-fg-dim">
-          <span>{formatWindowInstant(window.start)}</span>
-          <span className="text-right">{formatWindowInstant(window.end)}</span>
-        </div>
       </div>
 
       <div>
@@ -199,7 +199,7 @@ export function LogCleanupWindow({
         </div>
         <ToggleGroup
           aria-label="Log categories shown in the chart"
-          className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4"
+          className="mt-2 grid w-full grid-cols-1 gap-2 sm:grid-cols-2"
           onValueChange={(values) => onCategoriesChange(values as LogEventCategory[])}
           type="multiple"
           value={[...categories]}
@@ -209,7 +209,7 @@ export function LogCleanupWindow({
             return (
               <ToggleGroupItem
                 aria-label={categoryDescription(category, count, selectedCategories.has(category))}
-                className="ui-control h-auto min-h-11 justify-between gap-2 rounded-[var(--radius)] px-2.5 py-2 text-left data-[state=on]:border-accent data-[state=on]:bg-[color:color-mix(in_oklab,var(--color-accent)_9%,var(--color-panel-strong))] data-[state=on]:text-foreground data-[state=on]:shadow-none"
+                className="ui-control grid h-auto min-h-11 w-full grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[var(--radius)] px-2.5 py-2 text-left data-[state=on]:border-accent data-[state=on]:bg-[color:color-mix(in_oklab,var(--color-accent)_9%,var(--color-panel-strong))] data-[state=on]:text-foreground data-[state=on]:shadow-none"
                 key={category}
                 value={category}
               >
@@ -235,11 +235,13 @@ export function LogCleanupWindow({
             )
           })}
         </ToggleGroup>
-        <div className="mt-2 flex items-baseline justify-between gap-3 rounded-[var(--radius)] bg-panel-strong/55 px-3 py-2">
-          <p className="type-caption text-fg-dim">
-            <span className="font-medium text-foreground">{requestCount}</span> loaded request{' '}
-            {requestCount === 1 ? 'event' : 'events'} in this window. Server review identifies removable terminal
-            request groups.
+        <div className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2 rounded-[var(--radius)] bg-panel-strong/55 px-3 py-2">
+          <span className="font-mono text-[length:var(--density-type-caption)] font-medium tabular-nums text-foreground">
+            {requestCount}
+          </span>
+          <p className="min-w-0 type-caption text-fg-dim">
+            loaded request {requestCount === 1 ? 'event' : 'events'} in this window. Server review identifies removable
+            terminal request groups.
           </p>
         </div>
         <p className="mt-2 type-caption text-fg-dim">

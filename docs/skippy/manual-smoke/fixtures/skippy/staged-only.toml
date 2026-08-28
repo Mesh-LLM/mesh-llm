@@ -8,7 +8,6 @@ stage_layer_end = 8
 stage_model_path = "/tmp/manual-smoke/stage-0.gguf"
 stage_role = "prefill"
 stage_topology = "manual-smoke-topology"
-activation_wire_dtype = "f16"
 binary_stage_transport = "auto"
 lifecycle_startup_timeout_ms = 1000
 lifecycle_readiness_interval_ms = 1000

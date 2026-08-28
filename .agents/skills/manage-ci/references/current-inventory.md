@@ -31,6 +31,63 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
+`llama-upstream-canary.yml` runs only on its daily schedule or an explicit
+manual dispatch; it is not ordinary push or PR CI. It executes trusted
+default-branch content only on the persistent self-hosted `family-certify`
+runner group (tools come from the runner image; no GitHub Actions model
+caching). Before native compilation,
+`scripts/plan-family-battery.py` validates the versioned JSON family policy,
+the mandatory three-lane contract for every certified profile, and every exact
+artifact revision/file in the immutable local cache. It reads only GGUF
+metadata headers, requires each artifact to have at least one metadata-bearing
+shard, and requires every shard that carries `*.block_count` and
+`*.embedding_length` to equal the planned runtime range and activation width
+before compilation. It emits
+deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
+all-family shard while retaining the plan as evidence. The runner's `.env` exports
+`HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
+volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
+read-only; the cache is populated by a two-stage prewarm that downloads on
+local disk and moves each repo to NFS). The workflow builds its four
+certification binaries before the manifest lanes; the family battery builds
+them once itself unless `--skip-build` is selected, in which case it verifies
+that every binary already exists. A manual dispatch may set `force_certify` to
+run build, smoke, and the full family battery when the upstream SHA is
+unchanged. Before any certification starts, every selected GGUF is resolved
+directly by the immutable snapshot SHA checked into
+`ci/llama-canary/family-certified.json`. The runtime preflight records the
+revisions, verifies all shard/tensor scans and declared runtime/MTP layer
+counts/model bytes, disk
+headroom and certification ports, and runs one cheap MTP speculative-corpus
+smoke. Only GGUFs with a complete native MTP/NextN tensor head across all
+shards run `llama-spec-bench`; those rows also require native MTP draft
+sidebands in staged correctness. Per-lane
+outcomes, immutable model manifests, summaries, model scans, preflight
+evidence, and logs are uploaded for 14 days even when the battery fails. Stage
+readiness uses a declared per-model override or a model-size-derived deadline,
+each complete certification has
+a portable process-group wall-clock limit, and the workflow's outer battery
+ceiling is 12 hours. On a
+patch-apply failure it hands the queue to a non-interactive `opencode` agent
+(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
+via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
+`third_party/llama.cpp/patches`, runs the supported-families certification
+battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
+on `llama-canary/patch-queue-fix`. The same repair loop also runs when the
+queue applies but a certification lane fails (`battery` mode). After each agent
+turn the repair script
+itself runs the battery and, on failure, loops certify -> agent fix ->
+recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
+succeeds when the wrapper's own battery run passes. Every outcome (battery
+green, queue still broken, battery exhausted) posts a status comment on the
+repair PR — creating the PR (or a fallback issue) itself if the agent did
+not — and an agent turn writes the PR description (key upstream changes,
+patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
+PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
+the canary job itself remains `contents: read`. Any repair outcome keeps the
+canary run red: the certified fix must be merged from the repair PR before
+trusted main can certify. The upstream pin commit to
+`main` is gated on the battery passing.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
@@ -67,7 +124,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, and public website build |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -339,8 +396,21 @@ source commit.
   closure; the planner owns signals and final matrix selection.
 - Each `pr_*.yml` workflow checks out the default branch for canonical planning,
   projects one bounded lane, and calls its matching default-branch lane as a
-  nested reusable workflow. Jobs and logs remain attached to five focused PR
-  runs rather than one monolithic graph.
+  nested reusable workflow. The protected planner action extracts only
+  `ci/ownership.yml` and `ci/slices.yml` from the validated immutable PR source
+  SHA into a unique runner-temp directory. It treats those manifests as data;
+  both source catalogs must match the protected catalogs before use, so PRs
+  cannot alter ownership or expand protected matrix or worker ceilings.
+  planner code, Cargo workspace discovery, and affected-crate operations remain
+  rooted in the protected checkout. Missing or non-regular source manifests
+  fail planning. Jobs and logs remain attached to five focused PR runs rather
+  than one monolithic graph.
+- Catalog evolution is a sequenced maintainer merge. A branch that needs a new
+  `ci/ownership.yml` or `ci/slices.yml` entry cannot pass its own Plan gate,
+  because the byte-identical compare is the boundary keeping PR-controlled
+  routing out of the protected planner. Land a catalog-only commit on the
+  default branch first, then rebase the dependent branch onto it. Do not relax
+  the compare, add a label-gated bypass, or special-case catalog paths.
 - Each `main_*.yml` workflow plans the exhaustive main profile at the pushed
   SHA, projects one bounded lane, and calls its matching same-commit lane as a
   nested reusable workflow. Routine main jobs and logs therefore remain
@@ -376,6 +446,14 @@ fail-open policy.
   central runner policy permits it only for GitHub-hosted selections, and
   runtime rows must match the seed's container image and toolchain epoch.
 - `capture-sccache-stats`: machine-readable cache evidence.
+
+Rust-test batches that contain `skippy-runtime` or `skippy-model-package`
+restore the pinned Qwen correctness fixture from one exact GitHub Actions cache
+key containing its file SHA-256 and `.github/cache-version.txt`. Every use is
+verified against the pinned digest before tests. Cache publication is limited
+to the exhaustive trusted-main batch containing `skippy-runtime`; PR jobs are
+restore-only and jobs for which central runner policy denies native GitHub
+cache access download and verify the immutable revision without publishing.
 
 `scripts/collect-ci-metrics.py` is the read-only timing evidence collector. Its
 schema-v3 report keeps workflow wall/queue, job runner queue, measured

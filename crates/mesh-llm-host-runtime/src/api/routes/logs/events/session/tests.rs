@@ -4,11 +4,15 @@ use mesh_llm_events::logging::events::LifecycleEvent;
 use mesh_llm_events::logging::identifiers::{EventId, RequestId};
 use mesh_llm_events::logging::replay::ReplaySequence;
 
+use super::super::protocol::MAX_FRAME_BYTES;
 use super::*;
 use crate::logging::{
-    LoggingService, ReplayBus, RequestSummaryEntry, RequestSummaryEventSnapshots,
+    CallerPathType, LoggingService, ReplayBus, RequestSummaryEntry, RequestSummaryEventSnapshots,
     RequestSummaryMetadata, TerminalOutcome,
 };
+
+mod audit;
+mod queue;
 
 fn summary(created_at: &str, state: &str, metadata: RequestSummaryMetadata) -> RequestSummaryEntry {
     RequestSummaryEntry {
@@ -601,295 +605,203 @@ fn terminal_replay_uses_enriched_summary_metadata_for_filters() {
 }
 
 #[test]
-fn heartbeat_is_an_sse_comment() {
-    assert_eq!(super::super::heartbeat_frame(), ": keepalive\n\n");
-}
+fn lifecycle_replay_projects_canonical_caller_attribution() {
+    let bus = ReplayBus::new(4);
+    let cases = [
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+                Some("192.0.2.71:11204"),
+                Some(CallerPathType::RemoteQuicHttp),
+            ),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            Some("192.0.2.71:11204"),
+            Some("remote_quic_http"),
+        ),
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+                Some("192.0.2.72:11204"),
+                Some(CallerPathType::Relay),
+            ),
+            Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+            None,
+            Some("relay"),
+        ),
+        (
+            RequestSummaryMetadata::from_parts(None, None, None, None).with_caller_identity(
+                Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+                None,
+                None,
+            ),
+            Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+            None,
+            None,
+        ),
+        (RequestSummaryMetadata::default(), None, None, None),
+    ];
 
-#[tokio::test]
-async fn queue_bounds_slow_consumers_and_cancellation() {
-    let (queue, mut receiver) = ConnectionQueue::new(1);
-    queue.try_send("first".into()).expect("first fits");
-    assert_eq!(
-        queue.try_send("second".into()),
-        Err(QueueError::SlowConsumer)
-    );
-    assert_eq!(receiver.recv().await.as_deref(), Some("first"));
-    queue.cancel();
-    assert_eq!(
-        queue.try_send("after-cancel".into()),
-        Err(QueueError::Cancelled)
-    );
-    assert!(receiver.recv().await.is_none());
-}
+    for (sequence, (metadata, endpoint_id, caller_addr, path_type)) in cases.into_iter().enumerate()
+    {
+        entry_with_metadata(
+            &bus,
+            ReplayChannel::Requests,
+            sequence as u64 + 1,
+            RequestId::new(),
+            metadata,
+        );
+        let frame = replay_frames(
+            &bus,
+            &subscription(vec![ReplayChannel::Requests], Cursor::default()),
+            None,
+        )
+        .pop()
+        .expect("caller attribution replay frame");
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("lifecycle replay data");
+        let request = &data["request"];
 
-#[tokio::test]
-async fn queue_times_out_a_slow_socket_writer_without_unbounded_growth() {
-    let (queue, _receiver) = ConnectionQueue::new(1);
-    queue.try_send("first".into()).unwrap();
-    assert_eq!(
-        queue
-            .send_with_timeout("second".into(), std::time::Duration::from_millis(5))
-            .await,
-        Err(QueueError::SlowConsumer)
-    );
-}
-
-fn audit_subscription(cursor: AuditCursor) -> Subscription {
-    Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(AuditSelection {
-            cursor,
-            source: None,
-            severity: None,
-        }),
+        assert_eq!(
+            request
+                .get("callerEndpointId")
+                .and_then(|value| value.as_str()),
+            endpoint_id
+        );
+        assert!(endpoint_id.is_some() || request.get("callerEndpointId").is_none());
+        assert_eq!(
+            request.get("callerAddr").and_then(|value| value.as_str()),
+            caller_addr
+        );
+        assert!(caller_addr.is_some() || request.get("callerAddr").is_none());
+        assert_eq!(
+            request
+                .get("callerPathType")
+                .and_then(|value| value.as_str()),
+            path_type
+        );
+        assert!(path_type.is_some() || request.get("callerPathType").is_none());
     }
 }
 
-fn push_audit(bus: &ReplayBus, payload: &str) {
-    bus.push_audit_replay(payload.to_string(), 2);
-}
-
-fn audit_payload(
-    entry_id: &str,
-    occurred_at: &str,
-    source: &str,
-    code: &str,
-    severity: Option<&str>,
-) -> String {
-    let mut obj = serde_json::json!({
-        "kind": "audit",
-        "entry_id": entry_id,
-        "occurred_at": occurred_at,
-        "source": source,
-        "code": code,
-    });
-    if let Some(s) = severity {
-        obj.as_object_mut()
-            .unwrap()
-            .insert("severity".into(), serde_json::json!(s));
-    }
-    obj.to_string()
-}
-
 #[test]
-fn audit_replay_emits_ordered_frames_with_a1_ids() {
+fn lifecycle_replay_sanitizes_deserialized_metadata_at_the_sse_boundary() {
     let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-1",
-            "2026-01-01T00:00:01Z",
-            "runtime",
-            "startup",
-            Some("info"),
-        ),
+    let request_id = RequestId::new();
+    let sequence = 1;
+    let occurred_at = "2026-08-03T00:00:01Z";
+    let envelope = CanonicalEnvelope::new(
+        EventId::new(),
+        request_id,
+        ReplayChannel::Requests,
+        sequence,
+        occurred_at.into(),
+        LifecycleEvent::Admitted {
+            model: None,
+            method: None,
+        },
     );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "mesh", "peer_joined", None),
+    let unsafe_route = "/private/route?token=route-secret";
+    let unsafe_model = "https://model:secret@example.test/private";
+    let unsafe_provider = "Bearer provider-secret";
+    let unsafe_engine = r"C:\Users\operator\private-engine";
+    let unsafe_endpoint = "https://operator:credential@example.test/private?token=secret";
+    let unsafe_addr = "/Users/operator/.ssh/id_ed25519";
+    let unsafe_path_type = "/private/caller-path";
+    bus.push_replay(
+        serde_json::json!({
+            "canonical_envelope": envelope,
+            "request_summary_snapshots": {
+                "after": {
+                    "created_at": occurred_at,
+                    "state": "active",
+                    "terminal_at": null,
+                    "metadata": {
+                        "route": unsafe_route,
+                        "model": unsafe_model,
+                        "provider": unsafe_provider,
+                        "engine": unsafe_engine,
+                        "caller_endpoint_id": unsafe_endpoint,
+                        "caller_addr": unsafe_addr,
+                        "caller_path_type": "remote_quic_http"
+                    }
+                }
+            }
+        })
+        .to_string(),
+        0,
+        ReplaySequence::next(ReplayChannel::Requests, sequence),
     );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-3",
-            "2026-01-01T00:00:03Z",
-            "cli",
-            "command",
-            Some("warning"),
-        ),
+    let invalid_path_envelope = CanonicalEnvelope::new(
+        EventId::new(),
+        RequestId::new(),
+        ReplayChannel::Requests,
+        2,
+        "2026-08-03T00:00:02Z".into(),
+        LifecycleEvent::Admitted {
+            model: None,
+            method: None,
+        },
     );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(0)), None);
-    assert_eq!(frames.len(), 3);
-    assert!(frames[0].contains("event: audit_entry"));
-    assert!(frames[0].contains("id: a1:1"));
-    assert!(frames[1].contains("id: a1:2"));
-    assert!(frames[2].contains("id: a1:3"));
-    assert!(frames[0].contains("\"entryId\":\"id-1\""));
-    assert!(frames[1].contains("\"entryId\":\"id-2\""));
-    assert!(frames[2].contains("\"entryId\":\"id-3\""));
-}
-
-#[test]
-fn audit_live_updates_are_incremental_and_advance_filtered_records() {
-    let bus = ReplayBus::new(4);
-    let mut selected = audit_subscription(AuditCursor(0));
-    selected.audit.as_mut().unwrap().source = Some("runtime".into());
-    let mut session = ReplaySession::new(selected);
-    let mut updates = bus.subscribe_updates();
-
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "mesh", "ignored", None),
+    bus.push_replay(
+        serde_json::json!({
+            "canonical_envelope": invalid_path_envelope,
+            "request_summary_snapshots": {
+                "after": {
+                    "created_at": "2026-08-03T00:00:02Z",
+                    "state": "active",
+                    "terminal_at": null,
+                    "metadata": {
+                        "caller_path_type": unsafe_path_type
+                    }
+                }
+            }
+        })
+        .to_string(),
+        0,
+        ReplaySequence::next(ReplayChannel::Requests, 2),
     );
-    let filtered = updates.try_recv().expect("filtered audit update");
-    assert!(session.next_update_frames(&bus, &filtered, None).is_empty());
-    assert!(session.next_update_frames(&bus, &filtered, None).is_empty());
-
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "selected", None),
-    );
-    let update = updates.try_recv().expect("selected audit update");
-    let frames = session.next_update_frames(&bus, &update, None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id: a1:2"));
-    assert!(frames[0].contains("\"entryId\":\"id-2\""));
-}
-
-#[test]
-fn audit_replay_dedupes_records_at_or_below_cursor() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-3", "2026-01-01T00:00:03Z", "runtime", "c", None),
-    );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(2)), None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id: a1:3"));
-    assert!(frames[0].contains("id-3"));
-}
-
-#[test]
-fn audit_replay_filters_by_source() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "mesh", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-3", "2026-01-01T00:00:03Z", "mesh", "c", None),
-    );
-
-    let sel = AuditSelection {
-        cursor: AuditCursor(0),
-        source: Some("mesh".to_owned()),
-        severity: None,
-    };
-    let sub = Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(sel.clone()),
-    };
-    let frames = replay_frames(&bus, &sub, None);
-    assert_eq!(frames.len(), 2);
-    assert!(frames[0].contains("id-1"));
-    assert!(frames[1].contains("id-3"));
-    assert!(!frames[0].contains("id-2"));
-}
-
-#[test]
-fn audit_replay_filters_by_severity() {
-    let bus = ReplayBus::new(4);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", Some("info")),
-    );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-2",
-            "2026-01-01T00:00:02Z",
-            "runtime",
-            "b",
-            Some("warning"),
-        ),
-    );
-    push_audit(
-        &bus,
-        &audit_payload(
-            "id-3",
-            "2026-01-01T00:00:03Z",
-            "runtime",
-            "c",
-            Some("error"),
-        ),
-    );
-
-    let sel = AuditSelection {
-        cursor: AuditCursor(0),
-        source: None,
-        severity: Some("warning".to_owned()),
-    };
-    let sub = Subscription {
-        channels: Vec::new(),
-        filters: Default::default(),
-        cursor: Cursor::default(),
-        audit: Some(sel),
-    };
-    let frames = replay_frames(&bus, &sub, None);
-    assert_eq!(frames.len(), 1);
-    assert!(frames[0].contains("id-2"));
-}
-
-#[test]
-fn audit_gap_emits_recovery_endpoint() {
-    let bus = ReplayBus::new(1);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-    push_audit(
-        &bus,
-        &audit_payload("id-2", "2026-01-01T00:00:02Z", "runtime", "b", None),
-    );
-
-    let frames = replay_frames(
-        &bus,
-        &audit_subscription(AuditCursor(0)),
-        Some("a1:2".to_owned()),
-    );
-    assert!(frames[0].contains("event: replay_gap"));
-    assert!(frames[0].contains("/api/logs/audit"));
-    assert!(frames[0].contains("id: a1:1"));
-    assert!(frames[1].contains("event: audit_entry"));
-    assert!(frames[1].contains("id: a1:2"));
-}
-
-#[test]
-fn audit_frames_never_contain_lifecycle_fields() {
-    let bus = ReplayBus::new(3);
-    push_audit(
-        &bus,
-        &audit_payload("id-1", "2026-01-01T00:00:01Z", "runtime", "a", None),
-    );
-
-    let frames = replay_frames(&bus, &audit_subscription(AuditCursor(0)), None);
-    assert_eq!(frames.len(), 1);
-    assert!(!frames[0].contains("canonical_envelope"));
-    assert!(!frames[0].contains("detail_json"));
-    assert!(!frames[0].contains("requestId"));
-}
-
-#[test]
-fn lifecycle_gap_regression_still_uses_requests_endpoint() {
-    let bus = ReplayBus::new(1);
-    entry(&bus, ReplayChannel::Requests, 1, RequestId::new());
-    entry(&bus, ReplayChannel::Requests, 2, RequestId::new());
 
     let frames = replay_frames(
         &bus,
         &subscription(vec![ReplayChannel::Requests], Cursor::default()),
-        Some("opaque-rest-cursor".into()),
+        None,
     );
-    assert!(frames[0].contains("event: replay_gap"));
-    assert!(frames[0].contains("/api/logs/requests"));
-    assert!(!frames[0].contains("/api/logs/audit"));
+    let frame = frames
+        .iter()
+        .find(|frame| frame.contains("remote_quic_http"))
+        .expect("sanitized metadata replay frame");
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .expect("lifecycle replay data");
+    let request = &data["request"];
+
+    assert_eq!(request["route"], "[REDACTED]");
+    assert_eq!(request["model"], "[REDACTED]");
+    assert_eq!(request["provider"], "[REDACTED]");
+    assert_eq!(request["engine"], "[REDACTED]");
+    assert_eq!(request["callerEndpointId"], "[REDACTED]");
+    assert_eq!(request["callerAddr"], "[REDACTED]");
+    assert_eq!(request["callerPathType"], "remote_quic_http");
+    let emitted = frames.join("\n");
+    for unsafe_value in [
+        unsafe_route,
+        unsafe_model,
+        unsafe_provider,
+        unsafe_engine,
+        unsafe_endpoint,
+        unsafe_addr,
+        unsafe_path_type,
+    ] {
+        assert!(!emitted.contains(unsafe_value));
+    }
+}
+
+#[test]
+fn heartbeat_is_an_sse_comment() {
+    assert_eq!(super::super::heartbeat_frame(), ": keepalive\n\n");
 }

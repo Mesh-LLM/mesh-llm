@@ -165,8 +165,33 @@ runs:
         set -euo pipefail
 
         profile=manual-full
+        manifest_root="$GITHUB_WORKSPACE"
         changed_files_json=$(printf '%s\n' "$CHANGED_FILES" | jq -Rsc 'split("\n") | map(select(length > 0))')
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "pull request source SHA is malformed" >&2; exit 1; }
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          for manifest in ci/ownership.yml ci/slices.yml; do
+            entry=$(git ls-tree "$SOURCE_SHA" -- "$manifest")
+            if ! read -r mode type _ path <<<"$entry"; then
+              echo "source manifest is missing: $manifest" >&2
+              exit 1
+            fi
+            if [[ "$mode" != "100644" || "$type" != "blob" || "$path" != "$manifest" ]]; then
+              echo "source manifest is missing or is not a regular file: $manifest" >&2
+              exit 1
+            fi
+          done
+          if ! git show "$SOURCE_SHA:ci/slices.yml" | cmp -s - ci/slices.yml; then
+            echo "source slice catalog differs from the protected planner catalog" >&2
+            exit 1
+          fi
+          if ! git show "$SOURCE_SHA:ci/ownership.yml" | cmp -s - ci/ownership.yml; then
+            echo "source ownership catalog differs from the protected planner catalog" >&2
+            exit 1
+          fi
+          manifest_root=$(mktemp -d "$RUNNER_TEMP/mesh-ci-manifests.XXXXXX")
+          git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml \
+            | tar -x -C "$manifest_root"
           profile=pr-ready
           if [[ "$DRAFT" == "true" ]]; then
             profile=pr-draft
@@ -188,7 +213,7 @@ runs:
           --argjson affected_crates "$affected_crates_json" \
           '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files}
            + if ($affected_crates | length) > 0 then {affected_crates: $affected_crates} else {} end' \
-          | python3 scripts/plan-ci.py > ci-plan.json
+          | python3 scripts/plan-ci.py --manifest-root "$manifest_root" > ci-plan.json
 
         plan_json=$(jq -c . ci-plan.json)
         plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')

@@ -250,7 +250,7 @@ async fn moa_single_worker_stays_in_gateway() {
     let lifecycle = OpenAiLifecycleAttachment::unowned();
 
     let result = try_handle_moa_intercept(
-        tcp_stream,
+        tcp_stream.into(),
         &mut request,
         &ctx,
         &decision,
@@ -762,6 +762,7 @@ fn invalid_and_failed_moa_responses_map_from_http_status() {
 fn usage_never_turns_moa_or_pipeline_error_statuses_into_success() {
     let usage = mesh_llm_events::logging::events::TokenUsage {
         prompt_tokens: Some(8),
+        cached_prompt_tokens: None,
         completion_tokens: Some(5),
         total_tokens: Some(13),
     };
@@ -791,6 +792,7 @@ fn usage_never_turns_moa_or_pipeline_error_statuses_into_success() {
 fn streamed_moa_chat_and_responses_record_compatible_usage_lifecycle() {
     let usage = mesh_llm_events::logging::events::TokenUsage {
         prompt_tokens: Some(8),
+        cached_prompt_tokens: None,
         completion_tokens: Some(5),
         total_tokens: Some(13),
     };

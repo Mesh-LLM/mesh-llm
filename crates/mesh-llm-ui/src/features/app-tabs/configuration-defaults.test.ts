@@ -78,7 +78,7 @@ describe('CONFIGURATION_DEFAULTS', () => {
       {
         id: 'skippy-transport',
         label: 'Skippy Transport',
-        summary: 'Activation wire dtype, prefill chunking, and lifecycle timing.',
+        summary: 'Prefill chunking, stage transport, and lifecycle timing.',
         help: 'Stage transport, chunking, and lifecycle defaults',
         tomlSection: 'defaults.skippy'
       },
@@ -177,7 +177,6 @@ describe('CONFIGURATION_DEFAULTS', () => {
   it('includes skippy transport, multimodal, and advanced server inventories', () => {
     expect(settingIdsForCategory('skippy-transport')).toEqual(
       expect.arrayContaining([
-        'activation-wire-dtype',
         'stage-model-path',
         'stage-role',
         'stage-topology',
@@ -190,7 +189,6 @@ describe('CONFIGURATION_DEFAULTS', () => {
         'lifecycle-health-interval-ms'
       ])
     )
-    expect(settingById('activation-wire-dtype').tomlSection).toBe('defaults.skippy')
     expect(settingById('prefill-chunk-size').dependsOn?.settingId).toBe('prefill-chunking')
     expect(settingById('prefill-chunk-size').dependsOn?.condition('fixed')).toBe(true)
     expect(settingById('prefill-chunk-schedule').dependsOn?.condition('schedule')).toBe(true)
@@ -218,7 +216,7 @@ describe('CONFIGURATION_DEFAULTS', () => {
   it('keeps all settings keyed to canonical TOML sections without duplicate ids', () => {
     const settingIds = CONFIGURATION_DEFAULTS.settings.map((setting) => setting.id)
 
-    expect(CONFIGURATION_DEFAULTS.settings.length).toBeGreaterThanOrEqual(75)
+    expect(CONFIGURATION_DEFAULTS.settings.length).toBeGreaterThanOrEqual(74)
     expect(new Set(settingIds).size).toBe(settingIds.length)
     expect(CONFIGURATION_DEFAULTS.settings.every((setting) => setting.tomlSection.startsWith('defaults.'))).toBe(true)
   })

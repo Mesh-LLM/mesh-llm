@@ -36,7 +36,8 @@ NATIVE_SDK_WORKFLOW = (
 )
 SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
 SEED_KEY_PATTERN = re.compile(
-    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('[^'\n]+', '[^'\n]+'\) \}\}"
+    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('"
+    r"Cargo\.lock', '\.github/cache-version\.txt', 'Justfile', 'just/\*\*'\) \}\}"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"

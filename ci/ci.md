@@ -25,6 +25,7 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `ci.yml` | `workflow_call` only | Inert compatibility for the former main ingress filename |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
+| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. `scripts/plan-family-battery.py` validates the versioned `ci/llama-canary/family-certified.json` policy and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one all-family shard, builds the certification binaries once, then runs the full supported-family battery. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports, and runs a one-token MTP speculative-corpus smoke. Only GGUFs with a complete native MTP/NextN tensor head across all shards run `llama-spec-bench`; every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families and sweep cuts are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`; patch-apply failures and certification-lane failures route through the agent repair loop (`scripts/llama-canary-agent-repair.sh`), which produces a repair PR on `llama-canary/patch-queue-fix` for human review — the canary run stays red until that PR merges. After a successful changed-pin battery, a separate GitHub-hosted write-only job commits on the exact certified `main` SHA and fails safely if `main` advanced. Runner reads its pre-warmed HF cache over NFS (`HF_CACHE` + `HF_HUB_OFFLINE=1` in the runner `.env`; no `flock` on NFS, so the runner never downloads) |
 
 Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested
@@ -32,6 +33,22 @@ reusable workflow. GitHub therefore exposes five focused PR-associated runs
 with direct job and step drill-down. Each has a stable `PR / <lane>` result.
 The entries receive no repository secrets, cannot select Depot or publish
 trusted-main caches, and independently cancel superseded synchronizations.
+The protected planner action extracts only `ci/ownership.yml` and
+`ci/slices.yml` from the validated immutable PR source SHA into a unique
+runner-temp directory. The source ownership and slice catalogs must match the
+protected catalogs, preventing PR-controlled routing, matrix, or worker
+expansion. These files are routing data, not executable code.
+Planner code, Cargo workspace discovery, and affected-crate operations still
+run from the protected default-branch checkout. A missing or non-regular source
+manifest fails the plan.
+
+Because the catalogs must match byte for byte, a branch cannot introduce its
+own ownership or slice entry and pass its own Plan gate. Catalog evolution is a
+sequenced maintainer merge, not an escape hatch: land a catalog-only commit on
+the default branch that registers the new paths or slices, then rebase the
+dependent branch onto it so both copies match again. Do not relax the compare
+to unblock a branch — the byte-identical check is the boundary that keeps
+PR-controlled routing out of the protected planner.
 
 ### Required PR shape and visibility
 
@@ -182,6 +199,10 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 `scripts/plan-ci.py` is the only source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
 their schema and dependency graph, and emits `ci/ci-plan.schema.json` output.
+Its optional manifest root changes only those two reads. All workspace and
+Cargo operations use the planner's workspace root. PR callers pass the
+runner-temp source-manifest root; push and manual callers use
+`GITHUB_WORKSPACE`.
 Each plan contains source/base identities, direct crates, affected crates,
 semantic domains, signals, selected slices, reasons, typed matrices, runner
 roles, cache modes and fan-out budgets. Unknown paths and malformed inputs fail
@@ -224,7 +245,9 @@ runtime producers are not duplicated.
   that exports the exact toolchain epoch recorded in its artifact.
 - `ci-rust-tests-slice.yml` — deterministic affected or all-workspace Cargo
   test batches consuming the static ABI artifact and its producer-owned
-  toolchain epoch.
+  toolchain epoch. Batches that exercise Skippy correctness tests restore an
+  exact revision- and SHA-256-pinned model cache, verify the file before use,
+  and leave publication to one trusted-main batch.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
@@ -471,6 +494,7 @@ The implemented policy uses that isolation selectively:
 | --- | --- | --- |
 | Linux sccache compiler objects | Exact trusted 2 GiB seed plus job-local writes on GitHub-hosted jobs | Main Quality completion owns publication; PRs mutate only their ephemeral copy |
 | Linux Cargo `target` directories | Disabled for Clippy, Rust tests, host, and runtime | Avoids sharded multi-GiB generations and their restore/upload latency |
+| Skippy correctness model | Restore-only for PRs; one exhaustive trusted-main Rust-test batch publishes an exact file-SHA/cache-version key | Every consuming batch verifies the pinned Qwen file SHA-256; denied-cache runners download the immutable revision without publishing |
 | Static Linux ABI and Swift native ABI | Exact PR-scoped cache on miss | Same-PR reruns reuse the verified native input when its full recipe/toolchain key is unchanged |
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |

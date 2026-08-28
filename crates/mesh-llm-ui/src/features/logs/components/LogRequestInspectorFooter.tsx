@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
-import { SharedModalActionStrip } from '@/components/ui/SharedModal'
 import { Button } from '@/components/ui/button'
+import { SharedModalActionStrip } from '@/components/ui/SharedModal'
 import type { LogRequest } from '@/features/logs/api/schemas'
 import { LogRequestDeleteControl } from '@/features/logs/components/LogRequestDeleteControl'
 
@@ -22,7 +22,7 @@ export function LogRequestInspectorFooter({
   return (
     <SharedModalActionStrip
       aria-label="Request inspector actions"
-      className="shrink-0 items-stretch px-4 sm:items-center sm:px-5"
+      className="min-w-0 shrink-0 items-stretch gap-2 px-4 py-2.5 sm:flex-wrap sm:items-center sm:px-5 sm:py-3"
       role="contentinfo"
     >
       <Button

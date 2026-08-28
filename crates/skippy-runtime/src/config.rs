@@ -9,13 +9,9 @@ pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;
 pub const LLAMA_SERVER_DEFAULT_N_BATCH: u32 = 2048;
 pub const LLAMA_SERVER_DEFAULT_N_UBATCH: u32 = 512;
-/// Smaller default prefill batch for multi-lane skippy serving.
-///
-/// When `lane_count > 1`, skippy enables llama.cpp unified KV mode: every
-/// lane shares one `n_ctx` cell pool. A smaller default batch reduces the
-/// amount of KV space each prefill asks the shared pool to reserve at once
-/// after other lanes reset or preserve resident prefixes.
-pub const SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH: u32 = 1024;
+/// Unified-KV prefill batch default. Keep llama-server's 2048-token batch so
+/// the always-unified serving cutover does not regress the N=1 baseline.
+pub const SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH: u32 = LLAMA_SERVER_DEFAULT_N_BATCH;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(i32)]
@@ -203,12 +199,9 @@ impl RuntimeConfig {
     }
 }
 
-pub(crate) fn default_n_batch_for_lane_count(lane_count: u32) -> u32 {
-    if lane_count > 1 {
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH
-    } else {
-        LLAMA_SERVER_DEFAULT_N_BATCH
-    }
+/// Unified KV is always enabled; the per-lane batch distinction is removed.
+pub(crate) fn default_n_batch_for_lane_count(_lane_count: u32) -> u32 {
+    SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH
 }
 
 pub(crate) struct RawRuntimeConfigParts {
@@ -224,7 +217,7 @@ impl Default for RuntimeConfig {
             layer_end: 1,
             ctx_size: 512,
             lane_count: 1,
-            n_batch: Some(LLAMA_SERVER_DEFAULT_N_BATCH),
+            n_batch: Some(SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH),
             n_ubatch: Some(LLAMA_SERVER_DEFAULT_N_UBATCH),
             n_threads: None,
             n_threads_batch: None,
@@ -380,9 +373,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_raw_uses_smaller_batch_for_unified_kv_defaults() -> anyhow::Result<()> {
+    fn runtime_config_raw_uses_unified_kv_batch_default_for_all_lanes() -> anyhow::Result<()> {
         let config = RuntimeConfig {
-            lane_count: 4,
+            lane_count: 1,
             n_batch: None,
             n_ubatch: None,
             ..RuntimeConfig::default()
@@ -396,9 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_raw_keeps_llama_batch_default_for_single_lane() -> anyhow::Result<()> {
+    fn runtime_config_raw_uses_unified_kv_batch_default_for_multi_lane() -> anyhow::Result<()> {
         let config = RuntimeConfig {
-            lane_count: 1,
+            lane_count: 4,
             n_batch: None,
             n_ubatch: None,
             ..RuntimeConfig::default()
@@ -406,7 +399,7 @@ mod tests {
 
         let raw = config.as_raw()?;
 
-        assert_eq!(raw.raw.n_batch, LLAMA_SERVER_DEFAULT_N_BATCH as i32);
+        assert_eq!(raw.raw.n_batch, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH as i32);
         assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
         Ok(())
     }
@@ -439,7 +432,7 @@ mod tests {
 
         let raw = config.as_raw()?;
 
-        assert_eq!(raw.raw.n_batch, LLAMA_SERVER_DEFAULT_N_BATCH as i32);
+        assert_eq!(raw.raw.n_batch, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH as i32);
         assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
         assert_eq!(raw.raw.n_threads, 12);
         assert_eq!(raw.raw.n_threads_batch, 6);

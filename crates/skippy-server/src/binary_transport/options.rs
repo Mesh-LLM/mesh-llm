@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{StageConfig, StageTopology, binary::WireActivationDType};
+use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::MtpSource;
 
 use crate::{
@@ -17,7 +17,6 @@ pub struct BinaryStageOptions {
     pub topology: Option<StageTopology>,
     pub bind_addr: SocketAddr,
     pub activation_width: i32,
-    pub wire_dtype: WireActivationDType,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -63,7 +62,6 @@ impl BinaryStageOptions {
         if args.openai_prefill_chunk_size == 0 {
             bail!("--openai-prefill-chunk-size must be greater than zero");
         }
-        let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
         let downstream_wire_condition =
             WireCondition::new(args.downstream_wire_delay_ms, args.downstream_wire_mbps)?;
         let config = load_json::<StageConfig>(&args.config)
@@ -112,7 +110,6 @@ impl BinaryStageOptions {
             topology,
             bind_addr,
             activation_width: args.activation_width,
-            wire_dtype,
             metrics_otlp_grpc: args.metrics_otlp_grpc,
             telemetry_queue_capacity: args.telemetry_queue_capacity,
             telemetry_level: args.telemetry_level,
@@ -141,15 +138,6 @@ impl BinaryStageOptions {
         } else {
             MtpSource::Integrated
         }
-    }
-}
-
-pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
     }
 }
 

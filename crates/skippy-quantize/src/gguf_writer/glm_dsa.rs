@@ -366,7 +366,7 @@ fn metadata_u32(metadata: &[GgufKv], key: &str) -> Option<u32> {
 }
 
 impl GgufKv {
-    fn key(&self) -> &str {
+    pub(crate) fn key(&self) -> &str {
         match self {
             Self::ArrayBool { key, .. }
             | Self::ArrayF32 { key, .. }
@@ -379,7 +379,8 @@ impl GgufKv {
             | Self::String { key, .. }
             | Self::U16 { key, .. }
             | Self::U32 { key, .. }
-            | Self::U64 { key, .. } => key,
+            | Self::U64 { key, .. }
+            | Self::Raw { key, .. } => key,
         }
     }
 }

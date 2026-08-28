@@ -52,7 +52,7 @@ describe('LogRequestDetails Overview query ownership', () => {
 
     render(<LogRequestDetails onBack={vi.fn()} onTabChange={vi.fn()} requestId={requestId} tab="overview" />)
 
-    expect(queries.summary).toHaveBeenCalledWith(requestId)
+    expect(queries.summary).toHaveBeenCalledWith(requestId, undefined)
     expect(queries.events).toHaveBeenCalledWith(requestId, true)
     expect(queries.artifacts).toHaveBeenCalledWith(requestId, true)
     expect(queries.attempts).toHaveBeenCalledWith(requestId, true)

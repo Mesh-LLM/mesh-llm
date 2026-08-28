@@ -236,7 +236,9 @@ fn prepare_terminal_delete(
         });
     }
     match facade.request(&request_id)? {
-        Some(record) if record.outcome == "active" => return Err(LogsError::ActiveRequest),
+        Some(record) if record.request.outcome == "active" => {
+            return Err(LogsError::ActiveRequest);
+        }
         Some(_) => {}
         None => return Err(LogsError::NotFound),
     }

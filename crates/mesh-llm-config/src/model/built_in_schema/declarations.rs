@@ -519,10 +519,6 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::String,
         ),
         basic_setting(
-            &format!("{prefix}.activation_wire_dtype"),
-            string_enum(["auto", "f16", "f32", "q8"]),
-        ),
-        basic_setting(
             &format!("{prefix}.binary_stage_transport"),
             ConfigValueSchema::String,
         ),

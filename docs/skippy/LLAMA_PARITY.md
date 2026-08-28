@@ -114,7 +114,7 @@ just because one early gate passed.
 | Candidate selected | We have one cheap representative GGUF for the llama.cpp model implementation. | Yes |
 | Downloaded/local | The representative is available in the local Hugging Face cache. | Yes |
 | Inspect | GGUF metadata yields architecture, layer count, activation width, and split plan. | Yes |
-| Text split | `single-step`, `chain`, and `dtype-matrix` pass with default `f16` wire. | Yes for text serving |
+| Text split | `single-step` and `chain` pass with the fixed raw-f32 wire. | Yes for text serving |
 | Exact state | `state-handoff` accepts, or the family has a documented reason to reject exact state mobility. | Yes |
 | Cache policy | The family is assigned `ResidentKv`, `KvRecurrent`, package-only `ResidentKv`, or cache disabled. | Yes |
 | Cache smoke | Serving-path exact-prefix cache hits and misses behave correctly for that family/policy. | Yes for cache-on-by-default |
@@ -210,8 +210,10 @@ counters, repeated-hit stability, suffix-prefill result, and promotion decision.
 
 ## Policy
 
-Default activation wire remains `f16`. `q8` is opt-in per family only when the
-dtype matrix proves exactness for that representative split.
+Activation transport is fixed to raw `f32`. The single-step and chain lanes
+prove staged execution parity without a lower-precision wire policy. Older
+tables below retain f16/q8 measurements as historical evidence; those formats
+are no longer selectable protocol modes.
 
 For recurrent and hybrid families, the cheap lane should use `--recurrent-all`
 until exact recurrent layer ranges are known. Activations may cross topology
@@ -285,7 +287,7 @@ or a blocker is discovered.
 | `mistral4` | `mistral4` | package selected | yes | package validated | package validated | package-local `ResidentKv` target | package validated | `bartowski/mistralai_Mistral-Small-4-119B-2603-GGUF:IQ2_XXS` package-only certified; 36-layer package materialized and validated with all 579 tensors accounted for |
 | `lfm2` | `lfm2` | selected | yes | pass | pass | `KvRecurrent` | pass | recurrent cache restore ready; keep normal decode ownership sticky |
 | `gpt2` | `gpt2` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
-| `gemma` | `gemma` | selected | yes | pass with `f32` wire | pass | `ResidentKv` | pass | cache restore ready with `f32`; `f16`/`q8` rejected |
+| `gemma` | `gemma` | selected | yes | pass with raw f32 wire | pass | `ResidentKv` | pass | cache restore ready |
 | `gemma3n` | `gemma3n` | selected | yes | pass | pass | `ResidentKv` text path | pass | certified with AltUp sideband activation frames; reviewed topology keeps KV-reuse layers with their KV-owner layers (`0..10,10..15,15..30`) |
 | `mpt` | `mpt` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `olmo2` | `olmo2` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
@@ -298,19 +300,19 @@ or a blocker is discovered.
 | `granite_moe` | `granite-moe` | layout probe selected | yes | pass | pass | `ResidentKv` | pass | tiny random layout probe only; replace with a real small artifact when available |
 | `hunyuan_dense` | `hunyuan-dense` | selected | yes | pass | pass | `ResidentKv` | pass | runtime-slice and cache restore ready |
 | `hunyuan_moe` | `hunyuan-moe` | selected | yes | pass | pass | `ResidentKv` | pass | real A13B MoE runtime-slice and cache restore ready |
-| `hunyuan_vl` | `hunyuan-vl` | selected | yes | pass | untested | default `f16` media path | split multimodal pass | HunyuanOCR projector split multimodal ready |
+| `hunyuan_vl` | `hunyuan-vl` | selected | yes | pass | untested | split media path | split multimodal pass | HunyuanOCR projector split multimodal ready |
 | `bloom` | `bloom` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `gptneox` | `gptneox` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
-| `openai_moe` | `openai-moe` / `gpt-oss` | selected | yes | pass | pass | `ResidentKv` | pass | GPT-OSS 20B split/cache ready; f16 wire validated, q8 rejected |
+| `openai_moe` | `openai-moe` / `gpt-oss` | selected | yes | pass | pass | `ResidentKv` | pass | GPT-OSS 20B split/cache ready |
 | `baichuan` | `baichuan` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `exaone` | `exaone` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `exaone4` | `exaone4` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
-| `ernie4_5_moe` | `ernie4-5-moe` | selected | yes | pass | pass | `ResidentKv` | pass | ERNIE 4.5 MoE split/cache ready; f16 and q8 wire validated |
+| `ernie4_5_moe` | `ernie4-5-moe` | selected | yes | pass | pass | `ResidentKv` | pass | ERNIE 4.5 MoE split/cache ready |
 | `nemotron_h_moe` | `nemotron-h-moe` | package selected | yes | package validated | rejected-too-large | `KvRecurrent` | package validated | `lmstudio-community/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF:Q4_K_M` package-only certified; 52-layer package materialized and validated with all 401 tensors accounted for |
 | `command_r` | `command-r` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `cohere2` | `cohere2` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `jamba` | `jamba` | selected | yes | pass | pass | `KvRecurrent` | pass | recurrent cache restore ready; middle stage can be recurrent-only |
-| `kimi_linear` | `kimi-linear` | selected | yes | pass | rejected-too-large full state; `KvRecurrent` pass | `KvRecurrent` | pass | KDA recurrent ranges plus sparse K-only MLA KV pages split/cache ready; f16 and q8 wire validated |
+| `kimi_linear` | `kimi-linear` | selected | yes | pass | rejected-too-large full state; `KvRecurrent` pass | `KvRecurrent` | pass | KDA recurrent ranges plus sparse K-only MLA KV pages split/cache ready |
 | `falcon` | `falcon` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `internlm2` | `internlm2` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
 | `stablelm` | `stablelm` | selected | yes | pass | pass | `ResidentKv` | pass | cache restore ready |
@@ -347,6 +349,10 @@ Broader coverage lives in `docs/skippy/llama-parity-candidates.json`. The board
 above tracks the active certification queue rather than every pinned llama.cpp
 implementation.
 
+Any lower-precision wire remarks retained in this document or the candidate
+inventory are historical experiment evidence only. The shipping activation
+wire is fixed raw f32 and no longer has a family-specific dtype certification.
+
 ## Next Batch
 
 1. Finish package or remote certification for MiMo-V2 and Exaone-MoE.
@@ -365,7 +371,7 @@ stage ABI. They are cheap text-split and cache-smoke evidence, not full
 promotion by themselves until the reviewed topology records are updated.
 Rows with distributed evidence call out the second backend explicitly.
 
-| Family | Artifact | Text Split | q8 Wire | Exact State | Cache |
+| Family | Artifact | Text Split | Historical q8 Wire | Exact State | Cache |
 | --- | --- | --- | --- | --- | --- |
 | `qwen2` | `meshllm/qwen2.5-0.5b-instruct-parity-q8_0-gguf` | `single-step`, `chain`, and dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 10.82x cache-hit speedup |
 | `deepseek` | `Morgen0052/deepseek-llm-7b-chat-Q4_K_M-GGUF` | `single-step`, `chain`, and f16 dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 1.58x cache-hit speedup |
@@ -412,7 +418,7 @@ Rows with distributed evidence call out the second backend explicitly.
 | `olmoe` | see `target/family-certify/llama-parity-olmoe-runtime-slice-1` and `/Volumes/External/tmp/skippy-moe-expert-smoke-20260506` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 197.09x cache-hit speedup; MoE expert-stage smoke passed for one-stage, split-middle, and split-final |
 | `qwen2vl` | see `target/family-certify/llama-parity-candidate-multimodal-20260506b`; split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `Qwen2-VL-2B-Instruct-Q4_K_M.gguf`, `mmproj-Qwen2-VL-2B-Instruct-f16.gguf`, and `test-1.jpeg` | text `single-step`, `chain`, f32, and f16 passed after allowing tied output embeddings in final runtime slices; split multimodal passed after sampled final media prefill and position sideband forwarding | rejected: q8 predicted token `362` vs baseline `11` | FullState restore blocked by M-RoPE native-position rules; production `ResidentKv` text cache passed | `ResidentKv` one-stage borrowed-hit smoke passed, 8-token prefix, 229,376 resident bytes, 2.43x cache-hit speedup; split multimodal smoke passed |
 | `qwen3vl` | see `target/family-certify/llama-parity-candidate-multimodal-20260506b`; split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `Qwen3VL-2B-Instruct-Q4_K_M.gguf`, `mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf`, and `test-1.jpeg` | text `single-step`, `chain`, and dtype matrix passed after allowing tied output embeddings in final runtime slices; split multimodal passed after native input-width activation padding, sampled final media prefill, and position sideband forwarding | validated | FullState restore blocked by M-RoPE native-position rules; production `ResidentKv` text cache passed | `ResidentKv` one-stage borrowed-hit smoke passed, 8-token prefix, 917,504 resident bytes, 1.83x cache-hit speedup; split multimodal smoke passed |
-| `hunyuan_vl` | split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `HunyuanOCR-Q8_0.gguf`, `mmproj-HunyuanOCR-Q8_0.gguf`, and `test-1.jpeg` | split multimodal passed with the shared Hunyuan-Dense/VL graph filter | untested | untested | projector/media sideband split smoke passed; default f16 activation wire is the support target |
+| `hunyuan_vl` | split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `HunyuanOCR-Q8_0.gguf`, `mmproj-HunyuanOCR-Q8_0.gguf`, and `test-1.jpeg` | split multimodal passed with the shared Hunyuan-Dense/VL graph filter | untested | untested | projector/media sideband split smoke passed over raw f32 activation transport |
 | `deepseek2ocr` | see `target/family-certify/llama-parity-new-mm-candidates-20260507b`; split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `DeepSeek-OCR-Q8_0.gguf`, `mmproj-DeepSeek-OCR-Q8_0.gguf`, and `test-1.jpeg` | text `single-step`, `chain`, dtype matrix, and split multimodal passed | rejected | accepted | `ResidentKv` handoff and split multimodal smoke passed |
 | `qwen3vlmoe` | see `target/family-certify/llama-parity-new-mm-candidates-20260507b`; split smoke via `cargo test -p skippy-server real_multimodal_split_smoke_when_fixture_is_set` with `Qwen3-VL-30B-A3B-Instruct-1M-MXFP4_MOE.gguf`, `mmproj-F16.gguf`, and `test-1.jpeg` | text `single-step`, `chain`, dtype matrix, and split multimodal passed | rejected | accepted | `ResidentKv` handoff and split multimodal smoke passed; stage readiness wait allows large local fixtures |
 | `gemma3n` | see `target/family-certify/llama-parity-gemma3n-cpu-20260507d` | `single-step`, chain split `0..10,10..15,15..30`, dtype matrix, and state handoff passed after adding AltUp sideband activation frames | validated | accepted for text `ResidentKv` policy | multimodal/projector smoke remains separate, but text split serving is certified |
@@ -631,8 +637,8 @@ inference.
   forwards each projector chunk separately, carries the M-RoPE position sideband
   across the stage protocol, samples from the final media prefill without
   re-decoding logits, and pads Qwen3-VL activation frames to the native input
-  width expected by downstream llama.cpp graphs. Qwen2-VL should stay on `f16`
-  wire because q8 changed the next-token argmax; Qwen3-VL validates q8.
+  width expected by downstream llama.cpp graphs. Historical lower-precision
+  results are retained as research evidence; shipping transport is raw f32.
   FullState restore remains blocked by M-RoPE native-position rules, so the
   production text-cache proof for Qwen VL remains `ResidentKv`.
 - `bert` and `t5` are now downloaded and inspected, but intentionally remain
@@ -659,7 +665,6 @@ target/debug/skippy-correctness state-handoff \
   --activation-width 896 \
   --source-bind-addr 127.0.0.1:19831 \
   --restore-bind-addr 127.0.0.1:19832 \
-  --activation-wire-dtype f16 \
   --state-payload-kind resident-kv \
   --borrow-resident-hits \
   --cache-hit-repeats 3 \

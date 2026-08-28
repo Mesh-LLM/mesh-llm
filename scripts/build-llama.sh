@@ -224,7 +224,10 @@ fi
 
 case "$LLAMA_BACKEND" in
   cuda)
-    configure_cuda_toolkit_env || true
+    if ! configure_cuda_toolkit_env; then
+      echo "CUDA toolkit compiler was not found; set CUDACXX, CMAKE_CUDA_COMPILER, NVCC, or put nvcc on PATH" >&2
+      exit 1
+    fi
     CMAKE_ARGS+=(-DGGML_CUDA=ON)
     if [[ -n "${CUDACXX:-}" ]]; then
       CMAKE_ARGS+=(-DCMAKE_CUDA_COMPILER="$CUDACXX")

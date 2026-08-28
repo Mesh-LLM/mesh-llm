@@ -27,6 +27,8 @@ fn request_query() -> RequestQuery {
         from: None,
         to: None,
         route: None,
+        exclude_route: None,
+        exclude_route_prefix: None,
         model: None,
         provider: None,
         engine: None,
@@ -83,6 +85,8 @@ fn request_query_applies_all_filters_and_normalizes_time_bounds() {
             from: Some("2026-08-02T20:00:00-04:00".to_string()),
             to: Some("2026-08-03T00:01:00Z".to_string()),
             route: Some("chat".to_string()),
+            exclude_route: None,
+            exclude_route_prefix: None,
             model: Some("model-a".to_string()),
             provider: Some("provider-a".to_string()),
             engine: Some("engine-a".to_string()),
@@ -94,6 +98,527 @@ fn request_query_applies_all_filters_and_normalizes_time_bounds() {
 
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].request_id, "matching-request");
+}
+
+#[test]
+fn request_route_exclusions_apply_before_pagination_and_preserve_null_routes() {
+    // Given
+    let (_root, store) = open_store();
+    for (request_id, route, created_at) in [
+        ("visible-null-route", None, "2026-08-03T00:00:01Z"),
+        (
+            "visible-chat-route",
+            Some("chat_completions"),
+            "2026-08-03T00:00:02Z",
+        ),
+        (
+            "hidden-management-route",
+            Some("management_get_status"),
+            "2026-08-03T00:00:03Z",
+        ),
+        (
+            "hidden-models-route",
+            Some("models"),
+            "2026-08-03T00:00:04Z",
+        ),
+    ] {
+        store
+            .insert_summary(
+                request_id, None, route, None, None, created_at, None, None, None,
+            )
+            .expect("insert request summary");
+    }
+
+    // When
+    let page = store
+        .query_requests(&RequestQuery {
+            limit: 2,
+            exclude_route: Some("models".to_string()),
+            exclude_route_prefix: Some("management_".to_string()),
+            ..request_query()
+        })
+        .expect("query visible request summaries");
+
+    // Then
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|record| record.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["visible-chat-route", "visible-null-route"]
+    );
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn caller_identity_round_trips_without_replacing_principal_identity() {
+    let (_root, store) = open_store();
+    let endpoint_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    store
+        .conn()
+        .execute(
+            "INSERT INTO summaries \
+             (request_id, created_at, tenant_id, account_id, user_id, caller_endpoint_id, caller_addr, caller_path_type) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                "request-with-caller",
+                "2026-08-20T12:00:00Z",
+                "tenant-a",
+                "account-a",
+                "user-a",
+                endpoint_id,
+                "192.0.2.42:11204",
+                "remote_quic_http",
+            ],
+        )
+        .expect("insert caller summary");
+
+    let repository_row = store
+        .get_summary("request-with-caller")
+        .expect("query repository summary")
+        .expect("repository summary");
+    let query_row = store
+        .query_request_with_caller("request-with-caller")
+        .expect("query request record")
+        .expect("request record");
+
+    assert_eq!(repository_row.tenant_id.as_deref(), Some("tenant-a"));
+    assert_eq!(repository_row.account_id.as_deref(), Some("account-a"));
+    assert_eq!(repository_row.user_id.as_deref(), Some("user-a"));
+    assert_eq!(query_row.caller_endpoint_id.as_deref(), Some(endpoint_id));
+    assert_eq!(query_row.caller_addr.as_deref(), Some("192.0.2.42:11204"));
+    assert_eq!(
+        query_row.caller_path_type.as_deref(),
+        Some("remote_quic_http")
+    );
+}
+
+#[test]
+fn authenticated_relay_upsert_replaces_and_protects_the_complete_caller_tuple() {
+    let (_root, store) = open_store();
+    let request_id = "request-with-authenticated-relay";
+    let endpoint_id = "7272727272727272727272727272727272727272727272727272727272727272";
+
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            Some("model-a"),
+            Some("responses"),
+            Some("provider-a"),
+            Some("engine-a"),
+            None,
+            Some("127.0.0.1:40123"),
+            Some("local_http"),
+            "2026-08-20T12:00:00Z",
+        )
+        .expect("persist provisional local caller");
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            None,
+            None,
+            None,
+            None,
+            Some(endpoint_id),
+            None,
+            Some("relay"),
+            "2026-08-20T12:00:01Z",
+        )
+        .expect("replace with authenticated relay caller");
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("127.0.0.1:49999"),
+            Some("local_http"),
+            "2026-08-20T12:00:02Z",
+        )
+        .expect("ignore later provisional local caller");
+
+    let repository_row = store
+        .get_summary(request_id)
+        .expect("query summary")
+        .expect("summary");
+    let query_row = store
+        .query_request_with_caller(request_id)
+        .expect("query request record")
+        .expect("request record");
+    assert_eq!(repository_row.model.as_deref(), Some("model-a"));
+    assert_eq!(repository_row.route.as_deref(), Some("responses"));
+    assert_eq!(repository_row.provider.as_deref(), Some("provider-a"));
+    assert_eq!(repository_row.engine.as_deref(), Some("engine-a"));
+    assert_eq!(query_row.caller_endpoint_id.as_deref(), Some(endpoint_id));
+    assert_eq!(query_row.caller_addr, None);
+    assert_eq!(query_row.caller_path_type.as_deref(), Some("relay"));
+}
+
+#[test]
+fn authenticated_endpoint_only_caller_round_trips_through_public_query_api() {
+    let (_root, store) = open_store();
+    let request_id = "request-with-endpoint-only-caller";
+    let endpoint_id = "7373737373737373737373737373737373737373737373737373737373737373";
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            Some("model-a"),
+            Some("responses"),
+            Some("provider-a"),
+            Some("engine-a"),
+            Some(endpoint_id),
+            None,
+            None,
+            "2026-08-20T12:00:00Z",
+        )
+        .expect("persist endpoint-only caller");
+
+    let direct = store
+        .query_request_with_caller(request_id)
+        .expect("query request")
+        .expect("request record");
+    let page = store
+        .query_requests_with_caller(&request_query())
+        .expect("query request page");
+    let listed = page
+        .items
+        .iter()
+        .find(|record| record.request.request_id == request_id)
+        .expect("listed request");
+
+    for record in [&direct, listed] {
+        assert_eq!(record.caller_endpoint_id.as_deref(), Some(endpoint_id));
+        assert_eq!(record.caller_addr, None);
+        assert_eq!(record.caller_path_type, None);
+    }
+}
+
+#[test]
+fn endpoint_only_upsert_replaces_local_or_empty_and_protects_first_authenticated_caller() {
+    let (_root, store) = open_store();
+    let endpoint_id = "7474747474747474747474747474747474747474747474747474747474747474";
+    let later_endpoint_id = "7575757575757575757575757575757575757575757575757575757575757575";
+
+    for (request_id, caller_addr, caller_path_type) in [
+        ("endpoint-only-replaces-empty", None, None),
+        (
+            "endpoint-only-replaces-local",
+            Some("127.0.0.1:40123"),
+            Some("local_http"),
+        ),
+    ] {
+        store
+            .upsert_summary_metadata_with_caller(
+                request_id,
+                Some("model-a"),
+                Some("responses"),
+                Some("provider-a"),
+                Some("engine-a"),
+                None,
+                caller_addr,
+                caller_path_type,
+                "2026-08-20T12:00:00Z",
+            )
+            .expect("persist initial caller");
+        store
+            .upsert_summary_metadata_with_caller(
+                request_id,
+                None,
+                None,
+                None,
+                None,
+                Some(endpoint_id),
+                None,
+                None,
+                "2026-08-20T12:00:01Z",
+            )
+            .expect("replace with endpoint-only caller");
+
+        for (later_endpoint, later_addr, later_path) in [
+            (None, Some("127.0.0.1:49999"), Some("local_http")),
+            (
+                Some(later_endpoint_id),
+                Some("192.0.2.75:11204"),
+                Some("remote_quic_http"),
+            ),
+            (Some(later_endpoint_id), None, Some("relay")),
+            (Some(later_endpoint_id), None, None),
+        ] {
+            store
+                .upsert_summary_metadata_with_caller(
+                    request_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    later_endpoint,
+                    later_addr,
+                    later_path,
+                    "2026-08-20T12:00:02Z",
+                )
+                .expect("ignore later caller");
+        }
+
+        let record = store
+            .query_request_with_caller(request_id)
+            .expect("query request")
+            .expect("request record");
+        assert_eq!(record.caller_endpoint_id.as_deref(), Some(endpoint_id));
+        assert_eq!(record.caller_addr, None);
+        assert_eq!(record.caller_path_type, None);
+        assert_eq!(record.request.model.as_deref(), Some("model-a"));
+        assert_eq!(record.request.route.as_deref(), Some("responses"));
+        assert_eq!(record.request.provider.as_deref(), Some("provider-a"));
+        assert_eq!(record.request.engine.as_deref(), Some("engine-a"));
+    }
+}
+
+#[test]
+fn unrecognized_stage_caller_does_not_replace_local_request_metadata() {
+    let (_root, store) = open_store();
+    let request_id = "request-with-stage-second";
+    let endpoint_id = "7575757575757575757575757575757575757575757575757575757575757575";
+
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            Some("model-a"),
+            Some("responses"),
+            Some("provider-a"),
+            Some("engine-a"),
+            None,
+            Some("127.0.0.1:40123"),
+            Some("local_http"),
+            "2026-08-20T12:00:00Z",
+        )
+        .expect("persist provisional local caller");
+    store
+        .upsert_summary_metadata_with_caller(
+            request_id,
+            None,
+            None,
+            None,
+            None,
+            Some(endpoint_id),
+            Some("192.0.2.75:11204"),
+            Some("remote_quic_stage"),
+            "2026-08-20T12:00:01Z",
+        )
+        .expect("ignore unrecognized stage caller");
+
+    let repository_row = store
+        .get_summary(request_id)
+        .expect("query summary")
+        .expect("summary");
+    let query_row = store
+        .query_request_with_caller(request_id)
+        .expect("query request record")
+        .expect("request record");
+    assert_eq!(repository_row.model.as_deref(), Some("model-a"));
+    assert_eq!(repository_row.route.as_deref(), Some("responses"));
+    assert_eq!(repository_row.provider.as_deref(), Some("provider-a"));
+    assert_eq!(repository_row.engine.as_deref(), Some("engine-a"));
+    assert_eq!(query_row.caller_endpoint_id, None);
+    assert_eq!(query_row.caller_addr.as_deref(), Some("127.0.0.1:40123"));
+    assert_eq!(query_row.caller_path_type.as_deref(), Some("local_http"));
+}
+
+#[test]
+fn unrecognized_stage_caller_does_not_enter_empty_summary_metadata() {
+    let (_root, store) = open_store();
+    let endpoint_id = "7676767676767676767676767676767676767676767676767676767676767676";
+
+    for (request_id, path_type) in [
+        ("request-with-stage-first", "remote_quic_stage"),
+        ("request-with-empty-path", ""),
+        ("request-with-partial-path", "remote_quic_http/"),
+    ] {
+        store
+            .upsert_summary_metadata_with_caller(
+                request_id,
+                Some("model-a"),
+                Some("responses"),
+                Some("provider-a"),
+                Some("engine-a"),
+                Some(endpoint_id),
+                Some("192.0.2.76:11204"),
+                Some(path_type),
+                "2026-08-20T12:00:00Z",
+            )
+            .expect("ignore unrecognized caller on empty summary");
+
+        let repository_row = store
+            .get_summary(request_id)
+            .expect("query repository summary")
+            .expect("summary");
+        let query_row = store
+            .query_request_with_caller(request_id)
+            .expect("query request record")
+            .expect("request record");
+        assert_eq!(repository_row.model.as_deref(), Some("model-a"));
+        assert_eq!(repository_row.route.as_deref(), Some("responses"));
+        assert_eq!(repository_row.provider.as_deref(), Some("provider-a"));
+        assert_eq!(repository_row.engine.as_deref(), Some("engine-a"));
+        assert_eq!(query_row.caller_endpoint_id, None);
+        assert_eq!(query_row.caller_addr, None);
+        assert_eq!(query_row.caller_path_type, None);
+    }
+}
+
+#[test]
+fn partial_caller_tuples_do_not_enter_empty_summary_metadata() {
+    let (_root, store) = open_store();
+    let endpoint_id = "7777777777777777777777777777777777777777777777777777777777777777";
+    let partial_tuples = [
+        (
+            "request-local-without-address",
+            None,
+            None,
+            Some("local_http"),
+        ),
+        (
+            "request-remote-without-endpoint",
+            None,
+            Some("192.0.2.77:11204"),
+            Some("remote_quic_http"),
+        ),
+        ("request-relay-without-endpoint", None, None, Some("relay")),
+        (
+            "request-values-without-path",
+            Some(endpoint_id),
+            Some("192.0.2.77:11204"),
+            None,
+        ),
+        (
+            "request-invalid-endpoint-only",
+            Some("not-an-authenticated-endpoint"),
+            None,
+            None,
+        ),
+        (
+            "request-remote-invalid-endpoint",
+            Some("not-an-authenticated-endpoint"),
+            Some("192.0.2.77:11204"),
+            Some("remote_quic_http"),
+        ),
+        (
+            "request-local-invalid-address",
+            None,
+            Some("not-a-socket-address"),
+            Some("local_http"),
+        ),
+    ];
+
+    for (request_id, caller_endpoint_id, caller_addr, caller_path_type) in partial_tuples {
+        store
+            .upsert_summary_metadata_with_caller(
+                request_id,
+                None,
+                None,
+                None,
+                None,
+                caller_endpoint_id,
+                caller_addr,
+                caller_path_type,
+                "2026-08-20T12:00:00Z",
+            )
+            .expect("ignore partial caller tuple");
+
+        let row = store
+            .query_request_with_caller(request_id)
+            .expect("query request record")
+            .expect("request record");
+        assert_eq!(row.caller_endpoint_id, None);
+        assert_eq!(row.caller_addr, None);
+        assert_eq!(row.caller_path_type, None);
+    }
+}
+
+#[test]
+fn supported_caller_tuples_are_canonicalized_before_persistence() {
+    let (_root, store) = open_store();
+    let endpoint_id = "7878787878787878787878787878787878787878787878787878787878787878";
+
+    for (request_id, caller_endpoint_id, caller_addr, caller_path_type) in [
+        (
+            "request-local-canonical",
+            Some("ignored-endpoint"),
+            Some("[2001:0db8:0:0::1]:40123"),
+            Some("local_http"),
+        ),
+        (
+            "request-remote-canonical",
+            Some(endpoint_id),
+            Some("[2001:0db8:0:0::2]:11204"),
+            Some("remote_quic_http"),
+        ),
+        (
+            "request-relay-clears-address",
+            Some(endpoint_id),
+            Some("192.0.2.78:11204"),
+            Some("relay"),
+        ),
+        (
+            "request-remote-clears-invalid-address",
+            Some(endpoint_id),
+            Some("not-a-socket-address"),
+            Some("remote_quic_http"),
+        ),
+    ] {
+        store
+            .upsert_summary_metadata_with_caller(
+                request_id,
+                None,
+                None,
+                None,
+                None,
+                caller_endpoint_id,
+                caller_addr,
+                caller_path_type,
+                "2026-08-20T12:00:00Z",
+            )
+            .expect("persist supported caller tuple");
+    }
+
+    let local = store
+        .query_request_with_caller("request-local-canonical")
+        .expect("query local caller")
+        .expect("local caller");
+    assert_eq!(local.caller_endpoint_id, None);
+    assert_eq!(local.caller_addr.as_deref(), Some("[2001:db8::1]:40123"));
+    assert_eq!(local.caller_path_type.as_deref(), Some("local_http"));
+
+    let remote = store
+        .query_request_with_caller("request-remote-canonical")
+        .expect("query remote caller")
+        .expect("remote caller");
+    assert_eq!(remote.caller_endpoint_id.as_deref(), Some(endpoint_id));
+    assert_eq!(remote.caller_addr.as_deref(), Some("[2001:db8::2]:11204"));
+    assert_eq!(remote.caller_path_type.as_deref(), Some("remote_quic_http"));
+
+    let relay = store
+        .query_request_with_caller("request-relay-clears-address")
+        .expect("query relay caller")
+        .expect("relay caller");
+    assert_eq!(relay.caller_endpoint_id.as_deref(), Some(endpoint_id));
+    assert_eq!(relay.caller_addr, None);
+    assert_eq!(relay.caller_path_type.as_deref(), Some("relay"));
+
+    let remote_without_addr = store
+        .query_request_with_caller("request-remote-clears-invalid-address")
+        .expect("query remote caller with invalid address")
+        .expect("remote caller with invalid address");
+    assert_eq!(
+        remote_without_addr.caller_endpoint_id.as_deref(),
+        Some(endpoint_id)
+    );
+    assert_eq!(remote_without_addr.caller_addr, None);
+    assert_eq!(
+        remote_without_addr.caller_path_type.as_deref(),
+        Some("remote_quic_http")
+    );
 }
 
 #[test]
@@ -382,6 +907,13 @@ fn forged_or_scope_mismatched_request_cursor_is_rejected() {
 
     query.cursor = Some(encode_cursor("2026-08-03T00:00:05Z", "request-a"));
     query.route = Some("completion".to_string());
+    assert!(matches!(
+        store.query_requests(&query),
+        Err(LogStoreError::CursorInvalid)
+    ));
+
+    query.route = None;
+    query.exclude_route = Some("chat".to_string());
     assert!(matches!(
         store.query_requests(&query),
         Err(LogStoreError::CursorInvalid)

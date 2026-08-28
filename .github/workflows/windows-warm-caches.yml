@@ -41,6 +41,7 @@ env:
   CACHE_NAMESPACE: mesh-llm
   LLAMA_WINDOWS_CACHE_RETENTION: ${{ github.event.inputs.retention || vars.LLAMA_WINDOWS_CACHE_RETENTION || '2' }}
   WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
+  MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
   WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
   ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
 

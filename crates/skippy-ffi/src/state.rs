@@ -11,6 +11,7 @@ pub struct KvPageComponentDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    pub k_idx_row_bytes: u32,
     pub payload_offset: u64,
     pub payload_bytes: u64,
     pub flags: u64,
@@ -18,6 +19,9 @@ pub struct KvPageComponentDesc {
 
 pub const KV_PAGE_CODEC_SINGLE_V1: u32 = 1;
 pub const KV_PAGE_CODEC_ISWA_COMPOSITE_V1: u32 = 2;
+
+pub const KV_PAGE_FLAG_V_TRANSPOSED: u64 = 1 << 0;
+pub const KV_PAGE_FLAG_HAS_K_IDX: u64 = 1 << 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,6 +37,7 @@ pub struct KvPageDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    pub k_idx_row_bytes: u32,
     pub payload_bytes: u64,
     pub flags: u64,
     pub codec: u32,

@@ -5,8 +5,7 @@ use super::{
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
     StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    WireReplyKind,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{
         activation_decoded_f32_bytes_with_state_flags, activation_wire_bytes_with_state_flags,
     },
@@ -237,14 +236,10 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
     }
 }
 
-pub fn write_stage_message(
-    mut writer: impl Write,
-    message: &StageWireMessage,
-    dtype: WireActivationDType,
-) -> io::Result<()> {
+pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -> io::Result<()> {
     // Wire v4 fixed prefix, little-endian:
     // kind, pos_start, token_count, token_sideband_count, position_sideband_count (5 x i32);
-    // StageStateHeader (10 x i32); request_id, session_id (2 x u64);
+    // StageStateHeader (9 x i32); request_id, session_id (2 x u64);
     // optional StageSamplingConfig follows when state_flags::SAMPLING is set.
     // Token sideband, raw StateImport bytes, or activation bytes follow this
     // prefix, so prefill overhead stays independent of ID string length.
@@ -268,7 +263,6 @@ pub fn write_stage_message(
     )?;
 
     let mut state = message.state;
-    state.reserved = dtype as i32;
     if message.sampling.is_some() {
         state.flags |= super::state_flags::SAMPLING;
     } else {
@@ -353,7 +347,6 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
     } else {
         None
     };
-    let dtype = state.dtype()?;
     if kind == WireMessageKind::Stop {
         return Ok(StageWireMessage {
             kind,
@@ -422,7 +415,7 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
         if state.source_stage_index < 0 || kind.is_activationless_prefix_cache_control() {
             0
         } else {
-            activation_wire_bytes_with_state_flags(dtype, token_count, n_embd, state.flags)?
+            activation_wire_bytes_with_state_flags(token_count, n_embd, state.flags)?
         };
     if activation_bytes > MAX_STAGE_ACTIVATION_BYTES {
         return Err(invalid_data(
@@ -491,8 +484,7 @@ fn write_state_header(mut writer: impl Write, state: StageStateHeader) -> io::Re
     write_i32(&mut writer, state.prompt_token_count)?;
     write_i32(&mut writer, state.decode_step)?;
     write_i32(&mut writer, state.current_token)?;
-    write_i32(&mut writer, state.source_stage_index)?;
-    write_i32(&mut writer, state.reserved)
+    write_i32(&mut writer, state.source_stage_index)
 }
 
 fn read_state_header(mut reader: impl Read) -> io::Result<StageStateHeader> {
@@ -506,7 +498,6 @@ fn read_state_header(mut reader: impl Read) -> io::Result<StageStateHeader> {
         decode_step: read_i32(&mut reader)?,
         current_token: read_i32(&mut reader)?,
         source_stage_index: read_i32(&mut reader)?,
-        reserved: read_i32(&mut reader)?,
     })
 }
 

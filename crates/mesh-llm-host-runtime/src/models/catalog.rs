@@ -942,20 +942,64 @@ pub async fn download_hf_repo_file_with_progress_label(
         revision: revision.clone(),
         file: file.to_string(),
     };
-    let HfAssetsDownload {
-        mut paths,
-        transfer_stats,
-    } = download_hf_assets(label, vec![asset.clone()], progress).await?;
-    paths.sort();
-    let path = paths
-        .iter()
-        .find(|path| path_suffix_matches_ignore_case(path, &asset.file))
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Downloaded Hugging Face asset not found in cache: {repo}/{file}@{revision}"
+    let mut retried_dangling_symlink = false;
+    let (path, paths, transfer_stats) = loop {
+        let HfAssetsDownload {
+            mut paths,
+            transfer_stats,
+        } = download_hf_assets(label, vec![asset.clone()], progress).await?;
+        paths.sort();
+        let path = paths
+            .iter()
+            .find(|path| path_suffix_matches_ignore_case(path, &asset.file))
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Downloaded Hugging Face asset not found in cache: {repo}/{file}@{revision}"
+                )
+            })?;
+        let resolution_error = match std::fs::canonicalize(&path) {
+            Ok(_) => break (path, paths, transfer_stats),
+            Err(err) => err,
+        };
+        if resolution_error.kind() != std::io::ErrorKind::NotFound {
+            return Err(resolution_error).with_context(|| {
+                format!(
+                    "Resolve downloaded Hugging Face asset {repo}/{file}@{revision} at {}",
+                    path.display()
+                )
+            });
+        }
+        let is_symlink = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata.file_type().is_symlink(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Inspect downloaded Hugging Face asset {}", path.display())
+                });
+            }
+        };
+        if !is_symlink {
+            return Err(resolution_error).with_context(|| {
+                format!(
+                    "Resolve downloaded Hugging Face asset {repo}/{file}@{revision} at {}",
+                    path.display()
+                )
+            });
+        }
+        std::fs::remove_file(&path).with_context(|| {
+            format!(
+                "Remove dangling Hugging Face snapshot pointer {}",
+                path.display()
             )
         })?;
+        if retried_dangling_symlink {
+            anyhow::bail!(
+                "Downloaded Hugging Face asset remained a dangling snapshot symlink after one retry: {repo}/{file}@{revision}"
+            );
+        }
+        retried_dangling_symlink = true;
+    };
     let display_name = Path::new(&asset.file)
         .file_name()
         .and_then(|value| value.to_str())
@@ -1521,6 +1565,167 @@ mod tests {
 
         assert_eq!(download.path, shard_one);
         assert_eq!(download.paths, vec![shard_one, shard_two, shard_three]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn download_hf_repo_file_retries_dangling_snapshot_symlink_once() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let snapshot_dir = cache.path().join("snapshots/commit");
+        let blob_dir = cache.path().join("blobs");
+        let snapshot = snapshot_dir.join("model.gguf");
+        let blob = blob_dir.join("etag");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        symlink("../../blobs/etag", &snapshot).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&snapshot)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::metadata(&snapshot).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let label = format!("dangling-snapshot-retry-{}", cache.path().display());
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label.clone(),
+            Arc::new({
+                let calls = Arc::clone(&calls);
+                let snapshot = snapshot.clone();
+                let blob = blob.clone();
+                move |_, _| match calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => Ok(vec![snapshot.clone()]),
+                    1 => {
+                        assert_eq!(
+                            std::fs::symlink_metadata(&snapshot).unwrap_err().kind(),
+                            std::io::ErrorKind::NotFound
+                        );
+                        std::fs::write(&blob, b"gguf").unwrap();
+                        symlink("../../blobs/etag", &snapshot).unwrap();
+                        Ok(vec![snapshot.clone()])
+                    }
+                    attempt => panic!("unexpected download attempt {attempt}"),
+                }
+            }),
+        );
+
+        let download = download_hf_repo_file_with_progress_label(
+            "org/repo",
+            Some("commit"),
+            "model.gguf",
+            &label,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a dangling Ok(path) must not be trusted"
+        );
+        assert_eq!(download.path, snapshot);
+        assert!(download.path.exists());
+        assert_eq!(std::fs::read(&download.path).unwrap(), b"gguf");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn download_hf_repo_file_removes_second_dangling_snapshot_symlink() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let snapshot_dir = cache.path().join("snapshots/commit");
+        let snapshot = snapshot_dir.join("model.gguf");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        symlink("../../blobs/first-etag", &snapshot).unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let label = format!("double-dangling-snapshot-{}", cache.path().display());
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label.clone(),
+            Arc::new({
+                let calls = Arc::clone(&calls);
+                let snapshot = snapshot.clone();
+                move |_, _| match calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => Ok(vec![snapshot.clone()]),
+                    1 => {
+                        assert_eq!(
+                            std::fs::symlink_metadata(&snapshot).unwrap_err().kind(),
+                            std::io::ErrorKind::NotFound
+                        );
+                        symlink("../../blobs/second-etag", &snapshot).unwrap();
+                        Ok(vec![snapshot.clone()])
+                    }
+                    attempt => panic!("unexpected download attempt {attempt}"),
+                }
+            }),
+        );
+
+        let result = download_hf_repo_file_with_progress_label(
+            "org/repo",
+            Some("commit"),
+            "model.gguf",
+            &label,
+            false,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            std::fs::symlink_metadata(&snapshot).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn download_hf_repo_file_does_not_retry_missing_non_symlink_path() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = tempfile::tempdir().unwrap();
+        let fixture = cache.path().join("fixture");
+        let missing = fixture.join("model.gguf");
+        let sentinel = fixture.join("sentinel");
+        std::fs::create_dir_all(&fixture).unwrap();
+        std::fs::write(&sentinel, b"keep").unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let label = format!("missing-non-symlink-{}", cache.path().display());
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label.clone(),
+            Arc::new({
+                let calls = Arc::clone(&calls);
+                let missing = missing.clone();
+                move |_, _| match calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => Ok(vec![missing.clone()]),
+                    attempt => panic!("unexpected download attempt {attempt}"),
+                }
+            }),
+        );
+
+        let result = download_hf_repo_file_with_progress_label(
+            "org/repo",
+            Some("commit"),
+            "model.gguf",
+            &label,
+            false,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(fixture.is_dir());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"keep");
+        assert!(!missing.exists());
     }
 
     #[test]

@@ -577,13 +577,6 @@ fn generation_defaults_presentation(rendered: &str) -> Option<SettingPresentatio
 
 fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
-        "defaults.skippy.activation_wire_dtype" => Some(sp(
-            "Activation wire dtype",
-            "Choose the dtype used when activation frames travel between skippy stages.",
-            SKIPPY_CATEGORY,
-            10,
-        )
-        .hint("segmented")),
         "defaults.skippy.stage_model_path" => Some(sp(
             "Stage model path",
             "Set the model or package path used for this skippy stage.",

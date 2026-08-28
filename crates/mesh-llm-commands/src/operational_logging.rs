@@ -1,21 +1,20 @@
 //! Bounded CLI command dispatch events.
-//!
-//! This boundary starts after `clap` has parsed a [`Command`] and finishes at
-//! the top-level command dispatcher. It deliberately does not inspect command
-//! arguments or error text. Parse failures happen before a `Command` exists
-//! and remain outside this boundary.
+
+mod command_summary;
 
 use anyhow::Result;
+use command_summary::command_summary;
 use mesh_llm_cli::Command;
 #[cfg(test)]
 use mesh_llm_events::OutputEvent;
-use mesh_llm_events::{CliCommandFamily, CliCommandOutcome, emit_cli_command_event};
+use mesh_llm_events::{
+    CliCommandFamily, CliCommandOutcome, CliCommandSummary, emit_cli_command_event,
+};
 use std::fmt;
 use std::sync::{Arc, LazyLock, RwLock};
 
 /// Marker a handler can retain in its error chain when it explicitly rejects a
-/// parsed command. Other handler or dispatcher errors are classified as
-/// failures without reading their details.
+/// parsed command.
 #[derive(Debug)]
 pub struct CommandDispatchRejected;
 
@@ -27,35 +26,25 @@ impl fmt::Display for CommandDispatchRejected {
 
 impl std::error::Error for CommandDispatchRejected {}
 
-/// Fail-open durable-audit bridge invoked after each command boundary
-/// emission. The caller installs it only after logging runtime
-/// initialization, so no durable record is produced before initialization.
-/// The bridge receives only the static command family and outcome; it never
-/// sees command arguments, argv, or error text.
-pub type CliOperationalAuditBridge = Arc<dyn Fn(CliCommandFamily, CliCommandOutcome) + Send + Sync>;
+/// Fail-open durable-audit bridge invoked after each command boundary emission.
+pub type CliOperationalAuditBridge =
+    Arc<dyn Fn(CliCommandFamily, CliCommandOutcome, Option<CliCommandSummary>) + Send + Sync>;
 
 static CLI_OPERATIONAL_AUDIT_BRIDGE: LazyLock<RwLock<Option<CliOperationalAuditBridge>>> =
     LazyLock::new(|| RwLock::new(None));
 
-/// Install the durable command audit bridge. Callers invoke this only after
-/// the logging runtime has been initialized so command behavior is unchanged
-/// before initialization. Replacing the bridge is allowed for tests and
-/// embedded hosts.
 pub fn install_cli_operational_audit_bridge(bridge: CliOperationalAuditBridge) {
     *CLI_OPERATIONAL_AUDIT_BRIDGE
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bridge);
 }
 
-/// Remove the command audit bridge. Used by tests and by callers that must
-/// stop persisting command outcomes.
 pub fn clear_cli_operational_audit_bridge() {
     *CLI_OPERATIONAL_AUDIT_BRIDGE
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
-/// Return the installed bridge, if any.
 pub fn cli_operational_audit_bridge() -> Option<CliOperationalAuditBridge> {
     CLI_OPERATIONAL_AUDIT_BRIDGE
         .read()
@@ -63,42 +52,71 @@ pub fn cli_operational_audit_bridge() -> Option<CliOperationalAuditBridge> {
         .clone()
 }
 
-/// Process-local lifecycle emitter for one parsed command dispatch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandDispatchBoundary {
     family: CliCommandFamily,
+    summary: Option<CliCommandSummary>,
 }
 
 impl CommandDispatchBoundary {
-    /// Start the command boundary after parsing succeeds.
     pub fn start(command: &Command) -> Self {
-        Self::start_family(command_family(command))
+        Self::start_with_family(command_family(command), command)
     }
 
-    /// Start a command boundary whose bounded family was resolved by the
-    /// dispatcher (for example, external plugin versus truly unknown).
-    pub fn start_family(family: CliCommandFamily) -> Self {
-        let boundary = Self { family };
+    pub fn start_with_family(family: CliCommandFamily, command: &Command) -> Self {
+        Self::start_with_summary(family, command_summary(command))
+    }
+
+    pub fn start_with_cli(cli: &mesh_llm_cli::Cli, family: CliCommandFamily) -> Self {
+        let Some(command) = cli.command.as_ref() else {
+            return Self::start_family(family);
+        };
+        let mut summary = command_summary(command).map(|value| value.as_str().to_owned());
+        if let Some(summary_value) = summary.as_mut() {
+            for (present, marker) in [
+                (!cli.join.is_empty(), " --join [REDACTED]"),
+                (!cli.relay.is_empty(), " --root-relay [REDACTED]"),
+                (!cli.relay_auth.is_empty(), " --relay-auth [REDACTED]"),
+            ] {
+                if present && !summary_value.contains(marker) {
+                    summary_value.push_str(marker);
+                }
+            }
+        }
+        Self::start_with_summary(
+            family,
+            summary.and_then(|value| CliCommandSummary::sanitize(&value)),
+        )
+    }
+
+    fn start_with_summary(family: CliCommandFamily, summary: Option<CliCommandSummary>) -> Self {
+        let boundary = Self { family, summary };
         boundary.emit(CliCommandOutcome::Started);
         boundary
     }
 
-    /// Emit exactly one terminal result for the command dispatcher outcome.
+    pub fn start_family(family: CliCommandFamily) -> Self {
+        let boundary = Self {
+            family,
+            summary: None,
+        };
+        boundary.emit(CliCommandOutcome::Started);
+        boundary
+    }
+
     pub fn finish(self, result: &Result<()>) {
         self.emit(command_outcome(result));
     }
 
-    fn emit(self, outcome: CliCommandOutcome) {
-        // Command results must retain their existing return and output behavior
-        // even if the process-local presentation sink is unavailable.
+    fn emit(&self, outcome: CliCommandOutcome) {
         let _ = emit_cli_command_event(self.family, outcome);
         if let Some(bridge) = cli_operational_audit_bridge() {
-            bridge(self.family, outcome);
+            bridge(self.family, outcome, self.summary.clone());
         }
     }
 
     #[cfg(test)]
-    fn event(self, outcome: CliCommandOutcome) -> OutputEvent {
+    fn event(&self, outcome: CliCommandOutcome) -> OutputEvent {
         OutputEvent::CliCommandLifecycle {
             family: self.family,
             outcome,
@@ -106,14 +124,14 @@ impl CommandDispatchBoundary {
     }
 }
 
-/// Emit a process lifecycle outcome that occurs before a parsed [`Command`]
-/// exists, while retaining the same presentation and durable-audit bridge.
 pub fn emit_cli_process_event(family: CliCommandFamily, outcome: CliCommandOutcome) {
-    let boundary = CommandDispatchBoundary { family };
+    let boundary = CommandDispatchBoundary {
+        family,
+        summary: None,
+    };
     boundary.emit(outcome);
 }
 
-/// Map a parsed command to a stable, argument-free event family.
 pub fn command_family(command: &Command) -> CliCommandFamily {
     match command {
         Command::Models { .. } | Command::Download { .. } | Command::ModelPrepare { .. } => {
@@ -156,6 +174,7 @@ fn command_outcome(result: &Result<()>) -> CliCommandOutcome {
 mod tests {
     use super::*;
     use anyhow::{Error, anyhow};
+    use clap::Parser;
     use mesh_llm_events::{clear_output_sink, set_cli_command_event_verbose, set_output_sink};
     use std::io;
 
@@ -211,14 +230,12 @@ mod tests {
 
     impl Drop for CommandEventVerboseResetGuard {
         fn drop(&mut self) {
-            mesh_llm_events::set_cli_command_event_verbose(false);
+            set_cli_command_event_verbose(false);
         }
     }
 
     fn lifecycle_events(command: &Command, result: &Result<()>) -> [OutputEvent; 2] {
-        let boundary = CommandDispatchBoundary {
-            family: command_family(command),
-        };
+        let boundary = CommandDispatchBoundary::start(command);
         [
             boundary.event(CliCommandOutcome::Started),
             boundary.event(command_outcome(result)),
@@ -226,42 +243,33 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn command_dispatch_orders_started_before_completed_without_command_arguments() {
         let command = Command::Load {
             name: "private-model.gguf?token=private-token".to_string(),
             port: 41731,
         };
-        let result = Ok(());
-
-        let events = lifecycle_events(&command, &result);
-
+        let events = lifecycle_events(&command, &Ok(()));
         assert_eq!(
-            events,
-            [
-                OutputEvent::CliCommandLifecycle {
-                    family: CliCommandFamily::Runtime,
-                    outcome: CliCommandOutcome::Started,
-                },
-                OutputEvent::CliCommandLifecycle {
-                    family: CliCommandFamily::Runtime,
-                    outcome: CliCommandOutcome::Completed,
-                },
-            ]
+            events[0].clone(),
+            OutputEvent::CliCommandLifecycle {
+                family: CliCommandFamily::Runtime,
+                outcome: CliCommandOutcome::Started
+            }
+        );
+        assert_eq!(
+            events[1].clone(),
+            OutputEvent::CliCommandLifecycle {
+                family: CliCommandFamily::Runtime,
+                outcome: CliCommandOutcome::Completed
+            }
         );
         let serialized = format!("{events:?}");
-        for raw_value in [
-            "private-model.gguf?token=private-token",
-            "41731",
-            "private-token",
-        ] {
-            assert!(
-                !serialized.contains(raw_value),
-                "command metadata must not enter lifecycle events"
-            );
-        }
+        assert!(!serialized.contains("private-token"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn explicit_handler_rejection_maps_to_rejected_without_error_detail() {
         let command = Command::Discover {
             name: Some("private-mesh".to_string()),
@@ -273,31 +281,19 @@ mod tests {
         };
         let result: Result<()> = Err(Error::new(CommandDispatchRejected)
             .context("private command rejection detail with private-token"));
-
         let events = lifecycle_events(&command, &result);
-
         assert_eq!(
-            events[1],
+            events[1].clone(),
             OutputEvent::CliCommandLifecycle {
                 family: CliCommandFamily::Discovery,
-                outcome: CliCommandOutcome::Rejected,
+                outcome: CliCommandOutcome::Rejected
             }
         );
-        let serialized = format!("{events:?}");
-        for raw_value in [
-            "private-mesh",
-            "private-region",
-            "wss://relay.private.example/?token=private-token",
-            "private command rejection detail with private-token",
-        ] {
-            assert!(
-                !serialized.contains(raw_value),
-                "rejection detail must not enter lifecycle events"
-            );
-        }
+        assert!(!format!("{events:?}").contains("private-token"));
     }
 
     #[test]
+    #[serial_test::serial]
     fn unmarked_dispatch_failure_maps_to_failed_without_error_detail() {
         let command = Command::Download {
             name: Some("private/model?token=private-token".to_string()),
@@ -306,18 +302,15 @@ mod tests {
         let result: Result<()> = Err(anyhow!(
             "download failed for https://private.example/model?token=private-token"
         ));
-
         let events = lifecycle_events(&command, &result);
-
         assert_eq!(
-            events[1],
+            events[1].clone(),
             OutputEvent::CliCommandLifecycle {
                 family: CliCommandFamily::Models,
-                outcome: CliCommandOutcome::Failed,
+                outcome: CliCommandOutcome::Failed
             }
         );
-        let serialized = format!("{events:?}");
-        assert!(!serialized.contains("https://private.example/model?token=private-token"));
+        assert!(!format!("{events:?}").contains("private-token"));
     }
 
     #[test]
@@ -331,42 +324,25 @@ mod tests {
         let recording = Arc::new(RecordingBridge::default());
         let _bridge_guard = BridgeResetGuard;
         let bridge_recording = recording.clone();
-        install_cli_operational_audit_bridge(Arc::new(move |family, outcome| {
+        install_cli_operational_audit_bridge(Arc::new(move |family, outcome, _summary| {
             bridge_recording
                 .calls
                 .lock()
                 .expect("recording bridge mutex poisoned")
                 .push((family, outcome));
         }));
-
-        let command = Command::Load {
+        let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "model.gguf".to_string(),
             port: 9337,
-        };
-        let boundary = CommandDispatchBoundary::start(&command);
-        let result: Result<()> = Ok(());
-        boundary.finish(&result);
-
-        assert_eq!(
-            sink.take_events(),
-            vec![
-                OutputEvent::CliCommandLifecycle {
-                    family: CliCommandFamily::Runtime,
-                    outcome: CliCommandOutcome::Started,
-                },
-                OutputEvent::CliCommandLifecycle {
-                    family: CliCommandFamily::Runtime,
-                    outcome: CliCommandOutcome::Completed,
-                },
-            ]
-        );
+        });
+        boundary.finish(&Ok(()));
+        assert_eq!(sink.take_events().len(), 2);
         assert_eq!(
             recording.take_calls(),
             vec![
                 (CliCommandFamily::Runtime, CliCommandOutcome::Started),
-                (CliCommandFamily::Runtime, CliCommandOutcome::Completed),
-            ],
-            "installed bridge fires exactly once per outcome"
+                (CliCommandFamily::Runtime, CliCommandOutcome::Completed)
+            ]
         );
     }
 
@@ -374,18 +350,12 @@ mod tests {
     #[serial_test::serial]
     fn command_dispatch_without_bridge_stays_fail_open() {
         clear_cli_operational_audit_bridge();
-        let command = Command::Load {
+        let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "private-model.gguf".to_string(),
             port: 41731,
-        };
-        let boundary = CommandDispatchBoundary::start(&command);
-        let result: Result<()> = Err(anyhow!("private dispatch failure"));
-        boundary.finish(&result);
-
-        assert!(
-            cli_operational_audit_bridge().is_none(),
-            "uninstalled bridge must remain absent after dispatch"
-        );
+        });
+        boundary.finish(&Err(anyhow!("private dispatch failure")));
+        assert!(cli_operational_audit_bridge().is_none());
     }
 
     #[test]
@@ -394,46 +364,156 @@ mod tests {
         let recording = Arc::new(RecordingBridge::default());
         let _bridge_guard = BridgeResetGuard;
         let bridge_recording = recording.clone();
-        install_cli_operational_audit_bridge(Arc::new(move |family, outcome| {
+        install_cli_operational_audit_bridge(Arc::new(move |family, outcome, _summary| {
             bridge_recording
                 .calls
                 .lock()
                 .expect("recording bridge mutex poisoned")
                 .push((family, outcome));
         }));
-
-        let command = Command::Discover {
+        let boundary = CommandDispatchBoundary::start(&Command::Discover {
             name: Some("private-mesh".to_string()),
             model: None,
             min_vram: None,
             region: Some("private-region".to_string()),
             auto: false,
             relay: vec!["wss://relay.private.example/?token=private-token".to_string()],
-        };
-        let boundary = CommandDispatchBoundary::start(&command);
-        let result: Result<()> = Err(Error::new(CommandDispatchRejected)
-            .context("private command rejection detail with private-token"));
-        boundary.finish(&result);
-
-        let calls = recording.take_calls();
+        });
+        boundary.finish(&Err(Error::new(CommandDispatchRejected)
+            .context("private command rejection detail with private-token")));
         assert_eq!(
-            calls,
+            recording.take_calls(),
             vec![
                 (CliCommandFamily::Discovery, CliCommandOutcome::Started),
-                (CliCommandFamily::Discovery, CliCommandOutcome::Rejected),
+                (CliCommandFamily::Discovery, CliCommandOutcome::Rejected)
             ]
         );
-        let serialized = format!("{calls:?}");
-        for raw_value in [
-            "private-mesh",
-            "private-region",
-            "wss://relay.private.example/?token=private-token",
-            "private command rejection detail with private-token",
-        ] {
-            assert!(
-                !serialized.contains(raw_value),
-                "command metadata must not cross the audit bridge"
-            );
-        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn dispatch_summary_is_shared_by_started_and_terminal_bridge_records() {
+        let recording = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let expected = CliCommandSummary::sanitize("mesh-llm load --port 9337 name [REDACTED]")
+            .expect("bounded summary");
+        let _bridge_guard = BridgeResetGuard;
+        let calls = recording.clone();
+        install_cli_operational_audit_bridge(Arc::new(move |_, _, summary| {
+            calls.lock().expect("bridge mutex").push(summary)
+        }));
+        let boundary = CommandDispatchBoundary::start(&Command::Load {
+            name: "model.gguf".to_owned(),
+            port: 9337,
+        });
+        boundary.finish(&Ok(()));
+        assert_eq!(
+            recording.lock().expect("bridge mutex").as_slice(),
+            &[Some(expected.clone()), Some(expected)]
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn start_with_cli_redacts_global_credentials_in_both_bridge_records() {
+        let cli = mesh_llm_cli::Cli::parse_from([
+            "mesh-llm",
+            "--join",
+            "private-invite-token",
+            "--relay",
+            "wss://relay.example/?token=private-relay-token",
+            "--relay-auth",
+            "https://relay.example/?token=private-token=padding",
+            "load",
+            "private/model",
+        ]);
+        let recording = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let _bridge_guard = BridgeResetGuard;
+        let calls = recording.clone();
+        install_cli_operational_audit_bridge(Arc::new(move |family, outcome, summary| {
+            calls
+                .lock()
+                .expect("bridge mutex")
+                .push((family, outcome, summary));
+        }));
+
+        let boundary = CommandDispatchBoundary::start_with_cli(&cli, CliCommandFamily::Runtime);
+        boundary.finish(&Ok(()));
+
+        let calls = recording.lock().expect("bridge mutex");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, CliCommandFamily::Runtime);
+        assert_eq!(calls[1].0, CliCommandFamily::Runtime);
+        assert_eq!(calls[0].1, CliCommandOutcome::Started);
+        assert_eq!(calls[1].1, CliCommandOutcome::Completed);
+        assert_eq!(calls[0].2, calls[1].2);
+        let summary = calls[0].2.as_ref().expect("CLI summary").as_str();
+        assert!(summary.contains("--join [REDACTED]"));
+        assert!(summary.contains("--root-relay [REDACTED]"));
+        assert!(summary.contains("--relay-auth [REDACTED]"));
+        assert!(CliCommandSummary::sanitize(summary).is_some());
+        assert!(!summary.contains("private-invite-token"));
+        assert!(!summary.contains("private-relay-token"));
+        assert!(!summary.contains("private-token"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn start_with_cli_does_not_fabricate_global_markers_without_base_summary() {
+        let cli = mesh_llm_cli::Cli::parse_from([
+            "mesh-llm",
+            "--join",
+            "private-invite-token",
+            "--relay-auth",
+            "https://relay.example/?token=private-token=padding",
+            "benchmark",
+            "tune",
+            "--model",
+            "private-model",
+            "--json",
+            "--ctx-sizes",
+            "1",
+            "--batch-sizes",
+            "1",
+            "--ubatch-sizes",
+            "1",
+            "--mmap-values",
+            "auto",
+            "--mlock-values",
+            "enabled",
+            "--flash-attention",
+            "on",
+            "--speculative-types",
+            "auto",
+            "--spec-draft-models",
+            "private-draft.gguf",
+            "--spec-draft-max-tokens",
+            "1",
+            "--spec-draft-min-tokens",
+            "1",
+            "--spec-ngram-min",
+            "1",
+            "--spec-ngram-max",
+            "1",
+            "--apply",
+            "--launch-args",
+            "--debug-telemetry",
+        ]);
+        let recording = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let _bridge_guard = BridgeResetGuard;
+        let calls = recording.clone();
+        install_cli_operational_audit_bridge(Arc::new(move |family, outcome, summary| {
+            calls
+                .lock()
+                .expect("bridge mutex")
+                .push((family, outcome, summary));
+        }));
+
+        let boundary = CommandDispatchBoundary::start_with_cli(&cli, CliCommandFamily::Benchmark);
+        boundary.finish(&Ok(()));
+
+        let calls = recording.lock().expect("bridge mutex");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].2.is_none());
+        assert!(calls[1].2.is_none());
     }
 }

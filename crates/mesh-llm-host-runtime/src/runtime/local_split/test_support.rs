@@ -58,7 +58,6 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
-        wire_dtype: skippy::StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 4,
         n_batch: Some(2048),
@@ -130,6 +129,7 @@ pub(super) fn split_test_peer(
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,
@@ -297,7 +297,6 @@ pub(super) fn runtime_status_for_stage(
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         activation_width: 896,
-        wire_dtype: skippy::StageWireDType::F16,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,
@@ -359,7 +358,6 @@ threads = 6
 threads_batch = 3
 
 [models.skippy]
-activation_wire_dtype = "q8"
 prefill_chunking = "fixed"
 prefill_chunk_size = 96
 
@@ -423,7 +421,6 @@ stop = ["END"]
 
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
     assert_eq!(settings.activation_width, 2048);
-    assert_eq!(settings.activation_wire_dtype, skippy::StageWireDType::Q8);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
     assert_eq!(settings.runtime_options.config.ctx_size, 8192);
@@ -631,7 +628,6 @@ pub(super) fn test_stage_status_from_load(
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         activation_width: load.activation_width as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -669,7 +665,6 @@ pub(super) fn test_stage_status_from_stop(
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
         activation_width: 0,
-        wire_dtype: skippy::StageWireDType::F16,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,

@@ -40,11 +40,11 @@ activation links and then crossed three reply links before stage 0 could emit
 the token. On a topology with a fixed 10 ms delay per inter-stage hop, the reply
 chain alone makes the hot path six hops, or about 60 ms before compute.
 
-## Generation 4 Direct Prediction Return and Verify Retirement
+## Generation 5 Direct Prediction Return and Verify Retirement
 
-Stage protocol generation 4 is a compatibility-breaking change. A peer is stage
+Stage protocol generation 5 is a compatibility-breaking change. A peer is stage
 compatible only when it advertises both `skippy-stage/2` and
-`stage-generation-4`. Prediction-bearing messages return
+`stage-generation-5`. Prediction-bearing messages return
 directly from the final/readout stage to the driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
 but they are not part of the decode-token prediction return path.
@@ -113,8 +113,7 @@ All 3 boundaries:
 ## Optimization Implication
 
 The next prefill optimization should attack activation traffic or activation
-handling before spending time on token/control traffic. Under the current
-locked topology, `f16` activation wire format is the conservative default: it
-roughly halves activation payload size without changing stage placement, layer
-balance, or decode behavior. `q8` remains a per-family/per-split opt-in because
-it can change exact next-token results.
+handling before spending time on token/control traffic. The current wire uses
+raw little-endian `f32` so transport adds no quantization error and needs no
+per-family dtype policy. Compression or quantization belongs in a separately
+versioned protocol experiment with a model-agnostic safety contract.

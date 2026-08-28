@@ -2,11 +2,12 @@
 //! and peer list management (add/remove/update).
 
 use super::{
-    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, MeshOperationalEvent, ModelDemand,
-    ModelRuntimeDescriptor, Node, NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS,
-    PeerAnnouncement, PeerInfo, ServedModelDescriptor, SignedNodeOwnership, connect_mesh,
-    elapsed_ms_u64, emit_mesh_info, infer_remote_served_descriptors, parse_invite_token,
-    record_mesh_operational_event,
+    DEAD_PEER_TTL, DisplayLatencySource, InviteTokenMaterial, MeshOperationalEvent,
+    MeshPeerRemovalReason, MeshPolicyRejectionReason, ModelDemand, ModelRuntimeDescriptor, Node,
+    NodeRole, PEER_CONNECT_AND_GOSSIP_TIMEOUT, PEER_STALE_SECS, PeerAnnouncement, PeerInfo,
+    ServedModelDescriptor, SignedNodeOwnership, connect_mesh, elapsed_ms_u64, emit_mesh_info,
+    infer_remote_served_descriptors, mesh_peer_operational_context, parse_invite_token,
+    record_mesh_operational_event, record_mesh_operational_event_with_context,
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::{PropagatedLatencyObservation, policy_accepts_peer};
@@ -232,6 +233,7 @@ pub(crate) struct LocalAnnouncementData {
     owner_attestation: Option<SignedNodeOwnership>,
     artifact_transfer_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
+    cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
     gpu_compute_tflops_fp16: Option<String>,
@@ -281,6 +283,11 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
+        || match (&old.cache_affinity, &new.cache_affinity) {
+            (Some(old), Some(new)) => !old.has_same_cache_state(new),
+            (None, None) => false,
+            _ => true,
+        }
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
@@ -294,6 +301,21 @@ pub(crate) fn merge_first_joined_mesh_ts(existing: &mut Option<u64>, incoming: O
         (Some(_), None) => {}
         (Some(a), Some(b)) => *existing = Some(a.min(b)),
         (None, None) => {}
+    }
+}
+
+fn merge_cache_affinity(
+    existing: &mut Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
+    incoming: Option<&mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
+    clear_on_absence: bool,
+) {
+    match (existing.as_ref(), incoming) {
+        (_, None) if clear_on_absence => *existing = None,
+        (None, Some(incoming)) => *existing = Some(incoming.clone()),
+        (Some(current), Some(incoming)) if incoming.is_newer_than(current) => {
+            *existing = Some(incoming.clone());
+        }
+        _ => {}
     }
 }
 
@@ -362,6 +384,11 @@ pub(super) fn apply_transitive_ann(
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    merge_cache_affinity(
+        &mut existing.cache_affinity,
+        ann.cache_affinity.as_ref(),
+        false,
+    );
     if ann.inference_admission_state.is_some() {
         existing.inference_admission_state = ann.inference_admission_state;
     }
@@ -519,7 +546,12 @@ impl Node {
                 );
             }
             if self
-                .add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
+                .add_peer_after_direct_requirements_validated(
+                    remote,
+                    addr.clone(),
+                    ann,
+                    context.negotiated_protocol_generation,
+                )
                 .await
             {
                 if let Some(ref their_id) = ann.mesh_id {
@@ -801,6 +833,11 @@ impl Node {
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+        merge_cache_affinity(
+            &mut existing.cache_affinity,
+            ann.cache_affinity.as_ref(),
+            true,
+        );
         existing.inference_admission_state = ann.inference_admission_state;
         if ann.version.is_some() {
             existing.version = ann.version.clone();
@@ -884,8 +921,14 @@ impl Node {
             let _ = self.peer_change_tx.send(admitted_count);
         }
         drop(state);
-        if newly_rejected {
-            record_mesh_operational_event(MeshOperationalEvent::GossipPolicyRejected);
+        if newly_rejected
+            && let Some(reason) =
+                MeshPolicyRejectionReason::from_ownership_status(&owner_summary.status)
+        {
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipPolicyRejected(reason),
+                mesh_peer_operational_context(id, self.authenticated_peer_path(id).await),
+            );
         }
         true
     }
@@ -971,7 +1014,11 @@ impl Node {
             .count();
         drop(state);
         self.capture_peer_observation("peer_direct_add", &peer, "direct", None);
-        record_mesh_operational_event(MeshOperationalEvent::GossipDirectPeerPromoted);
+        record_mesh_operational_event_with_context(
+            MeshOperationalEvent::GossipDirectPeerPromoted,
+            mesh_peer_operational_context(id, self.authenticated_peer_path(id).await)
+                .numeric_summary("direct_peers", count as u64),
+        );
         let _ = self.peer_change_tx.send(count);
         self.emit_plugin_mesh_event(
             crate::plugin::proto::mesh_event::Kind::PeerUp,
@@ -1033,6 +1080,16 @@ impl Node {
         let advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
+        let now_unix_ms = current_time_unix_ms();
+        let salt = mesh_llm_routing::cache_inventory::rotating_salt(
+            self.endpoint.id().as_bytes(),
+            now_unix_ms,
+        );
+        let cache_affinity = self
+            .cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .advertisement(salt, now_unix_ms);
         let release_attestation = self.release_attestation.lock().await.clone();
         let (mesh_id, mesh_policy_hash, signed_genesis_policy) =
             if let Some(state) = self.requirement_mesh_state.lock().await.clone() {
@@ -1080,6 +1137,7 @@ impl Node {
             artifact_transfer_supported:
                 crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
             advertised_model_throughput,
+            cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
                 &self.gpu_mem_bandwidth_gbps,
             )
@@ -1149,6 +1207,7 @@ impl Node {
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
+            cache_affinity: peer.cache_affinity.clone(),
             latency_ms: latency.latency_ms,
             latency_source: Some(match latency.source {
                 DisplayLatencySource::Direct => crate::proto::node::LatencySource::Direct,
@@ -1214,6 +1273,7 @@ impl Node {
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
+            cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,
             latency_age_ms: None,
@@ -1571,7 +1631,7 @@ impl Node {
 
         Ok(())
     }
-    pub(super) async fn remove_peer(&self, id: EndpointId) {
+    pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
         let mut state = self.state.lock().await;
         // Always clear any rejection-tracking entry so the map stays bounded.
         state.policy_rejected_peers.remove(&id);
@@ -1598,14 +1658,18 @@ impl Node {
             self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
                 event: "peer_removed",
                 peer: id,
-                reason: "remove_peer",
+                reason: reason.reason_code(),
                 reporter: None,
                 last_seen_age_ms: Some(last_seen_age_ms),
                 last_mentioned_age_ms: Some(last_mentioned_age_ms),
                 had_connection: Some(had_connection),
                 bridge_id,
             });
-            record_mesh_operational_event(MeshOperationalEvent::GossipPeerRemoved);
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipPeerRemoved(reason),
+                mesh_peer_operational_context(id, peer.selected_path)
+                    .numeric_summary("direct_peers", count as u64),
+            );
             let _ = self.peer_change_tx.send(count);
             self.emit_plugin_mesh_event(
                 crate::plugin::proto::mesh_event::Kind::PeerDown,
@@ -1651,8 +1715,13 @@ impl Node {
             }
             return;
         }
-        self.add_peer_after_direct_requirements_validated(id, addr, ann)
-            .await;
+        self.add_peer_after_direct_requirements_validated(
+            id,
+            addr,
+            ann,
+            negotiated_protocol_generation,
+        )
+        .await;
     }
 
     pub(crate) async fn add_peer_after_direct_requirements_validated(
@@ -1660,6 +1729,7 @@ impl Node {
         id: EndpointId,
         addr: EndpointAddr,
         ann: &PeerAnnouncement,
+        _negotiated_protocol_generation: Option<u32>,
     ) -> bool {
         // Reject ingest from peers below the supported version floor. They
         // are not added to local state, do not appear in /api/status, and
@@ -1671,7 +1741,10 @@ impl Node {
                 id.fmt_short(),
                 ann.version
             );
-            record_mesh_operational_event(MeshOperationalEvent::GossipIncompatibleVersionRejected);
+            record_mesh_operational_event_with_context(
+                MeshOperationalEvent::GossipIncompatibleVersionRejected,
+                mesh_peer_operational_context(id, self.authenticated_peer_path(id).await),
+            );
             self.remove_disallowed_peer(id).await;
             return false;
         }

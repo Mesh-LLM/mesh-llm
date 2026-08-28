@@ -1,18 +1,8 @@
-import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
 import { useRef } from 'react'
-import {
-  SharedModal,
-  SharedModalBody,
-  SharedModalContent,
-  SharedModalDescription,
-  SharedModalHeader,
-  SharedModalTitle
-} from '@/components/ui/SharedModal'
-import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
-import { Button } from '@/components/ui/button'
+import { SharedModal, SharedModalBody, SharedModalContent } from '@/components/ui/SharedModal'
 import { LogRequestId } from '@/features/logs/api/ids'
-import type { LogAuditEntry } from '@/features/logs/api/schemas'
+import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
+import { LogAuditInspector } from '@/features/logs/components/LogAuditInspector'
 import { LogRequestDetails } from '@/features/logs/components/LogRequestDetails'
 import { LogRequestInspectorHeader } from '@/features/logs/components/LogRequestInspectorHeader'
 import type { LogInspector, LogRequestDetailTab } from '@/features/logs/lib/log-inspector'
@@ -20,6 +10,7 @@ import type { LogInspector, LogRequestDetailTab } from '@/features/logs/lib/log-
 type LogEventInspectorProps = {
   readonly inspector: LogInspector | undefined
   readonly auditEntries: readonly LogAuditEntry[]
+  readonly requestRows?: readonly LogRequest[]
   readonly requestTab: LogRequestDetailTab
   readonly onClose: () => void
   readonly onRequestTabChange: (tab: LogRequestDetailTab) => void
@@ -34,6 +25,7 @@ const AUDIT_INSPECTOR_FRAME_CLASS = `${INSPECTOR_FRAME_BASE_CLASS} sm:h-auto sm:
 export function LogEventInspector({
   inspector,
   auditEntries,
+  requestRows,
   requestTab,
   onClose,
   onRequestTabChange,
@@ -67,6 +59,7 @@ export function LogEventInspector({
             onClose={onClose}
             onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
             onRequestTabChange={onRequestTabChange}
+            requestRows={requestRows}
             requestTab={requestTab}
           />
         </SharedModalContent>
@@ -75,33 +68,10 @@ export function LogEventInspector({
   )
 }
 
-function AuditInspectorHeader({ code }: { readonly code: string }) {
-  return (
-    <SharedModalHeader className="relative min-w-0 shrink-0 pr-16 lg:pr-14">
-      <SharedModalTitle aria-label={`Operational event ${code}`} className="min-w-0 break-words">
-        {code}
-      </SharedModalTitle>
-      <SharedModalDescription>
-        Recorded state, timing, source, and related identifiers for this event.
-      </SharedModalDescription>
-      <DialogPrimitive.Close asChild>
-        <Button
-          aria-label="Close inspector"
-          className="ui-control-ghost absolute right-2 top-2 size-13 rounded-[var(--radius)] text-fg-dim lg:right-4 lg:top-4 lg:size-8"
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          <X aria-hidden="true" className="size-4" />
-        </Button>
-      </DialogPrimitive.Close>
-    </SharedModalHeader>
-  )
-}
-
 function InspectorContent({
   inspector,
   auditEntries,
+  requestRows,
   requestTab,
   onClose,
   onRequestTabChange,
@@ -110,12 +80,14 @@ function InspectorContent({
   switch (inspector.type) {
     case 'request': {
       const requestId = LogRequestId.parse(inspector.id)
+      const knownRequest = requestRows?.find((row) => row.requestId.toString() === requestId.toString())
       return (
         <>
-          <LogRequestInspectorHeader requestId={requestId} />
+          <LogRequestInspectorHeader knownRequest={knownRequest} requestId={requestId} />
           <SharedModalBody className="flex min-h-0 flex-1 overflow-hidden p-0">
             <LogRequestDetails
               embedded
+              knownRequest={knownRequest}
               onBack={onClose}
               onMaintenanceMutationSucceeded={onMaintenanceMutationSucceeded}
               onTabChange={onRequestTabChange}
@@ -129,132 +101,11 @@ function InspectorContent({
     case 'audit': {
       const audit = auditEntries.find((entry) => entry.entryId === inspector.id)
       const code = audit?.code ?? inspector.id
-      return (
-        <>
-          <AuditInspectorHeader code={code} />
-          <SharedModalBody
-            aria-label="Operational event metadata"
-            className="min-h-0 flex-1 overflow-y-auto p-0"
-            role="region"
-          >
-            {audit ? <AuditMetadata audit={audit} /> : <AuditOutsideWindow />}
-          </SharedModalBody>
-        </>
-      )
+      return <LogAuditInspector audit={audit} auditEntries={auditEntries} code={code} />
     }
     default:
       return assertNever(inspector)
   }
-}
-
-function AuditMetadata({ audit }: { readonly audit: LogAuditEntry }) {
-  const statusFields: Array<{
-    readonly kind: 'severity' | 'outcome'
-    readonly label: string
-    readonly value: string
-  }> = [
-    { kind: 'severity', label: 'Severity', value: audit.severity ?? 'Not provided' },
-    ...(audit.outcome ? ([{ kind: 'outcome' as const, label: 'Outcome', value: audit.outcome }] as const) : [])
-  ]
-  const metadataFields: Array<readonly [string, string]> = [
-    ['Entry ID', audit.entryId],
-    ['Source', audit.source],
-    ['Occurred', audit.occurredAt],
-    ['Sequence', String(audit.sequence)],
-    ...(audit.subjectKind ? ([['Subject kind', audit.subjectKind]] as const) : []),
-    ...(audit.subjectId ? ([['Subject ID', audit.subjectId]] as const) : []),
-    ...(audit.operationId ? ([['Operation ID', audit.operationId]] as const) : []),
-    ...(audit.requestId ? ([['Request ID', audit.requestId]] as const) : []),
-    ...(audit.reasonCode ? ([['Reason', audit.reasonCode]] as const) : []),
-    ...(audit.durationMs !== undefined ? ([['Duration', `${audit.durationMs} ms`]] as const) : []),
-    ...Object.entries(audit.numericSummaries ?? {}).map(([key, value]) => [`Summary · ${key}`, String(value)] as const)
-  ]
-
-  return (
-    <div className="flex min-w-0 flex-col">
-      <section
-        aria-labelledby="audit-state-heading"
-        className="border-b border-border-soft bg-panel-strong px-4 py-4 sm:px-5"
-      >
-        <h2 className="type-panel-title text-foreground" id="audit-state-heading">
-          Event state
-        </h2>
-        <dl className="mt-3 flex min-w-0 flex-wrap gap-x-8 gap-y-3">
-          {statusFields.map(({ kind, label, value }) => (
-            <div className="min-w-[8rem]" key={label}>
-              <dt className="type-label text-fg-faint">{label}</dt>
-              <dd className="mt-1">
-                <StatusBadge dot size="caption" tone={statusTone(kind, value)}>
-                  {value}
-                </StatusBadge>
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-      <section aria-labelledby="audit-metadata-heading" className="min-w-0 px-4 py-4 sm:px-5">
-        <h2 className="type-panel-title text-foreground" id="audit-metadata-heading">
-          Event metadata
-        </h2>
-        <dl className="mt-2 grid min-w-0 gap-x-6 sm:grid-cols-2">
-          {metadataFields.map(([label, value]) => (
-            <div
-              className="min-w-0 border-t border-border-soft py-2.5 sm:grid sm:grid-cols-[minmax(5.75rem,max-content)_minmax(0,1fr)] sm:items-baseline sm:gap-3"
-              key={label}
-            >
-              <dt className="type-label text-fg-faint">{label}</dt>
-              <dd className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption-lg)] text-foreground sm:mt-0 [overflow-wrap:anywhere]">
-                {value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-    </div>
-  )
-}
-
-function AuditOutsideWindow() {
-  return (
-    <div className="px-4 py-5 sm:px-5" role="status">
-      <div className="type-panel-title text-foreground">Operational event is outside the loaded window</div>
-      <p className="type-body mt-1 text-fg-dim">Return to the ledger and load a window containing this entry.</p>
-    </div>
-  )
-}
-
-function statusTone(kind: 'severity' | 'outcome', value: string): StatusBadgeTone {
-  const normalized = value.trim().toLowerCase()
-  return kind === 'severity' ? (SEVERITY_TONES[normalized] ?? 'muted') : (OUTCOME_TONES[normalized] ?? 'muted')
-}
-
-const SEVERITY_TONES: Readonly<Record<string, StatusBadgeTone>> = {
-  info: 'muted',
-  warning: 'warn',
-  error: 'bad'
-}
-
-const OUTCOME_TONES: Readonly<Record<string, StatusBadgeTone>> = {
-  active: 'accent',
-  running: 'accent',
-  started: 'warn',
-  pending: 'warn',
-  loading: 'warn',
-  cancelled: 'warn',
-  canceled: 'warn',
-  completed: 'good',
-  accepted: 'good',
-  ready: 'good',
-  success: 'good',
-  succeeded: 'good',
-  healthy: 'good',
-  available: 'good',
-  failed: 'bad',
-  error: 'bad',
-  rejected: 'bad',
-  denied: 'bad',
-  blocked: 'bad',
-  dropped: 'bad'
 }
 
 function assertNever(value: never): never {

@@ -188,7 +188,6 @@ pub fn native_mtp_openai_ab(args: NativeMtpOpenAiAbArgs) -> Result<()> {
         split_layer: args.split_layer,
         layer_end: args.runtime.layer_end,
         activation_width: args.activation_width,
-        activation_wire_dtype: args.activation_wire_dtype,
         exact_content_match,
         batched_events_required: require_batched_events,
         batched_events_present,

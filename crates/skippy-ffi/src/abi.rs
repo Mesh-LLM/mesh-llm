@@ -9,6 +9,21 @@ pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
 pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
+pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct IterationRequest {
+    pub session: *mut Session,
+    pub token_ids: *const i32,
+    pub token_count: usize,
+    pub positions: *const i32,
+    pub position_count: usize,
+    pub sampling: *const SamplingConfig,
+    pub input_desc: *const crate::ActivationDesc,
+    pub input_payload: *const c_void,
+    pub sample_last: bool,
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

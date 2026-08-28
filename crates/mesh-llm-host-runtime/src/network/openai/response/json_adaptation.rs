@@ -8,12 +8,12 @@ use super::probe::{
 };
 use super::relay::relay_error_response;
 use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::normalize_chat_completion_json_body;
 use anyhow::{Result, anyhow};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 const MAX_TRANSFORMED_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
 const TRANSFORMED_RESPONSE_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -25,7 +25,7 @@ const TRANSFORMED_RESPONSE_READ_LIMITS: ResponseBodyReadLimits = ResponseBodyRea
 pub(in crate::network::openai::response) async fn relay_translated_responses_json<
     R: AsyncRead + Unpin,
 >(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
@@ -78,7 +78,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
 pub(in crate::network::openai::response) async fn relay_normalized_chat_completion_json<
     R: AsyncRead + Unpin,
 >(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     retry_policy: ResponseRetryPolicy,
@@ -182,7 +182,8 @@ mod tests {
         );
         let header_end = header.len();
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.into_bytes(),
                 header_end,
@@ -201,7 +202,7 @@ mod tests {
         });
 
         upstream_writer.write_all(body).await.unwrap();
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
             .await
@@ -224,6 +225,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(mesh_llm_events::logging::events::TokenUsage {
                     prompt_tokens: Some(2),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),
@@ -253,7 +255,8 @@ mod tests {
         );
         let header_end = header.len();
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.into_bytes(),
                 header_end,
@@ -306,7 +309,8 @@ mod tests {
         );
         let header_end = header.len();
         let server_task = tokio::spawn(async move {
-            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
             let probe = ResponseProbe {
                 buffered: header.into_bytes(),
                 header_end,
@@ -325,7 +329,7 @@ mod tests {
         });
 
         upstream_writer.write_all(body).await.unwrap();
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
             .await
@@ -341,6 +345,7 @@ mod tests {
                 status_code: 200,
                 usage: Some(mesh_llm_events::logging::events::TokenUsage {
                     prompt_tokens: Some(2),
+                    cached_prompt_tokens: None,
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),

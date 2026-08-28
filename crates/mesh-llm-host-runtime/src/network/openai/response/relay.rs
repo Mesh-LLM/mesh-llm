@@ -7,9 +7,9 @@ use super::probe::{
     try_parse_response_headers,
 };
 use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
+use crate::network::openai::client_stream::ClientStream;
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 const MAX_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
 
@@ -90,7 +90,7 @@ fn oversized_error_http_response(status_code: u16) -> Vec<u8> {
 }
 
 pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     route_observer: OpenAiRouteObserver<'_>,
@@ -126,7 +126,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
 }
 
 pub(in crate::network::openai::response) async fn relay_success_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     parsed: ParsedResponseHeaders,
@@ -285,7 +285,8 @@ mod tests {
         let captured = Arc::new(Captures::default());
         let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
             let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
             relay_success_response(
                 &mut client,
@@ -312,7 +313,7 @@ mod tests {
         });
         upstream_writer.write_all(body).await.unwrap();
         drop(upstream_writer);
-        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut socket = ClientStream::connect(address).await.unwrap();
         let mut client_response = Vec::new();
         socket.read_to_end(&mut client_response).await.unwrap();
         task.await.unwrap();
@@ -342,7 +343,8 @@ mod tests {
         let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
         let task_header = header.clone();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
             let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
             let mut empty_reader = tokio::io::empty();
             relay_success_response(
@@ -368,7 +370,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut socket = ClientStream::connect(address).await.unwrap();
         let mut client_response = Vec::new();
         socket.read_to_end(&mut client_response).await.unwrap();
         task.await.unwrap();

@@ -3797,6 +3797,7 @@ version = "0.76.0-rc7"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "dirs",
  "hex",
  "iroh",
@@ -4183,7 +4184,9 @@ dependencies = [
 name = "mesh-llm-routing"
 version = "0.76.0-rc7"
 dependencies = [
+ "blake3",
  "iroh",
+ "serde",
  "serde_json",
 ]
 
@@ -7510,6 +7513,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-scheduler"
+version = "0.76.0-rc7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "skippy-cache",
+ "skippy-runtime",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "skippy-server"
 version = "0.76.0-rc7"
 dependencies = [
@@ -7534,6 +7548,7 @@ dependencies = [
  "skippy-metrics",
  "skippy-protocol",
  "skippy-runtime",
+ "skippy-scheduler",
  "skippy-tokenizer",
  "skippy-topology",
  "socket2",

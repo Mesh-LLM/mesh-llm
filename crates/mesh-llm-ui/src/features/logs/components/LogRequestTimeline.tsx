@@ -23,7 +23,7 @@ function QueryNotice({
   if (error) {
     return (
       <p
-        className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-2 type-caption text-fg-dim"
+        className="min-w-0 break-words rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 px-[var(--panel-x)] py-[var(--panel-y)] type-caption text-fg-dim"
         role="alert"
       >
         {subject === 'lifecycle evidence'
@@ -35,7 +35,7 @@ function QueryNotice({
   if (loading) {
     return (
       <p
-        className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-2 type-caption text-fg-dim"
+        className="min-w-0 break-words rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 px-[var(--panel-x)] py-[var(--panel-y)] type-caption text-fg-dim"
         role="status"
       >
         Loading {subject}.
@@ -57,7 +57,7 @@ export function LogRequestTimeline({
   const attemptsReady = !attemptsLoading && !attemptsError
 
   return (
-    <div className="grid min-w-0 gap-6">
+    <div className="grid min-w-0 gap-[var(--shell-normal)]">
       {eventsReady ? (
         <LogStreamTimeline
           emptyMessage="No lifecycle or stream markers were retained for this request."

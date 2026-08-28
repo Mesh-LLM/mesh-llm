@@ -18,6 +18,7 @@ mod space_maintenance_tests;
 mod artifact_privacy;
 mod artifact_repository;
 mod artifacts;
+mod audit_detail;
 mod capture;
 mod cursor;
 mod error;
@@ -25,6 +26,7 @@ mod maintenance;
 mod migrations;
 mod query;
 mod repositories;
+mod schema;
 mod store;
 mod timestamps;
 
@@ -35,6 +37,7 @@ pub use artifact_repository::UnavailableArtifactPointer;
 pub use artifacts::{
     ArtifactContent, ArtifactFileStore, ArtifactRedactor, ArtifactStatus, ArtifactWriteReceipt,
 };
+pub use audit_detail::AuditEntryDetail;
 pub use capture::{
     ARTIFACT_CAPTURE_DISABLED_PRIVACY_UNAVAILABLE, ArtifactCaptureDisabledReason,
     ArtifactCaptureHealthMarker, ArtifactCaptureOutcome, FailOpenArtifactCapture,
@@ -50,7 +53,7 @@ pub use maintenance::{
 pub use migrations::CURRENT_VERSION as LOG_STORE_SCHEMA_VERSION;
 pub use query::{
     ArtifactRecord, EventRecord, MAX_QUERY_LIMIT, PageQuery, ProxyQuery, ProxyRecord, QueryPage,
-    QuerySort, RequestOutcome, RequestQuery, RequestRecord,
+    QuerySort, RequestOutcome, RequestQuery, RequestRecord, RequestRecordWithCaller,
 };
 pub use repositories::{
     AuditEntryFilters, AuditEntryRow, AuditEntrySeverity, AuditEntrySource, CascadeArtifactPointer,

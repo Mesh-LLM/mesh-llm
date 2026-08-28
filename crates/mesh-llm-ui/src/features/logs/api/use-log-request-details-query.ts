@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useDataMode, type DataMode } from '@/lib/data-mode'
 import { LogsApiClient } from '@/features/logs/api/client'
 import { LogPageCursor, type LogRequestId } from '@/features/logs/api/ids'
-import type { LogsPage } from '@/features/logs/api/schemas'
+import type { LogRequest, LogsPage } from '@/features/logs/api/schemas'
 
 const DETAIL_PAGE_SIZE = 50
 export const DETAIL_ITEM_LIMIT = 250
@@ -63,11 +63,19 @@ export const logRequestDetailsKeys = {
   ]
 }
 
-export function useLogRequestSummaryQuery(requestId: LogRequestId) {
+/**
+ * Read one request summary, optionally seeded with the ledger row the caller
+ * already holds. The seed is treated as immediately stale, so the inspector
+ * paints real data on the first frame and the authoritative record still
+ * arrives from a background refetch.
+ */
+export function useLogRequestSummaryQuery(requestId: LogRequestId, knownRequest?: LogRequest) {
   const dataMode = useDataMode()
   return useQuery({
     queryKey: logRequestDetailsKeys.summary(requestId, dataMode.mode),
     queryFn: () => new LogsApiClient().getRequest(requestId, dataMode.mode as DataMode),
+    initialData: knownRequest,
+    initialDataUpdatedAt: 0,
     staleTime: 10_000
   })
 }

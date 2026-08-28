@@ -103,11 +103,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-4 stage protocol.
-  Stage compatibility requires `stage-generation-4`; direct prediction return and
+- `serve-binary` participates in the breaking generation-5 stage protocol.
+  Stage compatibility requires `stage-generation-5`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-4 topology.
+  generation-5 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -123,7 +123,7 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-4 prediction returns flow directly from the final stage to stage 0.
+  generation-5 prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
@@ -159,9 +159,13 @@ deadline handling.
 - Set `SKIPPY_BINARY_WARM_PRECONNECT=1` to establish one downstream binary
   connection while a stage runtime loads and replenish it after use. This is
   opt-in and leaves the normal on-demand connection path unchanged.
-- Set `SKIPPY_DECODE_BATCH_COLLECTION_US` to an opt-in collection window for
-  cross-request decode batching. The default is zero added wait; configured
-  values are capped at 10,000 microseconds and ignored for single-lane runtimes.
+- Set `SKIPPY_ITERATION_SCHEDULER_SAFE_MODE=1` for an operator-controlled
+  degraded mode that keeps the iteration scheduler as the sole serving path
+  while serializing active sequences, prefills, and direct iteration batches.
+  This is a restart-time containment control for production incidents; it does
+  not restore or retain the removed decode batchers. Scheduler startup
+  telemetry records `skippy.scheduler.safe_mode` and the bounded command-queue
+  capacity so operators can verify the effective mode.
 - `--openai-prefill-chunk-policy` selects fixed, scheduled, or adaptive stage0
   prefill chunking without changing the default fixed
   `--openai-prefill-chunk-size`. Passing `--openai-prefill-chunk-schedule`
@@ -236,9 +240,8 @@ sequenceDiagram
 ```
 
 This is topology dependent; use `--no-async-prefill-forward` to benchmark the
-synchronous baseline on a target link. The conservative exact default is `f16`;
-`q8` should stay per-family/per-split opt-in until a correctness smoke validates
-it.
+synchronous baseline on a target link. Activation frames use raw little-endian
+`f32`; compression is not selected per family or split.
 
 Debug telemetry includes middle-out timing spans:
 
@@ -250,8 +253,8 @@ Debug telemetry includes middle-out timing spans:
   compute, downstream write, downstream wait, upstream reply, credit, and
   deferred-reply timestamps. It also carries runtime lock wait and session
   counts for the executable message. Activation conversion is reported with
-  `input_activation_decode_ms` for wire-to-f32 materialization and
-  `activation_encode_ms` for f32-to-wire forwarding so transfer cost can be
+  `input_activation_decode_ms` for wire materialization and
+  `activation_encode_ms` for f32 wire framing so transfer cost can be
   separated from compute and socket write time.
 - `stage.binary_session_stop` records logical session reset timing when a
   persistent lane receives `Stop`; the TCP stream remains open after the reset.

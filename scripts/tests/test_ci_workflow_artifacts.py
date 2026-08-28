@@ -117,6 +117,18 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn('read -r -a verify_args <<< "$VERIFY_BACKEND"', workflow)
         self.assertIn('verify-runner-image "${verify_args[@]}"', workflow)
 
+    def test_windows_cuda_runtime_declares_the_installed_toolkit_version(self):
+        workflow = (WORKFLOWS / "ci-windows-runtime-slice.yml").read_text()
+
+        self.assertIn(
+            "WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}",
+            workflow,
+        )
+        self.assertIn(
+            "MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}",
+            workflow,
+        )
+
     def test_cuda_smoke_uses_the_registered_gpu_runner_labels(self):
         product_smoke = (
             WORKFLOWS / "ci-linux-product-smoke-slice.yml"

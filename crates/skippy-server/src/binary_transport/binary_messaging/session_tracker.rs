@@ -1,15 +1,12 @@
 use super::telemetry::insert_runtime_session_stats;
 use crate::{
-    runtime_state::RuntimeState,
+    frontend::iteration_scheduler::IterationScheduler,
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::StageConfig;
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, Mutex},
-};
+use std::collections::BTreeSet;
 
 /// Runtime session keys created by one binary stage connection.
 ///
@@ -37,7 +34,7 @@ impl ConnectionSessionTracker {
 /// Returns lanes held by sessions that never reached a graceful `Stop`.
 pub(super) fn release_tracked_connection_sessions(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     telemetry: &Telemetry,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
@@ -46,37 +43,39 @@ pub(super) fn release_tracked_connection_sessions(
         return Ok(());
     }
     let orphaned_count = orphaned.len();
-    let mut runtime = runtime.lock().map_err(|_| {
-        anyhow::anyhow!(
-            "failed to reclaim {orphaned_count} orphaned binary stage session(s): runtime lock poisoned"
-        )
-    })?;
-    let mut failures = Vec::new();
-    for session_key in orphaned {
-        match runtime.drop_session_timed(&session_key) {
-            Ok(drop_stats) => {
-                let mut attrs = lifecycle_attrs(config);
-                attrs.insert("llama_stage.session_key".to_string(), json!(session_key));
-                attrs.insert(
-                    "llama_stage.session_reset".to_string(),
-                    json!(drop_stats.reset_session),
-                );
-                attrs.insert(
-                    "llama_stage.lane_discarded".to_string(),
-                    json!(drop_stats.lane_discarded),
-                );
-                insert_runtime_session_stats(
-                    &mut attrs,
-                    "llama_stage.runtime_sessions_after",
-                    &drop_stats.stats_after,
-                );
-                telemetry.emit("stage.binary_session_orphan_reclaimed", attrs);
+    let scheduler_config = config.clone();
+    let scheduler_telemetry = telemetry.clone();
+    let failures = iteration_scheduler
+        .execute_runtime("binary-orphan-cleanup", move |runtime| {
+            let mut failures = Vec::new();
+            for session_key in orphaned {
+                match runtime.drop_session_timed(&session_key) {
+                    Ok(drop_stats) => {
+                        let mut attrs = lifecycle_attrs(&scheduler_config);
+                        attrs.insert("llama_stage.session_key".to_string(), json!(session_key));
+                        attrs.insert(
+                            "llama_stage.session_reset".to_string(),
+                            json!(drop_stats.reset_session),
+                        );
+                        attrs.insert(
+                            "llama_stage.lane_discarded".to_string(),
+                            json!(drop_stats.lane_discarded),
+                        );
+                        insert_runtime_session_stats(
+                            &mut attrs,
+                            "llama_stage.runtime_sessions_after",
+                            &drop_stats.stats_after,
+                        );
+                        scheduler_telemetry.emit("stage.binary_session_orphan_reclaimed", attrs);
+                    }
+                    Err(error) => {
+                        failures.push(format!("{session_key}: {error:#}"));
+                    }
+                }
             }
-            Err(error) => {
-                failures.push(format!("{session_key}: {error:#}"));
-            }
-        }
-    }
+            Ok(failures)
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     if !failures.is_empty() {
         bail!(
             "failed to reclaim {}/{} orphaned binary stage session(s): {}",

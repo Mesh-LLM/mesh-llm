@@ -41,7 +41,6 @@ tuning_profile        = "balanced"      # "throughput", "balanced", or "saver"
 stage_model_path      = ""               # Path or repo for a stage model
 stage_role            = ""               # Stage role override
 stage_topology        = ""               # Stage topology override
-activation_wire_dtype = "auto"           # "auto", "f16", "f32", or "q8"
 binary_stage_transport = ""              # Binary stage transport override
 prefill_chunking      = "auto"           # Prefill chunking policy
 prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)

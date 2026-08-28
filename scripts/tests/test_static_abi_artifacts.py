@@ -96,6 +96,21 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self.assertIn("SKIPPY_LLAMA_AUTO_BUILD=0", package_script)
         self.assertIn("MESH_LLM_AUTO_BUILD_LLAMA=0", package_script)
 
+    def test_skippy_ffi_links_mtmd_hash_dependency_after_mtmd(self) -> None:
+        build_script = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+            encoding="utf-8",
+        )
+
+        mtmd_link = 'println!("cargo:rustc-link-lib=static=mtmd");'
+        hash_link = 'println!("cargo:rustc-link-lib=static=vendor-hash");'
+        self.assertIn('build_dir.join("vendor/hash")', build_script)
+        self.assertIn('"vendor/hash/libvendor-hash.a"', build_script)
+        self.assertIn('"vendor/hash/vendor-hash.lib"', build_script)
+        self.assertLess(
+            build_script.index(mtmd_link),
+            build_script.index(hash_link),
+        )
+
     def test_dynamic_output_probe_is_pipefail_safe(self) -> None:
         build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",

@@ -1,4 +1,3 @@
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
 use crate::cli::ServeOpenAiArgs;
@@ -9,7 +8,6 @@ use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
@@ -18,6 +16,7 @@ use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
 use crate::frontend::generation::open_draft_runner;
 use crate::frontend::generation::prewarm_generation_sessions;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{
@@ -49,7 +48,6 @@ use serde_json::Value;
 use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::StageTopology;
-use skippy_protocol::binary::WireActivationDType;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -119,9 +117,12 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     }
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(runtime.clone(), args.generation_concurrency);
-    let decode_frame_batcher =
-        DecodeFrameBatcher::new(runtime.clone(), args.generation_concurrency);
+    let iteration_scheduler = IterationScheduler::new(
+        runtime.clone(),
+        &config,
+        args.generation_concurrency,
+        telemetry.clone(),
+    )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
         .context("construct stage-0 tokenizer capability for OpenAI serving")?;
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
@@ -147,8 +148,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     });
     let backend = OpenAiGuardrailsConfig::for_standalone_mode(args.openai_guardrails)
         .wrap_backend_with_context_limit(backend, Some(ctx_size));
@@ -188,7 +188,6 @@ pub struct EmbeddedOpenAiArgs {
     pub native_mtp_max_tokens: usize,
     pub native_mtp_min_tokens: usize,
     pub activation_width: i32,
-    pub wire_dtype: WireActivationDType,
     pub reply_credit_limit: Option<usize>,
     pub downstream_connect_timeout_secs: u64,
     pub downstream_wire_condition: WireCondition,
@@ -245,12 +244,32 @@ pub async fn serve_embedded_openai(args: EmbeddedOpenAiArgs) -> Result<()> {
     serve_embedded_openai_with_shutdown(args, std::future::pending::<()>()).await
 }
 
+pub(crate) async fn serve_embedded_openai_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: IterationScheduler,
+) -> Result<()> {
+    serve_embedded_openai_with_shutdown_and_scheduler(
+        args,
+        std::future::pending::<()>(),
+        Some(iteration_scheduler),
+    )
+    .await
+}
+
 pub async fn serve_embedded_openai_with_shutdown(
     args: EmbeddedOpenAiArgs,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    serve_embedded_openai_with_shutdown_and_scheduler(args, shutdown, None).await
+}
+
+async fn serve_embedded_openai_with_shutdown_and_scheduler(
+    args: EmbeddedOpenAiArgs,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<()> {
     let bind_addr = args.bind_addr;
-    let binding = embedded_openai_router(args)?;
+    let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
     println!(
         "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={}",
@@ -278,10 +297,17 @@ pub struct EmbeddedOpenAiBackend {
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
+    embedded_openai_router_with_scheduler(args, None)
+}
+
+fn embedded_openai_router_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<EmbeddedOpenAiRouter> {
     let telemetry = args.telemetry.clone();
     let tokenizer = TokenizerCapability::from_stage_zero(&args.config, args.runtime.clone())
         .context("construct stage-0 tokenizer capability for embedded OpenAI serving")?;
-    let binding = embedded_openai_backend(args)?;
+    let binding = embedded_openai_backend_with_scheduler(args, iteration_scheduler)?;
     let router = instrumented_openai_router(binding.backend.clone(), tokenizer, telemetry);
 
     Ok(EmbeddedOpenAiRouter {
@@ -292,6 +318,13 @@ pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAi
 }
 
 pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiBackend> {
+    embedded_openai_backend_with_scheduler(args, None)
+}
+
+fn embedded_openai_backend_with_scheduler(
+    args: EmbeddedOpenAiArgs,
+    iteration_scheduler: Option<IterationScheduler>,
+) -> Result<EmbeddedOpenAiBackend> {
     if args.prefill_chunk_size == 0 {
         bail!("--openai-prefill-chunk-size must be greater than zero");
     }
@@ -348,7 +381,6 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     let prefill_reply_credit_limit = args.reply_credit_limit.unwrap_or(3);
     let mode = OpenAiBackendMode::EmbeddedStageZero {
         config: args.config.clone(),
-        wire_dtype: args.wire_dtype,
         prefill_chunk_policy: PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
             policy: &args.prefill_chunk_policy,
             schedule: args.prefill_chunk_schedule.as_deref(),
@@ -377,9 +409,15 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     .context("prewarm embedded OpenAI runtime sessions")?;
     let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let decode_batcher = DecodeBatcher::new(args.runtime.clone(), args.generation_concurrency);
-    let decode_frame_batcher =
-        DecodeFrameBatcher::new(args.runtime.clone(), args.generation_concurrency);
+    let iteration_scheduler = match iteration_scheduler {
+        Some(iteration_scheduler) => iteration_scheduler,
+        None => IterationScheduler::new(
+            args.runtime.clone(),
+            &args.config,
+            args.generation_concurrency,
+            args.telemetry.clone(),
+        )?,
+    };
     let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         config: args.config.clone(),
@@ -403,8 +441,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_receipt: args.generation_receipt,
         linear_proposal_ingress: args.linear_proposal_ingress,
         kv,
-        decode_batcher,
-        decode_frame_batcher,
+        iteration_scheduler,
     });
     let openai_guardrails = args
         .openai_guardrails

@@ -209,28 +209,27 @@ Initial outcome:
 - `skippy-bench` now rejects stage ranges whose lengths differ by more
   than one layer.
 
-### 5. Activation Wire Dtype Sweep
+### 5. Activation Wire Dtype Sweep (Historical)
 
 Hypothesis: boundary activation transfer may be significant for prefill. `f16`
 or `q8` wire payloads can reduce transfer time, but they are only acceptable if
 correctness stays inside the tolerance already used by `skippy-correctness`.
 
-Trial support already existed:
+The removed trial support exposed:
 
-- `skippy-bench run --activation-wire-dtype f32|f16|q8`
+- `skippy-bench run --activation-wire-dtype f32|f16|q8` (no longer accepted)
 - debug spans include activation byte counts and forwarding/wait timing
 
-Initial outcome:
+Historical outcome:
 
-- Accepted as a guarded experiment, not a default.
+- Evaluated as a guarded experiment, not promoted to production.
 - Historical `q8` activation compression cut one boundary payload from
   `4096 B` per token for `fp16` to `2052 B`, about `49.9%` smaller.
 - The `q8` smoke was correctness-positive once, and one smoke was `23.8%`
   faster than `fp16`, but a second smoke was `20.0%` slower and the full sweep
   was stopped because the scalar codec was too noisy.
-- Recommendation: compare `f32` and `f16` in the current Rust runner first.
-  Keep `q8` out of the main path until its pack/unpack is vectorized or the
-  four-host run proves network transfer dominates codec overhead.
+- Current production: all activation transport uses fixed raw f32. The f16/q8
+  experiments remain as historical research evidence only.
 
 ## Later
 

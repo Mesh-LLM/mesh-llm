@@ -19,8 +19,8 @@ Do not enable KV-only cache for Qwen3.6. The package candidate is exact
 ```mermaid
 flowchart LR
     Client["OpenAI client"] --> S0["stage0 + OpenAI\nstudio54 192.168.0.2\nlayers 0..14"]
-    S0 -->|"f16 activation or cache-hit control"| S1["stage1\nbuild 192.168.0.4\nlayers 14..27"]
-    S1 -->|"f16 activation or cache-hit control"| S2["stage2\nblack 192.168.0.3\nlayers 27..40"]
+    S0 -->|"f32 activation or cache-hit control"| S1["stage1\nbuild 192.168.0.4\nlayers 14..27"]
+    S1 -->|"f32 activation or cache-hit control"| S2["stage2\nblack 192.168.0.3\nlayers 27..40"]
     S0 --- C0["1 GiB physical\nkv-recurrent cache"]
     S1 --- C1["1 GiB physical\nkv-recurrent cache"]
     S2 --- C2["1 GiB physical\nkv-recurrent cache"]
@@ -54,7 +54,7 @@ bind address, downstream endpoint, and traffic path behave the same.
 | stage0 | `studio54`, `192.168.0.2`, layers `0..14` |
 | stage1 | `build`, `192.168.0.4`, layers `14..27` |
 | stage2 | `black`, `192.168.0.3`, layers `27..40` |
-| activation wire dtype | `f16` |
+| activation wire format | raw little-endian `f32` |
 | OpenAI surface | embedded in stage0 |
 | OpenAI bind | `192.168.0.2:20680` in the soak gate |
 | generation concurrency | `1` for current package gates |

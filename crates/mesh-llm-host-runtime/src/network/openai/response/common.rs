@@ -164,6 +164,11 @@ pub(in crate::network::openai) fn parse_token_usage_from_json_body(
 ) -> Option<TokenUsage> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let usage = json.get("usage")?;
+    let cached_prompt_tokens = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(serde_json::Value::as_u64);
     TokenUsage::from_counts(
         usage
             .get("prompt_tokens")
@@ -177,6 +182,7 @@ pub(in crate::network::openai) fn parse_token_usage_from_json_body(
             .get("total_tokens")
             .and_then(serde_json::Value::as_u64),
     )
+    .map(|usage| usage.with_cached_prompt_tokens(cached_prompt_tokens))
 }
 
 pub(in crate::network::openai::response) fn retryable_quality_result(
@@ -351,7 +357,12 @@ mod tests {
     #[test]
     fn token_usage_parser_supports_chat_responses_and_absence() {
         let chat = serde_json::json!({
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+            "usage": {
+                "prompt_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 4},
+                "completion_tokens": 3,
+                "total_tokens": 8
+            }
         });
         let responses = serde_json::json!({
             "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9}
@@ -361,6 +372,7 @@ mod tests {
             parse_token_usage_from_json_body(chat.to_string().as_bytes()),
             Some(TokenUsage {
                 prompt_tokens: Some(5),
+                cached_prompt_tokens: Some(4),
                 completion_tokens: Some(3),
                 total_tokens: Some(8),
             })
@@ -369,6 +381,7 @@ mod tests {
             parse_token_usage_from_json_body(responses.to_string().as_bytes()),
             Some(TokenUsage {
                 prompt_tokens: Some(5),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(4),
                 total_tokens: Some(9),
             })

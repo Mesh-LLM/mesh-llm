@@ -65,19 +65,6 @@ fn validate_prompt_topology_plan(
     let splits = split_boundaries_from_ranges(ranges);
     let plan = plan_contiguous_with_splits(&request, &splits).context("topology planner failed")?;
 
-    if args.activation_wire_dtype.eq_ignore_ascii_case("q8") {
-        match family.as_ref().map(|family| family.q8_wire_validation) {
-            Some(WireValidation::Validated) => {}
-            Some(WireValidation::Rejected) => {
-                bail!("topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record", args.model_id);
-            }
-            Some(WireValidation::Untested) => {
-                bail!("topology planner has no q8 validation for {}; use f16 until this family/split passes correctness", args.model_id);
-            }
-            None => {}
-        }
-    }
-
     let rejected = plan
         .boundaries
         .iter()

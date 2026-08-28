@@ -8,10 +8,10 @@ use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, MediaInput,
-    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
-    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
-    parse_cache_type,
+    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
+    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
+    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel,
+    StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -31,6 +31,11 @@ pub struct RuntimeState {
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
+    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
+    /// unified-KV mode every lane draws decode/prefill cells from this single
+    /// shared pool, so it is the real ceiling for scheduler admission — see
+    /// [`Self::kv_pool_tokens`].
+    ctx_size: u32,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
     /// `next_lane_index - free_lane_indices.len()`.
@@ -112,6 +117,16 @@ pub struct RuntimeDecodeFrameBatchRequest<'a> {
     pub input: Option<&'a ActivationFrame>,
 }
 
+pub struct RuntimeIterationBatchRequest<'a> {
+    pub session_id: &'a str,
+    pub token_ids: &'a [i32],
+    pub positions: &'a [i32],
+    pub sampling: Option<&'a SamplingConfig>,
+    pub input: Option<&'a ActivationFrame>,
+    pub sample_last: bool,
+    pub phase: IterationBatchPhase,
+}
+
 #[derive(Debug, Clone)]
 struct ResidentLanePrefix {
     page_id: String,
@@ -128,11 +143,17 @@ impl RuntimeState {
     /// this must not be used to drive inference.
     #[cfg(test)]
     pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
+        Self::new_modelless_with_capacity_for_test(lane_count, 0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_modelless_with_capacity_for_test(lane_count: u32, ctx_size: u32) -> Self {
         Self {
             model: StageModel::new_dummy(),
             layer_start: 0,
             layer_end: 1,
             lane_count,
+            ctx_size,
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),
@@ -140,6 +161,20 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
         }
+    }
+
+    pub fn lane_count(&self) -> u32 {
+        self.lane_count
+    }
+
+    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
+    ///
+    /// In unified-KV mode all lanes share this single pool, so it is the real
+    /// token budget the iteration scheduler must admit against. Returns 0 for
+    /// the modelless test runtime, in which case callers should fall back to a
+    /// configured default.
+    pub fn kv_pool_tokens(&self) -> u32 {
+        self.ctx_size
     }
 }
 
@@ -188,6 +223,7 @@ pub fn load_runtime_with_overrides(
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count: config.lane_count,
+        ctx_size: config.ctx_size,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -236,6 +272,7 @@ pub fn load_runtime_with_overrides_and_open_events(
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count: config.lane_count,
+        ctx_size: config.ctx_size,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -349,9 +386,20 @@ mod tests {
     };
 
     use super::{
-        RuntimeLaunchOverrides, load_runtime_with_overrides, runtime_config_from_stage_config,
-        should_attach_package_projector,
+        RuntimeLaunchOverrides, RuntimeState, load_runtime_with_overrides,
+        runtime_config_from_stage_config, should_attach_package_projector,
     };
+
+    #[test]
+    fn modelless_runtime_reports_zero_kv_pool_so_scheduler_uses_fallback() {
+        // The scheduler derives its admission budget from `kv_pool_tokens()` and
+        // keeps its configured default when the runtime reports 0. The modelless
+        // test runtime carries no context, so it must report 0 (not panic or
+        // report a stale non-zero pool).
+        let rt = RuntimeState::new_modelless_for_test(4);
+        assert_eq!(rt.kv_pool_tokens(), 0);
+        assert_eq!(rt.lane_count(), 4);
+    }
 
     #[test]
     fn runtime_config_preserves_selected_backend_device_and_thread_overrides() {
@@ -504,8 +552,12 @@ mod tests {
             projector_path: None,
             stage_id: "stage-final".to_string(),
             stage_index: 1,
-            layer_start: 78,
-            layer_end: 79,
+            // GLM-DSA stages must begin on a full-indexer layer. Layer 78 is
+            // the auxiliary next-token head rather than a base transformer
+            // layer, so the smallest valid final-stage fixture is 74..78;
+            // native MTP loading retains layer 78's nextn tensors alongside it.
+            layer_start: 74,
+            layer_end: 78,
             ctx_size: 128,
             lane_count: 1,
             n_batch: Some(1),
@@ -537,8 +589,8 @@ mod tests {
         Some((package_path, config))
     }
 
-    fn glm52_mtp_input() -> ActivationFrame {
-        let hidden_bytes = 6144 * std::mem::size_of::<f32>();
+    fn glm52_mtp_input(token_count: u32) -> ActivationFrame {
+        let hidden_bytes = 6144 * token_count as usize * std::mem::size_of::<f32>();
         ActivationFrame {
             desc: ActivationDesc {
                 version: 1,
@@ -546,8 +598,8 @@ mod tests {
                 layout: RuntimeActivationLayout::TokenMajor,
                 producer_stage_index: 0,
                 layer_start: 0,
-                layer_end: 78,
-                token_count: 1,
+                layer_end: 74,
+                token_count,
                 sequence_count: 1,
                 payload_bytes: hidden_bytes as u64,
                 flags: 0,
@@ -572,7 +624,7 @@ mod tests {
         )?
         .expect("GLM final stage should load from the package");
         let mut runtime = runtime.lock().expect("runtime mutex poisoned");
-        let input = glm52_mtp_input();
+        let input = glm52_mtp_input(1);
         let sampling = SamplingConfig {
             temperature: 0.0,
             ..SamplingConfig::default()
@@ -584,6 +636,17 @@ mod tests {
         assert!(predicted >= 0);
         assert_eq!(draft.token_ids.len(), 1);
         assert!(draft.token_ids[0] >= 0);
+        let verify_inputs = [predicted, draft.token_ids[0]];
+        let (verified, _next_draft, _output) = runtime.verify_frame_sampled(
+            "smoke",
+            &verify_inputs,
+            Some(&sampling),
+            Some(&glm52_mtp_input(2)),
+            0,
+            1,
+        )?;
+        assert!(!verified.is_empty());
+        runtime.retire_verify_checkpoint("smoke", 1, 2)?;
         Ok(())
     }
 
@@ -610,7 +673,7 @@ mod tests {
             "disabled-mtp",
             1,
             Some(&sampling),
-            Some(&glm52_mtp_input()),
+            Some(&glm52_mtp_input(1)),
             0,
             1,
         )?;
@@ -675,7 +738,7 @@ mod tests {
             "external-mtp",
             1,
             Some(&sampling),
-            Some(&glm52_mtp_input()),
+            Some(&glm52_mtp_input(1)),
             0,
             1,
         )?;

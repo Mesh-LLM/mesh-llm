@@ -177,21 +177,59 @@ pub fn sanitize_lifecycle_event(event: LifecycleEvent) -> LifecycleEvent {
 /// let such an address bypass credential redaction, so every redaction gate
 /// must use this helper rather than a bare `starts_with("http://")`.
 pub(crate) fn is_http_url(value: &str) -> bool {
+    http_url_start(value) == Some(0)
+}
+
+fn http_url_start(value: &str) -> Option<usize> {
     let bytes = value.as_bytes();
     let starts_ci = |prefix: &[u8]| {
         bytes.len() >= prefix.len() && bytes[..prefix.len()].eq_ignore_ascii_case(prefix)
     };
-    starts_ci(b"http://") || starts_ci(b"https://")
+    if starts_ci(b"http://") || starts_ci(b"https://") {
+        return Some(0);
+    }
+    (1..bytes.len()).find(|&index| {
+        let suffix = &bytes[index..];
+        (suffix.len() >= b"http://".len()
+            && suffix[..b"http://".len()].eq_ignore_ascii_case(b"http://"))
+            || (suffix.len() >= b"https://".len()
+                && suffix[..b"https://".len()].eq_ignore_ascii_case(b"https://"))
+    })
 }
 
 pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
-            if is_http_url(word) {
-                redact_url_query(word)
-            } else {
-                word.to_string()
+            let mut redacted = String::with_capacity(word.len());
+            let mut cursor = 0;
+            while let Some(relative_start) = http_url_start(&word[cursor..]) {
+                let url_start = cursor + relative_start;
+                redacted.push_str(&word[cursor..url_start]);
+
+                let scheme_len = if word.as_bytes()[url_start..]
+                    .get(..b"https://".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
+                {
+                    b"https://".len()
+                } else {
+                    b"http://".len()
+                };
+                let after_scheme = url_start + scheme_len;
+                let url_end = http_url_start(&word[after_scheme..])
+                    .map_or(word.len(), |next_start| after_scheme + next_start);
+                let url_with_separator = &word[url_start..url_end];
+                let url_len = url_with_separator
+                    .trim_end_matches(|character: char| {
+                        character.is_ascii_punctuation() && character != '='
+                    })
+                    .len();
+                let (url, separator) = url_with_separator.split_at(url_len);
+                redacted.push_str(&redact_url_query(url));
+                redacted.push_str(separator);
+                cursor = url_end;
             }
+            redacted.push_str(&word[cursor..]);
+            redacted
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -711,6 +749,59 @@ mod redaction_corpus_tests {
     fn url_without_query_passes_through() {
         let url = "https://example.com/path/to/resource";
         assert_eq!(redact_url_query(url), url);
+    }
+
+    #[test]
+    fn every_punctuation_adjacent_url_is_redacted() {
+        let text = "(https://alice:first@host/v1),(https://bob:second@host/v2)";
+        let cleaned = redact_urls_in_text(text);
+        assert_eq!(
+            cleaned,
+            "(https://[REDACTED]@host/v1),(https://[REDACTED]@host/v2)"
+        );
+        assert!(!cleaned.contains("alice:first"));
+        assert!(!cleaned.contains("bob:second"));
+    }
+
+    #[test]
+    fn punctuation_between_query_bearing_urls_is_preserved() {
+        let text = "(https://host/v1?token=first),(https://host/v2?token=second)";
+        let cleaned = redact_urls_in_text(text);
+        assert_eq!(
+            cleaned,
+            "(https://host/v1?token=[REDACTED]),(https://host/v2?token=[REDACTED])"
+        );
+        assert!(!cleaned.contains("first"));
+        assert!(!cleaned.contains("second"));
+    }
+
+    #[test]
+    fn arbitrary_punctuation_between_query_bearing_urls_is_preserved() {
+        let text = "https://host/v1?token=first).https://host/v2?token=second";
+        let cleaned = redact_urls_in_text(text);
+        assert_eq!(
+            cleaned,
+            "https://host/v1?token=[REDACTED]).https://host/v2?token=[REDACTED]"
+        );
+        assert!(!cleaned.contains("first"));
+        assert!(!cleaned.contains("second"));
+    }
+
+    #[test]
+    fn url_syntax_punctuation_between_adjacent_urls_is_preserved() {
+        for separator in ['?', '&', '#'] {
+            let text =
+                format!("https://host/v1?token=first{separator}https://host/v2?token=second");
+            let cleaned = redact_urls_in_text(&text);
+            assert_eq!(
+                cleaned,
+                format!(
+                    "https://host/v1?token=[REDACTED]{separator}https://host/v2?token=[REDACTED]"
+                )
+            );
+            assert!(!cleaned.contains("first"));
+            assert!(!cleaned.contains("second"));
+        }
     }
 
     #[test]

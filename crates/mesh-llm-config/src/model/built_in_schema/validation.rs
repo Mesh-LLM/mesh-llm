@@ -225,10 +225,6 @@ fn built_in_schema_exports_throughput_and_skippy_t5_controls() {
     assert_eq!(numeric_control(&threads).step, Some(1.0));
 
     assert_static_choices(
-        "defaults.skippy.activation_wire_dtype",
-        &["auto", "f16", "f32", "q8"],
-    );
-    assert_static_choices(
         "defaults.skippy.prefill_chunking",
         &["auto", "fixed", "schedule", "adaptive-ramp"],
     );

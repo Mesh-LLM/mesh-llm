@@ -420,6 +420,14 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
 
     node.set_serving_models(Vec::new()).await;
     node.set_hosted_models(Vec::new()).await;
+
+    // Last mesh-facing step: every subsystem that speaks over the mesh endpoint
+    // has now stopped, so close it explicitly. Dropping it instead makes iroh
+    // log `Endpoint dropped without calling `Endpoint::close`. Aborting
+    // ungracefully.` and abandon the connection-close frames, leaving peers to
+    // time this node out rather than seeing it depart.
+    node.close_endpoint().await;
+
     cleanup_run_auto_runtime_dir(runtime);
 }
 

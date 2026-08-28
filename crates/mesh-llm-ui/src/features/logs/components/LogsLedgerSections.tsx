@@ -1,13 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 
 import { useEffect } from 'react'
-import { Activity, CircleCheckBig, CircleX, Database, RotateCcw } from 'lucide-react'
+import { Activity, CircleCheckBig, CircleX, Database } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { type FilterCategory, type FilterValueOption } from '@/components/ui/FilterPopover'
 import { Sparkline } from '@/components/ui/Sparkline'
-import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
+import type { StatusBadgeTone } from '@/components/ui/StatusBadge'
 import type { TanStackTable as DataTableTanStackTableType } from '@/components/ui/data-table'
 import type { LogsLiveConnectionState } from '@/features/logs/api/use-logs-live-recovery'
 import type { LogRequest } from '@/features/logs/api/schemas'
@@ -26,7 +24,7 @@ export const ledgerFilterCategories: Array<FilterCategory<LedgerFilterKey>> = [{
 
 export function activeFilterGroupCount(search: LogsLedgerSearch) {
   return [
-    search.timeRange,
+    search.timeRange ?? (search.from || search.to ? 'window' : undefined),
     search.model,
     search.provider,
     search.engine,
@@ -291,94 +289,12 @@ type TableCaptureProps = {
   readonly onCapture: (table: DataTableTanStackTableType<LogEventLedgerRow> | null) => void
 }
 
-export type LogWindowRecoverySource = {
-  readonly id: 'requests' | 'operations'
-  readonly label: string
-  readonly error: boolean
-  readonly fetching: boolean
-  readonly loading: boolean
-  readonly hasLoadedData: boolean
-  readonly onRetry: () => void
-}
-
 export function TableCapture({ table, onCapture }: TableCaptureProps) {
   useEffect(() => {
     onCapture(table)
     return () => onCapture(null)
   }, [table, onCapture])
   return null
-}
-
-function recoverySourceStatus(source: LogWindowRecoverySource) {
-  if (source.error && source.fetching) return { label: 'Retrying', tone: 'accent' as const }
-  if (source.error && source.hasLoadedData) return { label: 'Showing last window', tone: 'warn' as const }
-  if (source.error) return { label: 'Unavailable', tone: 'bad' as const }
-  return { label: 'Loading', tone: 'accent' as const }
-}
-
-export function LogWindowRecoveryAlert({ sources }: { readonly sources: readonly LogWindowRecoverySource[] }) {
-  const failedSources = sources.filter((source) => source.error)
-  if (failedSources.length === 0) return null
-
-  const visibleSources = sources.filter((source) => source.error || source.loading)
-  const hasLoadedFailure = failedSources.some((source) => source.hasLoadedData)
-  const title = `${failedSources.length === sources.length ? 'Log data' : 'Some log data'} could not be ${
-    hasLoadedFailure ? 'refreshed' : 'loaded'
-  }`
-  const description =
-    failedSources.length === sources.length
-      ? 'The local logging service did not return a usable response. Retry each source independently.'
-      : failedSources[0]?.hasLoadedData
-        ? `${failedSources[0].label} could not be refreshed. The last loaded window remains visible.`
-        : `${failedSources[0]?.label ?? 'One source'} could not be loaded. Data from the other source remains usable when loaded.`
-
-  return (
-    <Alert
-      className="panel-shell rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-bad)_35%,var(--color-border))] bg-panel p-[var(--panel-x)]"
-      variant="destructive"
-    >
-      <div className="min-w-0">
-        <AlertTitle className="type-panel-title text-foreground">{title}</AlertTitle>
-        <AlertDescription className="mt-1 max-w-[68ch] type-caption text-fg-dim">{description}</AlertDescription>
-      </div>
-      <div
-        aria-label="Log data source recovery"
-        className={`mt-3 grid gap-3 border-t border-border-soft pt-3 ${visibleSources.length > 1 ? 'md:grid-cols-2 md:gap-0' : ''}`}
-        role="group"
-      >
-        {visibleSources.map((source, index) => {
-          const status = recoverySourceStatus(source)
-          return (
-            <div
-              className={`flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between ${
-                visibleSources.length > 1 && index === 0 ? 'md:pr-4' : ''
-              } ${visibleSources.length > 1 && index > 0 ? 'md:border-l md:border-border-soft md:pl-4' : ''}`}
-              key={source.id}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="type-caption font-medium text-foreground">{source.label}</span>
-                <StatusBadge dot size="caption" tone={status.tone}>
-                  {status.label}
-                </StatusBadge>
-              </div>
-              {source.error ? (
-                <Button
-                  className="ui-control min-h-[3.15rem] shrink-0 gap-1.5 !text-xs sm:min-h-0"
-                  disabled={source.fetching}
-                  onClick={source.onRetry}
-                  size="sm"
-                  variant="outline"
-                >
-                  <RotateCcw className={`size-3.5 ${source.fetching ? 'animate-spin' : ''}`} aria-hidden="true" />
-                  {source.fetching ? 'Retrying…' : `Retry ${source.id}`}
-                </Button>
-              ) : null}
-            </div>
-          )
-        })}
-      </div>
-    </Alert>
-  )
 }
 
 /* ------------------------------------------------------------------ */

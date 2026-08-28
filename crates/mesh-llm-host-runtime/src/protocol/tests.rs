@@ -76,7 +76,6 @@ tensor_split = []
 parallel = 3
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 
 [defaults.speculative]
 mode = "auto"
@@ -183,6 +182,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         stage_status_list_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,

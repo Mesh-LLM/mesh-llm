@@ -53,7 +53,6 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
     pub(super) activation_width: i32,
-    pub(super) activation_wire_dtype: skippy::StageWireDType,
 }
 
 pub(super) async fn load_split_runtime_generation(
@@ -415,7 +414,6 @@ pub(super) fn split_runtime_stage_load_request(
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: settings.activation_width,
-        wire_dtype: settings.activation_wire_dtype,
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
         n_batch: resolved_config.n_batch,
@@ -511,7 +509,6 @@ pub(super) fn split_generation_load_settings<'a>(
         embedded_openai,
         load_mode,
         activation_width,
-        activation_wire_dtype: resolved.skippy.activation_wire_dtype,
     })
 }
 

@@ -53,7 +53,6 @@ pub(in crate::binary_transport) struct BinaryRestoredPrefix {
     token_count: usize,
     entries: usize,
     resident_seq_id: Option<i32>,
-    resident_borrowed: Option<bool>,
     exact: bool,
 }
 
@@ -64,24 +63,16 @@ impl BinaryRestoredPrefix {
             token_count,
             entries,
             resident_seq_id: None,
-            resident_borrowed: None,
             exact: true,
         }
     }
 
-    fn resident(
-        page_id: String,
-        token_count: usize,
-        seq_id: i32,
-        entries: usize,
-        borrowed: bool,
-    ) -> Self {
+    fn resident(page_id: String, token_count: usize, seq_id: i32, entries: usize) -> Self {
         Self {
             page_id,
             token_count,
             entries,
             resident_seq_id: Some(seq_id),
-            resident_borrowed: Some(borrowed),
             exact: false,
         }
     }
@@ -104,9 +95,6 @@ impl BinaryRestoredPrefix {
             );
             if let Some(seq_id) = self.resident_seq_id {
                 attrs.insert("skippy.kv.resident_seq_id".to_string(), json!(seq_id));
-            }
-            if let Some(borrowed) = self.resident_borrowed {
-                attrs.insert("skippy.kv.resident_lane_hit".to_string(), json!(borrowed));
             }
         }
     }
@@ -146,7 +134,7 @@ pub(super) fn binary_message_kv_attrs(
 
 pub(in crate::binary_transport) fn maybe_prefix_cache_control(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -220,16 +208,13 @@ pub(in crate::binary_transport) fn maybe_prefix_cache_control(
         WireMessageKind::RestorePrefill
         | WireMessageKind::TryRestorePrefill
         | WireMessageKind::TryRestorePrefillDecode => {
-            let restore = {
-                let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                restore_binary_prefix(
-                    kv,
-                    &mut runtime,
-                    session_id,
-                    std::slice::from_ref(&identity),
-                    token_ids,
-                )
-            };
+            let restore = restore_binary_prefix(
+                kv,
+                runtime,
+                session_id,
+                std::slice::from_ref(&identity),
+                token_ids,
+            );
             match restore {
                 Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                     result.hit = true;
@@ -318,7 +303,6 @@ fn restore_binary_prefix(
                         restored.token_count,
                         restored.seq_id,
                         restored.entries,
-                        restored.borrowed,
                     )
                 })
             }),
@@ -337,7 +321,7 @@ pub(in crate::binary_transport) fn emit_binary_proactive_eviction(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -394,16 +378,13 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             telemetry.emit("stage.binary_kv_lookup_decision", attrs);
             return result;
         };
-        let prefix_restore = {
-            let mut runtime = runtime.lock().expect("runtime lock poisoned");
-            restore_binary_prefix(
-                kv,
-                &mut runtime,
-                session_id,
-                std::slice::from_ref(&activation.identity),
-                token_ids,
-            )
-        };
+        let prefix_restore = restore_binary_prefix(
+            kv,
+            runtime,
+            session_id,
+            std::slice::from_ref(&activation.identity),
+            token_ids,
+        );
         match prefix_restore {
             Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                 result.restored_tokens = restored.token_count;
@@ -493,10 +474,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             }
         }
     }
-    let prefix_restore = {
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-        restore_binary_prefix(kv, &mut runtime, session_id, &identities, token_ids)
-    };
+    let prefix_restore = restore_binary_prefix(kv, runtime, session_id, &identities, token_ids);
     match prefix_restore {
         Ok(Some(restored)) => {
             result.restored_tokens = restored.token_count;
@@ -558,7 +536,7 @@ fn candidate_already_resident(token_count: u64, min_record_tokens: u64) -> bool 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::binary_transport) fn maybe_record_binary_prefill(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -601,7 +579,6 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
         return result;
     }
     {
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
         for identity in identities {
             let token_count = identity.identity.token_count;
             let token_count_usize = usize::try_from(token_count)
@@ -611,7 +588,7 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 continue;
             }
             if token_count_usize == token_ids.len() {
-                match kv.record_exact_state(&mut runtime, session_id, &identity) {
+                match kv.record_exact_state(runtime, session_id, &identity) {
                     Ok(Some(record)) => {
                         result.recorded_pages = result.recorded_pages.saturating_add(1);
                         result.recorded_tokens = result
@@ -659,7 +636,7 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 }
             }
             match kv.record_resident_prefix(
-                &mut runtime,
+                runtime,
                 session_id,
                 &identity,
                 &token_ids[..token_count_usize],
@@ -944,15 +921,13 @@ mod tests {
     use super::binary_full_prefill_record_identities;
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
     use crate::kv_integration::KvStageIntegration;
-    use skippy_protocol::binary::{
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    };
+    use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     fn prefill_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::PrefillEmbd,
             pos_start: 0,
             token_count: 0,
-            state: StageStateHeader::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32),
+            state: StageStateHeader::new(WireMessageKind::PrefillEmbd),
             request_id: 11,
             session_id: 13,
             sampling: None,
@@ -964,7 +939,7 @@ mod tests {
         }
     }
     #[test]
-    fn binary_full_prefill_record_plan_includes_shared_prefix_candidate() {
+    fn binary_full_prefill_uses_one_radix_path_per_request() {
         let config = prefix_cache_test_config();
         let kv = KvStageIntegration::from_config(&config)
             .unwrap()
@@ -993,28 +968,10 @@ mod tests {
             .map(|identity| identity.identity.token_count)
             .collect::<Vec<_>>();
 
-        assert_eq!(record_counts, vec![2214, 2176]);
-        assert!(lookup_counts.contains(&2176));
-
-        let recorded_shared = record_plan
-            .iter()
-            .find(|identity| identity.identity.token_count == 2176)
-            .expect("binary full-prefill record plan should include shared grid prefix");
-        let lookup_shared = lookup_plan
-            .iter()
-            .find(|identity| identity.identity.token_count == 2176)
-            .expect("lookup plan should probe shared grid prefix");
-        let recorded_exact = record_plan
-            .iter()
-            .find(|identity| identity.identity.token_count == 2214)
-            .expect("binary full-prefill record plan should keep exact first prompt");
-        let lookup_exact = lookup_plan
-            .iter()
-            .find(|identity| identity.identity.token_count == 2231)
-            .expect("lookup plan should probe exact second prompt");
-
-        assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
-        assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+        assert_eq!(record_counts, vec![2214]);
+        assert_eq!(lookup_counts, vec![2231]);
+        assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
+        assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
     }
 }
 

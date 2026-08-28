@@ -27,9 +27,9 @@ class EnvironmentMutationContractTests(unittest.TestCase):
         result = self.run_checker()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("34 Rust files", result.stdout)
-        self.assertIn("192 mutation sites", result.stdout)
-        self.assertIn("17 contract-audited files", result.stdout)
+        self.assertIn("35 Rust files", result.stdout)
+        self.assertIn("193 mutation sites", result.stdout)
+        self.assertIn("18 contract-audited files", result.stdout)
 
     def test_unregistered_mutation_file_is_rejected_by_repository_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +136,54 @@ mod tests {
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("needs adjacent SAFETY and audit TODO comments", result.stderr)
+
+    def test_synchronous_bootstrap_mutation_rejects_audit_todo(self) -> None:
+        bootstrap_file = (
+            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / bootstrap_file
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                f"""fn configure_metal_pipeline_cache() {{
+    // SAFETY: single-threaded bootstrap before the Tokio runtime.
+    {TODO}
+    unsafe {{ std::env::set_var("METAL_CACHE", "1") }};
+}}
+""",
+                encoding="utf-8",
+            )
+
+            result = self.run_checker("--root", str(root), "--file", bootstrap_file)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale environment audit TODO remains", result.stderr)
+
+    def test_synchronous_bootstrap_mutation_requires_exact_boundary(self) -> None:
+        bootstrap_file = (
+            "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / bootstrap_file
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """fn configure_late() {
+    // SAFETY: generic claim.
+    unsafe { std::env::set_var("METAL_CACHE", "1") };
+}
+""",
+                encoding="utf-8",
+            )
+
+            result = self.run_checker("--root", str(root), "--file", bootstrap_file)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "bootstrap mutation must remain in configure_metal_pipeline_cache",
+                result.stderr,
+            )
 
 
 if __name__ == "__main__":

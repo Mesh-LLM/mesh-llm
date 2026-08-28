@@ -555,8 +555,6 @@ pub struct SkippyConfig {
     #[serde(default)]
     pub stage_topology: Option<String>,
     #[serde(default)]
-    pub activation_wire_dtype: Option<String>,
-    #[serde(default)]
     pub binary_stage_transport: Option<String>,
     #[serde(default)]
     pub openai_frontend_mode: Option<toml::Value>,

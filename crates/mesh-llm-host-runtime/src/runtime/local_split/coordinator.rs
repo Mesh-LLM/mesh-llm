@@ -573,7 +573,7 @@ impl SplitTopologyCoordinator {
         let resources = SplitTopologyResourceInputs {
             ctx_size_override: Some(self.ctx_size),
             parallel_override: Some(self.slots),
-            ..self.topology_resources
+            ..self.topology_resources.clone()
         };
         let planned = plan_runtime_slice_topology_with_resources(
             &topology_id,

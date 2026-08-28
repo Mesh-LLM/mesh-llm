@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) use dto::{ArtifactDto, AuditDto, EventDto, PageDto, ProxyDto, RequestDto};
 pub(crate) use error::LogsError;
 use mesh_llm_events::logging::events::LifecycleEvent;
-use mesh_llm_log_store::{ArtifactRecord, LogStoreError, QuerySort, RequestRecord};
+use mesh_llm_log_store::{ArtifactRecord, LogStoreError, QuerySort, RequestRecordWithCaller};
 
 use self::dto::artifact_state;
 use self::parse::SourceFilter;
@@ -601,7 +601,7 @@ fn load_active_metadata(
     active: &[RequestSummaryEntry],
     parsed: &parse::RequestListQuery,
     cursor_is_active: bool,
-) -> Result<HashMap<String, RequestRecord>, LogsError> {
+) -> Result<HashMap<String, RequestRecordWithCaller>, LogsError> {
     let request_ids = if parsed.source != Some(SourceFilter::Durable) {
         active
             .iter()
@@ -622,14 +622,14 @@ fn load_active_metadata(
     Ok(facade
         .requests_by_ids(&request_ids)?
         .into_iter()
-        .map(|record| (record.request_id.clone(), record))
+        .map(|record| (record.request.request_id.clone(), record))
         .collect())
 }
 
 fn validate_cursor_scope(
     facade: &LoggingQueryFacade,
     active: &[RequestSummaryEntry],
-    active_metadata: &HashMap<String, RequestRecord>,
+    active_metadata: &HashMap<String, RequestRecordWithCaller>,
     parsed: &parse::RequestListQuery,
     cursor_is_active: bool,
 ) -> Result<(), LogsError> {
@@ -673,7 +673,7 @@ fn collect_durable(
     active_ids: &HashSet<String>,
     parsed: &parse::RequestListQuery,
     cursor_is_active: bool,
-) -> Result<Vec<RequestRecord>, LogsError> {
+) -> Result<Vec<RequestRecordWithCaller>, LogsError> {
     let mut query = parsed.store.clone();
     if cursor_is_active {
         // An active-only cursor is not a durable row, so passing it to SQLite
@@ -688,7 +688,9 @@ fn collect_durable(
     for _ in 0..max_pages {
         let page = facade.requests(&query)?;
         for record in page.items {
-            if !active_ids.contains(&record.request_id) && durable_after_cursor(&record, parsed) {
+            if !active_ids.contains(&record.request.request_id)
+                && durable_after_cursor(&record, parsed)
+            {
                 result.push(record);
             }
         }
@@ -700,11 +702,17 @@ fn collect_durable(
     Ok(result)
 }
 
-fn durable_after_cursor(record: &RequestRecord, parsed: &parse::RequestListQuery) -> bool {
+fn durable_after_cursor(
+    record: &RequestRecordWithCaller,
+    parsed: &parse::RequestListQuery,
+) -> bool {
     let Some((timestamp, request_id)) = &parsed.cursor_boundary else {
         return true;
     };
-    let row = (record.created_at.as_str(), record.request_id.as_str());
+    let row = (
+        record.request.created_at.as_str(),
+        record.request.request_id.as_str(),
+    );
     let cursor = (timestamp.as_str(), request_id.as_str());
     match parsed.store.sort {
         QuerySort::Ascending => row > cursor,
@@ -714,7 +722,7 @@ fn durable_after_cursor(record: &RequestRecord, parsed: &parse::RequestListQuery
 
 fn active_matches(
     entry: &RequestSummaryEntry,
-    metadata: Option<&RequestRecord>,
+    metadata: Option<&RequestRecordWithCaller>,
     parsed: &parse::RequestListQuery,
 ) -> bool {
     if !active_matches_filters(entry, metadata, parsed) {
@@ -733,16 +741,27 @@ fn active_matches(
 
 fn active_matches_filters(
     entry: &RequestSummaryEntry,
-    metadata: Option<&RequestRecord>,
+    metadata: Option<&RequestRecordWithCaller>,
     parsed: &parse::RequestListQuery,
 ) -> bool {
     let query = &parsed.store;
-    if let Some(route) = &query.route
-        && entry
-            .metadata
-            .route()
-            .or_else(|| metadata.and_then(|record| record.route.as_deref()))
-            != Some(route.as_str())
+    let route = entry
+        .metadata
+        .route()
+        .or_else(|| metadata.and_then(|record| record.request.route.as_deref()));
+    if let Some(selected_route) = &query.route
+        && route != Some(selected_route.as_str())
+    {
+        return false;
+    }
+    if query
+        .exclude_route
+        .as_deref()
+        .is_some_and(|excluded| route == Some(excluded))
+        || query
+            .exclude_route_prefix
+            .as_deref()
+            .is_some_and(|prefix| route.is_some_and(|route| route.starts_with(prefix)))
     {
         return false;
     }
@@ -750,7 +769,7 @@ fn active_matches_filters(
         && entry
             .metadata
             .model()
-            .or_else(|| metadata.and_then(|record| record.model.as_deref()))
+            .or_else(|| metadata.and_then(|record| record.request.model.as_deref()))
             != Some(model.as_str())
     {
         return false;
@@ -759,7 +778,7 @@ fn active_matches_filters(
         && entry
             .metadata
             .provider()
-            .or_else(|| metadata.and_then(|record| record.provider.as_deref()))
+            .or_else(|| metadata.and_then(|record| record.request.provider.as_deref()))
             != Some(provider.as_str())
     {
         return false;
@@ -768,13 +787,13 @@ fn active_matches_filters(
         && entry
             .metadata
             .engine()
-            .or_else(|| metadata.and_then(|record| record.engine.as_deref()))
+            .or_else(|| metadata.and_then(|record| record.request.engine.as_deref()))
             != Some(engine.as_str())
     {
         return false;
     }
     if let Some(status_code) = query.status_code
-        && metadata.and_then(|record| record.status_code) != Some(i64::from(status_code))
+        && metadata.and_then(|record| record.request.status_code) != Some(i64::from(status_code))
     {
         return false;
     }

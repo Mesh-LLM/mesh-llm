@@ -1,5 +1,5 @@
-//! QUIC tunnel management for forwarding OpenAI HTTP traffic to the local
-//! model-aware API proxy.
+//! QUIC tunnel management for delivering remote OpenAI HTTP traffic and
+//! forwarding stage transport streams.
 
 use crate::mesh::Node;
 use crate::protocol::read_len_prefixed;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-const TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES: usize = 8 * 1024;
+mod inbound_http;
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
@@ -21,11 +21,18 @@ fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)
 }
 
+#[derive(Clone)]
+pub(super) struct HttpIngress {
+    targets: tokio::sync::watch::Receiver<crate::inference::election::ModelTargets>,
+    affinity: crate::network::affinity::AffinityRouter,
+}
+
 /// Manages all tunnels for a node
 #[derive(Clone)]
 pub struct Manager {
     node: Node,
     http_port: Arc<AtomicU16>,
+    http_ingress: Arc<std::sync::RwLock<Option<HttpIngress>>>,
 }
 
 impl Manager {
@@ -39,6 +46,7 @@ impl Manager {
             iroh::endpoint::RecvStream,
         )>,
         mut tunnel_http_rx: tokio::sync::mpsc::Receiver<(
+            EndpointId,
             iroh::endpoint::SendStream,
             iroh::endpoint::RecvStream,
         )>,
@@ -51,22 +59,29 @@ impl Manager {
         let mgr = Manager {
             node: node.clone(),
             http_port: Arc::new(AtomicU16::new(0)),
+            http_ingress: Arc::new(std::sync::RwLock::new(None)),
         };
 
-        // Handle inbound HTTP tunnel streams.
-        // These connect to the local model-aware OpenAI proxy.
+        // Handle inbound HTTP tunnel streams in-process when the runtime has
+        // installed direct ingress; retain the legacy port fallback for embedders.
         let http_port_ref = mgr.http_port.clone();
+        let http_ingress_ref = mgr.http_ingress.clone();
         let http_node = mgr.node.clone();
         tokio::spawn(async move {
-            while let Some((send, recv)) = tunnel_http_rx.recv().await {
+            while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
+                let ingress = http_ingress_ref.read().ok().and_then(|guard| guard.clone());
                 let port = http_port_ref.load(Ordering::Relaxed);
-                if port == 0 {
+                if ingress.is_none() && port == 0 {
                     tracing::warn!("Inbound HTTP tunnel but no OpenAI surface running, dropping");
                     continue;
                 }
                 let node = http_node.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_inbound_http_stream(node, send, recv, port).await {
+                    if let Err(e) = inbound_http::handle_inbound_http_stream(
+                        node, remote, send, recv, port, ingress,
+                    )
+                    .await
+                    {
                         tracing::warn!("Inbound HTTP tunnel stream error: {e}");
                     }
                 });
@@ -91,79 +106,22 @@ impl Manager {
         Ok(mgr)
     }
 
-    /// Update the local model-aware API proxy port for inbound HTTP tunnel streams.
-    /// Set to 0 to disable.
+    /// Install the in-process model-aware ingress used by remote HTTP tunnels.
+    pub fn set_http_ingress(
+        &self,
+        targets: tokio::sync::watch::Receiver<crate::inference::election::ModelTargets>,
+        affinity: crate::network::affinity::AffinityRouter,
+    ) {
+        if let Ok(mut ingress) = self.http_ingress.write() {
+            *ingress = Some(HttpIngress { targets, affinity });
+        }
+        tracing::info!("Tunnel manager: direct HTTP ingress enabled");
+    }
+
+    /// Update the compatibility API proxy port used until direct ingress is installed.
     pub fn set_http_port(&self, port: u16) {
         self.http_port.store(port, Ordering::Relaxed);
-        tracing::info!("Tunnel manager: http_port updated to {port}");
     }
-}
-
-/// Handle an inbound HTTP tunnel bi-stream: connect to the local API proxy and relay.
-async fn handle_inbound_http_stream(
-    node: Node,
-    quic_send: iroh::endpoint::SendStream,
-    mut quic_recv: iroh::endpoint::RecvStream,
-    http_port: u16,
-) -> Result<()> {
-    // Admission check for remote QUIC HTTP ingress.
-    match node
-        .activity_policy_guard
-        .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
-    {
-        crate::runtime::AdmissionResult::Allowed => {}
-        crate::runtime::AdmissionResult::Paused { reason, .. } => {
-            tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
-            anyhow::bail!("remote inference paused: {reason}");
-        }
-    }
-
-    tracing::info!("Inbound HTTP tunnel stream -> API proxy :{http_port}");
-    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
-    tcp_stream.set_nodelay(true)?;
-    let _inflight = node.begin_inflight_request();
-
-    // Only raw mesh ingress that successfully claimed a parent emits the
-    // private assertion. Direct API requests have it stripped before they can
-    // reach this tunnel, so they retain normal target frontend ownership.
-    let prefix = read_tunneled_http_header_prefix(&mut quic_recv).await?;
-    let _remote_suppression =
-        crate::network::openai::request_parse::raw_lifecycle_owner_from_header_prefix(&prefix)
-            .and_then(|request_id| {
-                crate::logging_runtime_state()
-                    .and_then(|state| state.suppress_remote_tunneled_request(request_id))
-            });
-    tcp_stream.write_all(&prefix).await?;
-
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
-}
-
-/// Read at most one bounded HTTP header prefix without changing the bytes that
-/// the existing relay will subsequently forward. A read may include a small
-/// amount of body data from the same transport chunk; it is forwarded directly
-/// to the local API proxy and is never retained by logging state.
-async fn read_tunneled_http_header_prefix<R>(reader: &mut R) -> Result<Vec<u8>>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut prefix = Vec::with_capacity(TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES);
-    let mut chunk = [0u8; TUNNELED_HTTP_HEADER_READ_CHUNK_BYTES];
-    let max_header_bytes = crate::network::openai::request_parse::MAX_HEADER_BYTES;
-
-    while prefix.len() < max_header_bytes {
-        if prefix.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-        let read_cap = (max_header_bytes - prefix.len()).min(chunk.len());
-        let bytes_read = reader.read(&mut chunk[..read_cap]).await?;
-        if bytes_read == 0 {
-            break;
-        }
-        prefix.extend_from_slice(&chunk[..bytes_read]);
-    }
-
-    Ok(prefix)
 }
 
 async fn handle_inbound_stage_transport(
@@ -427,18 +385,6 @@ fn relay_remaining_chunks_error(total: u64, err: std::io::Error) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn tunnel_prefetch_forwards_a_complete_bounded_header_prefix() {
-        let (mut writer, mut reader) = tokio::io::duplex(4096);
-        let request = b"POST /v1/chat/completions HTTP/1.1\r\nx-request-id: 550e8400-e29b-41d4-a716-446655440000\r\n\r\n";
-        writer.write_all(request).await.unwrap();
-
-        let prefix = read_tunneled_http_header_prefix(&mut reader).await.unwrap();
-
-        assert_eq!(prefix, request);
-        assert!(prefix.len() <= crate::network::openai::request_parse::MAX_HEADER_BYTES);
-    }
 
     /// Simulate relay_bidirectional behavior when one direction finishes
     /// before the other — the scenario that caused the remote proxy bug.

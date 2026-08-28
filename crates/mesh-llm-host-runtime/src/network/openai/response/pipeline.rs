@@ -1,6 +1,6 @@
 use crate::mesh;
+use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 use super::probe::append_capsule_nonce_headers;
 use crate::network::openai::request_parse::pipeline_request_supported;
@@ -39,7 +39,7 @@ pub enum PipelineProxyResult {
 /// 4. Forwards to the strong model via HTTP
 /// 5. Streams the response back to the client
 pub async fn pipeline_proxy_local(
-    client_stream: &mut TcpStream,
+    client_stream: &mut ClientStream,
     request_path: &str,
     mut body: serde_json::Value,
     planner_port: u16,
@@ -106,7 +106,7 @@ async fn pipeline_preplan_request(
 }
 
 async fn pipeline_proxy_streaming(
-    client_stream: &mut TcpStream,
+    client_stream: &mut ClientStream,
     http_client: &reqwest::Client,
     strong_url: &str,
     body: &serde_json::Value,
@@ -139,7 +139,7 @@ fn completed_pipeline_response(
 }
 
 async fn relay_pipeline_streaming_response(
-    client_stream: &mut TcpStream,
+    client_stream: &mut ClientStream,
     resp: reqwest::Response,
 ) -> PipelineProxyResult {
     let status = resp.status();
@@ -218,7 +218,10 @@ impl SseUsageParser {
     }
 }
 
-async fn write_pipeline_chunk(client_stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
+async fn write_pipeline_chunk(
+    client_stream: &mut ClientStream,
+    bytes: &[u8],
+) -> std::io::Result<()> {
     let chunk_header = format!("{:x}\r\n", bytes.len());
     client_stream.write_all(chunk_header.as_bytes()).await?;
     client_stream.write_all(bytes).await?;
@@ -226,7 +229,7 @@ async fn write_pipeline_chunk(client_stream: &mut TcpStream, bytes: &[u8]) -> st
 }
 
 async fn pipeline_proxy_non_streaming(
-    client_stream: &mut TcpStream,
+    client_stream: &mut ClientStream,
     http_client: &reqwest::Client,
     strong_url: &str,
     body: &serde_json::Value,
@@ -243,7 +246,7 @@ async fn pipeline_proxy_non_streaming(
 }
 
 async fn relay_pipeline_non_streaming_response(
-    client_stream: &mut TcpStream,
+    client_stream: &mut ClientStream,
     resp: reqwest::Response,
 ) -> PipelineProxyResult {
     let status = resp.status();
@@ -297,6 +300,7 @@ mod tests {
             parser.usage,
             Some(TokenUsage {
                 prompt_tokens: Some(4),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(6),
                 total_tokens: Some(10),
             })
@@ -314,6 +318,7 @@ mod tests {
     fn pipeline_error_statuses_discard_usage_from_error_bodies() {
         let usage = Some(TokenUsage {
             prompt_tokens: Some(2),
+            cached_prompt_tokens: None,
             completion_tokens: Some(3),
             total_tokens: Some(5),
         });

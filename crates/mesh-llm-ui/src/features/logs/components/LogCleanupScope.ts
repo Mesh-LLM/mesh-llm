@@ -1,4 +1,5 @@
 import type { LogCleanupPreviewRequest, LogsRequestQuery } from '@/features/logs/api/client'
+import { withLedgerRouteExclusions } from '@/features/logs/api/ledger-route-exclusions'
 import type { LogCleanupOutcome } from '@/features/logs/api/schemas'
 
 function isCleanupOutcome(value: string | undefined): value is LogCleanupOutcome {
@@ -14,15 +15,20 @@ export function supportsCleanup(query: LogsRequestQuery) {
 
 export function cleanupScopeFromQuery(
   query: LogsRequestQuery
-): Pick<LogCleanupPreviewRequest, 'source' | 'from' | 'to' | 'route' | 'model' | 'provider' | 'engine' | 'outcome'> {
+): Pick<
+  LogCleanupPreviewRequest,
+  'source' | 'from' | 'to' | 'route' | 'excludeRoute' | 'model' | 'provider' | 'engine' | 'outcome'
+> {
+  const scopedQuery = withLedgerRouteExclusions(query)
   return {
-    source: query.source === 'durable' ? 'durable' : undefined,
-    from: query.from,
-    to: query.to,
-    route: query.route,
-    model: query.model,
-    provider: query.provider,
-    engine: query.engine,
-    outcome: isCleanupOutcome(query.outcome) ? query.outcome : undefined
+    source: scopedQuery.source === 'durable' ? 'durable' : undefined,
+    from: scopedQuery.from,
+    to: scopedQuery.to,
+    route: scopedQuery.route,
+    excludeRoute: scopedQuery.excludeRoute,
+    model: scopedQuery.model,
+    provider: scopedQuery.provider,
+    engine: scopedQuery.engine,
+    outcome: isCleanupOutcome(scopedQuery.outcome) ? scopedQuery.outcome : undefined
   }
 }

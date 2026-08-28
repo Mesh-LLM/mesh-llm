@@ -659,6 +659,39 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
             producer,
         )
 
+    def test_cuda_runtime_producers_validate_matrix_version_against_compiler(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        aarch64 = job_block(
+            workflow,
+            "build_native_runtime_linux_aarch64_cuda",
+            "build_native_runtime_linux_x86_64_cuda",
+        )
+        x86_64 = job_block(
+            workflow,
+            "build_native_runtime_linux_x86_64_cuda",
+            "build_native_runtime_linux_x86_64_rocm",
+        )
+        windows = job_block(
+            workflow,
+            "build_native_runtime_windows_gpu",
+            "publish",
+        )
+
+        for producer in (aarch64, x86_64):
+            self.assertIn(
+                "MESH_CUDA_VERSION: ${{ matrix.cuda_version }}",
+                producer,
+            )
+            self.assertIn(
+                "MESH_LLM_CUDA_TOOLKIT_MAJOR: ${{ matrix.cuda_major }}",
+                producer,
+            )
+        self.assertIn(
+            "MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}",
+            windows,
+        )
+        self.assertIn("MESH_LLM_CUDA_TOOLKIT_MAJOR: '12'", windows)
+
     def test_cuda12_release_runtime_includes_pascal_sm61(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         linux_cuda = job_block(

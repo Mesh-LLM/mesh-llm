@@ -87,14 +87,20 @@ fi
 CONFIG_PATH="${WORK_DIR}/stage-openai-smoke.json"
 python3 - "$CONFIG_PATH" "$MODEL_ID" "$MODEL_PATH" "$LAYER_END" "$CTX_SIZE" <<'PY'
 import json
+import hashlib
 import sys
 
 config_path, model_id, model_path, layer_end, ctx_size = sys.argv[1:]
+model_digest = hashlib.sha256()
+with open(model_path, "rb") as model_file:
+    for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+        model_digest.update(chunk)
 config = {
     "run_id": "openai-smoke",
     "topology_id": "openai-smoke-single-stage",
     "model_id": model_id,
     "model_path": model_path,
+    "source_model_sha256": model_digest.hexdigest(),
     "stage_id": "stage-0",
     "stage_index": 0,
     "layer_start": 0,
@@ -121,11 +127,12 @@ fi
 
 SERVER_LOG="${WORK_DIR}/serve-openai.log"
 echo "starting serve-openai on ${BASE_URL}"
-LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
+SKIPPY_TELEMETRY_STDERR=1 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   target/debug/skippy-server serve-openai \
     --config "$CONFIG_PATH" \
     --bind-addr "${HOST}:${PORT}" \
     --default-max-tokens "$DEFAULT_MAX_TOKENS" \
+    --telemetry-level debug \
     >"$SERVER_LOG" 2>&1 &
 SERVER_PID="$!"
 
@@ -216,7 +223,7 @@ echo "probing unsupported sampling rejection"
 unsupported_sampling_request="$(jq -cn --arg model "$MODEL_ID" '{
   model: $model,
   messages: [{role: "user", content: "Say hi"}],
-  min_p: 0.1,
+  typical_p: 0.9,
   max_tokens: 2
 }')"
 unsupported_sampling_response="${WORK_DIR}/unsupported-sampling-response.json"
@@ -235,6 +242,12 @@ if [[ "$unsupported_sampling_status" != "400" ]]; then
 fi
 unsupported_sampling_json="$(cat "$unsupported_sampling_response")"
 echo "$unsupported_sampling_json" | jq -e '.error.code == "unsupported_model_feature"' >/dev/null
+
+if ! grep -q '"event":"stage.scheduler_iteration"' "$SERVER_LOG"; then
+  echo "default OpenAI request path did not emit scheduler iteration telemetry" >&2
+  tail -80 "$SERVER_LOG" >&2 || true
+  exit 1
+fi
 
 if [[ "$RUN_BENCHY" == "1" ]]; then
   require_cmd uvx

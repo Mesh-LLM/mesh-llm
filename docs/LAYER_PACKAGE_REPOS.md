@@ -53,6 +53,11 @@ switch: `native-mtp` says the package has preserved native prediction tensors
 and recommends that strategy; it does not force a Skippy-specific speculation
 implementation.
 
+GLM-DSA package generation is currently an offline artifact-preparation
+workflow: the pinned runtime does not advertise GLM-DSA stage execution. These
+packages must not be treated as serving-certified until the native staged graph
+patch is restored and certified.
+
 For GLM-DSA packages, set `generation.policy.profile` to `glm-dsa-v1` and
 declare phase choices such as decode `compact-flash`, short-prefill `dense`,
 long-prefill `sparse-chunked`, and IndexShare `required`. The policy values

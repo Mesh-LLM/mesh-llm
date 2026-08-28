@@ -269,7 +269,6 @@ impl ResolvedSkippyConfig {
             native_mtp_max_tokens: self.speculative.decode.native_mtp.max_draft_tokens,
             native_mtp_min_tokens: self.speculative.decode.native_mtp.min_draft_tokens,
             activation_width,
-            wire_dtype: self.skippy.activation_wire_dtype.into(),
             reply_credit_limit: None,
             downstream_connect_timeout_secs: 30,
         })
@@ -283,13 +282,8 @@ impl ResolvedSkippyConfig {
     }
 
     fn ensure_embedded_openai_safe(&self, staged: bool) -> Result<()> {
-        if !staged {
-            if self.skippy.activation_wire_dtype_explicit {
-                bail!("skippy.activation_wire_dtype requires staged serving");
-            }
-            if self.skippy.prefill_controls_explicit {
-                bail!("skippy prefill chunk controls require staged serving");
-            }
+        if !staged && self.skippy.prefill_controls_explicit {
+            bail!("skippy prefill chunk controls require staged serving");
         }
         Ok(())
     }
@@ -378,7 +372,6 @@ impl ResolvedEmbeddedOpenAiArgs {
         model_id: String,
         default_max_tokens: u32,
         generation_concurrency: usize,
-        wire_dtype: skippy_protocol::binary::WireActivationDType,
         native_mtp_enabled: bool,
     ) -> Self {
         Self {
@@ -425,7 +418,6 @@ impl ResolvedEmbeddedOpenAiArgs {
             },
             native_mtp_min_tokens: 0,
             activation_width: 0,
-            wire_dtype,
             reply_credit_limit: None,
             downstream_connect_timeout_secs: 30,
         }
@@ -436,7 +428,6 @@ impl ResolvedEmbeddedOpenAiArgs {
         default_max_tokens: u32,
         generation_concurrency: usize,
         activation_width: i32,
-        wire_dtype: skippy_protocol::binary::WireActivationDType,
         native_mtp_enabled: bool,
     ) -> Self {
         Self {
@@ -483,7 +474,6 @@ impl ResolvedEmbeddedOpenAiArgs {
             },
             native_mtp_min_tokens: 0,
             activation_width,
-            wire_dtype,
             reply_credit_limit: None,
             downstream_connect_timeout_secs: 30,
         }
@@ -521,7 +511,6 @@ impl ResolvedEmbeddedOpenAiArgs {
             native_mtp_max_tokens: self.native_mtp_max_tokens,
             native_mtp_min_tokens: self.native_mtp_min_tokens,
             activation_width: self.activation_width,
-            wire_dtype: self.wire_dtype,
             reply_credit_limit: self.reply_credit_limit,
             downstream_connect_timeout_secs: self.downstream_connect_timeout_secs,
             downstream_wire_condition: skippy_server::binary_transport::WireCondition::new(

@@ -45,8 +45,6 @@ pub struct ServeBinaryArgs {
     pub bind_addr: Option<SocketAddr>,
     #[arg(long)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub metrics_otlp_grpc: Option<String>,
     #[arg(long, default_value_t = 1024)]
@@ -193,8 +191,6 @@ pub struct ServeOpenAiArgs {
     pub prefill_adaptive_step: usize,
     #[arg(long, default_value_t = 384)]
     pub prefill_adaptive_max: usize,
-    #[arg(long, default_value = "f32")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 60)]
     pub startup_timeout_secs: u64,
     #[arg(long)]

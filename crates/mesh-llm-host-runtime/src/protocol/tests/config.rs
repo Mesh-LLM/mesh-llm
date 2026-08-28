@@ -66,7 +66,6 @@ fn mesh_config_proto_roundtrip_preserves_nested_sections() {
     assert_eq!(json["defaults"]["model_fit"]["kv_unified"], "auto");
     assert_eq!(json["defaults"]["hardware"]["gpu_layers"], "auto");
     assert_eq!(json["defaults"]["throughput"]["parallel"], 3);
-    assert_eq!(json["defaults"]["skippy"]["activation_wire_dtype"], "auto");
     assert_eq!(json["defaults"]["speculative"]["mode"], "auto");
     assert_eq!(
         json["defaults"]["request_defaults"]["reasoning_budget"],
