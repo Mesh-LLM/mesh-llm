@@ -402,6 +402,17 @@ async fn try_pipeline_proxy(
         return None;
     };
 
+    // The pipeline proxy rebuilds the outbound strong-model request from the
+    // parsed JSON body rather than forwarding `request.raw` byte-for-byte, so
+    // the capsule nonce stabilized at ingress would otherwise be dropped. Read
+    // it back off `raw` and thread it onto the strong-model call so the
+    // downstream response echoes the same value the client expects.
+    let (client_nonce, nonce_origin) = request.capsule_nonce_headers();
+    let capsule_nonce = proxy::PipelineCapsuleNonce {
+        client_nonce,
+        nonce_origin,
+    };
+
     tracing::info!("pipeline: {planner_name} (plan) → {strong_name} (execute)");
     let result = proxy::pipeline_proxy_local(
         tcp_stream,
@@ -411,6 +422,7 @@ async fn try_pipeline_proxy(
         &planner_name,
         strong_port,
         node,
+        &capsule_nonce,
     )
     .await;
     match result {

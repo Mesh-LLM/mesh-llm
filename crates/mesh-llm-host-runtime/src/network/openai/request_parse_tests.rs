@@ -997,3 +997,40 @@ async fn ingress_rejects_duplicate_nonce_headers_and_mints_a_single_one() {
         vec![openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND.to_string()]
     );
 }
+
+#[test]
+fn capsule_nonce_headers_from_raw_reads_back_stabilized_headers() {
+    // The request-rebuilding proxy paths (pipeline / MoA) reconstruct the
+    // outbound request from a parsed body and would otherwise drop the nonce
+    // stabilized at ingress. They read it back off `raw` via this helper, so it
+    // must surface both the minted nonce and the trusted origin marker.
+    let raw = concat!(
+        "POST /v1/chat/completions HTTP/1.1\r\n",
+        "host: 127.0.0.1\r\n",
+        "x-capsule-client-nonce: 11111111-2222-4333-8444-555555555555\r\n",
+        "x-capsule-nonce-origin: frontend\r\n",
+        "\r\n",
+        "{}",
+    )
+    .as_bytes();
+    let (nonce, origin) = capsule_nonce_headers_from_raw(raw);
+    assert_eq!(
+        nonce.as_deref(),
+        Some("11111111-2222-4333-8444-555555555555")
+    );
+    assert_eq!(origin.as_deref(), Some("frontend"));
+}
+
+#[test]
+fn capsule_nonce_headers_from_raw_returns_none_without_headers() {
+    let raw = concat!(
+        "POST /v1/chat/completions HTTP/1.1\r\n",
+        "host: 127.0.0.1\r\n",
+        "\r\n",
+        "{}",
+    )
+    .as_bytes();
+    let (nonce, origin) = capsule_nonce_headers_from_raw(raw);
+    assert_eq!(nonce, None);
+    assert_eq!(origin, None);
+}

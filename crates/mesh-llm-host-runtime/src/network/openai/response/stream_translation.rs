@@ -792,7 +792,7 @@ mod tests {
         let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: local_ingress\r\n\r\n";
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
         let server_task = tokio::spawn(async move {
             let (client_socket, _) = listener.accept().await.unwrap();
             let mut client_socket: ClientStream = client_socket.into();
@@ -830,7 +830,7 @@ mod tests {
             "public-proxy SSE response must echo the client nonce header: {output_text}"
         );
         assert!(
-            output_text.contains("x-capsule-nonce-origin: local_ingress\r\n"),
+            output_text.contains("x-capsule-nonce-origin: frontend\r\n"),
             "public-proxy SSE response must echo the nonce origin marker: {output_text}"
         );
     }

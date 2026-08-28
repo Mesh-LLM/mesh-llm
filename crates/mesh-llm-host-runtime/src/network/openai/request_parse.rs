@@ -149,6 +149,20 @@ impl BufferedHttpRequest {
         }
     }
 
+    /// The stabilized capsule client nonce and origin marker carried on the
+    /// already-rebuilt `raw` request.
+    ///
+    /// `finalize_forwarded_request` resolves the nonce once at ingress and
+    /// re-stamps `x-capsule-client-nonce` (and, only when this frontend minted
+    /// the value, `x-capsule-nonce-origin`) into `raw`. Paths that rebuild the
+    /// forwarded request from a parsed body instead of forwarding `raw`
+    /// byte-for-byte (the pipeline / MoA strong-model proxy) must read the
+    /// stabilized value back out here so the outbound request carries the same
+    /// nonce every downstream reader expects, rather than dropping it.
+    pub fn capsule_nonce_headers(&self) -> (Option<String>, Option<String>) {
+        capsule_nonce_headers_from_raw(&self.raw)
+    }
+
     /// The only semantic request media kind trusted by artifact capture.
     ///
     /// This derives from the closed OpenAI ingress route vocabulary and a
@@ -809,6 +823,35 @@ fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option
 /// trusted origin marker to stamp alongside it. A forwarded (client-supplied)
 /// nonce is returned with no origin marker, so a caller can never make a value
 /// it chose look as though this frontend minted it.
+/// Read the stabilized `x-capsule-client-nonce` / `x-capsule-nonce-origin`
+/// headers back out of an already-rebuilt raw HTTP request.
+///
+/// Only the request-header block is scanned. Used by request-rebuilding proxy
+/// paths (pipeline / MoA) that would otherwise emit an outbound request with no
+/// nonce because they construct it from a parsed JSON body rather than
+/// forwarding `raw`.
+fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>) {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(raw.len(), |pos| pos);
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut req = httparse::Request::new(&mut headers_buf);
+    if req.parse(&raw[..header_end.saturating_add(4).min(raw.len())]).is_err() {
+        return (None, None);
+    }
+    let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+    let origin_header = openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
+    let find = |name: &str| {
+        req.headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case(name))
+            .and_then(|header| std::str::from_utf8(header.value).ok())
+            .map(str::to_string)
+    };
+    (find(nonce_header), find(origin_header))
+}
+
 fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
     let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
     let inbound = headers

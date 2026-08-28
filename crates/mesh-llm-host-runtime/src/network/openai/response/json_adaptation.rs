@@ -250,7 +250,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let header = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: local_ingress\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n",
             body.len()
         );
         let header_end = header.len();
@@ -290,7 +290,7 @@ mod tests {
             "public-proxy JSON response must echo the client nonce header: {output_text}"
         );
         assert!(
-            output_text.contains("x-capsule-nonce-origin: local_ingress\r\n"),
+            output_text.contains("x-capsule-nonce-origin: frontend\r\n"),
             "public-proxy JSON response must echo the nonce origin marker: {output_text}"
         );
     }
