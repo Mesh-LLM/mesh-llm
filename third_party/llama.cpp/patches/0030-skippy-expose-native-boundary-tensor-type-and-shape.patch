@@ -1,0 +1,163 @@
+From 0362a8a242e2d5881ce69d0049c057c0a4a03cdf Mon Sep 17 00:00:00 2001
+From: Paul Hogan
+ <5004d00b753726762516a66df75936687319095eacf0e9f7a4710f7a0ff12098@meshllm.communities.buzz.xyz>
+Date: Fri, 28 Aug 2026 19:07:01 +1000
+Subject: [PATCH] skippy: expose native boundary tensor type and shape
+
+Add skippy_session_boundary_tensor_info to report the ggml type, shape
+(ne), and element size of the graph boundary tensor from the most
+recent evaluation of a frame-emitting session. Family dtype policy can
+now be derived from the actual boundary tensor instead of weight dtype
+or internal kernel conversions.
+
+Guard skippy_copy_output_activation_frame against non-f32 boundary
+tensors: the host embeddings copy assumes sizeof(float), so a boundary
+evaluated in f16/bf16 now fails loudly with the actual type name
+instead of memcpying a mis-typed payload.
+
+Advertise SKIPPY_FEATURE_BOUNDARY_META (1 << 29) and bump
+SKIPPY_ABI_VERSION_PATCH 41 -> 42.
+---
+ include/skippy/activation.h | 21 +++++++++++++++
+ include/skippy/common.h     |  3 ++-
+ src/skippy/abi.cpp          |  3 ++-
+ src/skippy/activation.cpp   | 52 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 77 insertions(+), 2 deletions(-)
+
+diff --git a/include/skippy/activation.h b/include/skippy/activation.h
+index 32d796c59..38be5c3d6 100644
+--- a/include/skippy/activation.h
++++ b/include/skippy/activation.h
+@@ -46,6 +46,27 @@ struct skippy_activation_desc {
+     uint64_t flags;
+ };
+ 
++struct skippy_session;
++
++/** @brief Native graph tensor at the pipeline boundary of the last evaluation. */
++struct skippy_boundary_tensor_info {
++    /** @brief ggml_type enum value of the boundary tensor (e.g. GGML_TYPE_F32). */
++    int32_t ggml_type;
++    /** @brief Tensor extents in ggml order; ne[0] is the fastest-changing dim. */
++    int64_t ne[4];
++    /** @brief Bytes per element for ggml_type. */
++    uint32_t element_size;
++    /** @brief Nonzero when this session configuration emits activation frames. */
++    uint8_t emits_frame;
++    uint8_t reserved[7];
++};
++
++/** @brief Reports the boundary tensor of the most recent graph evaluation. */
++LLAMA_API enum skippy_status skippy_session_boundary_tensor_info(
++        struct skippy_session * session,
++        struct skippy_boundary_tensor_info * out_info,
++        struct skippy_error ** out_error);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index e7f322abf..04c1c5805 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -34,7 +34,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 41
++#define SKIPPY_ABI_VERSION_PATCH 42
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -73,6 +73,7 @@ enum skippy_feature {
+     SKIPPY_FEATURE_NGRAM_CACHE_DRAFT      = 1 << 26,
+     SKIPPY_FEATURE_INKLING_MTP_MM         = 1 << 27,
+     SKIPPY_FEATURE_ITERATION_BATCH        = 1 << 28,
++    SKIPPY_FEATURE_BOUNDARY_META          = 1 << 29,
+ };
+ 
+ enum skippy_status {
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index f48e56cb5..19b328001 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -36,7 +36,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_NATIVE_MTP_N1 |
+            SKIPPY_FEATURE_NGRAM_CACHE_DRAFT |
+            SKIPPY_FEATURE_INKLING_MTP_MM |
+-           SKIPPY_FEATURE_ITERATION_BATCH;
++           SKIPPY_FEATURE_ITERATION_BATCH |
++           SKIPPY_FEATURE_BOUNDARY_META;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 2e85acf51..8dfcbfc3e 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -461,6 +461,22 @@ enum skippy_status skippy_copy_output_activation_frame(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+ 
++    {
++        // The host embeddings buffer is typed float: llama_get_embeddings hands
++        // back a float* regardless of the graph's boundary tensor type. Refuse
++        // to reinterpret a non-f32 boundary rather than memcpy a differently
++        // typed payload; boundary transport dtype is negotiated, never guessed.
++        llm_graph_result * res = session->ctx->get_gf_res_prev();
++        ggml_tensor * embd = res != nullptr ? res->get_embd() : nullptr;
++        if (embd != nullptr && embd->type != GGML_TYPE_F32) {
++            const std::string message = std::string("pipeline boundary tensor type is ") +
++                    ggml_type_name(embd->type) +
++                    " but the activation frame transport only copies f32 embeddings";
++            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message.c_str());
++            return SKIPPY_STATUS_RUNTIME_ERROR;
++        }
++    }
++
+     std::memcpy(output_payload, embeddings, hidden_bytes);
+ 
+     if ((output_flags & SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K) != 0) {
+@@ -988,3 +1004,39 @@ enum skippy_status skippy_restore_verify_prefix(
+     return SKIPPY_STATUS_OK;
+ }
+ 
++
++enum skippy_status skippy_session_boundary_tensor_info(
++        struct skippy_session * session,
++        struct skippy_boundary_tensor_info * out_info,
++        struct skippy_error ** out_error) {
++    if (out_info == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "boundary tensor info output is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_info = {};
++    out_info->ggml_type = -1;
++
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required for boundary tensor info");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!skippy_emits_activation_frame(session)) {
++        out_info->emits_frame = 0;
++        return skippy_success(out_error);
++    }
++
++    llm_graph_result * res = session->ctx->get_gf_res_prev();
++    ggml_tensor * embd = res != nullptr ? res->get_embd() : nullptr;
++    if (embd == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "no graph boundary tensor is available yet");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++
++    out_info->emits_frame = 1;
++    out_info->ggml_type = static_cast<int32_t>(embd->type);
++    for (int i = 0; i < 4; ++i) {
++        out_info->ne[i] = embd->ne[i];
++    }
++    out_info->element_size = static_cast<uint32_t>(ggml_type_size(embd->type));
++    return skippy_success(out_error);
++}
+-- 
+2.54.0 (Apple Git-157)
+

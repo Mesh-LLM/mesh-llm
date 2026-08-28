@@ -28,6 +28,32 @@ pub struct ActivationDesc {
     pub flags: u64,
 }
 
+/// Native boundary tensor introspection for the last emitted activation frame.
+///
+/// Mirrors `skippy_boundary_tensor_info` from `include/skippy/activation.h`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BoundaryTensorInfo {
+    pub ggml_type: i32,
+    pub ne: [i64; 4],
+    pub element_size: u32,
+    pub emits_frame: u8,
+    pub reserved: [u8; 7],
+}
+
+impl Default for BoundaryTensorInfo {
+    fn default() -> Self {
+        Self {
+            ggml_type: -1,
+            ne: [0; 4],
+            element_size: 0,
+            emits_frame: 0,
+            reserved: [0; 7],
+        }
+    }
+}
+
+
 pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
 
 #[repr(C)]

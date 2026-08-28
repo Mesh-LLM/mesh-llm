@@ -3,12 +3,15 @@ use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
-    GenerationSignalWindow as RawGenerationSignalWindow, NativeMtpDraft as RawNativeMtpDraft,
-    SamplingConfig as RawSamplingConfig, Session as RawSession, TokenSignal as RawTokenSignal,
+    BoundaryTensorInfo as RawBoundaryTensorInfo, GenerationSignalWindow as RawGenerationSignalWindow,
+    NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
+    Session as RawSession, TokenSignal as RawTokenSignal,
 };
 
 use crate::error::ensure_ok;
-use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal};
+use crate::{
+    BoundaryTensorInfo, GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal,
+};
 
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
@@ -313,6 +316,26 @@ impl StageSession {
         };
         ensure_ok(status, error)?;
         Ok(signal.into())
+    }
+
+    /// Returns the native boundary tensor type and shape for the most recent
+    /// graph evaluation, or `None` when this stage configuration emits no
+    /// activation frame.
+    pub fn boundary_tensor_info(&mut self) -> Result<Option<BoundaryTensorInfo>> {
+        let mut info = RawBoundaryTensorInfo::default();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_boundary_tensor_info(self.raw, &mut info, &mut error)
+        };
+        ensure_ok(status, error)?;
+        if info.emits_frame == 0 {
+            return Ok(None);
+        }
+        Ok(Some(BoundaryTensorInfo {
+            ggml_type: info.ggml_type,
+            ne: info.ne,
+            element_size: info.element_size,
+        }))
     }
 
     pub fn signal_window(&mut self, window_tokens: u32) -> Result<GenerationSignalWindow> {

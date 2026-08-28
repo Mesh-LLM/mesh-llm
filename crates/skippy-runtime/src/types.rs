@@ -302,6 +302,30 @@ pub struct TokenSignal {
     pub second_token: i32,
 }
 
+/// Native boundary tensor type and shape for the most recent graph evaluation
+/// of a stage session that emits activation frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundaryTensorInfo {
+    /// `ggml_type` enum value as reported by the native graph.
+    pub ggml_type: i32,
+    /// Tensor extents in ggml order (`ne[0]` is the fastest-changing dim).
+    pub ne: [i64; 4],
+    /// Bytes per element for `ggml_type`.
+    pub element_size: u32,
+}
+
+impl BoundaryTensorInfo {
+    /// Human-readable ggml type name for the common activation types.
+    pub fn ggml_type_name(&self) -> &'static str {
+        match self.ggml_type {
+            0 => "f32",
+            1 => "f16",
+            30 => "bf16",
+            _ => "other",
+        }
+    }
+}
+
 impl From<RawTokenSignal> for TokenSignal {
     fn from(raw: RawTokenSignal) -> Self {
         Self {

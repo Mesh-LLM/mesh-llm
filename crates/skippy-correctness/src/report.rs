@@ -148,6 +148,69 @@ pub struct SplitScanReport {
     pub results: Vec<SingleStepReport>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundaryDTypeScanSplit {
+    pub split_layer: u32,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    pub boundary_tensor: Option<BoundaryTensorReport>,
+    pub frame_desc: Option<FrameDescReport>,
+    pub boundary_payload_sha256: Option<String>,
+    pub desc_matches_tensor: bool,
+    pub predicted_token: Option<i32>,
+    pub signal: Option<TokenSignalReport>,
+    pub predicted_token_matches: Option<bool>,
+    pub signal_matches: Option<bool>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct BoundaryTensorReport {
+    pub ggml_type: i32,
+    pub ggml_type_name: &'static str,
+    pub ne: [i64; 4],
+    pub element_size: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct FrameDescReport {
+    pub dtype: &'static str,
+    pub dtype_value: i32,
+    pub layout: &'static str,
+    pub token_count: u32,
+    pub payload_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct TokenSignalReport {
+    pub entropy: f32,
+    pub top_logprob: f32,
+    pub second_logprob: f32,
+    pub margin: f32,
+    pub top_token: i32,
+    pub second_token: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BoundaryDTypeReport {
+    pub mode: &'static str,
+    pub status: &'static str,
+    pub model_identity: ModelIdentity,
+    pub layer_end: u32,
+    pub prompt: String,
+    pub splits: Vec<u32>,
+    pub split_count: usize,
+    pub f32_boundary_count: usize,
+    pub non_f32_boundary_count: usize,
+    pub mismatch_count: usize,
+    pub signal_mismatch_count: usize,
+    pub error_count: usize,
+    pub matches: bool,
+    pub baseline: BaselineReport,
+    pub baseline_signal: TokenSignalReport,
+    pub results: Vec<BoundaryDTypeScanSplit>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct StateHandoffReport {
     pub mode: &'static str,

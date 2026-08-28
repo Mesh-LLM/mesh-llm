@@ -15,6 +15,7 @@ pub enum CommandKind {
     SingleStep(SingleStepArgs),
     Chain(ChainArgs),
     SplitScan(SplitScanArgs),
+    BoundaryReport(BoundaryReportArgs),
     StateHandoff(StateHandoffArgs),
     SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
@@ -146,6 +147,18 @@ pub struct SplitScanArgs {
     pub splits: String,
     #[arg(long, default_value = "127.0.0.1:19041")]
     pub stage1_bind_addr: SocketAddr,
+    #[arg(long)]
+    pub allow_mismatch: bool,
+}
+
+#[derive(Args)]
+pub struct BoundaryReportArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long, default_value = "1..30")]
+    pub splits: String,
     #[arg(long)]
     pub allow_mismatch: bool,
 }

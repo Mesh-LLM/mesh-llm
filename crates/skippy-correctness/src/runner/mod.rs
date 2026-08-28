@@ -1,4 +1,5 @@
 pub(crate) mod native_mtp;
+mod boundary_report;
 mod prediction_return;
 mod single_step;
 mod split_chain;
@@ -7,6 +8,7 @@ mod stage_execution;
 mod stage_fa_parity;
 mod state_handoff;
 
+pub use boundary_report::boundary_report;
 pub use single_step::single_step;
 pub use split_chain::{chain, split_scan};
 pub use split_prefix_hit::split_prefix_hit;
