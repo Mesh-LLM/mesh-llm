@@ -1505,6 +1505,45 @@ fn pinned_gpu_startup_preflight_cli_models_resolve_matching_config_gpu_id() {
 }
 
 #[test]
+fn startup_preflight_reads_programmatic_hardware_device_without_legacy_gpu_id() {
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
+    let config = plugin::MeshConfig {
+        gpu: plugin::GpuConfig {
+            assignment: plugin::GpuAssignment::Pinned,
+            parallel: None,
+        },
+        models: vec![plugin::ModelConfigEntry {
+            model: "Qwen3-8B-Q4_K_M".into(),
+            gpu_id: None,
+            hardware: Some(plugin::HardwareConfig {
+                device: Some("pci:0000:65:00.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        ..plugin::MeshConfig::default()
+    };
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
+
+    let mut plans = vec![StartupModelPlan {
+        gpu_id: specs[0].gpu_id.clone(),
+        ..startup_model_plan("Qwen3-8B-Q4_K_M")
+    }];
+    let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
+    preflight_config_owned_startup_models_with_gpus(&config, &specs, &mut plans, &gpus, None)
+        .expect("hardware.device should resolve without legacy gpu_id");
+
+    assert_eq!(
+        plans[0]
+            .pinned_gpu
+            .as_ref()
+            .map(|gpu| gpu.backend_device.as_str()),
+        Some("CUDA0")
+    );
+}
+
+#[test]
 fn pinned_gpu_startup_preflight_cli_device_overrides_stale_config_gpu_id() {
     // An explicit CLI `--device` must win over a persisted per-model
     // `hardware.device` for the model being started, even when the
@@ -1708,6 +1747,28 @@ fn cli_device_reaches_startup_preflight_under_auto_assignment() {
         .expect_err("an unresolvable --device must fail startup preflight");
 
     assert!(format!("{err:#}").contains("failed pinned GPU preflight"));
+    assert_eq!(plans[0].pinned_gpu, None);
+}
+
+#[test]
+fn cli_device_cpu_skips_gpu_preflight_through_outer_entry_point() {
+    // CPU is a valid llama.cpp backend selector, but it is not represented in
+    // the GPU facts inventory. The outer preflight must therefore leave the
+    // plan unpinned instead of failing on an empty or GPU-only survey.
+    let options =
+        runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M", "--device", "CPU"]);
+    let config = plugin::MeshConfig::default();
+    let specs = build_startup_model_specs(&options, &config).expect("startup specs");
+    assert_eq!(specs[0].gpu_id.as_deref(), Some("CPU"));
+    let mut plans = vec![StartupModelPlan {
+        gpu_id: specs[0].gpu_id.clone(),
+        ..startup_model_plan("Qwen3-8B-Q4_K_M")
+    }];
+
+    preflight_config_owned_startup_models(&config, &specs, &mut plans, None, None)
+        .expect("CPU device selection must not require a GPU inventory");
+
+    assert_eq!(plans[0].gpu_id.as_deref(), Some("CPU"));
     assert_eq!(plans[0].pinned_gpu, None);
 }
 

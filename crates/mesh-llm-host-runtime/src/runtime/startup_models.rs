@@ -8,6 +8,7 @@ use crate::crypto::{
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain, load_trust_store,
 };
 use crate::inference::election;
+use crate::inference::skippy::find_model_entry_for_refs;
 use crate::mesh;
 use crate::models;
 use crate::plugin;
@@ -691,53 +692,34 @@ fn configured_server_alias(
 /// Look up the `hardware.device` (legacy `gpu_id`) persisted for a model
 /// referenced by an explicit CLI `--model`/`--gguf` value.
 ///
-/// Matching mirrors `ResolverContext::new` in
+/// Matching uses the same shared lookup as `ResolverContext::new` in
 /// `crate::inference::skippy::resolver::resolution`, which is what actually
 /// picks the persisted `hardware.device` up further downstream: the declared
 /// ref first (the alias from `--gguf <path> --model <alias>`), then the model
 /// ref string, then any config row whose `hardware.model_path` names the same
-/// file. Keeping the two lookups in step is what makes this preflight see
-/// exactly the pins that would otherwise reach the native ABI unresolved —
-/// a bare-path `--gguf` launch never matches a row keyed by alias, and the
-/// alias branch's `model_ref` is the GGUF path rather than the alias.
+/// file. Keeping one lookup in both paths prevents preflight and runtime from
+/// drifting apart — a bare-path `--gguf` launch never matches a row keyed by
+/// alias, and the alias branch's `model_ref` is the GGUF path rather than the
+/// alias.
 fn matching_config_model_gpu_id<'a>(
     config: &'a plugin::MeshConfig,
     declared_ref: Option<&str>,
     model_ref: &Path,
 ) -> Option<&'a str> {
     let model_ref_text = model_ref.to_string_lossy();
-    config
-        .models
-        .iter()
-        .find(|entry| {
-            declared_ref.is_some_and(|alias| entry.model.as_str() == alias)
-                || entry.model.as_str() == model_ref_text.as_ref()
-        })
-        .or_else(|| matching_config_model_by_model_path(config, model_ref))
-        .and_then(|entry| entry.gpu_id.as_deref())
-}
-
-fn matching_config_model_by_model_path<'a>(
-    config: &'a plugin::MeshConfig,
-    model_ref: &Path,
-) -> Option<&'a plugin::ModelConfigEntry> {
-    let requested = comparable_startup_model_path(model_ref);
-    config.models.iter().find(|entry| {
+    find_model_entry_for_refs(
+        config,
+        declared_ref,
+        Some(model_ref_text.as_ref()),
+        model_ref,
+    )
+    .and_then(|entry| {
         entry
             .hardware
             .as_ref()
-            .and_then(|hardware| hardware.model_path.as_deref())
-            .is_some_and(|configured| {
-                comparable_startup_model_path(Path::new(configured)) == requested
-            })
+            .and_then(|hardware| hardware.device.as_deref())
+            .or(entry.gpu_id.as_deref())
     })
-}
-
-/// Canonicalize for comparison, falling back to the raw path when the file is
-/// absent. A bare model ref such as `Qwen3-8B-Q4_K_M` never canonicalizes, so
-/// it can only ever compare equal to an identically bare configured path.
-fn comparable_startup_model_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The device persisted for a startup model: its own `hardware.device` first,
@@ -1232,6 +1214,18 @@ fn resolve_requested_startup_device<'a>(
     }
 }
 
+fn is_cpu_startup_device(requested_device: Option<&str>) -> bool {
+    requested_device.is_some_and(|device| device.trim().eq_ignore_ascii_case("CPU"))
+}
+
+/// Preserve an explicit CPU selector for the runtime resolver while bypassing
+/// GPU-only startup preflight. CPU is a backend selector, not a GPU fact.
+pub(super) fn startup_device_override(requested_device: Option<&str>) -> Option<String> {
+    requested_device
+        .filter(|device| is_cpu_startup_device(Some(device)))
+        .map(|_| "CPU".to_string())
+}
+
 fn resolve_startup_backend_device_by_name<'a>(
     requested_device: &str,
     gpus: &'a [hardware::GpuFacts],
@@ -1293,6 +1287,12 @@ pub(super) fn preflight_config_owned_startup_models_with_gpus(
         let must_resolve_device =
             spec.config_owned && config.gpu.assignment == plugin::GpuAssignment::Pinned;
         if !must_resolve_device && plan.gpu_id.is_none() {
+            continue;
+        }
+        // CPU is a valid llama.cpp backend selector, but it is deliberately
+        // absent from the GPU inventory. Keep the selector on the startup
+        // plan for dashboard/runtime reporting and leave the GPU pin unset.
+        if startup_device_override(plan.gpu_id.as_deref()).is_some() {
             continue;
         }
 

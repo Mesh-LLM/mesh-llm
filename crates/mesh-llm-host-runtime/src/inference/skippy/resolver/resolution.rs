@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -187,6 +187,57 @@ impl<'a> ResolverContext<'a> {
             global_throughput,
         }
     }
+}
+
+/// Find the configured model entry for a launch, preferring exact references
+/// before falling back to a configured model path.
+///
+/// Startup preflight and runtime config resolution use this lookup so a
+/// persisted hardware selector cannot be validated for one entry and then
+/// applied to another. When both references are supplied, the primary one
+/// normally names the declared alias. The model reference text comes next,
+/// followed by the canonicalized `hardware.model_path`.
+pub(crate) fn find_model_entry_for_refs<'a>(
+    mesh_config: &'a crate::plugin::MeshConfig,
+    primary_ref: Option<&str>,
+    secondary_ref: Option<&str>,
+    model_path: &Path,
+) -> Option<&'a ModelConfigEntry> {
+    primary_ref
+        .and_then(|model_ref| find_model_entry_by_exact_ref(mesh_config, model_ref))
+        .or_else(|| {
+            secondary_ref
+                .and_then(|model_ref| find_model_entry_by_exact_ref(mesh_config, model_ref))
+        })
+        .or_else(|| find_model_entry_by_resolved_path(mesh_config, model_path))
+}
+
+fn find_model_entry_by_exact_ref<'a>(
+    mesh_config: &'a crate::plugin::MeshConfig,
+    model_ref: &str,
+) -> Option<&'a ModelConfigEntry> {
+    mesh_config
+        .models
+        .iter()
+        .find(|entry| entry.model == model_ref)
+}
+
+fn find_model_entry_by_resolved_path<'a>(
+    mesh_config: &'a crate::plugin::MeshConfig,
+    model_path: &Path,
+) -> Option<&'a ModelConfigEntry> {
+    let requested_path = comparable_path(model_path);
+    mesh_config.models.iter().find(|entry| {
+        entry
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .is_some_and(|configured| comparable_path(Path::new(configured)) == requested_path)
+    })
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn validate_supported_model_fit_controls(context: &ResolverContext<'_>) -> Result<()> {

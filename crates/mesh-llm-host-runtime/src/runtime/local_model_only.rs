@@ -5,7 +5,8 @@ use super::{
     build_startup_model_specs, cleanup_run_auto_runtime_dir, configure_run_auto_process_state,
     emit_shutdown, openai_guardrail_policy_handle, preflight_config_owned_startup_models,
     resolve_local_model_only_startup_models, runtime_model_required_bytes,
-    skippy_telemetry_options, start_local_openai_model, wait_shutdown_signal,
+    skippy_telemetry_options, start_local_openai_model, startup_device_override,
+    wait_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -172,6 +173,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
         mmproj_override: model.mmproj_path.as_deref(),
         ctx_size_override: model.ctx_size,
         pinned_gpu: model.pinned_gpu.as_ref(),
+        device_override: startup_device_override(model.gpu_id.as_deref()),
         capacity_budget_bytes: local_capacity_bytes,
         cache_type_k_override: model.cache_type_k.as_deref(),
         cache_type_v_override: model.cache_type_v.as_deref(),
