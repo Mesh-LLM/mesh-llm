@@ -118,9 +118,12 @@ rm -f "$ROOT/.deps/llama-canary-pr-body.md"
 # The agent reuses the open repair PR on $BRANCH if one exists, so repeated
 # canary failures amend a single PR instead of stacking duplicates. Surface
 # the current PR number (if any) in the prompt so it does not have to guess.
+# Every GitHub call — read or write — carries the repair token: the workflow
+# job never exports GH_TOKEN/GITHUB_TOKEN and checks out with
+# persist-credentials disabled, so an unauthenticated gh would silently fail.
 EXISTING_PR=""
 if command -v gh >/dev/null 2>&1; then
-  EXISTING_PR="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' || true)"
+  EXISTING_PR="$(gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' || true)"
 fi
 
 agent_turn() {
@@ -133,8 +136,10 @@ agent_turn() {
 }
 
 battery_summary() {
-  # Last 80 lines of the most recent battery log, enough to name the failing
-  # family/split lanes without flooding the agent prompt.
+  # Last 80 lines of the most recent battery evidence — either this run's
+  # workflow-teed log (battery mode) or the wrapper's own certification run —
+  # enough to name the failing family/split lanes without flooding the agent
+  # prompt.
   local log="$1"
   if [[ ! -s "$log" ]]; then
     echo "(no battery output captured; see the canary run log)"
@@ -144,8 +149,7 @@ battery_summary() {
 }
 
 current_pr() {
-  # Read-only; the job's ambient read token is sufficient.
-  gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
+  gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
 }
 
 # Repair remote: the write PAT is embedded in the push URL (never echoed) and
@@ -229,7 +233,7 @@ pr_comment() {
   [[ -n "$resource" ]] || resource="$(ensure_pr)"
   [[ -n "$resource" ]] || return 0
   # ensure_pr returns an issue number when no PR exists; use the right command.
-  if gh pr view "$resource" >/dev/null 2>&1; then
+  if gh_repair gh pr view "$resource" >/dev/null 2>&1; then
     gh_repair gh pr comment "$resource" --body "$body" >/dev/null 2>&1 || true
   else
     gh_repair gh issue comment "$resource" --body "$body" >/dev/null 2>&1 || true
@@ -300,8 +304,11 @@ run_battery() {
 }
 
 repair_followup_prompt() {
-  # Shared prompt for every post-repair recertification failure. The agent has
-  # no GitHub credentials; the wrapper commits, pushes, and updates the PR.
+  # Shared prompt for every repair turn. In battery mode turn 1 this is
+  # seeded directly from the workflow's teed failure evidence (no battery
+  # re-run first); later turns carry the wrapper's own certification output.
+  # The agent has no GitHub credentials; the wrapper commits, pushes, and
+  # updates the PR.
   printf 'The family certification battery failed after the patch-queue repair
 at upstream %s (attempt %s of %s). You are working in this repository checkout.
 
@@ -364,20 +371,30 @@ apply_pr_body
 
 # Certify → repair → recertify loop. The wrapper — not the agent — decides
 # when certification passes, so a lane failure can never be talked past.
-for turn in $(seq 1 "$MAX_REPAIR_TURNS"); do
-  echo "certification attempt $turn..."
-  if run_battery; then
-    echo "family battery passed; repair complete"
-    report_success
-    exit 0
+# In battery mode the workflow's own battery step already failed on this
+# runner (or the diagnostic attempt above did): iteration 1 is the repair
+# turn seeded from that evidence, never another full build+battery run
+# before the agent gets a chance to fix anything.
+attempt=0
+while (( attempt < MAX_REPAIR_TURNS )); do
+  attempt=$((attempt + 1))
+  if [[ "$MODE" == "battery" && "$attempt" -eq 1 ]]; then
+    echo "battery mode: repair turn 1 seeded from the workflow battery failure evidence"
+  else
+    echo "certification attempt $attempt..."
+    if run_battery; then
+      echo "family battery passed; repair complete"
+      report_success
+      exit 0
+    fi
   fi
-  echo "family battery failed on repair turn $turn; handing failures to the agent"
-  agent_turn "$(repair_followup_prompt "$turn")"
-  echo "agent repair turn $turn finished; verifying queue applies..."
+  echo "family battery failed on repair turn $attempt; handing failures to the agent"
+  agent_turn "$(repair_followup_prompt "$attempt")"
+  echo "agent repair turn $attempt finished; verifying queue applies..."
   if ! scripts/prepare-llama.sh "$UPSTREAM_SHA"; then
     publish_work_in_progress
     pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue regressed or still does not apply at upstream %s after repair turn %s/%s. The agent work is on this branch; see the canary run log for the failing patch.' \
-      "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS")"
+      "$UPSTREAM_SHA" "$attempt" "$MAX_REPAIR_TURNS")"
     exit 1
   fi
 done

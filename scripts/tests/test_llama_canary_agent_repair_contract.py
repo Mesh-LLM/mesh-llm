@@ -60,6 +60,36 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertIn("no workflow battery evidence", wrapper)
         # A missing battery log must not crash the failure-path summaries.
         self.assertIn("(no battery output captured", wrapper)
+        # The first battery-mode loop iteration is a repair turn seeded from
+        # the workflow evidence — never a second full build+battery run
+        # before the agent gets the failure output.
+        self.assertIn(
+            'if [[ "$MODE" == "battery" && "$attempt" -eq 1 ]]; then', wrapper
+        )
+        self.assertIn(
+            "battery mode: repair turn 1 seeded from the workflow battery failure evidence",
+            wrapper,
+        )
+
+    def test_every_github_call_is_token_scoped(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # The workflow job exports no ambient GH_TOKEN and checks out with
+        # persist-credentials disabled: every gh invocation — reads included
+        # — must go through the token-scoped helper.
+        lines = [
+            line
+            for line in wrapper.splitlines()
+            if not line.lstrip().startswith("#")
+            and " gh " in f" {line.strip()} "
+            # `command -v gh` checks binary presence, not an API call.
+            and "command -v" not in line
+        ]
+        for line in lines:
+            self.assertIn(
+                "gh_repair",
+                line,
+                f"bare gh invocation bypasses the repair token: {line.strip()}",
+            )
 
     def test_run_scopes_persistent_runner_state(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
