@@ -211,8 +211,15 @@ agent_turn() {
   ' heartbeat "$ROOT" "$started" &
   heartbeat_pid=$!
   set +m
+  # --auto: auto-approve opencode's permission prompts. The sandbox auto-
+  # REJECTS out-of-workspace writes (e.g. scratch dirs under /tmp) in non-
+  # interactive mode, and a rejection terminates the whole turn — every
+  # short-turn failure so far traces to this (live: run 33160131810 aborted
+  # on "external_directory (/tmp/opencode/*); auto-rejecting"). The agent
+  # runs with all GitHub tokens stripped and only the wrapper holds write
+  # credentials, so auto-approval inside this sandbox is safe.
   env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode run --model "$AGENT_MODEL" "$prompt" \
+    opencode run --auto --model "$AGENT_MODEL" "$prompt" \
     || echo "warning: opencode turn exited non-zero" >&2
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true

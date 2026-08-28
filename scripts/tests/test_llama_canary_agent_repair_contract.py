@@ -28,6 +28,11 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertNotIn("export GH_TOKEN", wrapper)
         # Agent turns explicitly strip every GitHub credential.
         self.assertIn("env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN", wrapper)
+        # Turns run with --auto: opencode's sandbox otherwise auto-rejects
+        # out-of-workspace scratch writes (/tmp) in non-interactive mode and
+        # the rejection kills the whole turn (live: run 33160131810). Safe
+        # because no GitHub credential is present in the agent environment.
+        self.assertIn('opencode run --auto --model "$AGENT_MODEL"', wrapper)
         # GitHub mutations go through the token-scoped helper.
         self.assertIn("gh_repair() {", wrapper)
         self.assertNotIn("\n  gh pr create", wrapper)
