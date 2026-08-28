@@ -149,8 +149,15 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         # Untrusted dispatch SHAs reach Bash only as environment variables.
         for repair_step in (queue_repair, battery_repair):
             self.assertIn("UPSTREAM_SHA_INPUT:", repair_step)
-            self.assertNotIn('"${{ github.event.inputs', repair_step)
-            self.assertNotIn('"${{ steps.sha.outputs', repair_step)
+            self.assertIn("CANARY_REPAIR_TOKEN:", repair_step)
+            # Extract the run: command body (everything after "run: |" or "run:")
+            # to ensure inline interpolation checks only inspect shell commands,
+            # not the env: mapping where ${{ }} is safe and intended.
+            run_marker = repair_step.find("\n        run:")
+            self.assertNotEqual(-1, run_marker, "repair step must have a run: key")
+            run_body = repair_step[run_marker + len("\n        run:"):]
+            self.assertNotIn("github.event.inputs", run_body)
+            self.assertNotIn("steps.sha.outputs", run_body)
 
         # The workflow's battery step tees its evidence log so a battery-mode
         # repair turn reuses it instead of re-running the battery.
