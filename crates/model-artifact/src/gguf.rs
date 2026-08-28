@@ -929,6 +929,111 @@ pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfil
     })
 }
 
+/// Per-layer weight-byte layout of a GGUF model, for stage-slice memory
+/// preflight. `layer_bytes[i]` covers every repeating-layer tensor with
+/// `blk.<i>.` in its name; the other fields hold the non-repeating bytes the
+/// skippy stage loader keeps when `include_embeddings` / `include_output`
+/// are set. Reads only the header and tensor-info table, never tensor data.
+#[derive(Clone, Debug, Default)]
+pub struct GgufLayerByteProfile {
+    /// Weight bytes of repeating layer `i` (index == block id). Empty for
+    /// models whose tensors carry no `blk.N.` prefix.
+    pub layer_bytes: Vec<u64>,
+    /// Non-layer tensors the stage loader keeps when the stage includes
+    /// embeddings (input-side tensors, no `blk.` prefix).
+    pub input_side_bytes: u64,
+    /// Non-layer tensors the stage loader keeps when the stage includes the
+    /// output head (output-side tensors, no `blk.` prefix).
+    pub output_side_bytes: u64,
+}
+
+/// Extract the repeating-layer index from a GGUF tensor name (`blk.7.mlvm.`,
+/// `model.layers.7.`), if present.
+fn gguf_tensor_layer_index(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("blk.").or_else(|| name.strip_prefix("model.layers."))?;
+    let end = rest.find('.')?;
+    let index: usize = rest[..end].parse().ok()?;
+    Some(index)
+}
+
+/// Scan a GGUF file's tensor-info table and bucket weight bytes per repeating
+/// layer plus the embedding/output sides. Mirrors the byte accounting used by
+/// the skippy stage loader's tensor filter (src/llama-model-loader.cpp,
+/// `skippy_graph_filter` keep rules). Returns `None` on any parse failure.
+pub fn scan_gguf_layer_byte_profile(path: &Path) -> Option<GgufLayerByteProfile> {
+    let GgufHeader {
+        file: mut f,
+        n_tensors,
+        n_kv,
+    } = open_gguf_header(path)?;
+
+    let mut alignment = 32u32;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let vtype = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        if key == "general.alignment" {
+            if let Ok(Some(value)) = read_gguf_value_as_u32(&mut f, vtype) {
+                alignment = value.max(1);
+            }
+        } else {
+            skip_gguf_value(&mut f, vtype).ok()?;
+        }
+    }
+
+    let file_len = f.metadata().ok()?.len();
+    let tensors = read_tensor_infos(&mut f, n_tensors).ok()?;
+    let tensor_info_end = f.stream_position().ok()?;
+    let data_start = align_offset(tensor_info_end, alignment);
+    if data_start > file_len {
+        return None;
+    }
+    let data_len = file_len - data_start;
+
+    let mut sorted = tensors;
+    sorted.sort_by_key(|tensor| tensor.offset);
+    if sorted.first()?.offset > data_len {
+        return None;
+    }
+
+    let mut profile = GgufLayerByteProfile::default();
+    for (index, tensor) in sorted.iter().enumerate() {
+        let next_offset = sorted
+            .get(index + 1)
+            .map(|next| next.offset)
+            .unwrap_or(data_len);
+        if next_offset < tensor.offset || next_offset > data_len {
+            return None;
+        }
+        let bytes = next_offset - tensor.offset;
+        match gguf_tensor_layer_index(&tensor.name) {
+            Some(layer) => {
+                if layer >= profile.layer_bytes.len() {
+                    profile.layer_bytes.resize(layer + 1, 0);
+                }
+                profile.layer_bytes[layer] = profile.layer_bytes[layer].saturating_add(bytes);
+            }
+            None => {
+                if is_output_side_tensor(&tensor.name) {
+                    profile.output_side_bytes = profile.output_side_bytes.saturating_add(bytes);
+                } else {
+                    profile.input_side_bytes = profile.input_side_bytes.saturating_add(bytes);
+                }
+            }
+        }
+    }
+    Some(profile)
+}
+
+/// Non-layer tensor on the output side of the model (the LM head and friends).
+/// Everything else without a layer index is treated as input-side.
+fn is_output_side_tensor(name: &str) -> bool {
+    // The output norm/head live at the model root without a blk prefix in
+    // every llama.cpp arch: output.*, output_norm.*. T5's enc-dec keys are
+    // also unambiguous. When in doubt the byte lands in input_side, which
+    // only makes the preflight conservative (stage 0 keeps it).
+    name.starts_with("output")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
