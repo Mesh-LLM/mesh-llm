@@ -107,19 +107,39 @@ check_repair_token_permissions() {
   # Preflight (issue #1434 follow-up): fail in seconds when the identity behind
   # CANARY_REPAIR_TOKEN cannot actually write to this repository, instead of
   # discovering it via a git 403 after hours of repair work (seen live: a
-  # token minted by an account without repo write). The token is used only
-  # in scoped single commands, never exported, and never echoed.
-  local login perms
+  # fine-grained PAT whose account HAD repo write, but whose token lacked the
+  # Contents: write permission). The REST permissions object reflects the
+  # ACCOUNT's access, not the token's fine-grained scope, so reading
+  # .permissions is not sufficient — the check probes the actual capability by
+  # creating and deleting a temporary ref, which requires exactly the
+  # Contents: write permission a push needs. The token is used only in scoped
+  # single commands, never exported, and never echoed.
+  local login default_branch head_sha probe_ref
   if ! login="$(gh_repair gh api user --jq .login 2>/dev/null)"; then
     echo "preflight: CANARY_REPAIR_TOKEN does not authenticate (gh api user failed); check the secret value" >&2
     return 1
   fi
-  perms="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}" --jq '.permissions.push' 2>/dev/null)"
-  if [[ "$perms" != "true" ]]; then
-    echo "preflight: identity '${login}' behind CANARY_REPAIR_TOKEN lacks push permission on ${GITHUB_REPOSITORY}; grant it Contents write (fine-grained PAT: repository access + Contents: Read and write) and re-save the secret, or mint the PAT from an account with write" >&2
+  default_branch="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}" --jq .default_branch 2>/dev/null)"
+  if [[ -z "$default_branch" ]]; then
+    echo "preflight: could not read ${GITHUB_REPOSITORY} with the repair token; grant the PAT access to this repository" >&2
     return 1
   fi
-  echo "preflight: repair token identity '${login}' has push access to ${GITHUB_REPOSITORY}"
+  head_sha="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}/branches/${default_branch}" --jq .commit.sha 2>/dev/null)"
+  if [[ -z "$head_sha" ]]; then
+    echo "preflight: could not resolve ${default_branch} on ${GITHUB_REPOSITORY} with the repair token" >&2
+    return 1
+  fi
+  probe_ref="refs/heads/canary-repair-token-preflight"
+  if ! gh_repair gh api --method POST "repos/${GITHUB_REPOSITORY:?}/git/refs" \
+      -f ref="$probe_ref" -f sha="$head_sha" >/dev/null 2>&1; then
+    echo "preflight: identity '${login}' cannot write refs on ${GITHUB_REPOSITORY}: the fine-grained PAT must include this repository with Contents: Read and write (account-level write is not enough). Edit the PAT's permissions or mint one with Contents: RW, then re-save CANARY_REPAIR_TOKEN." >&2
+    return 1
+  fi
+  if ! gh_repair gh api --method DELETE \
+      "repos/${GITHUB_REPOSITORY:?}/git/refs/${probe_ref//\//%2F}" >/dev/null 2>&1; then
+    echo "preflight: WARNING: write probe succeeded but the temporary ref ${probe_ref} could not be deleted; delete it manually" >&2
+  fi
+  echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
 }
 
 cd "$ROOT"

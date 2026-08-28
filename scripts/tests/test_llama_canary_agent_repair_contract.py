@@ -126,13 +126,17 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         wrapper = REPAIR.read_text(encoding="utf-8")
         # A permission gap on CANARY_REPAIR_TOKEN must fail the run in
         # seconds, before any repair work — not as a git 403 after a
-        # potentially hours-long certified repair (live: run 33151501701,
-        # "denied to i386").
+        # potentially hours-long certified repair (live: run 33153507371,
+        # where the account HAD push but the fine-grained PAT lacked
+        # Contents: write, so REST permissions passed while git push 403'd).
         self.assertIn("check_repair_token_permissions", wrapper)
-        # The preflight authenticates the token and asserts push permission
-        # on the target repo via scoped gh calls (never exporting the token).
+        # The preflight authenticates the token and PROBES the actual write
+        # capability (create+delete a temp ref) via scoped gh calls — reading
+        # the REST permissions object is not sufficient, because it reflects
+        # the account's access, not the token's fine-grained scope.
         self.assertIn('gh_repair gh api user --jq .login', wrapper)
-        self.assertIn("gh api \"repos/${GITHUB_REPOSITORY:?}\" --jq '.permissions.push'", wrapper)
+        self.assertIn('gh_repair gh api --method POST "repos/${GITHUB_REPOSITORY:?}/git/refs"', wrapper)
+        self.assertIn('gh_repair gh api --method DELETE', wrapper)
         # It runs unconditionally before the repair loop starts.
         preflight_call = wrapper.index("check_repair_token_permissions\n\n# Run-scope")
         self.assertGreater(preflight_call, wrapper.index("gh_repair()"))
