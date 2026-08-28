@@ -146,6 +146,16 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         # Both repair paths use the dedicated token, never the job token.
         self.assertNotIn("github.token", workflow[workflow.index("  latest-upstream:") : workflow.index("  update-pin:")])
 
+        # Untrusted dispatch SHAs reach Bash only as environment variables.
+        for repair_step in (queue_repair, battery_repair):
+            self.assertIn("UPSTREAM_SHA_INPUT:", repair_step)
+            self.assertNotIn('"${{ github.event.inputs', repair_step)
+            self.assertNotIn('"${{ steps.sha.outputs', repair_step)
+
+        # The workflow's battery step tees its evidence log so a battery-mode
+        # repair turn reuses it instead of re-running the battery.
+        self.assertIn("tee .deps/llama-canary-repair-battery.log", battery)
+
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
         classifier = FAMILY_OUTCOME.read_text(encoding="utf-8")

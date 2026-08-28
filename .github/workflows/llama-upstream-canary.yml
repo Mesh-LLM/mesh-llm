@@ -169,7 +169,14 @@ jobs:
         timeout-minutes: 720
         env:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
+        run: |
+          set -o pipefail
+          # Tee the battery output to the repair wrapper's evidence path so a
+          # battery-failure repair turn reuses this run's evidence instead of
+          # re-running the (up to 720-minute) battery before its first agent
+          # turn. The wrapper clears this file at the start of its own runs.
+          scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}" 2>&1 \
+            | tee .deps/llama-canary-repair-battery.log
 
       - name: Upload supported-families battery evidence
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' }}
@@ -227,8 +234,11 @@ jobs:
         env:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Untrusted dispatch values reach Bash only as environment
+          # variables, never through inline interpolation.
+          UPSTREAM_SHA_INPUT: ${{ github.event.inputs.upstream_sha || 'latest' }}
         run: |
-          scripts/llama-canary-agent-repair.sh patch-queue "${{ github.event.inputs.upstream_sha || 'latest' }}"
+          scripts/llama-canary-agent-repair.sh patch-queue
 
       - name: Agent repair loop (battery failure)
         id: repair_battery
@@ -244,8 +254,11 @@ jobs:
         env:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Untrusted dispatch values reach Bash only as environment
+          # variables, never through inline interpolation.
+          UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
         run: |
-          scripts/llama-canary-agent-repair.sh battery "${{ steps.sha.outputs.new_sha }}"
+          scripts/llama-canary-agent-repair.sh battery
 
       - name: Fail when the canary needs human attention
         # Any repair outcome leaves the run red: if the repair loop failed,

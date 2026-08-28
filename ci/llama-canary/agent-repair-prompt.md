@@ -39,15 +39,15 @@ in those skills are hard requirements for this repair, not suggestions.
    will get the failure output in a follow-up repair turn — the loop only
    ends when the wrapper's own battery run passes.
 
-5. **Commit & PR.** Work on branch `llama-canary/patch-queue-fix`. Commit the
-   patch-queue changes with a `fix(llama): rebase patch queue onto upstream
-   <short-sha>` message. If a PR already exists for that branch, push to it;
-   otherwise open one titled `fix(llama): rebase patch queue onto upstream
-   <short-sha>` describing the conflicts hit and the resolution per patch.
-   The wrapper separately asks you to write the full PR description (key
-   upstream changes, how the patch queue evolved, risks for reviewers) — when
-   that turn arrives, write the finished Markdown to the file it names and
-   touch nothing else.
+5. **Commit locally; the wrapper owns the PR.** Work on branch
+   `llama-canary/patch-queue-fix`. Commit the patch-queue changes with a
+   `fix(llama): rebase patch queue onto upstream <short-sha>` message. You
+   have no GitHub credentials: the deterministic wrapper that drives you
+   commits any remaining work, pushes the branch, and creates/updates the
+   repair PR itself. The wrapper separately asks you to write the full PR
+   description (key upstream changes, how the patch queue evolved, risks for
+   reviewers) — when that turn arrives, write the finished Markdown to the
+   file it names and touch nothing else.
 
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
