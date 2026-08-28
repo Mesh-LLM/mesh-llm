@@ -31,7 +31,11 @@ set -euo pipefail
 # done and, on failure, what the agent is stuck on and needs human help
 # with. The PR description is written by an agent turn that runs BEFORE
 # certification (upstream changes, patch-queue evolution, risks) with a
-# deterministic fallback body; no agent turn ever runs after a green battery.
+# deterministic fallback body. After a GREEN battery exactly one more agent
+# turn runs: a fresh-context review of the certified repair that may modify
+# the tree (dropped patch intent, rebase leftovers, ABI mirror drift); its
+# changes ride as a separate review(llama): commit and are flagged in the
+# success comment. That review is fail-open and never blocks a green repair.
 #
 # Credential split: the agent never sees a GitHub token — CANARY_REPAIR_TOKEN
 # is stripped from its environment, and only the deterministic wrapper
@@ -160,6 +164,7 @@ if [[ "$MODE" == "patch-queue" ]]; then
   rm -f "$BATTERY_LOG"
 fi
 rm -f "$ROOT/.deps/llama-canary-pr-body.md"
+rm -f "$ROOT/.deps/llama-canary-review-report.md"
 
 # Repair turns routinely build scratch worktrees under /tmp (e.g.
 # /tmp/llama-old-pin, /tmp/llama-repair). On this persistent runner those
@@ -303,23 +308,28 @@ ensure_pr() {
 }
 
 verify_pr_head_is_certified() {
-  # The green battery must be bound to the bytes on the repair PR: the remote
-  # PR head must equal the commit the wrapper pushed after certification.
-  local pr remote_head attempt
+  # The PR must carry exactly the bytes the wrapper published: the remote PR
+  # head must equal the last commit the wrapper pushed — the certified
+  # commit, or the post-green review head when the review agent modified the
+  # tree. The success comment names both, so reviewers can tell certified
+  # bytes from review bytes; review bytes re-certify on the next canary run
+  # after the PR merges.
+  local pr remote_head attempt expected
   pr="$(current_pr)"
   if [[ -z "$pr" ]]; then
     echo "no repair PR to verify" >&2
     return 1
   fi
+  expected="${REVIEW_HEAD:-${CERTIFIED_SHA:?}}"
   remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
   for attempt in 1 2 3; do
-    if [[ "$remote_head" == "${CERTIFIED_SHA:?}" ]]; then
+    if [[ "$remote_head" == "$expected" ]]; then
       return 0
     fi
     sleep "$attempt"
     remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
   done
-  echo "repair PR #${pr} head (${remote_head:-none}) does not match the certified commit ${CERTIFIED_SHA}" >&2
+  echo "repair PR #${pr} head (${remote_head:-none}) does not match the wrapper-published commit ${expected}" >&2
   return 1
 }
 
@@ -338,9 +348,13 @@ pr_comment() {
 }
 
 report_success() {
-  # Green-battery closeout: no agent turn runs after this point. The wrapper
-  # publishes the certified tree, writes the status comment, and verifies the
-  # PR head binding before declaring success.
+  # Green-battery closeout. The wrapper publishes the certified tree, ensures
+  # the PR and body, then — the change review asked for — one fresh-context
+  # review agent re-reads the certified repair and may modify it (its commit
+  # rides as a separate review(llama): commit on the same branch; see
+  # post_green_review_turn). Only after that does the wrapper verify the
+  # PR-head binding, so the verification and the success comment reflect the
+  # final PR head, not a stale certified one.
   publish_repair_branch
   # Ensure the PR exists BEFORE applying the body: on a first run no PR
   # exists yet, ensure_pr creates it (with the generic body), and the agent's
@@ -350,11 +364,12 @@ report_success() {
   # and the agent's 103-line analysis was never shown).
   ensure_pr >/dev/null
   apply_pr_body
+  post_green_review_turn
   # The literal backticks around the certified SHA are Markdown, not command
   # substitution.
   # shellcheck disable=SC2016
-  pr_comment "$(printf '**Family battery passed** after the agent repair at upstream %s.\nAll certification lanes green on the family-certify runner; certified commit: `%s`.' \
-    "$UPSTREAM_SHA" "${CERTIFIED_SHA:?}")"
+  pr_comment "$(printf '**Family battery passed** after the agent repair at upstream %s.\nAll certification lanes green on the family-certify runner; certified commit: `%s`.%s%s' \
+    "$UPSTREAM_SHA" "${CERTIFIED_SHA:?}" "${REVIEW_STATUS:-}" "${REVIEW_REPORT_TAIL:-}")"
   verify_pr_head_is_certified
 }
 
@@ -417,6 +432,74 @@ run_battery() {
   fi
   tail -n 2 "$BATTERY_LOG"
   return 1
+}
+
+post_green_review_turn() {
+  # Fresh-context review after a green battery (the change review asked for:
+  # even a certified repair PR gets an agent review that may modify it).
+  # Parity certification cannot see a rebase that silently drops a patch's
+  # intent (e.g. a conflict resolution that yields parity but deletes an
+  # upstream feature we had deliberately stopped deleting), so one review
+  # turn runs on the published, certified tree. It is explicitly told it did
+  # NOT author the repair. It may modify the tree — fix dropped intent,
+  # rebase leftovers, stale patch metadata, Rust ABI mirror drift — and its
+  # changes become a separate `review(llama):` commit pushed to the same
+  # branch. The human merging the PR can tell the two commits apart; the
+  # next canary re-certifies merged main before the pin advances, so review
+  # modifications can never bypass certification. Fail-open by design: a
+  # crashed or disabled review turn never fails a green repair, and a review
+  # with no findings makes no commit. Runs before verify_pr_head_is_certified
+  # so the success comment reports the final PR head, not a stale one.
+  if [[ "${CANARY_AGENT_REVIEW:-true}" != "true" ]]; then
+    echo "post-green agent review disabled (CANARY_AGENT_REVIEW != true); skipping"
+    REVIEW_STATUS=" Post-green agent review skipped (disabled via CANARY_AGENT_REVIEW)."
+    return 0
+  fi
+  echo "post-green agent review turn (fresh context)..."
+  agent_turn "$(printf 'You are a DIFFERENT agent reviewing a completed llama.cpp canary repair — you did NOT write it. Everything below is already certified green by the family battery, so do not re-run it.
+
+Read the repair PR branch (HEAD of this checkout, branch %s): the patch queue in third_party/llama.cpp/patches/ and the commits since main, plus ci/llama-canary/agent-repair-prompt.md and the repo skills it names for patch-ownership boundaries. The repair rebased the queue onto upstream %s.
+
+Review the repair, not the upstream code. Certification parity cannot see semantic losses, so check:
+1. Dropped intent: does any conflict resolution or regenerated patch silently stop doing what the old patch did (a deliberately-kept upstream feature accidentally deleted, a guard or accounting change quietly dropped)?
+2. Rebase leftovers: conflict markers, duplicate patch fragments, hunks that now apply as no-ops, stale patch descriptions.
+3. Patch hygiene: series ordering, patch subjects/bodies still matching content, no accidental upstream-code deletion (per the skills, patches must not delete upstream behavior we are not chartered to delete).
+4. ABI mirrors: if any patch changed the stage ABI, did the Rust mirrors in crates/ track it (version + PREPARE_SCHEMA bumped together)?
+5. Weakened lanes: any manifest, policy, or battery change that certifies less than before?
+
+If (and only if) you find a real defect, fix it minimally in the patch queue (or its Rust ABI mirror) and commit locally with message "review(llama): <what and why>". Never weaken a certification lane; if a defect cannot be safely fixed without recertification, leave the tree unchanged and report it.
+
+Write your review findings (verification steps, defects found, fixes made or recommended) to %s using your file tools. Then stop. You have no GitHub credentials — the wrapper owns all pushes and PR updates.' \
+    "$BRANCH" "$UPSTREAM_SHA" "$ROOT/.deps/llama-canary-review-report.md")" \
+    || echo "warning: post-green review turn exited non-zero; continuing with the certified tree" >&2
+  if [[ ! -s "$ROOT/.deps/llama-canary-review-report.md" ]]; then
+    echo "post-green review produced no report; continuing with the certified tree" >&2
+    REVIEW_STATUS=" Post-green agent review ran but produced no report; the certified tree is unchanged."
+    return 0
+  fi
+  # The agent may have committed locally (per its prompt) and/or left work in
+  # the working tree; the wrapper owns every push. Publish whatever HEAD is
+  # now only when it differs from the certified commit.
+  if [[ "$(git rev-parse HEAD)" != "${CERTIFIED_SHA:?}" || -n "$(git status --porcelain)" ]]; then
+    if [[ -n "$(git status --porcelain)" ]]; then
+      git add -A
+      if ! git diff --cached --quiet; then
+        git commit -m "review(llama): agent review fixes at upstream ${UPSTREAM_SHA:0:10}" \
+          -m "Modifications from the post-certification agent review of the canary repair (see the repair PR comment for the review report)."
+      fi
+    fi
+    echo "post-green review made changes; publishing review head $(git rev-parse --short HEAD)"
+    git push "$(repair_remote)" "+HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2) \
+      || echo "warning: could not push the review commit; the certified tree remains the PR head" >&2
+    REVIEW_STATUS="$(printf ' Post-green agent review made modifications: PR head is now the review commit `%s` (certified commit `%s` above; review changes re-certify when this PR merges and the next canary runs).' \
+      "$(git rev-parse --short HEAD)" "${CERTIFIED_SHA:0:10}")"
+  else
+    echo "post-green review found nothing to change; certified tree unchanged"
+    REVIEW_STATUS=" Post-green agent review found nothing to change; the certified tree stands."
+  fi
+  REVIEW_REPORT_TAIL="$(printf '\n\n<details><summary>Post-green agent review report (tail)</summary>\n\n```\n%s\n```\n\n</details>' \
+    "$(tail -n 20 "$ROOT/.deps/llama-canary-review-report.md")")"
+  REVIEW_HEAD="$(git rev-parse HEAD)"
 }
 
 repair_followup_prompt() {

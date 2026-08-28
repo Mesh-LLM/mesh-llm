@@ -163,6 +163,22 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         # repair turn reuses it instead of re-running the battery.
         self.assertIn("tee .deps/llama-canary-repair-battery.log", battery)
 
+    def test_post_green_agent_review_is_wired_and_opt_out(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        # After a certified repair, the wrapper runs one fresh-context review
+        # turn that may modify the repair (a separate review(llama): commit).
+        # Both repair steps pass the opt-out var with the same vars-pattern
+        # as CANARY_AGENT_MODEL, defaulting to enabled.
+        for repair_step in (
+            _step_block(workflow, "Agent repair loop (patch-queue failure)"),
+            _step_block(workflow, "Agent repair loop (battery failure)"),
+        ):
+            self.assertIn("CANARY_AGENT_REVIEW:", repair_step)
+            self.assertIn(
+                "CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}",
+                repair_step,
+            )
+
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
         classifier = FAMILY_OUTCOME.read_text(encoding="utf-8")
