@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::path::Path;
 use std::ptr;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::Model as RawModel;
@@ -17,9 +18,25 @@ use crate::{
 };
 
 pub struct StageModel {
-    pub(crate) raw: *mut RawModel,
+    inner: Arc<StageModelInner>,
     pub(crate) media: Option<MediaProjector>,
 }
+
+struct StageModelInner {
+    raw: *mut RawModel,
+}
+
+/// A read-only model handle for vocabulary operations that do not touch a
+/// session or its mutable inference context.
+#[derive(Clone)]
+pub struct StageModelReader {
+    inner: Arc<StageModelInner>,
+}
+
+// The native model and vocabulary are immutable after loading. Session/context
+// mutation is owned by separate handles and remains externally serialized.
+unsafe impl Send for StageModelInner {}
+unsafe impl Sync for StageModelInner {}
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -28,7 +45,9 @@ unsafe impl Send for StageModel {}
 impl StageModel {
     pub fn new_dummy() -> Self {
         Self {
-            raw: std::ptr::null_mut(),
+            inner: Arc::new(StageModelInner {
+                raw: std::ptr::null_mut(),
+            }),
             media: None,
         }
     }
@@ -46,7 +65,10 @@ impl StageModel {
             .as_deref()
             .map(|projector_path| MediaProjector::open(projector_path, raw))
             .transpose()?;
-        Ok(Self { raw, media })
+        Ok(Self {
+            inner: Arc::new(StageModelInner { raw }),
+            media,
+        })
     }
 
     fn open_path_with_optional_event_reporter(
@@ -258,7 +280,10 @@ impl StageModel {
         path: impl AsRef<Path>,
         config: &RuntimeConfig,
     ) -> Result<()> {
-        if self.raw.is_null() {
+        let inner = Arc::get_mut(&mut self.inner).ok_or_else(|| {
+            anyhow!("cannot attach MTP draft model while model readers are active")
+        })?;
+        if inner.raw.is_null() {
             return Err(anyhow!("cannot attach MTP draft model to a null model"));
         }
         let attach_symbol = skippy_ffi::skippy_model_attach_mtp_draft_model_fn()
@@ -272,7 +297,8 @@ impl StageModel {
         let path = path_to_cstring(path, "MTP draft model path")?;
         let raw_config = config.as_raw()?;
         let mut error = ptr::null_mut();
-        let status = unsafe { attach_symbol(self.raw, path.as_ptr(), &raw_config.raw, &mut error) };
+        let status =
+            unsafe { attach_symbol(inner.raw, path.as_ptr(), &raw_config.raw, &mut error) };
         write_native_log_note(format!(
             "skippy_model_attach_mtp_draft_model returned status={status:?}"
         ));
@@ -283,7 +309,8 @@ impl StageModel {
         write_native_log_note("skippy_session_create begin");
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
-        let status = unsafe { skippy_ffi::skippy_session_create(self.raw, &mut raw, &mut error) };
+        let status =
+            unsafe { skippy_ffi::skippy_session_create(self.inner.raw, &mut raw, &mut error) };
         write_native_log_note(format!("skippy_session_create returned status={status:?}"));
         ensure_ok(status, error)?;
         if raw.is_null() {
@@ -304,7 +331,7 @@ impl StageModel {
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_session_create_from_resident_prefix(
-                self.raw,
+                self.inner.raw,
                 cache_seq_id,
                 token_ids.as_ptr(),
                 token_ids.len(),
@@ -345,7 +372,7 @@ impl StageModel {
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_tokenize(
-                self.raw,
+                self.inner.raw,
                 text.as_ptr(),
                 add_special,
                 ptr::null_mut(),
@@ -368,7 +395,7 @@ impl StageModel {
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_tokenize(
-                self.raw,
+                self.inner.raw,
                 text.as_ptr(),
                 add_special,
                 tokens.as_mut_ptr(),
@@ -391,50 +418,17 @@ impl StageModel {
     }
 
     pub fn detokenize_bytes(&self, tokens: &[i32]) -> Result<Vec<u8>> {
-        let mut bytes = 0usize;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_detokenize(
-                self.raw,
-                tokens.as_ptr(),
-                tokens.len(),
-                ptr::null_mut(),
-                0,
-                &mut bytes,
-                &mut error,
-            )
-        };
-        if status != Status::BufferTooSmall && status != Status::Ok {
-            ensure_ok(status, error)?;
-        } else {
-            free_error(error);
-        }
-
-        let mut output = vec![0_u8; bytes.max(1)];
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_detokenize(
-                self.raw,
-                tokens.as_ptr(),
-                tokens.len(),
-                output.as_mut_ptr().cast(),
-                output.len(),
-                &mut bytes,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)?;
-        output.truncate(bytes);
-        Ok(output)
+        detokenize_bytes(self.inner.raw, tokens)
     }
 
     pub fn token_is_eog(&self, token: i32) -> Result<bool> {
-        let mut is_eog = false;
-        let mut error = ptr::null_mut();
-        let status =
-            unsafe { skippy_ffi::skippy_token_is_eog(self.raw, token, &mut is_eog, &mut error) };
-        ensure_ok(status, error)?;
-        Ok(is_eog)
+        token_is_eog(self.inner.raw, token)
+    }
+
+    pub fn reader(&self) -> StageModelReader {
+        StageModelReader {
+            inner: Arc::clone(&self.inner),
+        }
     }
 
     pub fn apply_chat_template(
@@ -535,7 +529,7 @@ impl StageModel {
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_apply_chat_template_json(
-                self.raw,
+                self.inner.raw,
                 messages_json.as_ptr(),
                 tools_ptr,
                 tool_choice_ptr,
@@ -565,7 +559,7 @@ impl StageModel {
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_apply_chat_template_json(
-                self.raw,
+                self.inner.raw,
                 messages_json.as_ptr(),
                 tools_ptr,
                 tool_choice_ptr,
@@ -643,13 +637,74 @@ impl StageModel {
     }
 }
 
-impl Drop for StageModel {
+impl StageModelReader {
+    pub fn detokenize_bytes(&self, tokens: &[i32]) -> Result<Vec<u8>> {
+        detokenize_bytes(self.inner.raw, tokens)
+    }
+
+    pub fn token_is_eog(&self, token: i32) -> Result<bool> {
+        token_is_eog(self.inner.raw, token)
+    }
+}
+
+fn detokenize_bytes(raw: *mut RawModel, tokens: &[i32]) -> Result<Vec<u8>> {
+    let mut bytes = 0usize;
+    let mut error = ptr::null_mut();
+    let status = unsafe {
+        skippy_ffi::skippy_detokenize(
+            raw,
+            tokens.as_ptr(),
+            tokens.len(),
+            ptr::null_mut(),
+            0,
+            &mut bytes,
+            &mut error,
+        )
+    };
+    if status != Status::BufferTooSmall && status != Status::Ok {
+        ensure_ok(status, error)?;
+    } else {
+        free_error(error);
+    }
+
+    let mut output = vec![0_u8; bytes.max(1)];
+    let mut error = ptr::null_mut();
+    let status = unsafe {
+        skippy_ffi::skippy_detokenize(
+            raw,
+            tokens.as_ptr(),
+            tokens.len(),
+            output.as_mut_ptr().cast(),
+            output.len(),
+            &mut bytes,
+            &mut error,
+        )
+    };
+    ensure_ok(status, error)?;
+    output.truncate(bytes);
+    Ok(output)
+}
+
+fn token_is_eog(raw: *mut RawModel, token: i32) -> Result<bool> {
+    let mut is_eog = false;
+    let mut error = ptr::null_mut();
+    let status = unsafe { skippy_ffi::skippy_token_is_eog(raw, token, &mut is_eog, &mut error) };
+    ensure_ok(status, error)?;
+    Ok(is_eog)
+}
+
+impl Drop for StageModelInner {
     fn drop(&mut self) {
-        self.media.take();
         if !self.raw.is_null() {
             unsafe {
                 let _ = skippy_ffi::skippy_model_free(self.raw, ptr::null_mut());
             }
         }
+    }
+}
+
+impl Drop for StageModel {
+    fn drop(&mut self) {
+        self.media.take();
     }
 }

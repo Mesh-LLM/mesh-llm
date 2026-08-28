@@ -33,6 +33,7 @@ const MIN_COMMAND_QUEUE_CAPACITY: usize = 8;
 const MAX_COMMANDS_PER_TURN: usize = 64;
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
+const IDLE_ADMISSION_COALESCE_US_ENV: &str = "SKIPPY_IDLE_ADMISSION_COALESCE_US";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct ScheduledGenerationStats {
@@ -560,7 +561,13 @@ impl SchedulerWorker {
             {
                 match self.commands.recv() {
                     Ok(SchedulerCommand::Shutdown) | Err(_) => break,
-                    Ok(command) => self.handle_command(command),
+                    Ok(command) => {
+                        let should_coalesce = matches!(&command, SchedulerCommand::Submit(_));
+                        self.handle_command(command);
+                        if should_coalesce && !self.coalesce_idle_admissions() {
+                            return;
+                        }
+                    }
                 }
             }
             for _ in 0..self.max_commands_per_turn {
@@ -593,6 +600,32 @@ impl SchedulerWorker {
                 }
             }
         }
+    }
+
+    fn coalesce_idle_admissions(&mut self) -> bool {
+        let value = env::var(IDLE_ADMISSION_COALESCE_US_ENV).ok();
+        let delay = idle_admission_coalesce_delay_from_value(value.as_deref());
+        if delay.is_zero() {
+            return true;
+        }
+
+        let deadline = Instant::now() + delay;
+        for _ in 1..self.max_commands_per_turn {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self.commands.recv_timeout(remaining) {
+                Ok(SchedulerCommand::Shutdown) => {
+                    self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                    return false;
+                }
+                Ok(command) => self.handle_command(command),
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        true
     }
 
     fn handle_command(&mut self, command: SchedulerCommand) {
@@ -1309,6 +1342,13 @@ impl SchedulerWorker {
     }
 }
 
+fn idle_admission_coalesce_delay_from_value(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_micros)
+        .unwrap_or_default()
+}
+
 fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: bool) -> bool {
     if has_direct && has_planned {
         !last_served_direct
@@ -1720,6 +1760,20 @@ mod tests {
             assert!(!scheduler_safe_mode_from_value(Some(disabled)));
         }
         assert!(!scheduler_safe_mode_from_value(None));
+    }
+
+    #[test]
+    fn idle_admission_coalesce_parser_defaults_to_disabled() {
+        assert_eq!(
+            idle_admission_coalesce_delay_from_value(Some("10000")),
+            Duration::from_millis(10)
+        );
+        for disabled in [None, Some(""), Some("invalid")] {
+            assert_eq!(
+                idle_admission_coalesce_delay_from_value(disabled),
+                Duration::ZERO
+            );
+        }
     }
 
     #[test]

@@ -9,10 +9,9 @@ use crate::frontend::generation::tool_call_stream::ToolCallStreamState;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::generation::tool_calls_stream_delta;
 use crate::frontend::tool_emulation;
-use crate::frontend::util::detokenize_bytes_with_runtime;
 use crate::frontend::util::finish_reason_for_generation;
+use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
-use crate::frontend::util::token_is_eog_with_runtime;
 use crate::frontend::util::trim_at_stop;
 use crate::frontend::util::valid_utf8_prefix_len;
 use crate::runtime_state::RuntimeState;
@@ -24,6 +23,7 @@ use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use openai_frontend::Usage;
 use serde_json::Value;
+use skippy_runtime::StageModelReader;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -265,17 +265,18 @@ pub(in crate::frontend) struct TextGenerationCollector<'a, F>
 where
     F: FnMut(&str) -> OpenAiResult<()>,
 {
-    runtime: Arc<Mutex<RuntimeState>>,
+    model: StageModelReader,
     stop_values: Vec<&'a str>,
     on_text_chunk: F,
     text: String,
     streamed_text_len: usize,
     max_stop_bytes: usize,
-    generated_text_tokens: Vec<i32>,
+    generated_text_bytes: Vec<u8>,
     completion_tokens: usize,
     finish_reason: FinishReason,
     metrics: GenerationMetrics,
     emulation_active: bool,
+    ignore_eos: bool,
 }
 
 impl<'a, F> TextGenerationCollector<'a, F>
@@ -286,25 +287,31 @@ where
         runtime: Arc<Mutex<RuntimeState>>,
         stop_values: Vec<&'a str>,
         on_text_chunk: F,
-    ) -> Self {
+    ) -> OpenAiResult<Self> {
         let max_stop_bytes = stop_values
             .iter()
             .map(|value| value.len())
             .max()
             .unwrap_or(0);
-        Self {
-            runtime,
+        let model = runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .model
+            .reader();
+        Ok(Self {
+            model,
             stop_values,
             on_text_chunk,
             text: String::new(),
             streamed_text_len: 0,
             max_stop_bytes,
-            generated_text_tokens: Vec::new(),
+            generated_text_bytes: Vec::new(),
             completion_tokens: 0,
             finish_reason: finish_reason_for_generation(true),
             metrics: GenerationMetrics::default(),
             emulation_active: false,
-        }
+            ignore_eos: false,
+        })
     }
 
     /// Enables early generation stop once a complete emulated tool call is
@@ -316,23 +323,35 @@ where
         self
     }
 
+    pub(in crate::frontend) fn with_ignore_eos(mut self, ignore_eos: bool) -> Self {
+        self.ignore_eos = ignore_eos;
+        self
+    }
+
     pub(in crate::frontend) fn push_token(&mut self, token: i32) -> OpenAiResult<TokenControl> {
         let eog_timer = Instant::now();
-        if token_is_eog_with_runtime(&self.runtime, token)? {
+        if !self.ignore_eos
+            && self
+                .model
+                .token_is_eog(token)
+                .map_err(openai_backend_error)?
+        {
             self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
             self.finish_reason = finish_reason_for_generation(false);
             return Ok(TokenControl::Stop);
         }
         self.metrics.eog_check_ms += eog_timer.elapsed().as_secs_f64() * 1000.0;
         self.completion_tokens += 1;
-        self.generated_text_tokens.push(token);
         let detokenize_timer = Instant::now();
-        let candidate_bytes =
-            detokenize_bytes_with_runtime(&self.runtime, &self.generated_text_tokens)?;
+        let piece = self
+            .model
+            .detokenize_bytes(&[token])
+            .map_err(openai_backend_error)?;
+        self.generated_text_bytes.extend_from_slice(&piece);
         self.metrics.detokenize_ms += detokenize_timer.elapsed().as_secs_f64() * 1000.0;
-        let valid_len = valid_utf8_prefix_len(&candidate_bytes);
+        let valid_len = valid_utf8_prefix_len(&self.generated_text_bytes);
         if valid_len > 0 {
-            let candidate = std::str::from_utf8(&candidate_bytes[..valid_len])
+            let candidate = std::str::from_utf8(&self.generated_text_bytes[..valid_len])
                 .map_err(|error| OpenAiError::backend(error.to_string()))?;
             if let Some(delta) = candidate.strip_prefix(&self.text) {
                 if !delta.is_empty() {

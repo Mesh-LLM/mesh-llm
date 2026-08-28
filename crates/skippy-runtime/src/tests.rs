@@ -53,6 +53,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn model_reader_prevents_late_model_mutation() {
+        let mut model = StageModel::new_dummy();
+        let reader = model.reader();
+        let error = model
+            .attach_mtp_draft_model("/definitely/missing/model.gguf", &RuntimeConfig::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("model readers are active"));
+
+        drop(reader);
+        let error = model
+            .attach_mtp_draft_model("/definitely/missing/model.gguf", &RuntimeConfig::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("null model"));
+    }
+
     fn open_correctness_model(model_path: &PathBuf) -> anyhow::Result<StageModel> {
         open_correctness_model_with_context(model_path, 256)
     }
