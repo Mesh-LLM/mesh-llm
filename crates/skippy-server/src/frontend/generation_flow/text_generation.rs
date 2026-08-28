@@ -152,8 +152,9 @@ impl StageOpenAiBackend {
 
         let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
-                .with_emulation_stop(emulation_active);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+                .with_emulation_stop(emulation_active)
+                .with_ignore_eos(sampling.ignore_eos);
         let cache_stats = match self.mode.clone() {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {

@@ -1,11 +1,39 @@
 use super::*;
 
+fn final_sampled_chunk_start(token_count: usize, batch_size: usize) -> usize {
+    debug_assert!(token_count > 0);
+    (token_count - 1) / batch_size.max(1) * batch_size.max(1)
+}
+
 impl RuntimeState {
     pub fn prefill(&mut self, session_id: &str, token_ids: &[i32]) -> Result<()> {
         let session = self.session(session_id)?;
         session.prefill_chunked(token_ids)?;
         self.add_session_tokens(session_id, token_ids.len() as u64);
         Ok(())
+    }
+
+    pub fn prefill_chunked_sampled(
+        &mut self,
+        session_id: &str,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+    ) -> Result<i32> {
+        if token_ids.is_empty() {
+            bail!("sampled prefill requires at least one token");
+        }
+        let session = self.session(session_id)?;
+        let batch_size = session.batch_size()?.max(1);
+        let final_chunk_start = final_sampled_chunk_start(token_ids.len(), batch_size);
+        session.prefill_chunked(&token_ids[..final_chunk_start])?;
+        let (predicted, _) = session.prefill_chunk_frame_sampled(
+            &token_ids[final_chunk_start..],
+            sampling,
+            None,
+            0,
+        )?;
+        self.add_session_tokens(session_id, token_ids.len() as u64);
+        Ok(predicted)
     }
 
     pub fn media_marker(&self) -> String {
@@ -573,6 +601,20 @@ impl RuntimeState {
             .get_mut(session_id)
             .map(|lane_session| &mut lane_session.session)
             .ok_or_else(|| anyhow::anyhow!("session {session_id} is not active"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::final_sampled_chunk_start;
+
+    #[test]
+    fn sampled_prefill_keeps_the_final_native_chunk_intact() {
+        assert_eq!(final_sampled_chunk_start(1, 512), 0);
+        assert_eq!(final_sampled_chunk_start(511, 512), 0);
+        assert_eq!(final_sampled_chunk_start(512, 512), 0);
+        assert_eq!(final_sampled_chunk_start(513, 512), 512);
+        assert_eq!(final_sampled_chunk_start(6603, 2048), 6144);
     }
 }
 

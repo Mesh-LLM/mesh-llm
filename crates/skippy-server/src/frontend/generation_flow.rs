@@ -276,8 +276,9 @@ impl StageOpenAiBackend {
         }
 
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
-                .with_emulation_stop(emulation_active);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+                .with_emulation_stop(emulation_active)
+                .with_ignore_eos(sampling.ignore_eos);
         let result = (|| {
             let decode_timer = PhaseTimer::start();
             let mut decoded_tokens = 0usize;
@@ -485,8 +486,9 @@ impl StageOpenAiBackend {
             .map(String::as_str)
             .collect::<Vec<_>>();
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
-                .with_emulation_stop(request.emulation_active);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+                .with_emulation_stop(request.emulation_active)
+                .with_ignore_eos(request.sampling.ignore_eos);
         let wire_sampling = wire_sampling_config(&request.sampling);
         let session_id = request.ids.session_id;
         let request_id = request.ids.request_id;

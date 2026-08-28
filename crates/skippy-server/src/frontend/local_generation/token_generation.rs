@@ -176,6 +176,7 @@ struct KvRestoreOutcome {
     restored_prefill_tokens: usize,
     capacity: crate::kv_integration::ResidentCapacityDecision,
     record: KvRecordResult,
+    prompt_prefill_sample: Option<i32>,
 }
 
 pub(super) struct DecodeState {
@@ -537,7 +538,31 @@ impl StageOpenAiBackend {
             });
         }
         if request.prompt_token_ids.len() > 1 {
-            self.restore_or_record_kv(request, session_id, cache_stats)?;
+            let chat_sampling_configured = if self
+                .kv
+                .as_ref()
+                .is_some_and(|kv| kv.payload == StagePrefixCachePayload::ResidentKv)
+            {
+                if let Some(metadata) = request.chat_sampling_metadata {
+                    self.configure_chat_sampling(
+                        session_id,
+                        metadata,
+                        request.prompt_token_ids.len(),
+                        request.sampling.enabled.then_some(request.sampling),
+                    )?;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            let prompt_prefill_sample =
+                self.restore_or_record_kv(request, session_id, cache_stats)?;
+            return Ok(PromptPrefillResult {
+                prompt_prefill_sample,
+                chat_sampling_configured,
+            });
         }
         Ok(PromptPrefillResult {
             prompt_prefill_sample: None,
@@ -614,7 +639,7 @@ impl StageOpenAiBackend {
         request: &LocalGeneration<'_>,
         session_id: &str,
         cache_stats: &mut GenerationCacheStats,
-    ) -> OpenAiResult<()> {
+    ) -> OpenAiResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
         let prefill_tokens =
             Arc::<[i32]>::from(&request.prompt_token_ids[..request.prompt_token_ids.len() - 1]);
@@ -622,6 +647,11 @@ impl StageOpenAiBackend {
             .recurrent_cache_prefix_token_ids
             .map(<[i32]>::to_vec);
         let max_tokens = request.max_tokens;
+        let final_prompt_token = *request
+            .prompt_token_ids
+            .last()
+            .expect("checked non-empty prompt");
+        let sampling = request.sampling.enabled.then(|| request.sampling.clone());
         let (cache_affinity, refresh_cache_affinity) = match self.kv.as_ref() {
             Some(kv) => {
                 let base = self.local_kv_message_base(session_id, request.ids);
@@ -653,6 +683,8 @@ impl StageOpenAiBackend {
                     &scheduler_session_id,
                     prefill_tokens.as_ref(),
                     recurrent_cache_prefix_token_ids.as_deref(),
+                    final_prompt_token,
+                    sampling.as_ref(),
                     max_tokens,
                     &mut scheduler_cache_stats,
                 )?;
@@ -670,11 +702,27 @@ impl StageOpenAiBackend {
             restored_prefill_tokens,
             capacity,
             record,
+            prompt_prefill_sample,
         } = outcome;
+        if prompt_prefill_sample.is_some() {
+            cache_stats.suffix_prefill_tokens = saturating_u32(
+                request
+                    .prompt_token_ids
+                    .len()
+                    .saturating_sub(restored_prefill_tokens),
+            );
+        }
+        let prompt_tail_tokens = usize::from(prompt_prefill_sample.is_some());
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.prefill_token_count".to_string(),
-            json!(request.prompt_token_ids.len().saturating_sub(1)),
+            json!(
+                request
+                    .prompt_token_ids
+                    .len()
+                    .saturating_sub(1)
+                    .saturating_add(prompt_tail_tokens)
+            ),
         );
         attrs.insert("llama_stage.prefill_chunk_count".to_string(), json!(1));
         attrs.insert(
@@ -693,6 +741,7 @@ impl StageOpenAiBackend {
                     .len()
                     .saturating_sub(1)
                     .saturating_sub(restored_prefill_tokens)
+                    .saturating_add(prompt_tail_tokens)
             ),
         );
         attrs.insert(
@@ -741,7 +790,7 @@ impl StageOpenAiBackend {
         if let Some(error) = record.proactive_eviction_error {
             return Err(openai_backend_error(error));
         }
-        Ok(())
+        Ok(prompt_prefill_sample)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -752,6 +801,8 @@ impl StageOpenAiBackend {
         session_id: &str,
         prefill_tokens: &[i32],
         recurrent_cache_prefix_token_ids: Option<&[i32]>,
+        final_prompt_token: i32,
+        sampling: Option<&SamplingConfig>,
         max_tokens: u32,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<KvRestoreOutcome> {
@@ -782,6 +833,7 @@ impl StageOpenAiBackend {
                 restored_prefill_tokens: 0,
                 capacity,
                 record: KvRecordResult::default(),
+                prompt_prefill_sample: None,
             });
         }
         let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
@@ -790,8 +842,25 @@ impl StageOpenAiBackend {
         } else {
             (false, 0)
         };
-        let mut decoded_prefill_suffix = false;
-        if restored_prefill_tokens < prefill_tokens.len() {
+        let resident_suffix_deferred = self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::ResidentKv);
+        let prompt_prefill_sample = if resident_suffix_deferred {
+            let suffix_start = restored_prefill_tokens.min(prefill_tokens.len());
+            let mut suffix = prefill_tokens[suffix_start..].to_vec();
+            suffix.push(final_prompt_token);
+            Some(
+                runtime
+                    .prefill_chunked_sampled(session_id, &suffix, sampling)
+                    .map_err(openai_backend_error)?,
+            )
+        } else {
+            None
+        };
+        let mut decoded_prefill_suffix =
+            resident_suffix_deferred && restored_prefill_tokens < prefill_tokens.len();
+        if !resident_suffix_deferred && restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
             if let Some(checkpoint_tokens) =
                 recurrent_cache_prefix_token_ids.filter(|checkpoint_tokens| {
@@ -869,6 +938,7 @@ impl StageOpenAiBackend {
             restored_prefill_tokens,
             capacity,
             record,
+            prompt_prefill_sample,
         })
     }
 
