@@ -56,6 +56,21 @@ fn read_chat_template(path: &str) -> Result<String> {
 }
 
 impl ResolvedSkippyConfig {
+    pub(crate) async fn materialize_projector_url(&mut self) -> Result<()> {
+        if self.hardware.projector_path.is_some() {
+            return Ok(());
+        }
+        let Some(projector_url) = self.multimodal.projector_url.as_deref() else {
+            return Ok(());
+        };
+        self.hardware.projector_path = Some(
+            crate::models::resolve::download_direct_ref_with_progress(projector_url, true)
+                .await
+                .with_context(|| format!("download multimodal.mmproj_url {projector_url}"))?,
+        );
+        Ok(())
+    }
+
     pub(crate) fn to_model_load_options(
         &self,
         telemetry: SkippyTelemetryOptions,
@@ -122,6 +137,15 @@ impl ResolvedSkippyConfig {
         options.direct_io = self.hardware.direct_io;
         options.main_gpu = self.hardware.main_gpu;
         options.split_mode = self.hardware.split_mode;
+        options.projector_use_gpu = self.multimodal.projector_use_gpu;
+        options
+            .media_marker
+            .clone_from(&self.multimodal.media_marker);
+        options.image_min_tokens = self.multimodal.image_min_tokens;
+        options.image_max_tokens = self.multimodal.image_max_tokens;
+        options.batch_max_tokens = self.multimodal.batch_max_tokens;
+        options.glm_dsa_policy = self.multimodal.glm_dsa_policy;
+        options.generation_signal_window = self.multimodal.generation_signal_window;
         if let Some(projector_path) = self.hardware.projector_path.clone() {
             options = options.with_projector_path(projector_path);
         }

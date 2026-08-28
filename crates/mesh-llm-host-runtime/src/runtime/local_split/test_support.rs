@@ -55,6 +55,13 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
@@ -419,7 +426,9 @@ stop = ["END"]
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         serving_hooks_factory: None,
     };
-    let settings = split_generation_load_settings(&spec).expect("split settings should resolve");
+    let settings = split_generation_load_settings(&spec)
+        .await
+        .expect("split settings should resolve");
 
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
     assert_eq!(settings.activation_width, 2048);

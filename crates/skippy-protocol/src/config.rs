@@ -11,9 +11,10 @@ pub struct StageIdentity {
     pub stage_index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LoadMode {
+    #[default]
     RuntimeSlice,
     LayerPackage,
     ArtifactSlice,
@@ -38,7 +39,15 @@ pub enum SplitMode {
     Row,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlmDsaPolicy {
+    #[default]
+    Auto,
+    V1,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StageConfig {
     pub run_id: String,
     pub topology_id: String,
@@ -61,6 +70,20 @@ pub struct StageConfig {
     pub model_path: Option<String>,
     #[serde(default)]
     pub projector_path: Option<String>,
+    #[serde(default)]
+    pub projector_use_gpu: Option<bool>,
+    #[serde(default)]
+    pub media_marker: Option<String>,
+    #[serde(default)]
+    pub image_min_tokens: Option<u32>,
+    #[serde(default)]
+    pub image_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub batch_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub glm_dsa_policy: GlmDsaPolicy,
+    #[serde(default)]
+    pub generation_signal_window: Option<u32>,
     pub stage_id: String,
     pub stage_index: u32,
     pub layer_start: u32,

@@ -1016,6 +1016,16 @@ pub struct MultimodalConfig {
     #[serde(default)]
     pub image_max_tokens: Option<u32>,
     #[serde(default)]
+    pub image_marker: Option<String>,
+    #[serde(default)]
+    pub media_marker: Option<String>,
+    #[serde(default)]
+    pub batch_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub glm_dsa_policy: Option<String>,
+    #[serde(default)]
+    pub generation_signal_window: Option<u32>,
+    #[serde(default)]
     pub embeddings: Option<toml::Value>,
     #[serde(default)]
     pub reranking: Option<toml::Value>,

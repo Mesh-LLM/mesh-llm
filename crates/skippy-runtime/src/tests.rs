@@ -5,8 +5,9 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        SplitMode, StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        GGML_TYPE_F16, GlmDsaPolicy, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig,
+        RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession, Status, TensorRole,
+        format_skippy_error,
     };
     use std::{
         env,
@@ -81,6 +82,12 @@ mod tests {
             flash_attn_type: FlashAttentionType::Auto,
             load_mode: RuntimeLoadMode::RuntimeSlice,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: GlmDsaPolicy::Auto,
             include_embeddings: true,
             include_output: true,
             mtp_source: MtpSource::Disabled,

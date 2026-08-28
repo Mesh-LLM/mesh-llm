@@ -12,6 +12,15 @@ use crate::frontend::{NativeMtpDraft, NativeMtpDraftOrigin};
 use super::token_generation::{DecodeState, decode_native_mtp};
 
 impl StageOpenAiBackend {
+    pub(in crate::frontend) fn generation_signal_window_tokens(&self) -> u32 {
+        match &self.mode {
+            crate::frontend::OpenAiBackendMode::EmbeddedStageZero { config, .. } => {
+                config.generation_signal_window.unwrap_or(16)
+            }
+            crate::frontend::OpenAiBackendMode::LocalRuntime => 16,
+        }
+    }
+
     pub(super) fn decode_one_token(
         &self,
         request: &LocalGeneration<'_>,
@@ -115,12 +124,15 @@ impl StageOpenAiBackend {
         let (token_signal, signal_window, token_signal_ms) = if state.generation_hooks_active {
             let signal_timer = PhaseTimer::start();
             let scheduler_session_id = session_id.to_string();
+            let signal_window_tokens = self.generation_signal_window_tokens();
             let (sessions_before, token_signal, signal_window, sessions_after) = self
                 .iteration_scheduler
                 .execute_runtime("generation-hook-signals", move |runtime| {
                     let sessions_before = runtime.session_stats();
                     let token_signal = runtime.last_token_signal(&scheduler_session_id).ok();
-                    let signal_window = runtime.signal_window(&scheduler_session_id, 16).ok();
+                    let signal_window = runtime
+                        .signal_window(&scheduler_session_id, signal_window_tokens)
+                        .ok();
                     let sessions_after = runtime.session_stats();
                     Ok((sessions_before, token_signal, signal_window, sessions_after))
                 })?;

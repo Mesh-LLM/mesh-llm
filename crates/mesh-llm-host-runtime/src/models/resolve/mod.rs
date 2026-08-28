@@ -181,6 +181,15 @@ pub async fn download_exact_ref_with_progress(input: &str, progress: bool) -> Re
         .map(|download| download.path)
 }
 
+pub(crate) async fn download_direct_ref_with_progress(
+    input: &str,
+    progress: bool,
+) -> Result<PathBuf> {
+    download_exact_ref_with_progress_direct(input, progress, true)
+        .await
+        .map(|download| download.path)
+}
+
 async fn download_exact_ref_with_progress_direct(
     input: &str,
     progress: bool,

@@ -15,6 +15,7 @@ use crate::{
 
 pub(crate) struct MediaProjector {
     pub(crate) raw: *mut skippy_ffi::MtmdContext,
+    marker: String,
 }
 
 type MediaFrameEval = (
@@ -30,19 +31,49 @@ type MediaFrameEval = (
 unsafe impl Send for MediaProjector {}
 
 impl MediaProjector {
-    pub(crate) fn open(path: &str, model: *mut RawModel) -> Result<Self> {
+    pub(crate) fn open(
+        path: &str,
+        model: *mut RawModel,
+        config: &crate::RuntimeConfig,
+    ) -> Result<Self> {
         let path = path_to_cstring(std::path::Path::new(path), "projector path")?;
         let raw_model = unsafe { skippy_ffi::skippy_model_llama_model(model) };
         if raw_model.is_null() {
             return Err(anyhow!("model did not expose a llama_model handle"));
         }
         let mut params = unsafe { skippy_ffi::mtmd_context_params_default() };
-        params.use_gpu = true;
+        if let Some(use_gpu) = config.projector_use_gpu {
+            params.use_gpu = use_gpu;
+        }
+        let marker = config
+            .media_marker
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .context("media_marker contains an interior NUL byte")?;
+        if let Some(marker) = marker.as_ref() {
+            params.media_marker = marker.as_ptr();
+        }
+        if let Some(value) = config.image_min_tokens {
+            params.image_min_tokens =
+                i32::try_from(value).context("image_min_tokens exceeds i32")?;
+        }
+        if let Some(value) = config.image_max_tokens {
+            params.image_max_tokens =
+                i32::try_from(value).context("image_max_tokens exceeds i32")?;
+        }
+        if let Some(value) = config.batch_max_tokens {
+            params.batch_max_tokens =
+                i32::try_from(value).context("batch_max_tokens exceeds i32")?;
+        }
         let raw = unsafe { skippy_ffi::mtmd_init_from_file(path.as_ptr(), raw_model, params) };
         if raw.is_null() {
             return Err(anyhow!("failed to load multimodal projector {path:?}"));
         }
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            marker: config.media_marker.clone().unwrap_or_else(Self::marker),
+        })
     }
 
     fn marker() -> String {
@@ -69,7 +100,10 @@ impl Drop for MediaProjector {
 
 impl StageModel {
     pub fn media_marker(&self) -> String {
-        MediaProjector::marker()
+        self.media
+            .as_ref()
+            .map(|projector| projector.marker.clone())
+            .unwrap_or_else(MediaProjector::marker)
     }
 
     pub fn has_media_projector(&self) -> bool {

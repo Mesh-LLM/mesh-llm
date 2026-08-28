@@ -556,6 +556,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_owned(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

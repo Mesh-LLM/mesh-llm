@@ -16,8 +16,8 @@ use super::support::{
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
     BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedSkippyConfig, ResolvedSkippyExecutionConfig, ResolvedThroughputConfig,
-    SkippyConfigResolveRequest,
+    ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
+    ResolvedThroughputConfig, SkippyConfigResolveRequest,
 };
 use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
@@ -55,6 +55,7 @@ pub(crate) fn resolve_skippy_config(
         context.model_entry,
         context.request.request_defaults,
     )?;
+    let multimodal = resolve_multimodal_config(&context)?;
 
     Ok(ResolvedSkippyConfig {
         model_id: context.request.model_id.to_string(),
@@ -65,6 +66,58 @@ pub(crate) fn resolve_skippy_config(
         skippy,
         speculative,
         request_defaults: resolved_request,
+        multimodal,
+    })
+}
+
+fn resolve_multimodal_config(context: &ResolverContext<'_>) -> Result<ResolvedMultimodalConfig> {
+    let model = context
+        .model_entry
+        .and_then(|entry| entry.multimodal.as_ref());
+    let defaults = context.defaults.and_then(|value| value.multimodal.as_ref());
+    let projector_use_gpu = resolve_bool_or_auto(
+        model
+            .and_then(|value| value.mmproj_offload.as_ref())
+            .or_else(|| defaults.and_then(|value| value.mmproj_offload.as_ref())),
+        "multimodal.mmproj_offload",
+    )?;
+    let policy = pick_string_owned(
+        model.and_then(|value| value.glm_dsa_policy.as_deref()),
+        defaults.and_then(|value| value.glm_dsa_policy.as_deref()),
+        Some("auto"),
+    );
+    let glm_dsa_policy = match policy.as_str() {
+        "auto" => skippy_protocol::GlmDsaPolicy::Auto,
+        "v1" => skippy_protocol::GlmDsaPolicy::V1,
+        other => bail!("multimodal.glm_dsa_policy must be \"auto\" or \"v1\", got {other:?}"),
+    };
+    Ok(ResolvedMultimodalConfig {
+        projector_url: pick_owned(
+            model.and_then(|value| value.mmproj_url.clone()),
+            defaults.and_then(|value| value.mmproj_url.clone()),
+        ),
+        projector_use_gpu,
+        media_marker: pick_owned(
+            model.and_then(|value| value.media_marker.clone()),
+            defaults.and_then(|value| value.media_marker.clone()),
+        ),
+        image_min_tokens: pick_owned(
+            model.and_then(|value| value.image_min_tokens),
+            defaults.and_then(|value| value.image_min_tokens),
+        ),
+        image_max_tokens: pick_owned(
+            model.and_then(|value| value.image_max_tokens),
+            defaults.and_then(|value| value.image_max_tokens),
+        ),
+        batch_max_tokens: pick_owned(
+            model.and_then(|value| value.batch_max_tokens),
+            defaults.and_then(|value| value.batch_max_tokens),
+        ),
+        glm_dsa_policy,
+        generation_signal_window: pick_owned(
+            model.and_then(|value| value.generation_signal_window),
+            defaults.and_then(|value| value.generation_signal_window),
+        ),
     })
 }
 

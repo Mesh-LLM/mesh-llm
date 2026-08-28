@@ -157,6 +157,7 @@ fn recurrent_test_backend(
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
@@ -514,6 +515,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("receipt test runtime was not loaded"))?;
