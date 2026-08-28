@@ -202,6 +202,9 @@ pub struct BoundaryDTypeReport {
     pub model_identity: ModelIdentity,
     pub layer_end: u32,
     pub prompt: String,
+    /// Number of prompt tokens transported across the boundary. 1 in the
+    /// legacy decode lane; the full tokenized prompt length in --prefill mode.
+    pub prompt_token_count: u32,
     pub splits: Vec<u32>,
     pub split_count: usize,
     pub f32_boundary_count: usize,

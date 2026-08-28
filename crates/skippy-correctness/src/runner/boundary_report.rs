@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     native_mtp::emit_report,
-    single_step::run_full_model_decode,
+    single_step::{run_full_model_decode, run_full_model_prefill},
     stage_execution::{
         FullModelResult, PackageStageSpec, ensure_matches, parse_split_list, runtime_flash_attn,
         runtime_load_mode, runtime_model_identity, stage_model_resolution, status,
@@ -43,7 +43,15 @@ pub fn boundary_report(args: BoundaryReportArgs) -> Result<()> {
         bail!("no splits requested");
     }
     let model_identity = runtime_model_identity(&args.runtime)?;
-    let baseline = run_full_model_decode(&args.runtime)?;
+    let mode = if args.prefill {
+        BoundaryProbeMode::Prefill
+    } else {
+        BoundaryProbeMode::SingleDecode
+    };
+    let baseline = match mode {
+        BoundaryProbeMode::SingleDecode => run_full_model_decode(&args.runtime)?,
+        BoundaryProbeMode::Prefill => run_full_model_prefill(&args.runtime)?,
+    };
     let baseline_signal = token_signal_report(&baseline.token_signal);
 
     let mut results = Vec::with_capacity(splits.len());
@@ -55,7 +63,13 @@ pub fn boundary_report(args: BoundaryReportArgs) -> Result<()> {
                 args.runtime.layer_end
             );
         }
-        results.push(probe_split(&args.runtime, &model_identity, &baseline, split_layer));
+        results.push(probe_split(
+            &args.runtime,
+            &model_identity,
+            &baseline,
+            split_layer,
+            mode,
+        ));
     }
 
     let mismatch_count = results
@@ -86,11 +100,15 @@ pub fn boundary_report(args: BoundaryReportArgs) -> Result<()> {
     let non_f32_boundary_count = results.len() - f32_boundary_count;
     let matches = mismatch_count == 0;
     let report = BoundaryDTypeReport {
-        mode: "boundary-dtype",
+        mode: match mode {
+            BoundaryProbeMode::SingleDecode => "boundary-dtype",
+            BoundaryProbeMode::Prefill => "boundary-dtype-prefill",
+        },
         status: status(matches),
         model_identity,
         layer_end: args.runtime.layer_end,
         prompt: args.runtime.prompt.clone(),
+        prompt_token_count: baseline.prompt_token_count,
         splits,
         split_count: results.len(),
         f32_boundary_count,
@@ -122,8 +140,9 @@ fn probe_split(
     model_identity: &ModelIdentity,
     baseline: &FullModelResult,
     split_layer: u32,
+    mode: BoundaryProbeMode,
 ) -> BoundaryDTypeScanSplit {
-    match run_split_probe(runtime, model_identity, baseline, split_layer) {
+    match run_split_probe(runtime, model_identity, baseline, split_layer, mode) {
         Ok(split) => split,
         Err(error) => BoundaryDTypeScanSplit {
             split_layer,
@@ -143,11 +162,22 @@ fn probe_split(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundaryProbeMode {
+    /// Legacy single-token decode: stage 0 decodes the first prompt token and
+    /// stage 1 decodes one boundary frame.
+    SingleDecode,
+    /// Multi-token prefill: both stages run `prefill_chunk_frame` over the
+    /// full prompt and parity is gated on the final token.
+    Prefill,
+}
+
 fn run_split_probe(
     runtime: &RuntimeArgs,
     model_identity: &ModelIdentity,
     baseline: &FullModelResult,
     split_layer: u32,
+    mode: BoundaryProbeMode,
 ) -> Result<BoundaryDTypeScanSplit> {
     let stage0_spec = PackageStageSpec {
         topology_id: "correctness-boundary-dtype",
@@ -192,15 +222,30 @@ fn run_split_probe(
     let tokens = stage0
         .tokenize(&runtime.prompt, true)
         .with_context(|| format!("failed to tokenize prompt for split {split_layer}"))?;
-    let token_id = *tokens
-        .first()
-        .with_context(|| format!("prompt produced no tokens for split {split_layer}"))?;
+    if tokens.is_empty() {
+        bail!("prompt produced no tokens for split {split_layer}");
+    }
+    let (input_tokens, transport_token_count) = match mode {
+        BoundaryProbeMode::SingleDecode => (&tokens[..1], 1_u64),
+        BoundaryProbeMode::Prefill => (
+            &tokens[..],
+            u64::try_from(tokens.len()).context("prompt token count exceeds u64")?,
+        ),
+    };
     let mut session0 = stage0
         .create_session()
         .with_context(|| format!("failed to create stage 0 session for split {split_layer}"))?;
-    let (_predicted, boundary) = session0
-        .decode_step_frame(token_id, None, 0)
-        .with_context(|| format!("stage 0 failed to decode for split {split_layer}"))?;
+    let boundary = match mode {
+        BoundaryProbeMode::SingleDecode => {
+            let (_predicted, boundary) = session0
+                .decode_step_frame(input_tokens[0], None, 0)
+                .with_context(|| format!("stage 0 failed to decode for split {split_layer}"))?;
+            boundary
+        }
+        BoundaryProbeMode::Prefill => session0
+            .prefill_chunk_frame(input_tokens, None, 0)
+            .with_context(|| format!("stage 0 failed to prefill for split {split_layer}"))?,
+    };
     let boundary_tensor = session0
         .boundary_tensor_info()
         .with_context(|| format!("failed to read boundary tensor info for split {split_layer}"))?
@@ -238,7 +283,7 @@ fn run_split_probe(
     })?;
     if let Some((anchor_start, anchor_end)) = shared_kv_anchor_range {
         let anchor_page = session0
-            .export_kv_page(anchor_start, anchor_end, 0, 1)
+            .export_kv_page(anchor_start, anchor_end, 0, transport_token_count)
             .with_context(|| {
                 format!(
                     "failed to export shared-KV anchor page {anchor_start}..{anchor_end} from stage 0 for split {split_layer}"
@@ -253,14 +298,28 @@ fn run_split_probe(
             })?;
     }
 
-    let (predicted, _final_frame) = session1
-        .decode_step_frame(token_id, Some(&boundary), 0)
-        .with_context(|| format!("stage 1 failed to decode boundary for split {split_layer}"))?;
-    let signal = token_signal_report(
-        &session1
-            .last_token_signal()
-            .with_context(|| format!("failed to read stage 1 token signal for split {split_layer}"))?,
-    );
+    let predicted = match mode {
+        BoundaryProbeMode::SingleDecode => {
+            session1
+                .decode_step_frame(input_tokens[0], Some(&boundary), 0)
+                .with_context(|| {
+                    format!("stage 1 failed to decode boundary for split {split_layer}")
+                })?
+                .0
+        }
+        BoundaryProbeMode::Prefill => {
+            session1
+                .prefill_chunk_frame_sampled(input_tokens, None, Some(&boundary), 0)
+                .with_context(|| {
+                    format!("stage 1 failed to prefill boundary for split {split_layer}")
+                })?
+                .0
+        }
+    };
+    let signal =
+        token_signal_report(&session1.last_token_signal().with_context(|| {
+            format!("failed to read stage 1 token signal for split {split_layer}")
+        })?);
 
     let desc_matches_tensor = boundary_matches(&boundary.desc, boundary_tensor.as_ref());
     let predicted_token_matches = Some(predicted == baseline.predicted_token);
@@ -318,7 +377,10 @@ fn stage_config(
 }
 
 /// The wire descriptor must describe the native boundary tensor exactly:
-/// same element type and a payload that covers the full tensor extent.
+/// same element type and a hidden payload that covers the full tensor
+/// extent. Arch sidebands (RWKV7 v_first, Gemma3N AltUp, Inkling MTP
+/// embeddings, GLM-DSA top-k) legitimately extend the payload beyond the
+/// hidden rows, so only the sideband-free portion is compared byte-exact.
 fn boundary_matches(desc: &ActivationDesc, tensor: Option<&BoundaryTensorReport>) -> bool {
     let Some(tensor) = tensor else {
         return false;
@@ -333,9 +395,13 @@ fn boundary_matches(desc: &ActivationDesc, tensor: Option<&BoundaryTensorReport>
         return false;
     }
     let elements: i64 = tensor.ne.iter().product();
-    let tensor_bytes = u64::try_from(elements.saturating_mul(i64::from(tensor.element_size)))
-        .unwrap_or(u64::MAX);
-    desc.payload_bytes == tensor_bytes
+    let tensor_bytes =
+        u64::try_from(elements.saturating_mul(i64::from(tensor.element_size))).unwrap_or(u64::MAX);
+    if desc.payload_bytes < tensor_bytes {
+        return false;
+    }
+    // Without sideband flags the payload is hidden rows only.
+    desc.payload_bytes == tensor_bytes || desc.flags != 0
 }
 
 fn signals_within_tolerance(baseline: &TokenSignal, probe: &TokenSignalReport) -> bool {

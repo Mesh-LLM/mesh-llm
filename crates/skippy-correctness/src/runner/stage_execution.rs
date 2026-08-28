@@ -34,6 +34,9 @@ pub(in crate::runner) struct FullModelResult {
     pub(in crate::runner) predicted_token: i32,
     pub(in crate::runner) second_predicted_token: Option<i32>,
     pub(in crate::runner) token_signal: TokenSignal,
+    /// Number of prompt tokens the baseline consumed. 1 for the single-decode
+    /// baseline; the full prompt length for the prefill baseline.
+    pub(in crate::runner) prompt_token_count: u32,
 }
 
 pub(in crate::runner) struct BinarySplitConfig {

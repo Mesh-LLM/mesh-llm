@@ -161,6 +161,14 @@ pub struct BoundaryReportArgs {
     pub splits: String,
     #[arg(long)]
     pub allow_mismatch: bool,
+    /// Transport the full multi-token prompt across the boundary: stage 0
+    /// prefills every prompt token in one frame, the boundary activation and
+    /// shared-KV anchor page cover all N tokens, and stage 1 prefills the
+    /// same tokens with the frame injected. Parity is gated on the final
+    /// token against a full-model prefill baseline. Without this flag the
+    /// lane decodes only the first prompt token (legacy single-token mode).
+    #[arg(long)]
+    pub prefill: bool,
 }
 
 #[derive(Args)]
