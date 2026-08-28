@@ -19,13 +19,13 @@ use std::collections::{BTreeMap, HashMap};
 
 /// A model as a fleet node would advertise it.
 #[derive(Clone, Copy)]
-struct FleetModel {
-    name: &'static str,
+pub(super) struct FleetModel {
+    pub(super) name: &'static str,
     parameter_count_b: f64,
     context_length: u32,
 }
 
-const SMALL_MODELS: &[FleetModel] = &[
+pub(super) const SMALL_MODELS: &[FleetModel] = &[
     FleetModel {
         name: "gemma-4-E4B-it-Q4_K_M",
         parameter_count_b: 4.0,
@@ -43,7 +43,7 @@ const SMALL_MODELS: &[FleetModel] = &[
     },
 ];
 
-const BIG_MODELS: &[FleetModel] = &[
+pub(super) const BIG_MODELS: &[FleetModel] = &[
     FleetModel {
         name: "Qwen3.8-27B-Q4_K_M",
         parameter_count_b: 27.0,
@@ -70,7 +70,7 @@ fn endpoint_id(seed: u32) -> EndpointId {
 }
 
 /// One admitted host peer serving exactly one model.
-fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
+pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
     let id = endpoint_id(seed);
     mesh::PeerInfo {
         id,
@@ -146,7 +146,7 @@ fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
     }
 }
 
-fn fleet_peer_with_health(
+pub(super) fn fleet_peer_with_health(
     seed: u32,
     model: FleetModel,
     admission: Option<crate::proto::node::InferenceAdmissionState>,
