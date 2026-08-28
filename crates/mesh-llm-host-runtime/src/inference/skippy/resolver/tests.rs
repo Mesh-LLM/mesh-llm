@@ -2517,3 +2517,82 @@ verify_window_pipeline_depth = 2
     assert_eq!(translated.max_proposal_tokens, 48);
     assert_eq!(args.speculative.verify_window.pipeline_depth, 2);
 }
+
+#[test]
+fn speculative_runtime_controls_reach_embedded_openai_translation() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+mode = "draft"
+draft_model = "/tmp/default-draft.gguf"
+draft_selection_policy = "manual"
+draft_acceptance_threshold = 0.2
+draft_split_probability = 0.3
+draft_device = "CPU"
+draft_threads = 2
+draft_cache_type_k = "f16"
+draft_cache_type_v = "f16"
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.speculative]
+draft_model = "/tmp/model-draft.gguf"
+draft_acceptance_threshold = 0.7
+draft_split_probability = 0.8
+draft_device = "CUDA0"
+draft_threads = 6
+draft_cache_type_k = "q8_0"
+draft_cache_type_v = "q4_0"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("draft runtime controls must resolve");
+    let args = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("draft runtime controls must translate");
+    let translated = format!("{args:?}");
+
+    assert!(translated.contains("model-draft.gguf"));
+    assert!(translated.contains("0.7"));
+    assert!(translated.contains("0.8"));
+    assert!(translated.contains("CUDA0"));
+    assert!(translated.contains("threads: Some(6)"));
+    assert!(translated.contains("q8_0"));
+    assert!(translated.contains("q4_0"));
+}
+
+#[test]
+fn speculative_default_true_enables_automatic_defaults_without_failing_resolution() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+spec_default = true
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+    })
+    .expect("spec_default = true must use automatic speculative defaults");
+
+    assert_eq!(resolved.speculative.strategy, "auto");
+}

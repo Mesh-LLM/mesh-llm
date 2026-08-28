@@ -207,6 +207,36 @@ mod standalone_speculative_config_tests {
     use super::*;
 
     #[test]
+    fn speculative_frontend_plan_accepts_draft_probability_controls() {
+        let config: SpeculativeDecodeConfig = serde_json::from_value(json!({
+            "requested_strategy": "auto",
+            "effective_strategy": "draft-model",
+            "native_mtp": {
+                "enabled": false,
+                "max_draft_tokens": 4,
+                "min_draft_tokens": 1,
+                "reject_cooldown_tokens": 0,
+                "suppress_cooldown_drafts": false,
+                "suppress_cooldown_draft_limit": 0
+            },
+            "ngram": null,
+            "extension": null,
+            "verify_window": {
+                "min_tokens": 1,
+                "max_tokens": 4,
+                "pipeline_depth": 1
+            },
+            "draft_acceptance_threshold": 0.7,
+            "draft_split_probability": 0.8
+        }))
+        .expect("frontend speculative plan must accept probability controls");
+
+        let rendered = serde_json::to_value(config).expect("serialize speculative plan");
+        assert_eq!(rendered["draft_acceptance_threshold"], json!(0.7));
+        assert_eq!(rendered["draft_split_probability"], json!(0.8));
+    }
+
+    #[test]
     fn standalone_speculative_config_rejects_invalid_composite_plan() {
         let config = SpeculativeDecodeConfig {
             extension: Some(NgramExtensionConfig { max_tokens: 4 }),
