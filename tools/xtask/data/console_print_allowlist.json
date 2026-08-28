@@ -3701,11 +3701,11 @@
   ],
   "crates/skippy-model-package/src/tests.rs": [
     {
-      "line": 414,
+      "line": 703,
       "macro_name": "eprintln!"
     },
     {
-      "line": 421,
+      "line": 710,
       "macro_name": "eprintln!"
     }
   ],
