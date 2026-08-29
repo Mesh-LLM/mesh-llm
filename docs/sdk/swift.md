@@ -6,7 +6,7 @@ Use the GitHub Swift package from tagged `Mesh-LLM/mesh-llm` releases.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.76.0-rc7"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.76.0-rc8"),
 ],
 targets: [
     .target(
