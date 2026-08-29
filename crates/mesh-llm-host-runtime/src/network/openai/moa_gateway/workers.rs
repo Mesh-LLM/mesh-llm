@@ -424,14 +424,23 @@ fn is_retryable_replica_error(error: &str) -> bool {
         .is_some_and(|status| matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
 }
 
+/// Fraction of the remaining worker deadline reserved for a standby attempt.
+///
+/// The primary keeps 75% of a full deadline (45s with the current 60s worker
+/// timeout), which remains above the documented 20-30s large-model first-call
+/// range while guaranteeing the standby a bounded chance after a hung primary.
+const STANDBY_DEADLINE_DENOMINATOR: u32 = 4;
+
 fn replica_attempt_timeout(
     deadline: tokio::time::Instant,
     index: usize,
     total_replicas: usize,
 ) -> Option<std::time::Duration> {
     let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
-    let remaining_replicas = total_replicas.saturating_sub(index).max(1) as u32;
-    Some(remaining / remaining_replicas)
+    if index == 0 && total_replicas > 1 {
+        return Some(remaining - remaining / STANDBY_DEADLINE_DENOMINATOR);
+    }
+    Some(remaining)
 }
 
 async fn call_remote_replica(
@@ -704,8 +713,8 @@ mod tests {
 
         let budgets = budgets.lock().unwrap();
         assert_eq!(budgets.len(), 2);
-        assert_eq!(budgets[0], std::time::Duration::from_secs(5));
-        assert_eq!(budgets[1], std::time::Duration::from_secs(5));
+        assert_eq!(budgets[0], std::time::Duration::from_millis(7500));
+        assert_eq!(budgets[1], std::time::Duration::from_millis(2500));
     }
 
     #[test]
