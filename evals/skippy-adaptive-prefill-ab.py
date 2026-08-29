@@ -568,28 +568,47 @@ def markdown(
         ("Prefill chunks / request", "prefill_chunk_count_median", True),
         ("Maximum chunk tokens", "prefill_max_chunk_size_median", None),
     ]
-    upper = max(float(before["ttft_ms_p95"]), float(after["ttft_ms_p95"])) * 1.1
-    lines = [
-        "```mermaid",
-        "xychart-beta",
-        '    title "Adaptive prefill: p95 TTFT (lower is better)"',
-        '    x-axis ["Before", "After"]',
-        f'    y-axis "ms" 0 --> {upper:.0f}',
-        f'    bar [{before["ttft_ms_p95"]:.1f}, {after["ttft_ms_p95"]:.1f}]',
-        "```",
-        "",
+    before_ttft = before.get("ttft_ms_p95")
+    after_ttft = after.get("ttft_ms_p95")
+    lines = []
+    if before_ttft is not None and after_ttft is not None:
+        upper = max(1.0, float(before_ttft), float(after_ttft)) * 1.1
+        lines.extend(
+            [
+                "```mermaid",
+                "xychart-beta",
+                '    title "Adaptive prefill: p95 TTFT (lower is better)"',
+                '    x-axis ["Before", "After"]',
+                f'    y-axis "ms" 0 --> {upper:.0f}',
+                f"    bar [{before_ttft:.1f}, {after_ttft:.1f}]",
+                "```",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         "| Metric | Before | After | Delta | Paired 95% CI |",
         "| --- | ---: | ---: | ---: | ---: |",
-    ]
+        ]
+    )
     for label, key, _lower_is_better in rows:
-        delta = delta_percent(float(before[key]), float(after[key]))
+        before_value = before.get(key)
+        after_value = after.get(key)
+        delta = (
+            delta_percent(float(before_value), float(after_value))
+            if before_value is not None and after_value is not None
+            else None
+        )
+        delta_text = f"{delta:+.1f}%" if delta is not None else "n/a"
+        before_text = f"{before_value:.1f}" if before_value is not None else "n/a"
+        after_text = f"{after_value:.1f}" if after_value is not None else "n/a"
         interval = intervals.get(key, {}).get("ci95")
         interval_text = (
             f"[{interval[0]:+.1f}%, {interval[1]:+.1f}%]" if interval else "n/a"
         )
         lines.append(
-            f"| {label} | {before[key]:.1f} | {after[key]:.1f} | "
-            f"{delta:+.1f}% | {interval_text} |"
+            f"| {label} | {before_text} | {after_text} | "
+            f"{delta_text} | {interval_text} |"
         )
     lines.extend(
         [

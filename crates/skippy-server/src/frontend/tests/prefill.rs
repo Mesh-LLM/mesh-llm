@@ -3,6 +3,25 @@ use super::*;
 use crate::frontend::prefill::representative_prefill_compute_sample;
 
 #[test]
+fn terminal_prefill_drain_preserves_largest_ack_wait() {
+    let mut terminal = EmbeddedPrefillDrain::default();
+    terminal.absorb(EmbeddedPrefillDrain {
+        drained_replies: 1,
+        downstream_wait_ms: 12.0,
+        downstream_wait_max_ms: 12.0,
+    });
+    terminal.absorb(EmbeddedPrefillDrain {
+        drained_replies: 1,
+        downstream_wait_ms: 87.0,
+        downstream_wait_max_ms: 87.0,
+    });
+
+    assert_eq!(terminal.drained_replies, 2);
+    assert_eq!(terminal.downstream_wait_ms, 99.0);
+    assert_eq!(terminal.downstream_wait_max_ms, 87.0);
+}
+
+#[test]
 fn prefill_chunk_schedule_parses_and_repeats_last_size() {
     let schedule = PrefillChunkSchedule::parse(Some("128, 256,512"))
         .unwrap()

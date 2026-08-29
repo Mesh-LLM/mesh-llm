@@ -282,7 +282,7 @@ impl StageSession {
                 };
                 (-1, output)
             };
-            if request.sample_last {
+            if iteration_request_should_emit_sample(request) {
                 samples.push(IterationSample {
                     request_index,
                     predicted_token,
@@ -1078,6 +1078,10 @@ impl StageSession {
     }
 }
 
+fn iteration_request_should_emit_sample(request: &IterationBatchRequest<'_>) -> bool {
+    request.sample_last && request.session.include_output
+}
+
 fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
     let framed_origin = request.session.token_count() == 0
         && request.input.is_some()
@@ -1112,8 +1116,8 @@ fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        IterationBatchPhase, IterationBatchRequest, collect_iteration_samples, raw_input_frame,
-        validate_serial_decode_request,
+        IterationBatchPhase, IterationBatchRequest, collect_iteration_samples,
+        iteration_request_should_emit_sample, raw_input_frame, validate_serial_decode_request,
     };
     use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
@@ -1168,6 +1172,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
+            include_output: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1188,6 +1193,7 @@ mod tests {
             let mut session = StageSession {
                 raw: ptr::null_mut(),
                 token_count: 0,
+                include_output: true,
             };
             let frame = ActivationFrame {
                 desc: activation_desc(1),
@@ -1218,6 +1224,7 @@ mod tests {
             let mut session = StageSession {
                 raw: ptr::null_mut(),
                 token_count: session_tokens,
+                include_output: true,
             };
             let request = IterationBatchRequest {
                 session: &mut session,
@@ -1238,6 +1245,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
+            include_output: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1249,6 +1257,26 @@ mod tests {
             phase: IterationBatchPhase::Prefill,
         };
         assert_eq!(request.phase, IterationBatchPhase::Prefill);
+    }
+
+    #[test]
+    fn serial_iteration_omits_samples_for_intermediate_stages() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+            include_output: false,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[],
+            sampling: None,
+            input: None,
+            sample_last: true,
+            phase: IterationBatchPhase::Decode,
+        };
+
+        assert!(!iteration_request_should_emit_sample(&request));
     }
 
     #[test]

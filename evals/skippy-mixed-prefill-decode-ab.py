@@ -781,38 +781,57 @@ def markdown(
         ("Prefill chunks / request", "prefill_chunk_count_median"),
         ("Maximum prefill chunk", "prefill_max_chunk_size_median"),
     ]
-    chart_keys = [
-        "makespan_ms",
-        "output_tokens_per_second",
-        "anchor_ttft_ms_p95",
-        "anchor_gap_ms_p95",
-        "prefill_ttft_ms_p95",
+    chart_metrics = [
+        ("Makespan", "makespan_ms"),
+        ("Throughput", "output_tokens_per_second"),
+        ("Anchor-TTFT-p95", "anchor_ttft_ms_p95"),
+        ("Anchor-gap-p95", "anchor_gap_ms_p95"),
+        ("Prefill-TTFT-p95", "prefill_ttft_ms_p95"),
     ]
-    chart_values = [100.0 * after[key] / before[key] for key in chart_keys]
-    chart_upper = max(120.0, max(chart_values) * 1.1)
-    lines = [
-        "```mermaid",
-        "xychart-beta",
-        '    title "Mixed scheduling (base = 100)"',
-        '    x-axis ["Makespan", "Throughput", "Anchor-TTFT-p95", '
-        '"Anchor-gap-p95", "Prefill-TTFT-p95"]',
-        f'    y-axis "Percent of base" 0 --> {chart_upper:.0f}',
-        "    bar [100, 100, 100, 100, 100]",
-        "    bar [" + ", ".join(f"{value:.1f}" for value in chart_values) + "]",
-        "```",
-        "",
+    chart_values = []
+    for label, key in chart_metrics:
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value is None or after_value is None or before_value == 0:
+            continue
+        chart_values.append((label, 100.0 * after_value / before_value))
+    lines = []
+    if chart_values:
+        chart_upper = max(120.0, max(value for _, value in chart_values) * 1.1)
+        labels = ", ".join(json.dumps(label) for label, _ in chart_values)
+        values = ", ".join(f"{value:.1f}" for _, value in chart_values)
+        lines.extend(
+            [
+                "```mermaid",
+                "xychart-beta",
+                '    title "Mixed scheduling (base = 100)"',
+                f"    x-axis [{labels}]",
+                f'    y-axis "Percent of base" 0 --> {chart_upper:.0f}',
+                "    bar [" + ", ".join("100" for _ in chart_values) + "]",
+                f"    bar [{values}]",
+                "```",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         "| Metric | Before | After | Delta | Paired 95% CI |",
         "| --- | ---: | ---: | ---: | ---: |",
-    ]
+        ]
+    )
     for label, key in rows:
-        delta = delta_percent(before[key], after[key])
+        before_value = before.get(key)
+        after_value = after.get(key)
+        if before_value is None or after_value is None:
+            continue
+        delta = delta_percent(before_value, after_value)
         delta_text = f"{delta:+.1f}%" if delta is not None else "n/a"
         interval = intervals.get(key, {}).get("ci95")
         interval_text = (
             f"[{interval[0]:+.1f}%, {interval[1]:+.1f}%]" if interval else "n/a"
         )
         lines.append(
-            f"| {label} | {before[key]:.3f} | {after[key]:.3f} | {delta_text} | {interval_text} |"
+            f"| {label} | {before_value:.3f} | {after_value:.3f} | {delta_text} | {interval_text} |"
         )
     lines.extend(
         [

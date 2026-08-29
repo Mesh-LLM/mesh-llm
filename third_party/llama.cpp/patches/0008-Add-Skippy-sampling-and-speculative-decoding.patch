@@ -333,7 +333,7 @@ new file mode 100644
 index 000000000..8440e5b97
 --- /dev/null
 +++ b/src/skippy/sampling.cpp
-@@ -0,0 +1,673 @@
+@@ -0,0 +1,672 @@
 +#include "skippy/sampling.h"
 +#include "skippy/errors.h"
 +#include "skippy/execution_internal.h"
@@ -734,16 +734,14 @@ index 000000000..8440e5b97
 +    const bool ignore_eos = (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
 +    if (ignore_eos) {
 +        const int32_t token_count = llama_vocab_n_tokens(vocab);
-+        effective_logit_bias.reserve(std::min<int32_t>(token_count, SKIPPY_MAX_LOGIT_BIAS));
++        effective_logit_bias.reserve(logit_bias_count);
 +        for (llama_token token = 0; token < token_count; ++token) {
 +            if (llama_vocab_is_eog(vocab, token)) {
 +                effective_logit_bias.push_back(
 +                        { token, -std::numeric_limits<float>::infinity() });
 +            }
 +        }
-+        for (uint32_t i = 0;
-+                i < logit_bias_count && effective_logit_bias.size() < SKIPPY_MAX_LOGIT_BIAS;
-+                ++i) {
++        for (uint32_t i = 0; i < logit_bias_count; ++i) {
 +            const bool targets_eog = llama_vocab_is_eog(vocab, sampling->logit_bias[i].token);
 +            if (!targets_eog) {
 +                effective_logit_bias.push_back(sampling->logit_bias[i]);
@@ -965,6 +963,7 @@ index 000000000..8440e5b97
 +            skippy_clear_chat_sampling(session);
 +        }
 +        const bool ignore_eog =
++                sampling != nullptr &&
 +                (sampling->flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS) != 0;
 +        return skippy_greedy_sample_context_with_eog_policy(
 +                session->stage_model->model,
