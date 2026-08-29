@@ -139,11 +139,35 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         stage_status_list_supported: false,
         owner_summary: Default::default(),
         advertised_model_throughput: vec![],
+        // Simulated peers advertise no cache affinity: these tests exercise
+        // admission and replica choice, which must not depend on cache state.
+        cache_affinity: None,
         inference_admission_state: None,
         display_rtt: None,
         selected_path: None,
         propagated_latency: None,
     }
+}
+
+/// A peer whose model advertises a specific `tool_use` capability level.
+///
+/// The default `fleet_peer` advertises `Supported` for every model, which makes
+/// the tool-capability term in `compute_actor_candidates` constant and
+/// therefore untested. Tool turns route through a single actor
+/// (`tool_turn::handle_tool_query`), and that actor is `actor_candidates[0]`,
+/// so any reordering of that list changes which model emits real tool calls.
+pub(super) fn fleet_peer_with_tool_use(
+    seed: u32,
+    model: FleetModel,
+    tool_use: CapabilityLevel,
+    admission: Option<crate::proto::node::InferenceAdmissionState>,
+) -> mesh::PeerInfo {
+    let mut peer = fleet_peer(seed, model);
+    peer.inference_admission_state = admission;
+    for descriptor in &mut peer.served_model_descriptors {
+        descriptor.capabilities.tool_use = tool_use;
+    }
+    peer
 }
 
 pub(super) fn fleet_peer_with_health(
@@ -663,4 +687,140 @@ async fn buzz_ladder_two_big_machines_form_the_only_reachable_committee() {
     ])
     .await;
     println!("two big replicas + smalls: {with_smalls:?}");
+}
+
+// ─── Tool-turn actor selection ───────────────────────────────────────
+//
+// A tool-bearing turn does not run a committee. `handle_tool_query` picks ONE
+// actor — `reducer_candidates(config)[0]`, which is `actor_candidates[0]` when
+// the host supplies it — and only that model receives the real tool schemas;
+// every other worker advises tool-free. So the ordering asserted here decides
+// whether tool calls are emitted by a model that can actually make them.
+//
+// The health and throughput terms added for fleet robustness sort BELOW
+// `tool_use`. These tests exist to keep it that way: a robustness heuristic
+// must never promote a non-tool-caller ahead of a tool-caller.
+
+/// Tool capability outranks health. A deprioritized tool-caller must still act
+/// before a perfectly healthy model that cannot call tools.
+#[tokio::test]
+async fn tool_capability_outranks_health_for_the_acting_model() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    // The tool-caller is deprioritized AND small — losing on every other term.
+    node.insert_test_peer(fleet_peer_with_tool_use(
+        1,
+        SMALL_MODELS[1],
+        CapabilityLevel::Supported,
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+    ))
+    .await;
+    // The healthy big model cannot call tools.
+    node.insert_test_peer(fleet_peer_with_tool_use(
+        2,
+        BIG_MODELS[0],
+        CapabilityLevel::None,
+        Some(InferenceAdmissionState::Accepting),
+    ))
+    .await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+    assert_eq!(
+        super::pool::canonical_base_name(&models[actors[0]].name),
+        super::pool::canonical_base_name(SMALL_MODELS[1].name),
+        "the acting model must be the tool-caller even when it is \
+         deprioritized and small; actor order = {:?}",
+        actors
+            .iter()
+            .map(|&i| models[i].name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Tool capability outranks advertised throughput. A slow tool-caller still
+/// acts before a fast model that cannot call tools.
+#[tokio::test]
+async fn tool_capability_outranks_advertised_throughput_for_the_acting_model() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    let mut slow_tool_caller =
+        fleet_peer_with_tool_use(1, BIG_MODELS[0], CapabilityLevel::Supported, None);
+    slow_tool_caller.advertised_model_throughput =
+        vec![crate::network::metrics::ModelThroughputHint {
+            model_name: BIG_MODELS[0].name.to_string(),
+            avg_tokens_per_second_milli: 1_000,
+            throughput_samples: 8,
+        }];
+    let mut fast_non_caller =
+        fleet_peer_with_tool_use(2, BIG_MODELS[1], CapabilityLevel::None, None);
+    fast_non_caller.advertised_model_throughput =
+        vec![crate::network::metrics::ModelThroughputHint {
+            model_name: BIG_MODELS[1].name.to_string(),
+            avg_tokens_per_second_milli: 90_000,
+            throughput_samples: 8,
+        }];
+    node.insert_test_peer(slow_tool_caller).await;
+    node.insert_test_peer(fast_non_caller).await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+    assert_eq!(
+        super::pool::canonical_base_name(&models[actors[0]].name),
+        super::pool::canonical_base_name(BIG_MODELS[0].name),
+        "a 90x throughput advantage must not buy the acting slot for a model \
+         that cannot call tools"
+    );
+}
+
+/// Every admitted worker stays in `actor_candidates`, so the hedge ladder in
+/// `hedged_reducer_call` can fall through when the preferred actor fails.
+/// Reordering must never shorten the list.
+#[tokio::test]
+async fn actor_candidates_retain_every_admitted_worker_as_hedge_fallback() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    node.insert_test_peer(fleet_peer_with_tool_use(
+        1,
+        BIG_MODELS[0],
+        CapabilityLevel::Supported,
+        Some(InferenceAdmissionState::AcceptingDeprioritized),
+    ))
+    .await;
+    node.insert_test_peer(fleet_peer_with_tool_use(
+        2,
+        BIG_MODELS[1],
+        CapabilityLevel::None,
+        None,
+    ))
+    .await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+    let actors = compute_actor_candidates(&node, &models).await;
+    assert_eq!(
+        actors.len(),
+        models.len(),
+        "a deprioritized worker must be demoted, never dropped: it is the \
+         fallback the actor hedge walks to"
+    );
+    let mut seen = actors.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), actors.len(), "indices must be unique");
 }
