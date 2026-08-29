@@ -220,6 +220,39 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             ("llama", "mesh"),
         )
 
+    def test_required_backends_allow_only_pinned_capability_exclusions(self) -> None:
+        comparisons = {
+            "vllm": {
+                "available": True,
+                "models": {
+                    "dense": {"available": True},
+                    "moe": {
+                        "available": False,
+                        "source": "pinned-capability-exclusion",
+                        "reason": "unsupported exact input",
+                    },
+                },
+            },
+            "sglang": {
+                "available": True,
+                "models": {
+                    "dense": {"available": True},
+                    "recurrent": {
+                        "available": False,
+                        "reason": "model path not found",
+                    },
+                },
+            },
+        }
+
+        self.assertEqual(
+            BENCH.required_comparison_errors(["vllm"], comparisons), []
+        )
+        self.assertEqual(
+            BENCH.required_comparison_errors(["sglang"], comparisons),
+            ["sglang: missing model inputs for recurrent"],
+        )
+
     def test_optional_backends_can_match_unified_total_kv_capacity(self) -> None:
         config = BENCH.load_config(CONFIG)
         model = config["models"][0]
