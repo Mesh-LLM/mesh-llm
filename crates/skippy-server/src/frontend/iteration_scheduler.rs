@@ -31,6 +31,7 @@ const MAX_NATIVE_ITERATION_TOKENS: usize = 2048;
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_COMMAND_QUEUE_CAPACITY: usize = 8;
 const MAX_COMMANDS_PER_TURN: usize = 64;
+const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
 
@@ -200,6 +201,7 @@ struct SchedulerWorker {
     max_direct_batch_size: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
+    active_runtime_sessions: usize,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
     last_served_cache_runtime: bool,
@@ -297,6 +299,7 @@ impl IterationScheduler {
                     max_direct_batch_size: scheduler_lane_count.max(1),
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
+                    active_runtime_sessions: 0,
                     telemetry: Some(telemetry),
                     last_served_direct: false,
                     last_served_cache_runtime: false,
@@ -675,6 +678,9 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            if !self.coalesce_direct_iterations() {
+                return;
+            }
             self.run_work_turn();
             if !self.iteration_interval.is_zero() {
                 match self.commands.recv_timeout(self.iteration_interval) {
@@ -743,13 +749,16 @@ impl SchedulerWorker {
     }
 
     fn run_runtime_operation(
-        &self,
+        &mut self,
         operation: RuntimeOperation,
         cache: Option<CacheRuntimeTelemetry>,
     ) {
         let started = Instant::now();
         let label = operation.label;
         (operation.run)(&self.runtime);
+        if let Ok(runtime) = self.runtime.lock() {
+            self.active_runtime_sessions = runtime.active_session_count();
+        }
         if let Some(telemetry) = self.telemetry.as_ref() {
             let mut attrs = BTreeMap::from([
                 ("skippy.scheduler.operation".to_string(), json!(label)),
@@ -786,6 +795,34 @@ impl SchedulerWorker {
             }
             telemetry.emit_debug("stage.scheduler_feature_runtime", attrs);
         }
+    }
+
+    fn coalesce_direct_iterations(&mut self) -> bool {
+        let target = direct_coalesce_target(
+            self.active_runtime_sessions,
+            self.direct_iterations.len(),
+            self.max_direct_batch_size,
+        );
+        if target <= self.direct_iterations.len() {
+            return true;
+        }
+
+        let deadline = Instant::now() + DIRECT_ITERATION_COALESCE_WINDOW;
+        while self.direct_iterations.len() < target {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match self.commands.recv_timeout(remaining) {
+                Ok(SchedulerCommand::Shutdown) => {
+                    self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                    return false;
+                }
+                Ok(command) => self.handle_command(command),
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        true
     }
 
     fn submit(&mut self, request: ScheduledRequest) {
@@ -1450,6 +1487,16 @@ fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: 
     }
 }
 
+fn direct_coalesce_target(
+    active_runtime_sessions: usize,
+    queued_direct_iterations: usize,
+    max_direct_batch_size: usize,
+) -> usize {
+    active_runtime_sessions
+        .max(queued_direct_iterations)
+        .min(max_direct_batch_size)
+}
+
 fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -1666,6 +1713,14 @@ mod tests {
     }
 
     #[test]
+    fn direct_coalescing_tracks_active_sessions_without_penalizing_singletons() {
+        assert_eq!(direct_coalesce_target(1, 1, 16), 1);
+        assert_eq!(direct_coalesce_target(16, 1, 16), 16);
+        assert_eq!(direct_coalesce_target(32, 4, 16), 16);
+        assert_eq!(direct_coalesce_target(0, 4, 16), 4);
+    }
+
+    #[test]
     fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
         let config = build_scheduler_config(32, 131_072, 1024, Some(4096), Some(128), 64);
         assert_eq!(config.max_active_sequences, 32);
@@ -1697,6 +1752,7 @@ mod tests {
             max_direct_batch_size: 2,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1817,6 +1873,7 @@ mod tests {
             max_direct_batch_size: 1,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1871,6 +1928,7 @@ mod tests {
             max_direct_batch_size: 1,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1923,6 +1981,7 @@ mod tests {
                 max_direct_batch_size: 3,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
@@ -2010,6 +2069,7 @@ mod tests {
                 max_direct_batch_size: 1,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
