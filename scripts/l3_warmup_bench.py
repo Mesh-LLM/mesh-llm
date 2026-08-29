@@ -50,10 +50,21 @@ def wait_ready(port: int, process: subprocess.Popen, timeout_s: float) -> None:
     raise RuntimeError("serve did not become ready in time")
 
 
-def first_model(port: int) -> str:
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=5) as response:
-        payload = json.load(response)
-    return payload["data"][0]["id"]
+def first_model(port: int, timeout_s: float = 600.0) -> str:
+    """The served model id, waiting out the asynchronous model load."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/v1/models", timeout=5
+            ) as response:
+                payload = json.load(response)
+            if payload.get("data"):
+                return payload["data"][0]["id"]
+        except Exception:
+            pass
+        time.sleep(1.0)
+    raise RuntimeError("no model appeared on /v1/models in time")
 
 
 def ttft_request(port: int, model: str, prompt: str, max_tokens: int) -> tuple[float, str]:
