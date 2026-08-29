@@ -4205,27 +4205,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 298,
+      "line": 302,
       "macro_name": "eprintln!"
     },
     {
-      "line": 308,
+      "line": 312,
       "macro_name": "println!"
     },
     {
-      "line": 326,
+      "line": 342,
       "macro_name": "eprintln!"
     },
     {
-      "line": 346,
+      "line": 362,
       "macro_name": "eprintln!"
     },
     {
-      "line": 354,
+      "line": 370,
       "macro_name": "eprintln!"
     },
     {
-      "line": 407,
+      "line": 423,
       "macro_name": "eprintln!"
     }
   ],
