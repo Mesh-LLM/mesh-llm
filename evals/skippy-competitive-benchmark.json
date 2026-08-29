@@ -133,6 +133,16 @@
       "revision": "e434a23f91ba5b4923cf6c9d9a238eb4a08e3a11",
       "sha256": "5f2f880516f5cb5d17bbb0b0b78623dee45d84855de9c5a0e637eaf828267d2b"
     },
+      "comparison_support": {
+        "vllm": {
+          "available": false,
+          "reason": "vLLM 0.27.1 with vllm-gguf-plugin 0.0.4 cannot load the pinned DeepSeek2 Q3 GGUF fused expert tensors"
+        },
+        "sglang": {
+          "available": false,
+          "reason": "SGLang 0.5.18 cannot load the pinned DeepSeek2 Q3 GGUF; a safetensors substitution would not be capacity-and-precision equivalent"
+        }
+      },
       "layer_end": 27,
       "synthetic_context_size": 4096,
       "thoughtworks_context_size": 16384,
@@ -153,6 +163,16 @@
       "revision": "80ebc50d7799a440b96c93bb6686a3924a09b0cb",
       "sha256": "2473f5e02854a2833df973277e6f109d94344e7860fbc78d5ff8b31d08dddaeb"
     },
+      "comparison_support": {
+        "vllm": {
+          "available": false,
+          "reason": "vLLM 0.27.1 with vllm-gguf-plugin 0.0.4 does not recognize the pinned Falcon-H1 Q4 GGUF architecture"
+        },
+        "sglang": {
+          "available": false,
+          "reason": "SGLang 0.5.18 cannot load the pinned Falcon-H1 Q4 GGUF architecture"
+        }
+      },
       "layer_end": 24,
       "synthetic_context_size": 32768,
       "thoughtworks_context_size": 16384,

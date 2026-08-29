@@ -143,6 +143,26 @@ def load_config(path: Path) -> dict[str, Any]:
             value = model.get(field)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"model {model['key']} needs a positive {field}")
+        comparison_support = model.get("comparison_support", {})
+        if not isinstance(comparison_support, dict) or not set(
+            comparison_support
+        ).issubset(OPTIONAL_ARMS):
+            raise ValueError(
+                f"model {model['key']} comparison_support has an unknown backend"
+            )
+        for arm, support in comparison_support.items():
+            if not isinstance(support, dict) or not isinstance(
+                support.get("available"), bool
+            ):
+                raise ValueError(
+                    f"model {model['key']} comparison_support for {arm} "
+                    "needs an available boolean"
+                )
+            if not support["available"] and not support.get("reason"):
+                raise ValueError(
+                    f"model {model['key']} comparison_support for {arm} "
+                    "needs an exclusion reason"
+                )
     thoughtworks = document.get("thoughtworks", {})
     dataset = thoughtworks.get("dataset", {})
     selection = thoughtworks.get("selection", {})
@@ -764,6 +784,19 @@ def resolve_optional_comparisons(
                 path = args.vllm_hf_config_root / model["key"] / "config.json"
                 expected = model["vllm_hf_config"]["sha256"]
                 actual = sha256(path) if path.is_file() else None
+                support = model.get("comparison_support", {}).get("vllm")
+                if support is not None and not support["available"]:
+                    model_status[model["key"]] = {
+                        "available": False,
+                        "config_path": str(path.parent),
+                        "config_sha256": actual,
+                        "expected_sha256": expected,
+                        "repo": model["vllm_hf_config"]["repo"],
+                        "revision": model["vllm_hf_config"]["revision"],
+                        "reason": support["reason"],
+                        "source": "pinned-capability-exclusion",
+                    }
+                    continue
                 model_status[model["key"]] = {
                     "available": actual == expected,
                     "config_path": str(path.parent),
@@ -824,6 +857,22 @@ def resolve_optional_comparisons(
                 available = path.is_file() or (
                     path.is_dir() and any(candidate.is_file() for candidate in path.rglob("*"))
                 )
+                support = model.get("comparison_support", {}).get("sglang")
+                if support is not None and not support["available"]:
+                    model_status[model["key"]] = {
+                        "available": False,
+                        "model_path": str(path),
+                        "model_sha256": (
+                            sha256(path)
+                            if available and path.is_file()
+                            else directory_sha256(path)
+                            if available
+                            else None
+                        ),
+                        "source": "pinned-capability-exclusion",
+                        "reason": support["reason"],
+                    }
+                    continue
                 model_status[model["key"]] = {
                     "available": available,
                     "model_path": str(path),
@@ -1890,6 +1939,33 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
             gate = next((row for row in parity if row["platform"] == platform and row["model"] == model and row["arm"] == "mesh" and row["concurrency"] == 1), None)
             gate_pass = bool(gate and gate["failures"] == 0 and gate["valid_pairs"] == 1 and gate["matches"] == 1)
             lines.extend([f"### {labels.get(model, model)}", "", f"Mesh correctness gate: **{'PASS' if gate_pass else 'FAIL OR PENDING'}**.", ""])
+            availability_path = (
+                args.artifact
+                / "comparisons"
+                / platform
+                / "availability.json"
+            )
+            if availability_path.is_file():
+                availability = json.loads(
+                    availability_path.read_text(encoding="utf-8")
+                )
+                exclusions = [
+                    f"{REPORT_ARM_STYLES[arm][0]}: "
+                    f"{entry['models'][model]['reason']}"
+                    for arm, entry in availability.items()
+                    if model in entry.get("models", {})
+                    and not entry["models"][model].get("available")
+                    and entry["models"][model].get("reason")
+                ]
+                if exclusions:
+                    lines.extend(
+                        [
+                            "Pinned exact-input backend exclusions: "
+                            + "; ".join(exclusions)
+                            + ".",
+                            "",
+                        ]
+                    )
             for output_tokens in config["synthetic"]["output_tokens"]:
                 rows = [row for row in model_synthetic if row["tg"] == output_tokens]
                 if not rows:

@@ -89,6 +89,17 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "positive thoughtworks_active_lanes"):
                 BENCH.load_config(path)
 
+    def test_config_requires_a_reason_for_comparison_exclusions(self) -> None:
+        document = json.loads(CONFIG.read_text(encoding="utf-8"))
+        document["models"][0]["comparison_support"] = {
+            "vllm": {"available": False}
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "needs an exclusion reason"):
+                BENCH.load_config(path)
+
     def test_trace_arm_order_alternates_to_reduce_time_order_bias(self) -> None:
         config = BENCH.load_config(CONFIG)
         plan = BENCH.build_plan(
@@ -181,6 +192,33 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertFalse(status["vllm"]["available"])
         self.assertFalse(status["sglang"]["available"])
         self.assertIn("Linux CUDA", status["vllm"]["reason"])
+
+    def test_model_capability_exclusions_remove_only_unsupported_arms(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        dense, moe = config["models"][:2]
+        args = SimpleNamespace(
+            comparison_backend=["vllm", "sglang"],
+            mesh_adaptive=False,
+        )
+        comparisons = {
+            arm: {
+                "available": True,
+                "models": {
+                    dense["key"]: {"available": True},
+                    moe["key"]: {"available": False},
+                },
+            }
+            for arm in args.comparison_backend
+        }
+
+        self.assertEqual(
+            BENCH.arms_for_model(args, dense, comparisons),
+            ("llama", "mesh", "vllm", "sglang"),
+        )
+        self.assertEqual(
+            BENCH.arms_for_model(args, moe, comparisons),
+            ("llama", "mesh"),
+        )
 
     def test_optional_backends_can_match_unified_total_kv_capacity(self) -> None:
         config = BENCH.load_config(CONFIG)
