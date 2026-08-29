@@ -176,6 +176,11 @@ pub(crate) struct PendingExactStateRecord {
     pub(crate) extra: ExactStateExtra,
     pub(crate) namespace: String,
     pub(crate) token_ids: Vec<i32>,
+    /// When this record re-warms the radix after an L3 fill, the fill's
+    /// claim key. The worker releases it only after the radix insert lands,
+    /// so requests arriving during the (asynchronous) re-warm window prefill
+    /// normally instead of duplicating the disk load.
+    pub(crate) l3_fill_claim: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -644,6 +649,7 @@ mod exact_state_record_queue_tests {
             extra: ExactStateExtra::default(),
             namespace: "test".to_string(),
             token_ids: vec![1],
+            l3_fill_claim: None,
         }
     }
 

@@ -26,7 +26,7 @@ pub use resident::{
     ResidentActivationCache, ResidentActivationLookup, ResidentActivationRecordOutcome,
     ResidentActivationStats,
 };
-pub use tier::{L3Fill, L3Tier, l3_namespace_key, l3_prefix_key};
+pub use tier::{L3Fill, L3Location, L3Tier, l3_namespace_key, l3_prefix_key};
 
 /// llama.cpp's hard sequence-id capacity for one context.
 pub const LLAMA_MAX_SEQ: i32 = 256;

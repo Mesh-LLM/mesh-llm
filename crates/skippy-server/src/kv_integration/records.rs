@@ -90,6 +90,9 @@ pub struct ExactStateRestore {
     /// assembly), separated from the runtime import cost above so restore
     /// thresholds can be set from real numbers. 0 for radix hits.
     pub fill_ms: f64,
+    /// Whether an L3 fill's radix re-warm record was accepted by the worker
+    /// (the fill claim is released when it lands).
+    pub rewarm_enqueued: bool,
 }
 
 #[derive(Debug, Clone)]

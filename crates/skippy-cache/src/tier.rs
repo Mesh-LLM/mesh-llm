@@ -34,6 +34,20 @@ pub fn l3_namespace_key(namespace: &str) -> String {
     format!("blake3:{}", hasher.finalize().to_hex())
 }
 
+/// A located entry: the cheap index-probe result, addressing exactly one
+/// recorded manifest. Splitting locate from load lets callers single-flight
+/// the expensive load on the entry itself (namespace + recorded length +
+/// manifest key) rather than on the query's shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct L3Location {
+    pub namespace_key: String,
+    pub prefix_key: String,
+    pub token_count: u64,
+    /// Manifest key (payload digest) — the identity of the physical entry;
+    /// the correct single-flight claim key.
+    pub manifest_key: String,
+}
+
 /// A successful fill from the tier.
 pub struct L3Fill {
     pub payload: ExactStatePayload,
@@ -73,6 +87,10 @@ impl L3Tier {
     /// Returns the manifest key. Entries at many lengths coexist — each is a
     /// complete state for its own length, which is what longest-prefix fill
     /// leans on.
+    ///
+    /// Zero-byte payloads are refused: a dense family whose native KV export
+    /// was unavailable would otherwise spill nothing and restore as a bare
+    /// position advance over missing state.
     pub fn spill(
         &self,
         namespace: &str,
@@ -80,6 +98,11 @@ impl L3Tier {
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
     ) -> Result<String> {
+        if payload.byte_len() == 0 {
+            bail!(
+                "refusing to spill an empty exact-state payload: no state component was exported"
+            );
+        }
         let token_count = token_ids.len() as u64;
         let (kv, recurrent): (Vec<u8>, Vec<u8>) = match payload.kind() {
             ExactStatePayloadKind::FullState => (
@@ -145,18 +168,19 @@ impl L3Tier {
         Ok(payload_digest)
     }
 
-    /// Fill a radix miss with the longest recorded prefix of the query,
-    /// mirroring the radix cache's longest-component-prefix semantics: probe
-    /// recorded lengths for this namespace from longest to shortest (capped
-    /// at `max_probes`), hashing the query's own leading tokens at each
-    /// length — so a recorded entry only matches when the query genuinely
-    /// starts with the tokens it was recorded for.
-    pub fn fill_longest(
+    /// Locate the longest recorded prefix of the query, mirroring the radix
+    /// cache's longest-component-prefix semantics: probe recorded lengths
+    /// for this namespace from longest to shortest (capped at `max_probes`),
+    /// hashing the query's own leading tokens at each length — so a
+    /// recorded entry only matches when the query genuinely starts with the
+    /// tokens it was recorded for. Index probes only; the expensive load is
+    /// `load`, so callers can single-flight on the returned entry.
+    pub fn locate_longest(
         &self,
         namespace: &str,
         token_ids: &[i32],
         max_probes: usize,
-    ) -> Result<Option<L3Fill>> {
+    ) -> Result<Option<L3Location>> {
         let namespace_key = l3_namespace_key(namespace);
         let query_len = token_ids.len() as u64;
         let lengths = self.store.recorded_prefix_lengths(&namespace_key)?;
@@ -185,31 +209,62 @@ impl L3Tier {
                     manifest.token_count
                 );
             }
-            // Memory bound: `assemble` materializes the payload once
-            // (`total_bytes`); the kv/recurrent split below reuses that
-            // allocation via `split_off`, so peak extra memory is the
-            // payload itself. Full-state fills are whole-blob by nature;
-            // kv-recurrent fills could stream per segment later.
-            let mut wire = self.store.assemble(&manifest)?;
-            let payload_bytes = wire.len() as u64;
-            let kv_bytes = usize::try_from(manifest.kv_bytes).context("kv bytes exceed usize")?;
-            let payload = match manifest.payload_kind.as_str() {
-                "full-state" => ExactStatePayload::full_state(wire),
-                "recurrent-only" => ExactStatePayload::recurrent_only(wire),
-                "kv-recurrent" => {
-                    let recurrent = wire.split_off(kv_bytes);
-                    ExactStatePayload::kv_recurrent(wire, recurrent)
-                }
-                other => bail!("L3 manifest holds unknown payload kind {other}"),
-            };
-            return Ok(Some(L3Fill {
-                payload,
-                token_count: manifest.token_count,
-                kv_desc_json: manifest.kv_desc_json,
-                payload_bytes,
+            return Ok(Some(L3Location {
+                namespace_key,
+                prefix_key,
+                token_count: length,
+                manifest_key: manifest.payload_digest,
             }));
         }
         Ok(None)
+    }
+
+    /// Load a located entry. Memory bound: `assemble` materializes the
+    /// payload once (`total_bytes`); the kv/recurrent split below reuses
+    /// that allocation via `split_off`, so peak extra memory is the payload
+    /// itself. Full-state fills are whole-blob by nature; kv-recurrent
+    /// fills could stream per segment later.
+    pub fn load(&self, location: &L3Location) -> Result<L3Fill> {
+        let manifest = self.store.load_manifest(&location.manifest_key)?;
+        if manifest.state_identity != self.state_identity {
+            bail!(
+                "L3 manifest {} was spilled under state identity {} but the tier serves {}",
+                location.manifest_key,
+                manifest.state_identity,
+                self.state_identity
+            );
+        }
+        let mut wire = self.store.assemble(&manifest)?;
+        let payload_bytes = wire.len() as u64;
+        let kv_bytes = usize::try_from(manifest.kv_bytes).context("kv bytes exceed usize")?;
+        let payload = match manifest.payload_kind.as_str() {
+            "full-state" => ExactStatePayload::full_state(wire),
+            "recurrent-only" => ExactStatePayload::recurrent_only(wire),
+            "kv-recurrent" => {
+                let recurrent = wire.split_off(kv_bytes);
+                ExactStatePayload::kv_recurrent(wire, recurrent)
+            }
+            other => bail!("L3 manifest holds unknown payload kind {other}"),
+        };
+        Ok(L3Fill {
+            payload,
+            token_count: manifest.token_count,
+            kv_desc_json: manifest.kv_desc_json,
+            payload_bytes,
+        })
+    }
+
+    /// Locate and load in one step.
+    pub fn fill_longest(
+        &self,
+        namespace: &str,
+        token_ids: &[i32],
+        max_probes: usize,
+    ) -> Result<Option<L3Fill>> {
+        match self.locate_longest(namespace, token_ids, max_probes)? {
+            Some(location) => Ok(Some(self.load(&location)?)),
+            None => Ok(None),
+        }
     }
 
     /// What the tier can restore right now: (manifest count, restorable
@@ -430,6 +485,57 @@ mod tests {
                 .0
                 .into_owned(),
             vec![2u8; 2048]
+        );
+    }
+
+    /// A dense family whose KV export was unavailable must not persist an
+    /// empty entry that would later restore as position-without-state.
+    #[test]
+    fn empty_payloads_are_refused_at_spill() {
+        let tier = tier("empty", "blake3:identity-a");
+        let empty = ExactStatePayload::kv_recurrent(Vec::new(), Vec::new());
+        assert!(tier.spill("ns", &tokens(128), &empty, None).is_err());
+        assert!(
+            tier.fill_longest("ns", &tokens(128), 64)
+                .expect("fill")
+                .is_none()
+        );
+    }
+
+    /// The locate/load split: locate is a cheap index probe addressing one
+    /// physical entry (the single-flight claim key), and load returns the
+    /// same payload fill_longest would.
+    #[test]
+    fn locate_addresses_one_entry_and_load_fetches_it() {
+        let tier = tier("locate", "blake3:identity-a");
+        tier.spill(
+            "ns",
+            &tokens(400),
+            &ExactStatePayload::full_state(vec![7u8; 4096]),
+            None,
+        )
+        .expect("spill");
+        let location = tier
+            .locate_longest("ns", &tokens(500), 64)
+            .expect("locate")
+            .expect("hit");
+        assert_eq!(location.token_count, 400);
+        // Two queries of different lengths that resolve to the same recorded
+        // prefix share one claim key.
+        let other = tier
+            .locate_longest("ns", &tokens(450), 64)
+            .expect("locate")
+            .expect("hit");
+        assert_eq!(location.manifest_key, other.manifest_key);
+        let fill = tier.load(&location).expect("load");
+        assert_eq!(fill.token_count, 400);
+        assert_eq!(
+            fill.payload
+                .full_state_bytes_timed()
+                .unwrap()
+                .0
+                .into_owned(),
+            vec![7u8; 4096]
         );
     }
 

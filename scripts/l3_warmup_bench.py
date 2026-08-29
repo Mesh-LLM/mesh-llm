@@ -12,6 +12,12 @@ time-to-first-token for the cases the criteria name:
   concurrent  two simultaneous same-prefix requests after another restart —
               must both succeed without duplicated disk loads (single-flight)
 
+The labels are certified, not assumed: the bench waits for the asynchronous
+spill to commit before the first shutdown, then asserts against the serve
+log that the restart arm performed a real L3 fill (token count recorded in
+the report) and that the concurrent arm started exactly one physical fill.
+A run whose evidence does not match its label exits non-zero.
+
 Usage:
   l3_warmup_bench.py --model <gguf-or-ref> --prefix-file agent-prefix.txt \
       [--port 18080] [--l3-dir /tmp/skippy-l3-bench] [--max-tokens 24] \
@@ -105,6 +111,69 @@ def ttft_request(port: int, model: str, prompt: str, max_tokens: int) -> tuple[f
     return ttft_ms, "".join(text)
 
 
+def manifest_count(l3_dir: str) -> int:
+    manifest_dir = os.path.join(l3_dir, "manifests")
+    try:
+        return len([name for name in os.listdir(manifest_dir) if name.endswith(".json")])
+    except FileNotFoundError:
+        return 0
+
+
+def wait_for_spill(l3_dir: str, minimum: int, timeout_s: float = 120.0) -> int:
+    """Wait until at least `minimum` manifests exist and the count has been
+    stable for a few seconds — the write-behind spill is asynchronous and the
+    restart arm is timing-dependent without this."""
+    deadline = time.monotonic() + timeout_s
+    stable_since = None
+    last = -1
+    while time.monotonic() < deadline:
+        count = manifest_count(l3_dir)
+        if count != last:
+            last = count
+            stable_since = time.monotonic()
+        elif count >= minimum and stable_since is not None and time.monotonic() - stable_since > 3.0:
+            return count
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"spill did not commit: {last} manifests after {timeout_s}s (needed {minimum})"
+    )
+
+
+class ServeLogWatch:
+    """Byte-offset deltas over the serve log, for certifying fill activity."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.offset = 0
+
+    def mark(self) -> None:
+        try:
+            self.offset = os.path.getsize(self.path)
+        except FileNotFoundError:
+            self.offset = 0
+
+    def delta(self) -> str:
+        try:
+            with open(self.path, "rb") as handle:
+                handle.seek(self.offset)
+                return handle.read().decode("utf-8", "replace")
+        except FileNotFoundError:
+            return ""
+
+    def fill_starts(self) -> int:
+        return self.delta().count("skippy L3 fill start:")
+
+    def fill_ok_tokens(self) -> list[int]:
+        tokens = []
+        for line in self.delta().splitlines():
+            if "skippy L3 fill ok:" in line:
+                try:
+                    tokens.append(int(line.split("skippy L3 fill ok:")[1].split()[0]))
+                except (ValueError, IndexError):
+                    pass
+        return tokens
+
+
 class Serve:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -186,20 +255,39 @@ def main() -> int:
         ttft, _ = ttft_request(args.port, model, turn_prompt, args.max_tokens)
         results["turn_ttft_ms"] = ttft
         print(f"turn      TTFT {ttft:8.0f} ms  (multi-turn longest-prefix reuse)")
+        # The spill is write-behind; without this wait the restart arm races
+        # the worker and its label is a coin flip.
+        results["spilled_manifests"] = wait_for_spill(args.l3_dir, minimum=1)
+        print(f"== spill committed ({results['spilled_manifests']} manifests on disk)")
     finally:
         serve.stop()
 
+    log_watch = ServeLogWatch(args.serve_log)
+    failures: list[str] = []
+
     print("== restarting serve (warm L3, cold RAM)")
+    log_watch.mark()
     serve.start()
     try:
         model = first_model(args.port)
         ttft, _ = ttft_request(args.port, model, prefix + question_two, args.max_tokens)
         results["restart_ttft_ms"] = ttft
-        print(f"restart   TTFT {ttft:8.0f} ms  (L3 fill from disk)")
+        filled = log_watch.fill_ok_tokens()
+        results["restart_filled_tokens"] = max(filled) if filled else 0
+        if not filled:
+            failures.append(
+                "restart arm performed no L3 fill — the TTFT above is a cold prefill, not a restore"
+            )
+            print(f"restart   TTFT {ttft:8.0f} ms  (NOT CERTIFIED: no fill observed)")
+        else:
+            print(
+                f"restart   TTFT {ttft:8.0f} ms  (certified L3 fill: {results['restart_filled_tokens']} tokens from disk)"
+            )
     finally:
         serve.stop()
 
     print("== restarting serve (concurrency: two same-prefix requests at once)")
+    log_watch.mark()
     serve.start()
     try:
         model = first_model(args.port)
@@ -225,10 +313,21 @@ def main() -> int:
             raise RuntimeError("; ".join(errors))
         results["concurrent_a_ttft_ms"] = concurrent["a"]
         results["concurrent_b_ttft_ms"] = concurrent["b"]
-        print(
-            f"concurrent TTFT {concurrent['a']:7.0f} / {concurrent['b']:.0f} ms  "
-            "(single-flight fill; loser prefills, winner warms radix)"
-        )
+        fill_starts = log_watch.fill_starts()
+        results["concurrent_fill_starts"] = fill_starts
+        if fill_starts > 1:
+            failures.append(
+                f"concurrent arm started {fill_starts} physical fills — single-flight did not hold"
+            )
+            print(
+                f"concurrent TTFT {concurrent['a']:7.0f} / {concurrent['b']:.0f} ms  "
+                f"(NOT CERTIFIED: {fill_starts} physical fills)"
+            )
+        else:
+            print(
+                f"concurrent TTFT {concurrent['a']:7.0f} / {concurrent['b']:.0f} ms  "
+                f"(certified: {fill_starts} physical fill(s); loser prefills, winner warms radix)"
+            )
     finally:
         serve.stop()
 
@@ -241,6 +340,10 @@ def main() -> int:
         with open(args.report_out, "w") as handle:
             json.dump(results, handle, indent=2)
         print(f"report written to {args.report_out}")
+    if failures:
+        for failure in failures:
+            print(f"CERTIFICATION FAILURE: {failure}", file=sys.stderr)
+        return 1
     return 0
 
 

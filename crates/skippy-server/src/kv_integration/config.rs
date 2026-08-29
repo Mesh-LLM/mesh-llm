@@ -70,6 +70,8 @@ impl KvStageIntegration {
         let worker_l3 = l3.clone();
         let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
         let worker_inflight_records = inflight_records.clone();
+        let inflight_fills: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let worker_inflight_fills = inflight_fills.clone();
         let exact_state_records_queued = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_records_dropped = exact_state_records_dropped.clone();
@@ -80,6 +82,7 @@ impl KvStageIntegration {
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
                     let page_id = pending.page_id.clone();
+                    let fill_claim = pending.l3_fill_claim.clone();
                     if store_exact_radix_record(
                         &worker_radix,
                         &worker_exact_blobs,
@@ -92,6 +95,15 @@ impl KvStageIntegration {
                     {
                         worker_exact_state_records_dropped
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(fill_claim) = fill_claim {
+                        // The filled entry is now radix-resident (or the
+                        // insert failed and a re-fill is the right call
+                        // anyway): release the fill claim.
+                        worker_inflight_fills
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&fill_claim);
                     }
                     worker_inflight_records
                         .lock()
@@ -125,7 +137,7 @@ impl KvStageIntegration {
             replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             l3,
-            inflight_fills: Arc::new(Mutex::new(BTreeSet::new())),
+            inflight_fills,
         }))
     }
 }
@@ -562,6 +574,7 @@ mod tests {
             extra: super::super::ExactStateExtra::default(),
             namespace: "model".to_string(),
             token_ids: tokens.to_vec(),
+            l3_fill_claim: None,
         }
     }
 

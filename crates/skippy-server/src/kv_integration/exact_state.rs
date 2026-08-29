@@ -48,6 +48,11 @@ impl KvStageIntegration {
                 stored_tokens: lookup.stored_tokens.clone(),
             };
             let token_count = lookup.stored_tokens.len() as u64;
+            if lookup.value.payload.byte_len() == 0 {
+                // Defense in depth: never restore an entry with no state
+                // bytes (see the matching guard at record time).
+                continue;
+            }
             let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
             let mut reconstruct_ms = 0.0;
             let mut reconstruct_bytes = 0u64;
@@ -137,6 +142,7 @@ impl KvStageIntegration {
                 recurrent_import_ms,
                 source: "radix",
                 fill_ms: 0.0,
+                rewarm_enqueued: false,
             };
             drop(lease);
             return Ok(Some(restored));
@@ -229,6 +235,13 @@ impl KvStageIntegration {
                 return Err(error);
             }
         };
+        if payload.byte_len() == 0 {
+            // A dense family whose native KV export was unavailable exports
+            // no state component at all. Recording it would later restore as
+            // a bare position advance over missing attention state — skip.
+            self.finish_record(&identity.page_id);
+            return Ok(None);
+        }
         let payload_kind = payload.kind();
         let logical_bytes = payload.byte_len();
         match self.enqueue_exact_state_record(PendingExactStateRecord {
@@ -237,6 +250,7 @@ impl KvStageIntegration {
             extra,
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids.clone(),
+            l3_fill_claim: None,
         }) {
             ExactStateRecordAdmission::Queued => {
                 // Recording owns the radix/blob locks while it hashes a potentially
@@ -288,27 +302,56 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
         lookup_started: Instant,
     ) -> Result<Option<ExactStateRestore>> {
+        const MAX_PREFIX_PROBES: usize = 64;
         let Some(l3) = &self.l3 else {
             return Ok(None);
         };
-        let claim_key = format!("{}:{}", identity.namespace, identity.token_ids.len());
+        // Locate first (cheap index probes), then single-flight the
+        // expensive load on the located entry itself — its manifest key —
+        // so same-length queries for different prefixes never suppress each
+        // other, and different-length queries resolving to one entry never
+        // load it twice.
+        let location =
+            match l3.locate_longest(&identity.namespace, &identity.token_ids, MAX_PREFIX_PROBES) {
+                Ok(Some(location)) => location,
+                Ok(None) => return Ok(None),
+                Err(error) => {
+                    // A corrupt or identity-mismatched entry must not fail the
+                    // request: the miss path (fresh prefill) is always safe.
+                    eprintln!(
+                        "skippy L3 locate failed for {}: {error:#}",
+                        identity.page_id
+                    );
+                    return Ok(None);
+                }
+            };
         {
             let mut inflight = self
                 .inflight_fills
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !inflight.insert(claim_key.clone()) {
+            if !inflight.insert(location.manifest_key.clone()) {
                 return Ok(None);
             }
         }
-        let outcome = self.fill_and_import(runtime, session_id, identity, lookup_started, l3);
-        self.inflight_fills
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&claim_key);
+        let outcome =
+            self.fill_and_import(runtime, session_id, identity, lookup_started, l3, &location);
+        // On success the claim travels with the re-warm record and the
+        // worker releases it once the entry is radix-resident — requests
+        // arriving during the asynchronous re-warm window prefill normally
+        // rather than duplicating the disk load. On any failure (or if the
+        // re-warm was not enqueued) release it here.
+        let handed_to_worker = matches!(&outcome, Ok(Some(restored)) if restored.rewarm_enqueued);
+        if !handed_to_worker {
+            self.inflight_fills
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&location.manifest_key);
+        }
         outcome
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fill_and_import(
         &self,
         runtime: &mut RuntimeState,
@@ -316,22 +359,31 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
         lookup_started: Instant,
         l3: &std::sync::Arc<skippy_cache::L3Tier>,
+        location: &skippy_cache::L3Location,
     ) -> Result<Option<ExactStateRestore>> {
-        const MAX_PREFIX_PROBES: usize = 64;
+        // One physical fill per entry: this line is the counter external
+        // measurement (the L3 warm-up bench) certifies single-flight with.
+        eprintln!(
+            "skippy L3 fill start: manifest {} ({} tokens)",
+            location.manifest_key, location.token_count
+        );
         let fill_started = Instant::now();
-        let filled =
-            match l3.fill_longest(&identity.namespace, &identity.token_ids, MAX_PREFIX_PROBES) {
-                Ok(filled) => filled,
-                Err(error) => {
-                    // A corrupt or identity-mismatched entry must not fail the
-                    // request: the miss path (fresh prefill) is always safe.
-                    eprintln!("skippy L3 fill failed for {}: {error:#}", identity.page_id);
-                    return Ok(None);
-                }
-            };
-        let Some(fill) = filled else {
-            return Ok(None);
+        let fill = match l3.load(location) {
+            Ok(fill) => fill,
+            Err(error) => {
+                eprintln!("skippy L3 fill failed for {}: {error:#}", identity.page_id);
+                return Ok(None);
+            }
         };
+        if fill.payload.byte_len() == 0 {
+            // Defense in depth against pre-guard stores: an entry with no
+            // state bytes must never restore as a bare position advance.
+            eprintln!(
+                "skippy L3 fill refused empty entry {}",
+                location.manifest_key
+            );
+            return Ok(None);
+        }
         let fill_ms = fill_started.elapsed().as_secs_f64() * 1000.0;
         let token_count = fill.token_count;
         let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = fill
@@ -389,15 +441,22 @@ impl KvStageIntegration {
         }
         let logical_bytes = fill.payload.byte_len();
         let payload_kind = fill.payload.kind();
+        eprintln!(
+            "skippy L3 fill ok: {} tokens ({} bytes) from manifest {} in {fill_ms:.0} ms",
+            token_count, logical_bytes, location.manifest_key
+        );
         // Re-warm the RAM tier off the request path; drops are fine, the L3
-        // copy stays authoritative.
-        let _ = self.enqueue_exact_state_record(PendingExactStateRecord {
+        // copy stays authoritative. The fill claim rides along so the worker
+        // releases it only once the entry is radix-resident.
+        let admission = self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
             payload: fill.payload,
             extra: ExactStateExtra { kv_desc },
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids[..token_count as usize].to_vec(),
+            l3_fill_claim: Some(location.manifest_key.clone()),
         });
+        let rewarm_enqueued = matches!(admission, super::ExactStateRecordAdmission::Queued);
         Ok(Some(ExactStateRestore {
             page_id: identity.page_id.clone(),
             token_count: token_count as usize,
@@ -412,6 +471,7 @@ impl KvStageIntegration {
             recurrent_import_ms,
             source: "l3",
             fill_ms,
+            rewarm_enqueued,
         }))
     }
 }

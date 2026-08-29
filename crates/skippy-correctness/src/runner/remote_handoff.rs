@@ -231,20 +231,57 @@ fn effective_payload_kind(args: &RemoteHandoffArgs) -> &'static str {
     }
 }
 
+/// Content digest of the served artifact, memoized per path: two harness
+/// processes serving different local GGUFs behind the same display model id
+/// must never share a state identity. Directories (layer-package refs) are
+/// not hashed here; their identity rides the package manifest via the
+/// model-identity fields.
+fn artifact_sha256_cached(path: &std::path::Path) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(path)
+    {
+        return cached.clone();
+    }
+    let digest = (|| -> Option<String> {
+        if !path.is_file() {
+            return None;
+        }
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut hasher = sha2::Sha256::new();
+        std::io::copy(&mut file, &mut hasher).ok()?;
+        use sha2::Digest as _;
+        Some(format!("{:x}", hasher.finalize()))
+    })();
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(path.to_path_buf(), digest.clone());
+    digest
+}
+
 /// The numerical identity of the state this configuration produces or
 /// accepts. The harness pins F16 KV and does not resolve a concrete backend
 /// device, so the platform tag inside `exact_state_identity` (arch,
-/// endianness, pointer width) is the cross-machine guard here.
+/// endianness, pointer width) is the cross-machine guard — and the served
+/// artifact's content digest guards against two different local files
+/// behind the same display model id.
 fn state_identity_for(
     args: &RemoteHandoffArgs,
     identity: &model_artifact::ModelIdentity,
 ) -> String {
+    let source_model_sha256 = artifact_sha256_cached(&args.runtime.model);
     exact_state_identity(&ExactStateIdentityParams {
         model_id: &identity.model_id,
         model_revision: identity.source_revision.as_deref(),
         model_file: identity.source_file.as_deref(),
         manifest_sha256: None,
-        source_model_sha256: None,
+        source_model_sha256: source_model_sha256.as_deref(),
         package_ref: None,
         cache_type_k: "f16",
         cache_type_v: "f16",
@@ -1827,4 +1864,77 @@ fn read_frame_expect<T: DeserializeOwned>(
 
 fn digest_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+#[cfg(test)]
+mod state_identity_tests {
+    use super::*;
+    use crate::cli::{
+        FlashAttentionArg, OutputArgs, RemoteHandoffArgs, RemoteHandoffRole, RuntimeArgs,
+        StageLoadMode, StatePayloadKind,
+    };
+
+    fn args_for(model: std::path::PathBuf) -> RemoteHandoffArgs {
+        RemoteHandoffArgs {
+            runtime: RuntimeArgs {
+                model,
+                model_id: None,
+                stage_model: None,
+                stage_load_mode: StageLoadMode::RuntimeSlice,
+                layer_end: 28,
+                ctx_size: 2048,
+                n_gpu_layers: 99,
+                n_batch: None,
+                n_ubatch: None,
+                prompt: "Hello".to_string(),
+                flash_attn: FlashAttentionArg::Auto,
+            },
+            output: OutputArgs { report_out: None },
+            role: RemoteHandoffRole::Send,
+            listen: "0.0.0.0:19081".parse().expect("addr"),
+            peer: None,
+            state_payload_kind: StatePayloadKind::FullState,
+            prefix_token_count: None,
+            decode_tokens: 16,
+            segment_bytes: 8 * 1024 * 1024,
+            baseline: false,
+            runtime_lane_count: None,
+            handshake_timeout_secs: 600,
+            accept_count: 1,
+            store_dir: None,
+            store_budget_bytes: 0,
+            manifest: None,
+            streaming: false,
+            stream_chunk_tokens: 512,
+            allow_mismatch: false,
+        }
+    }
+
+    /// Two different local files behind the same display model id must not
+    /// share a handoff identity — the content digest, not the name, decides.
+    #[test]
+    fn different_file_contents_behind_one_model_id_change_identity() {
+        let dir = std::env::temp_dir()
+            .join("skippy-remote-handoff-identity-tests")
+            .join(std::process::id().to_string());
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let first = dir.join("model-a.gguf");
+        let second = dir.join("model-b.gguf");
+        std::fs::write(&first, b"weights generation one").expect("write first");
+        std::fs::write(&second, b"weights generation two").expect("write second");
+        let identity = model_artifact::ModelIdentity::from_model_id("org/model:Q4_K_M");
+
+        let first_identity = state_identity_for(&args_for(first.clone()), &identity);
+        let second_identity = state_identity_for(&args_for(second), &identity);
+        assert_ne!(
+            first_identity, second_identity,
+            "same model id over different file contents must not share identity"
+        );
+
+        // Stable for the same content (memoized path re-queried).
+        assert_eq!(
+            first_identity,
+            state_identity_for(&args_for(first), &identity)
+        );
+    }
 }
