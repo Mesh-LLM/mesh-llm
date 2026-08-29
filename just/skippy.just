@@ -61,6 +61,11 @@ spec-bench target draft *ARGS:
 skippy-openai-smoke *ARGS:
     just with-lld scripts/skippy-openai-smoke.sh {{ ARGS }}
 
+# Build the OpenAI benchmark server against an explicitly selected native ABI.
+# Nightly runners provide LLAMA_STAGE_BUILD_DIR from their pre-baked image.
+competitive-benchmark-build:
+    just with-lld cargo build --release --locked -p skippy-server
+
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build
     target/debug/metrics-server serve --db "{{ db }}" --http-addr "{{ http_addr }}" --otlp-grpc-addr "{{ otlp_addr }}" {{ ARGS }}

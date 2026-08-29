@@ -107,7 +107,12 @@
       "filename": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
       "model_id": "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
       "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
-      "tokenizer_sha256": "e55040d7665f87216c2548bc5b4271a6c48e39b6592fbcee30144817428f3740",
+    "tokenizer_sha256": "e55040d7665f87216c2548bc5b4271a6c48e39b6592fbcee30144817428f3740",
+    "vllm_hf_config": {
+      "repo": "unsloth/Llama-3.2-1B-Instruct",
+      "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+      "sha256": "dfb67fd8afe73a1c75245824ef9d64a6ba8983025447e3bf76aa1ea57ee46152"
+    },
       "layer_end": 16,
       "synthetic_context_size": 32768,
       "cache_payload": "resident-kv"
@@ -120,7 +125,12 @@
       "filename": "DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf",
       "model_id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q3_K_M",
       "sha256": "30f78fce33d19c4bf68c410cd6504d424346dfbe846b4d3df5558e0be078a2a1",
-      "tokenizer_sha256": "fbda111c3e0ec5645ea180ca6cb5e51f18e76945a38a5646a2205795de6df698",
+    "tokenizer_sha256": "fbda111c3e0ec5645ea180ca6cb5e51f18e76945a38a5646a2205795de6df698",
+    "vllm_hf_config": {
+      "repo": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+      "revision": "e434a23f91ba5b4923cf6c9d9a238eb4a08e3a11",
+      "sha256": "5f2f880516f5cb5d17bbb0b0b78623dee45d84855de9c5a0e637eaf828267d2b"
+    },
       "layer_end": 27,
       "synthetic_context_size": 4096,
       "cache_payload": "resident-kv"
@@ -133,7 +143,12 @@
       "filename": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
       "model_id": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
       "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
-      "tokenizer_sha256": "0f86dd5768ca8fca8c1268a887560b7d3c9e739c582fc16c150e569d132c4492",
+    "tokenizer_sha256": "0f86dd5768ca8fca8c1268a887560b7d3c9e739c582fc16c150e569d132c4492",
+    "vllm_hf_config": {
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct",
+      "revision": "80ebc50d7799a440b96c93bb6686a3924a09b0cb",
+      "sha256": "2473f5e02854a2833df973277e6f109d94344e7860fbc78d5ff8b31d08dddaeb"
+    },
       "layer_end": 24,
       "synthetic_context_size": 32768,
       "cache_payload": "kv-recurrent"

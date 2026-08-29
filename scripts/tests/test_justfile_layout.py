@@ -34,7 +34,8 @@ RECIPES_BY_FILE: Final = {
         "release-host-build", "release-host-build-windows", "release-runtime-build",
     },
     "just/skippy.just": {
-        "bench-corpus", "family-certify", "metrics-server", "metrics-server-build",
+        "bench-corpus", "competitive-benchmark-build", "family-certify",
+        "metrics-server", "metrics-server-build",
         "skippy-openai-smoke", "skippy-quantize-build",
         "skippy-quantize-release-build", "skippy-quantize-standalone-build",
         "skippy-quantize-standalone-release-build", "skippy-wan-lab-build-bins",

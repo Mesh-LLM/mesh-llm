@@ -101,12 +101,42 @@ beyond the active lanes exercise waiting admission, queueing, and scheduler
 behavior. The trace arms alternate raw/Mesh and Mesh/raw across the concurrency
 ladder to reduce time-order bias.
 
+On Linux CUDA, `--mesh-adaptive` adds a staged Mesh arm whose committed active
+generation permit count starts at one. Under sustained queued load it tentatively
+probes one additional lane, keeps it only when useful-token retirement improves
+without hardware service-time or p95 latency pressure, and otherwise drains back
+to the last committed limit. Failed generations force immediate rollback or
+backoff, and a cooldown periodically re-probes after workload changes. Use
+`--comparison-backend vllm` and/or `--comparison-backend sglang` for optional
+external comparisons. vLLM serves the pinned GGUF with the pinned tokenizer
+and requires `vllm-gguf-plugin` in the vLLM virtual environment plus the
+pinned per-model configs under `--vllm-hf-config-root`.
+SGLang also serves the same pinned GGUF and tokenizer by default; an alternate
+per-model input may be supplied with `--sglang-model-root` when an architecture
+cannot load that GGUF. Missing optional runtimes or SGLang model inputs are recorded in
+`comparisons/<platform>/availability.json` and skipped without weakening the
+required raw llama.cpp/fixed Mesh matrix.
+Pass `--require-comparison-backends` for a controlled comparison that must
+produce every requested external-backend number; preflight then fails before
+timing if either runtime or any model input is missing. The next controlled
+CUDA rerun uses this flag with both vLLM and SGLang.
+
+The independent `nightly-competitive-benchmark.yml` workflow runs trusted
+`main` on the approved Linux GPU runner when
+`MESH_NIGHTLY_COMPETITIVE_ENABLED=1`. Its `MESH_NIGHTLY_COMPETITIVE_*`
+repository variables point at pre-baked native libraries, model/tokenizer
+inputs, Thoughtworks manifest, pinned llama.cpp checkout/server, and
+llama-benchy executable. The runner installs and downloads nothing during a
+timed run. Partial evidence uploads even when a cell fails, and the rendered
+summary identifies a promotion candidate only after correctness, full-load
+completion, and positive mean throughput deltas over fixed Mesh in both
+synthetic and Thoughtworks workloads.
+
 Mesh arms pin `--generation-queue-capacity 256` and
 `--generation-admission-timeout-secs 600`; these are benchmark overrides, not
 production defaults. Active `--generation-concurrency` remains equal to the
 manifest's KV-backed lane count, so waiting requests do not create native/KV
-lanes. The runner also pins `SKIPPY_IDLE_ADMISSION_COALESCE_US=10000` rather
-than inheriting iteration-admission behavior from the operator environment.
+lanes.
 
 Do not time benchmarks while model downloads, builds, or unrelated GPU work are
 active. Record the host-isolation decision with the artifact when the hardware

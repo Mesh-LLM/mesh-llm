@@ -99,6 +99,156 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertIn("--kv-unified", raw)
         self.assertNotIn("--no-cache-prompt", raw)
 
+    def test_adaptive_mesh_command_keeps_fixed_lane_ceiling(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][0]
+        args = SimpleNamespace(
+            mesh_binary=Path("mesh"),
+            llama_binary=Path("llama"),
+            tokenizer_root=Path("tokenizers"),
+        )
+        command = BENCH.server_command(
+            "mesh-adaptive",
+            args,
+            model,
+            Path("model.gguf"),
+            Path("stage.json"),
+            19000,
+            16384,
+            4,
+            8,
+            True,
+        )
+
+        self.assertEqual(command[command.index("--generation-concurrency") + 1], "4")
+        self.assertIn("--adaptive-generation-concurrency", command)
+        self.assertEqual(
+            command[
+                command.index("--adaptive-generation-min-concurrency") + 1
+            ],
+            "1",
+        )
+
+    def test_optional_comparisons_skip_cleanly_off_linux_cuda(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        args = SimpleNamespace(
+            comparison_backend=["vllm", "sglang"],
+            platform="metal",
+            vllm_binary=None,
+            sglang_python=None,
+            sglang_model_root=None,
+        )
+
+        status = BENCH.resolve_optional_comparisons(args, config["models"])
+
+        self.assertFalse(status["vllm"]["available"])
+        self.assertFalse(status["sglang"]["available"])
+        self.assertIn("Linux CUDA", status["vllm"]["reason"])
+
+    def test_sglang_defaults_to_the_pinned_gguf_and_tokenizer(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][0]
+        with tempfile.TemporaryDirectory() as directory:
+            model_root = Path(directory) / "models"
+            gguf = model_root / model["key"] / model["filename"]
+            gguf.parent.mkdir(parents=True)
+            gguf.write_bytes(b"fixture")
+            args = SimpleNamespace(
+                sglang_python=Path("sglang-python"),
+                sglang_model_root=None,
+                model_root=model_root,
+                tokenizer_root=Path("tokenizers"),
+            )
+
+            command = BENCH.server_command(
+                "sglang",
+                args,
+                model,
+                gguf,
+                Path("stage.json"),
+                19000,
+                16384,
+                4,
+                8,
+                True,
+            )
+
+        self.assertEqual(command[command.index("--model-path") + 1], str(gguf))
+        self.assertEqual(
+            command[command.index("--tokenizer-path") + 1],
+            str(Path("tokenizers") / model["key"]),
+        )
+        self.assertEqual(command[command.index("--max-running-requests") + 1], "4")
+        self.assertEqual(command[command.index("--load-format") + 1], "gguf")
+        self.assertEqual(command[command.index("--quantization") + 1], "gguf")
+
+    def test_vllm_uses_the_verified_config_for_the_pinned_gguf(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][0]
+        args = SimpleNamespace(
+            vllm_binary=Path("vllm"),
+            tokenizer_root=Path("tokenizers"),
+            vllm_hf_config_root=Path("hf-configs"),
+        )
+
+        command = BENCH.server_command(
+            "vllm",
+            args,
+            model,
+            Path("model.gguf"),
+            Path("stage.json"),
+            19000,
+            16384,
+            4,
+            8,
+            True,
+        )
+
+        self.assertEqual(
+            command[command.index("--hf-config-path") + 1],
+            str(Path("hf-configs") / model["key"]),
+        )
+        self.assertEqual(command[command.index("--load-format") + 1], "gguf")
+        self.assertEqual(command[command.index("--quantization") + 1], "gguf")
+        self.assertIn("--enable-prefix-caching", command)
+
+    def test_controlled_run_can_require_all_comparison_backends(self) -> None:
+        args = BENCH.parse_args(
+            [
+                "run",
+                "--platform",
+                "cuda",
+                "--output",
+                "artifact",
+                "--model-root",
+                "models",
+                "--tokenizer-root",
+                "tokenizers",
+                "--manifest",
+                "manifest.json",
+                "--mesh-root",
+                "mesh",
+                "--mesh-binary",
+                "skippy-server",
+                "--native-dir",
+                "native",
+                "--llama-root",
+                "llama",
+                "--llama-binary",
+                "llama-server",
+                "--benchy",
+                "llama-benchy",
+                "--comparison-backend",
+                "vllm",
+                "--comparison-backend",
+                "sglang",
+                "--require-comparison-backends",
+            ]
+        )
+
+        self.assertEqual(args.comparison_backend, ["vllm", "sglang"])
+        self.assertTrue(args.require_comparison_backends)
+
     def test_report_writes_csv_svg_markdown_and_hash_manifest(self) -> None:
         config = BENCH.load_config(CONFIG)
         with tempfile.TemporaryDirectory() as directory:
