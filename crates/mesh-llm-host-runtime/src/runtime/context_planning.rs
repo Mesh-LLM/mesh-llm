@@ -34,6 +34,26 @@ const MIN_AUTO_CONTEXT_LENGTH: u32 = 512;
 /// can still go higher via `parallel_override` /
 /// `[models.throughput] parallel = N` in the TOML config.
 const MAX_AUTO_PARALLEL_SLOTS: usize = 4;
+/// Default ceiling on auto-planned context length (128k).
+///
+/// Some published GGUFs advertise a native window far larger than is useful on
+/// a mesh — e.g. the Nemotron family ships 1,048,576-token artifacts. Left
+/// unclamped, the auto-planner would try to drive a 1M context, spend the whole
+/// KV budget on depth, and starve the parallel lanes that agentic serving needs
+/// (or shrink context per-lane below what an agent can use). 128k is the
+/// agent-serving sweet spot: deep enough for real tool loops and replay
+/// corpora, shallow enough to keep multiple lanes and usable decode throughput.
+///
+/// This clamp is a `min`, so native windows at or below 128k keep their full
+/// native size. It is a *default* only: an explicit `--ctx-size` /
+/// `[models] ctx_size` override bypasses planning entirely and can still request
+/// the full native window.
+///
+/// Deepening the default past 128k (toward 256k) is deliberately **not** done
+/// here: it is memory-bandwidth-bound, not capacity-bound, and picking the
+/// depth safely needs a populated-KV tok/s calibration we do not have yet. That
+/// work is tracked as a follow-up (bandwidth-aware context/lane planning).
+const MAX_AUTO_CONTEXT_LENGTH: u32 = 131_072;
 const KV_CACHE_BUDGET_NUMERATOR: u64 = 85;
 const KV_CACHE_BUDGET_DENOMINATOR: u64 = 100;
 const FALLBACK_CONTEXT_8K_FREE_BYTES: u64 = 3_000_000_000;
@@ -43,20 +63,32 @@ const FALLBACK_CONTEXT_64K_FREE_BYTES: u64 = 30_000_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeResourcePlanningProfile {
-    /// Prefer the deepest safe local context when the operator did not ask for
-    /// a shared mesh-serving surface.
+    /// A dedicated-local launch (no shared mesh-serving surface requested).
     DedicatedLocal,
-    /// Prefer the default llama-server/skippy auto concurrency target for
-    /// shared mesh-serving launches, then choose the deepest context that still
-    /// fits it.
+    /// A shared mesh-serving launch (`--auto` / `--publish` / `--discover` /
+    /// `--join`).
+    ///
+    /// Both profiles currently plan the same context (`min(native, 128k)` held
+    /// at single-lane depth, lanes filling the residual budget). The distinction
+    /// is retained for the bandwidth-aware planner follow-up, where a shared
+    /// mesh host and a dedicated local host will want different tok/s floors.
     SharedMesh,
 }
 
 impl RuntimeResourcePlanningProfile {
+    /// Number of concurrent lanes to *plan context depth* around.
+    ///
+    /// Both profiles now plan context at single-lane (deepest) depth and then
+    /// let [`planned_parallel_slots`] fill in as many lanes as fit at that
+    /// depth. This is the "lanes-first at the 128k floor" behavior: we hold the
+    /// context at `min(native, 128k)` and reduce lanes on a tight node rather
+    /// than shrink context below what an agent can use. The profile axis is kept
+    /// because it is threaded through the serving surfaces and will regain
+    /// distinct behavior in the bandwidth-aware planner follow-up (where a
+    /// shared mesh host and a dedicated local host want different tok/s floors).
     fn context_slot_target(self) -> u64 {
         match self {
-            Self::DedicatedLocal => 1,
-            Self::SharedMesh => MAX_AUTO_PARALLEL_SLOTS as u64,
+            Self::DedicatedLocal | Self::SharedMesh => 1,
         }
     }
 }
@@ -87,9 +119,12 @@ pub(super) struct RuntimeResourcePlanInput<'a> {
 
 /// Plan context length and parallel slots.
 ///
-/// Strategy: maximise context up to the model's native context length using
-/// the provided KV quant (default Q8_0).  No negotiation — the quant is
-/// decided upstream (Q8_0 default, or user override via CLI flags).
+/// Strategy: maximise context up to `min(native, MAX_AUTO_CONTEXT_LENGTH)` (the
+/// 128k agent-serving default ceiling) using the provided KV quant (default
+/// Q8_0), holding that context and filling as many lanes as the budget affords.
+/// No negotiation — the quant is decided upstream (Q8_0 default, or user
+/// override via CLI flags), and an explicit `--ctx-size` override bypasses this
+/// entirely.
 pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeResourcePlan {
     let context_length = input
         .ctx_size_override
@@ -113,6 +148,11 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     if native_context == 0 {
         return fallback_context;
     }
+    // Clamp the *native* window (read per-artifact from this GGUF's header, not
+    // from a model-name lookup) to the default auto-context ceiling before KV
+    // planning. Keeps 1M-token natives from over-committing KV to a single very
+    // deep context while leaving smaller native windows untouched.
+    let native_context = native_context.min(MAX_AUTO_CONTEXT_LENGTH);
     let Some(kv_bytes_per_token_full) = input.kv_cache_quant.kv_cache_bytes_per_token(metadata)
     else {
         return fallback_context.min(native_context);
@@ -335,9 +375,14 @@ mod tests {
     }
 
     #[test]
-    fn shared_mesh_profile_prefers_concurrency_when_native_context_would_allow_only_one_slot() {
+    fn both_profiles_produce_identical_auto_plans() {
+        // The old behavior traded context for concurrency on the shared-mesh
+        // profile (shallower context, more lanes). The default is now uniform:
+        // hold context at `min(native, 128k)` and let lanes fill the residual
+        // budget, so both profiles plan the same context and lane count. The
+        // profile axis is retained for the bandwidth-aware follow-up.
         let metadata = gqa_metadata(131_072);
-        let dedicated_plan = plan_runtime_resources(RuntimeResourcePlanInput {
+        let input = |profile| RuntimeResourcePlanInput {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
@@ -345,28 +390,73 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
-            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
-        });
-        let shared_plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            planning_profile: profile,
+        };
+        let dedicated_plan =
+            plan_runtime_resources(input(RuntimeResourcePlanningProfile::DedicatedLocal));
+        let shared_plan = plan_runtime_resources(input(RuntimeResourcePlanningProfile::SharedMesh));
+
+        assert_eq!(
+            dedicated_plan, shared_plan,
+            "both profiles hold the 128k floor and fill lanes identically"
+        );
+        assert!(dedicated_plan.context_length <= 131_072);
+    }
+
+    #[test]
+    fn auto_context_capped_at_128k_for_million_token_native() {
+        // Nemotron-class 1M-token native on a fat node. Left unclamped the
+        // planner would drive a multi-hundred-K context; the default ceiling
+        // holds it at 128k and spends the rest of the budget on lanes.
+        let metadata = gqa_metadata(1_048_576);
+        let plan = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
-            vram_bytes: 16_000_000_000,
+            vram_bytes: 80_000_000_000,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
             planning_profile: RuntimeResourcePlanningProfile::SharedMesh,
         });
 
-        assert_eq!(dedicated_plan.context_length, 131_072);
-        assert_eq!(dedicated_plan.slots, 1);
-        assert!(
-            shared_plan.context_length < dedicated_plan.context_length,
-            "shared mesh should trade context for concurrency: shared={}, dedicated={}",
-            shared_plan.context_length,
-            dedicated_plan.context_length
+        assert_eq!(
+            plan.context_length, 131_072,
+            "1M native must clamp to the 128k default ceiling"
         );
-        assert_eq!(shared_plan.slots, 4);
+        assert_eq!(
+            plan.slots, 4,
+            "fat node should keep the full 4 lanes at 128k"
+        );
+    }
+
+    #[test]
+    fn tight_budget_holds_128k_floor_and_reduces_lanes() {
+        // A >128k native on a node whose budget affords 128k at only ~1 lane.
+        // The policy holds context at the 128k floor and drops lanes, rather
+        // than shrinking context (pre-change shared-mesh planning would have
+        // divided the budget by 4 lanes and collapsed context to ~32k).
+        let metadata = gqa_metadata(262_144);
+        let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5_000_000_000,
+            vram_bytes: 18_000_000_000,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::SharedMesh,
+        });
+
+        assert_eq!(
+            plan.context_length, 131_072,
+            "context is held at the 128k floor, not shrunk to keep lanes"
+        );
+        assert!(
+            plan.slots < 4,
+            "a tight node reduces lanes rather than context; got {} lanes",
+            plan.slots
+        );
     }
 
     #[test]
