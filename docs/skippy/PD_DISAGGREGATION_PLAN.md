@@ -35,6 +35,22 @@ crates), verified end-to-end on loopback:
   baseline, per-connection reports, and a sweep script. See
   REMOTE_HANDOFF_RUNBOOK.md.
 
+Gap closure (2026-08-29), addressing the radix channel's acceptance
+criteria ("the sacraments") and the #1514 review:
+- dense families record KV pages under L3 by default (no payload override
+  needed for gemma/qwen);
+- longest-recorded-prefix fills with a per-namespace length index
+  (multi-turn reuse at every recorded length; divergent prompts miss);
+- single-flight fills (no duplicated disk loads under concurrency);
+- 32 GiB default disk budget with single-pass eviction and an explicit
+  unbounded opt-in; startup logs the restorable inventory;
+- weight content digests joined the exact-state identity;
+- `skippy.exact_cache.source` / `l3_fill_ms` attrs split store cost from
+  import cost;
+- `scripts/l3_warmup_bench.py` + `scripts/generate-agent-prefix.py`
+  measure cold/warm/multi-turn/restart/concurrent TTFT against a real
+  `mesh-llm serve`.
+
 Remaining, gated on other workstreams by #1427's own sequencing:
 multi-request serving waits on the #1416 iteration-level scheduler
 cutover; split-prefill → collapsed decode is the step-6 generalization;

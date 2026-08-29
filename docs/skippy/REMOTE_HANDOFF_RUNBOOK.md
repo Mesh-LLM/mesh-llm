@@ -83,12 +83,54 @@ bytes) and every segment is digest-verified before it lands locally.
 
 ## Serving-path L3 tier
 
-The same store backs real serving: set `SKIPPY_L3_DIR=<path>` (and
-optionally `SKIPPY_L3_BUDGET_BYTES`) on a stage with the exact-state prefix
-cache enabled, and recorded exact-state entries write through to disk while
-radix misses fill back from it — prefix reuse that survives restarts and
-RAM eviction. The tier identity is the radix namespace hash, so a
-configuration change refuses stale state.
+The same store backs real serving: set `SKIPPY_L3_DIR=<path>` on a stage
+with the exact-state prefix cache enabled, and recorded entries write
+through to disk while radix misses fill back from it — prefix reuse that
+survives restarts and RAM eviction. Semantics, mapped to the radix
+channel's acceptance criteria:
+
+- **Dense models reach disk by default.** With L3 enabled, families that
+  would use borrow-only ResidentKv (gemma, qwen, llama, glm) record KV
+  pages instead (KvRecurrent with a legitimately empty recurrent
+  snapshot), so the tier engages without any payload override.
+- **Longest-recorded-prefix fills.** Entries are indexed per namespace by
+  token length; a miss probes recorded lengths from longest to shortest,
+  hashing the query's own leading tokens at each — a growing multi-turn
+  prompt reuses the longest earlier turn it extends, mirroring the radix's
+  longest-prefix semantics. A divergent prompt of the same length misses.
+- **Single-flight fills.** Concurrent misses on one prefix never duplicate
+  disk loads: one request fills (and re-warms the radix for everyone),
+  the others prefill normally.
+- **Capped by default.** Unset `SKIPPY_L3_BUDGET_BYTES` means a 32 GiB
+  segment budget, evicting oldest manifests first; `0` is an explicit
+  opt-in to unbounded growth. The effective budget and the restorable
+  inventory (manifests, tokens, bytes) are logged when the tier opens.
+- **On-demand restore.** Startup stays fast — nothing preloads; state
+  fills on first miss, and the per-request attrs record
+  `skippy.exact_cache.source` (radix vs l3) and
+  `skippy.exact_cache.l3_fill_ms` (store cost, separated from import) so
+  warm reuse is always visible.
+- The tier identity is the radix namespace hash, so a configuration change
+  (weights, cache dtypes, layout, platform) refuses stale state.
+
+## Warm-up benchmark (acceptance measurement)
+
+`scripts/l3_warmup_bench.py` drives a real `mesh-llm serve` through the
+OpenAI endpoint and measures TTFT for the named cases: cold prefill, warm
+same-process (radix), multi-turn growth (longest-prefix), restart
+(L3 fill from disk), and two concurrent same-prefix requests
+(single-flight). Generate a stand-in agent prefix or use a captured one:
+
+```bash
+scripts/generate-agent-prefix.py 19000 agent-prefix.txt
+MESH_LLM_BIN=target/release/mesh-llm scripts/l3_warmup_bench.py \
+  --model <gguf-or-ref> --prefix-file agent-prefix.txt \
+  --report-out l3-bench.json
+```
+
+For the acceptance run proper, capture real prefixes from 2–3 agent
+harnesses (opencode, goose, pi, buzz) — the first ~19K tokens of a real
+session transcript — and run the bench once per prefix on both lab nodes.
 
 ## Two-machine run
 
