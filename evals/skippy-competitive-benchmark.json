@@ -207,6 +207,10 @@
           "tensor_equivalence_sha256": "f6e06c4d22099e8d55b9af541992a9c25744e27d9485c13ee4b493c229dd9e0e"
         }
       },
+      "vllm_capacity": {
+        "reference_tokens": 131072,
+        "reference_blocks": 2560
+      },
       "layer_end": 40,
       "synthetic_context_size": 32768,
       "thoughtworks_context_size": 131072,

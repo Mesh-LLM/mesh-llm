@@ -143,6 +143,17 @@ def load_config(path: Path) -> dict[str, Any]:
             value = model.get(field)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"model {model['key']} needs a positive {field}")
+        vllm_capacity = model.get("vllm_capacity")
+        if vllm_capacity is not None and (
+            not isinstance(vllm_capacity, dict)
+            or not isinstance(vllm_capacity.get("reference_tokens"), int)
+            or vllm_capacity["reference_tokens"] <= 0
+            or not isinstance(vllm_capacity.get("reference_blocks"), int)
+            or vllm_capacity["reference_blocks"] <= 0
+        ):
+            raise ValueError(
+                f"model {model['key']} needs a positive pinned vLLM capacity ratio"
+            )
         comparison_support = model.get("comparison_support", {})
         if not isinstance(comparison_support, dict) or not set(
             comparison_support
@@ -521,6 +532,16 @@ def comparison_capacity_policy(
     return {"mode": "unified-total-kv-tokens", "token_capacity": ctx_size}
 
 
+def vllm_capacity_blocks(model: dict[str, Any], ctx_size: int) -> int:
+    capacity = model.get("vllm_capacity")
+    if capacity is None:
+        block_size = 16
+        return (ctx_size + block_size - 1) // block_size
+    reference_tokens = capacity["reference_tokens"]
+    reference_blocks = capacity["reference_blocks"]
+    return (ctx_size * reference_blocks + reference_tokens - 1) // reference_tokens
+
+
 def server_command(
     arm: str,
     args: argparse.Namespace,
@@ -599,7 +620,7 @@ def server_command(
         )
         if comparison_capacity_policy(args, arm, ctx_size) is not None:
             block_size = 16
-            block_count = (ctx_size + block_size - 1) // block_size
+            block_count = vllm_capacity_blocks(model, ctx_size)
             command.extend(
                 [
                     "--block-size",

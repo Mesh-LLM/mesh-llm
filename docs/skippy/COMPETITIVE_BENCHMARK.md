@@ -137,6 +137,10 @@ be supplied with `--sglang-model-root`. Alternate containers are accepted only
 when their directory digest, source revision, and canonical tensor-equivalence
 digest are pinned in the model config. Granite uses the official BF16 GGUF for
 raw/Mesh and its value-equivalent official BF16 safetensors for vLLM/SGLang.
+Capacity matching accounts for model-specific vLLM cache page geometry:
+Granite pins the observed vLLM 0.27.1 ratio of 2,560 cache blocks per 131,072
+total tokens, rather than treating its internally enlarged Mamba page as a
+generic 16-token attention block.
 Missing optional runtimes or model inputs are recorded in
 `comparisons/<platform>/availability.json` and skipped without weakening the
 required raw llama.cpp/fixed Mesh matrix.
