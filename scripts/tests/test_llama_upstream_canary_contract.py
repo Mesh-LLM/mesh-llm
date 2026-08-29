@@ -131,12 +131,20 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/llama-canary-agent-repair.sh battery", battery_repair)
         self.assertIn("continue-on-error: true", battery_repair)
 
-        # Any repair outcome keeps the run red: the certified fix must merge
-        # through the repair PR before trusted main can certify.
-        fail_step = _step_block(workflow, "Fail when the canary needs human attention")
-        self.assertIn("steps.repair_queue.outcome", fail_step)
-        self.assertIn("steps.repair_battery.outcome", fail_step)
+        # Honest colors: a repair loop that exits 0 certified green on this
+        # runner, so the run stays green and points at the repair PR to
+        # merge. Only a stuck repair (or a repair that could not run) keeps
+        # the run red.
+        fail_step = _step_block(workflow, "Report canary outcome")
+        self.assertIn("steps.outcome.outputs.outcome == 'merge'", fail_step)
+        self.assertIn("steps.outcome.outputs.outcome == 'stuck'", fail_step)
         self.assertIn("exit 1", fail_step)
+        outcome_step = _step_block(workflow, "Collect canary outcome")
+        self.assertIn("steps.repair_queue.outcome", outcome_step)
+        self.assertIn("steps.repair_battery.outcome", outcome_step)
+        self.assertIn("repair_pr_url", outcome_step)
+        # The outcome lookup runs under the repair token, never the job token.
+        self.assertIn("GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", outcome_step)
 
         # The battery lane itself no longer hard-fails the job before the
         # repair loop can run.

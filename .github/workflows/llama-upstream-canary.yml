@@ -268,26 +268,107 @@ jobs:
         run: |
           scripts/llama-canary-agent-repair.sh battery
 
-      - name: Fail when the canary needs human attention
-        # Any repair outcome leaves the run red: if the repair loop failed,
-        # the agent is stuck; if it succeeded, the certified fix lives on the
-        # repair PR branch and a human must merge it before the trusted main
-        # queue can certify. The repair PR carries the details.
-        if: >
-          contains(fromJSON('["success", "failure"]'), steps.repair_queue.outcome)
-          || contains(fromJSON('["success", "failure"]'), steps.repair_battery.outcome)
-          || steps.battery.outcome == 'failure'
+      - name: Collect canary outcome
+        id: outcome
+        # Classify the run for reporting and notification. Never fails the job.
+        if: ${{ !cancelled() && (contains(fromJSON('["success", "failure"]'), steps.repair_queue.outcome) || contains(fromJSON('["success", "failure"]'), steps.repair_battery.outcome) || steps.battery.outcome == 'failure' || steps.prepare.outcome == 'failure') }}
+        env:
+          GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          REPAIR_BRANCH: llama-canary/patch-queue-fix
         run: |
+          set -euo pipefail
+          repair_queue="${{ steps.repair_queue.outcome }}"
+          repair_battery="${{ steps.repair_battery.outcome }}"
+          battery="${{ steps.battery.outcome }}"
+          prepare="${{ steps.prepare.outcome }}"
+          repair_pr_url=""
+          repair_pr_number=""
+          if command -v gh >/dev/null 2>&1; then
+            repair_pr_url="$(gh pr list --head "$REPAIR_BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)"
+            repair_pr_number="$(gh pr list --head "$REPAIR_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true)"
+          fi
+          # Any repair loop that ran and exited 0 certified green on this runner.
+          if [[ "$repair_queue" == "success" || "$repair_battery" == "success" ]]; then
+            outcome="merge"
+          elif [[ "$repair_queue" == "failure" || "$repair_battery" == "failure" || "$battery" == "failure" || "$prepare" == "failure" ]]; then
+            outcome="stuck"
+          else
+            outcome="none"
+          fi
           {
-            echo "## llama.cpp canary needs human attention"
-            echo
-            echo "The agent repair loop ran; review and merge the repair PR on"
-            echo "\`llama-canary/patch-queue-fix\` (it contains the agent's work, the upstream"
-            echo "analysis, and — if the loop did not finish green — where it is stuck). If the"
-            echo "repair loop could not even start, check the run log for missing opencode,"
-            echo "agent credentials, or CANARY_REPAIR_TOKEN on this runner."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
+            echo "outcome=$outcome"
+            echo "repair_pr_url=$repair_pr_url"
+            echo "repair_pr_number=$repair_pr_number"
+            echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report canary outcome
+        # Honest colors: a fully certified repair is a GREEN run whose outcome
+        # is "merge repair PR #N" — the summary says exactly that. The run is
+        # red only when the repair loop is stuck or could not run; then the
+        # repair PR (or fallback issue) carries the failure analysis.
+        if: steps.outcome.outputs.outcome == 'merge' || steps.outcome.outputs.outcome == 'stuck'
+        env:
+          OUTCOME: ${{ steps.outcome.outputs.outcome }}
+          REPAIR_PR_URL: ${{ steps.outcome.outputs.repair_pr_url }}
+          REPAIR_PR_NUMBER: ${{ steps.outcome.outputs.repair_pr_number }}
+          RUN_URL: ${{ steps.outcome.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          if [[ "$OUTCOME" == "merge" ]]; then
+            {
+              echo "## llama.cpp canary: certified repair ready to merge"
+              echo
+              echo "The agent repair loop rebased the patch queue and the family battery passed."
+              echo "Review and merge **${REPAIR_PR_URL:-the repair PR on \`llama-canary/patch-queue-fix\`}${REPAIR_PR_NUMBER:+ (PR #${REPAIR_PR_NUMBER})}**;"
+              echo "merging it advances the upstream pin. Run: ${RUN_URL}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## llama.cpp canary needs human attention"
+              echo
+              echo "The agent repair loop did not finish green. The analysis and the agent's"
+              echo "work-in-progress are on **${REPAIR_PR_URL:-the repair PR on \`llama-canary/patch-queue-fix\`}${REPAIR_PR_NUMBER:+ (PR #${REPAIR_PR_NUMBER})}**."
+              echo "If no PR or issue exists, the repair loop could not even start — check the run"
+              echo "log for missing opencode, agent credentials, or CANARY_REPAIR_TOKEN on this"
+              echo "runner. Run: ${RUN_URL}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Notify Buzz channel
+        # Best-effort post to #mesh-dev with the outcome and PR link. A missing
+        # key or a relay failure must never fail the canary: notification is
+        # telemetry, not a gate.
+        if: steps.outcome.outputs.outcome == 'merge' || steps.outcome.outputs.outcome == 'stuck'
+        continue-on-error: true
+        env:
+          BUZZ_NOTIFY_KEY: ${{ secrets.BUZZ_RELAY_KEY }}
+          BUZZ_RELAY_AUTH_TAG: ${{ secrets.BUZZ_RELAY_AUTH_TAG }}
+          BUZZ_CHANNEL: ${{ vars.LLAMA_CANARY_BUZZ_CHANNEL || 'a9ea5982-8d74-407f-b82e-6b55c69d411f' }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome }}
+          REPAIR_PR_URL: ${{ steps.outcome.outputs.repair_pr_url }}
+          REPAIR_PR_NUMBER: ${{ steps.outcome.outputs.repair_pr_number }}
+          RUN_URL: ${{ steps.outcome.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${BUZZ_NOTIFY_KEY}" ]]; then
+            echo "BUZZ_RELAY_KEY secret not set; skipping Buzz notification" >&2
+            exit 0
+          fi
+          if [[ "$OUTCOME" == "merge" ]]; then
+            verb="certified repair ready to merge"
+            body="The nightly llama.cpp canary completed an agent repair and the family battery passed **green**."
+            ask="Merge ${REPAIR_PR_URL:-the repair PR on \`llama-canary/patch-queue-fix\`}${REPAIR_PR_NUMBER:+ (PR #${REPAIR_PR_NUMBER})} to advance the pin."
+          else
+            verb="needs human attention"
+            body="The nightly llama.cpp canary could not finish green; the agent repair loop is stuck."
+            ask="See the analysis on ${REPAIR_PR_URL:-the repair PR on \`llama-canary/patch-queue-fix\`}${REPAIR_PR_NUMBER:+ (PR #${REPAIR_PR_NUMBER})}."
+          fi
+          printf '**llama.cpp upstream canary — %s**\n\n%s\n\n%s\nRun: %s\n' \
+            "$verb" "$body" "$ask" "$RUN_URL" > /tmp/buzz-notify.md
+          python3 scripts/llama-canary-buzz-notify.py "$BUZZ_CHANNEL" /tmp/buzz-notify.md \
+            || echo "warning: Buzz notification failed (best-effort, run continues)" >&2
 
   update-pin:
     needs: latest-upstream

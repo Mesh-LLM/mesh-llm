@@ -85,9 +85,17 @@ repair PR — creating the PR (or a fallback issue) itself if the agent did
 not — and an agent turn writes the PR description (key upstream changes,
 patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
 PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
-the canary job itself remains `contents: read`. Any repair outcome keeps the
-canary run red: the certified fix must be merged from the repair PR before
-trusted main can certify. The upstream pin commit to
+the canary job itself remains `contents: read`. Outcome reporting is
+color-honest: a repair loop that exits 0 certified green on the runner, so the
+run is green with a "merge repair PR #N" summary; only a stuck repair (or one
+that could not run) leaves the run red. Both outcomes post the run URL and the
+repair-PR link (looked up under `CANARY_REPAIR_TOKEN`) into the run summary,
+and — best-effort, never a gate — into the `#mesh-dev` Buzz channel via
+`scripts/llama-canary-buzz-notify.py` (stdlib BIP-340/NIP-98 signer, curl
+transport; authenticates with the `BUZZ_RELAY_KEY` secret, optionally the
+`BUZZ_RELAY_AUTH_TAG` owner-attestation secret when the notify key is not a
+direct relay member, and the `LLAMA_CANARY_BUZZ_CHANNEL` variable for the
+channel selector). The upstream pin commit to
 `main` is gated on the battery passing.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
