@@ -1,12 +1,17 @@
 use super::telemetry::insert_runtime_session_stats;
 use crate::{
+    binary_transport::binary_kv::take_shared_prefill_tokens,
     frontend::iteration_scheduler::IterationScheduler,
+    kv_integration::KvStageIntegration,
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::StageConfig;
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
 /// Runtime session keys created by one binary stage connection.
 ///
@@ -31,10 +36,23 @@ impl ConnectionSessionTracker {
     }
 }
 
-/// Returns lanes held by sessions that never reached a graceful `Stop`.
+fn reclaim_orphaned_prefill_tokens(
+    accumulated: Option<&Mutex<BTreeMap<String, Vec<i32>>>>,
+    orphaned: &[String],
+) {
+    let Some(accumulated) = accumulated else {
+        return;
+    };
+    for session_key in orphaned {
+        take_shared_prefill_tokens(accumulated, session_key);
+    }
+}
+
+/// Returns lanes and buffered prefill tokens held by sessions that never reached a graceful `Stop`.
 pub(super) fn release_tracked_connection_sessions(
     config: &StageConfig,
     iteration_scheduler: &IterationScheduler,
+    kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
@@ -43,6 +61,7 @@ pub(super) fn release_tracked_connection_sessions(
         return Ok(());
     }
     let orphaned_count = orphaned.len();
+    reclaim_orphaned_prefill_tokens(kv.map(|kv| kv.split_prefill_tokens.as_ref()), &orphaned);
     let scheduler_config = config.clone();
     let scheduler_telemetry = telemetry.clone();
     let failures = iteration_scheduler
@@ -103,8 +122,12 @@ pub(super) fn combine_connection_and_cleanup_results(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionSessionTracker, combine_connection_and_cleanup_results};
+    use super::{
+        ConnectionSessionTracker, combine_connection_and_cleanup_results,
+        reclaim_orphaned_prefill_tokens,
+    };
     use anyhow::anyhow;
+    use std::{collections::BTreeMap, sync::Mutex};
 
     #[test]
     fn tracker_drains_sessions_that_never_saw_a_stop() {
@@ -124,6 +147,25 @@ mod tests {
         tracker.touch("session-a");
         tracker.stopped("session-a");
         assert!(tracker.drain().is_empty());
+    }
+
+    #[test]
+    fn orphan_cleanup_reclaims_only_tracked_prefill_tokens() {
+        let accumulated = Mutex::new(BTreeMap::from([
+            ("session-a".to_string(), vec![1, 2, 3]),
+            ("session-b".to_string(), vec![4, 5]),
+            ("other-connection".to_string(), vec![6]),
+        ]));
+
+        reclaim_orphaned_prefill_tokens(
+            Some(&accumulated),
+            &["session-a".to_string(), "session-b".to_string()],
+        );
+
+        assert_eq!(
+            *accumulated.lock().unwrap(),
+            BTreeMap::from([("other-connection".to_string(), vec![6])])
+        );
     }
 
     #[test]

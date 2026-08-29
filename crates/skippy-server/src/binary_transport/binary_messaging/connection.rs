@@ -111,6 +111,7 @@ pub(super) fn handle_binary_connection(
     let cleanup_result = release_tracked_connection_sessions(
         config,
         iteration_scheduler,
+        kv,
         telemetry,
         &mut session_tracker,
     );
