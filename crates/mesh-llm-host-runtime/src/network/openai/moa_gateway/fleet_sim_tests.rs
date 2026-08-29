@@ -15,7 +15,7 @@ use crate::inference::election;
 use crate::mesh;
 use crate::models::{CapabilityLevel, ModelCapabilities};
 use iroh::{EndpointAddr, EndpointId, SecretKey};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// A model as a fleet node would advertise it.
 #[derive(Clone, Copy)]
@@ -236,7 +236,7 @@ async fn pool_width_is_flat_in_fleet_size() {
     }
 
     for (nodes, distinct_models, admitted) in &rows {
-        println!("nodes={nodes:>5} distinct_models={distinct_models} admitted={admitted}");
+        tracing::debug!("nodes={nodes:>5} distinct_models={distinct_models} admitted={admitted}");
     }
 
     let widths: Vec<usize> = rows.iter().map(|(_, _, w)| *w).collect();
@@ -263,9 +263,16 @@ async fn pool_width_tracks_model_diversity() {
         let pool = admitted_pool(&fleet).await;
         rows.push((distinct, pool.len()));
     }
-    for (distinct, admitted) in &rows {
-        println!("distinct_models={distinct} nodes=1200 admitted={admitted}");
-    }
+    assert_eq!(
+        rows.iter()
+            .map(|(distinct, _)| *distinct)
+            .collect::<Vec<_>>(),
+        (1usize..=6).collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().all(|(_, width)| (2..=3).contains(width)),
+        "committee width must remain bounded as admitted model diversity grows: {rows:?}"
+    );
 }
 
 /// The bimodal fleet Mic described: 1200 small nodes, 800 big nodes.
@@ -284,12 +291,12 @@ async fn bimodal_fleet_admission_and_actor() {
         assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
     let actors = compute_actor_candidates(&node, &models).await;
 
-    println!("fleet nodes = {}", total_nodes(&fleet));
-    println!(
+    tracing::debug!("fleet nodes = {}", total_nodes(&fleet));
+    tracing::debug!(
         "admitted workers = {:?}",
         models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>()
     );
-    println!(
+    tracing::debug!(
         "actor order = {:?}",
         actors
             .iter()
@@ -297,8 +304,32 @@ async fn bimodal_fleet_admission_and_actor() {
             .collect::<Vec<_>>()
     );
 
-    let by_name: BTreeMap<&str, ()> = models.iter().map(|m| (m.name.as_str(), ())).collect();
-    println!("distinct admitted names = {}", by_name.len());
+    let admitted = models
+        .iter()
+        .map(|model| super::pool::canonical_base_name(&model.name))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        admitted,
+        BIG_MODELS[..2]
+            .iter()
+            .map(|model| super::pool::canonical_base_name(model.name))
+            .collect::<std::collections::BTreeSet<_>>(),
+        "the bimodal fleet must retain its two distinct big models"
+    );
+    let mut actor_models = actors
+        .iter()
+        .map(|&index| super::pool::canonical_base_name(&models[index].name))
+        .collect::<Vec<_>>();
+    actor_models.sort();
+    let mut expected_actor_models = BIG_MODELS[..2]
+        .iter()
+        .map(|model| super::pool::canonical_base_name(model.name))
+        .collect::<Vec<_>>();
+    expected_actor_models.sort();
+    assert_eq!(
+        actor_models, expected_actor_models,
+        "actor candidates must contain both admitted equal-capability models"
+    );
 }
 
 /// How many of the fleet's nodes can ever receive a call for one turn?
@@ -314,12 +345,17 @@ async fn calls_per_turn_vs_fleet_size() {
         ];
         let pool = admitted_pool(&fleet).await;
         summary.insert(total_nodes(&fleet), pool.len());
-        println!(
+        tracing::debug!(
             "nodes={:>5} admitted={} names={pool:?}",
             total_nodes(&fleet),
             pool.len()
         );
     }
+    assert_eq!(
+        summary,
+        HashMap::from([(4, 2), (200, 2), (2_000, 2)]),
+        "replica growth must not widen per-turn committee calls"
+    );
 }
 
 #[tokio::test]
@@ -616,13 +652,15 @@ async fn buzz_ladder_committee_by_fleet_shape() {
         ),
     ];
 
-    println!(
+    tracing::debug!(
         "\n{:<26} {:>6} {:>9}  committee",
-        "fleet shape", "nodes", "workers"
+        "fleet shape",
+        "nodes",
+        "workers"
     );
     for (label, fleet) in &shapes {
         let pool = admitted_pool(fleet).await;
-        println!(
+        tracing::debug!(
             "{:<26} {:>6} {:>9}  {:?}",
             label,
             total_nodes(fleet),
@@ -662,7 +700,7 @@ async fn buzz_ladder_committee_by_fleet_shape() {
         (BUZZ_RUNG_LARGE, 1),
     ])
     .await;
-    println!("one-big ladder pool: {one_big:?}");
+    tracing::debug!("one-big ladder pool: {one_big:?}");
 }
 
 /// Two 80GB+ machines on the same 27B: the committee Buzz can actually reach.
@@ -686,7 +724,7 @@ async fn buzz_ladder_two_big_machines_form_the_only_reachable_committee() {
         (BUZZ_RUNG_MEDIUM, 10),
     ])
     .await;
-    println!("two big replicas + smalls: {with_smalls:?}");
+    tracing::debug!("two big replicas + smalls: {with_smalls:?}");
 }
 
 // ─── Tool-turn actor selection ───────────────────────────────────────

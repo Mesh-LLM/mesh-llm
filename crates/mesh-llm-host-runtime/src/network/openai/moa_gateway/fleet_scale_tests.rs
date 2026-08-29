@@ -56,9 +56,11 @@ async fn assembly_cost_and_width_at_thousand_scale() {
         SMALL_MODELS[0],
         SMALL_MODELS[1],
     ];
-    println!(
+    tracing::debug!(
         "\n{:>7} {:>12} {:>8}  committee",
-        "peers", "assemble_ms", "workers"
+        "peers",
+        "assemble_ms",
+        "workers"
     );
     let mut widths = Vec::new();
     for count in [10u32, 100, 1_000, 2_000, 4_000] {
@@ -69,7 +71,7 @@ async fn assembly_cost_and_width_at_thousand_scale() {
         let started = Instant::now();
         let pool = assemble(&node).await;
         let elapsed = started.elapsed();
-        println!(
+        tracing::debug!(
             "{count:>7} {:>12.1} {:>8}  {pool:?}",
             elapsed.as_secs_f64() * 1000.0,
             pool.len()
@@ -94,7 +96,7 @@ async fn actor_ranking_is_bounded_at_thousand_scale() {
 
     let started = Instant::now();
     let actors = compute_actor_candidates(&node, &pool).await;
-    println!(
+    tracing::debug!(
         "3000 peers: pool={} rank_ms={:.1} actors={:?}",
         pool.len(),
         started.elapsed().as_secs_f64() * 1000.0,
@@ -130,7 +132,7 @@ async fn fully_paused_thousand_node_fleet_admits_nobody() {
     }
 
     let pool = assemble(&node).await;
-    println!("1000 paused peers -> committee {pool:?}");
+    tracing::debug!("1000 paused peers -> committee {pool:?}");
     assert!(
         pool.is_empty(),
         "a fully paused fleet must admit no workers, got {pool:?}"
@@ -159,7 +161,7 @@ async fn fully_deprioritized_thousand_node_fleet_still_serves() {
     }
 
     let pool = assemble(&node).await;
-    println!("1000 deprioritized peers -> committee {pool:?}");
+    tracing::debug!("1000 deprioritized peers -> committee {pool:?}");
     assert!(
         !pool.is_empty(),
         "deprioritized peers are spillover capacity and must still be admitted"
@@ -172,7 +174,7 @@ async fn fully_deprioritized_thousand_node_fleet_still_serves() {
 async fn thousand_small_nodes_still_collapse_to_one_worker() {
     let node = node_with_n_peers(&[SMALL_MODELS[0], SMALL_MODELS[1], SMALL_MODELS[2]], 1_000).await;
     let pool = assemble(&node).await;
-    println!("1000 small peers, 3 distinct models -> committee {pool:?}");
+    tracing::debug!("1000 small peers, 3 distinct models -> committee {pool:?}");
     assert_eq!(
         pool.len(),
         1,
@@ -216,7 +218,7 @@ async fn few_big_many_small_at_thousand_scale() {
             .and_then(|&i| pool.get(i))
             .map(|m| canonical_base_name(&m.name))
             .unwrap_or_default();
-        println!(
+        tracing::debug!(
             "big={big} + 1000 small -> workers={} committee={:?} actor_first={first}",
             pool.len(),
             pool.iter().map(|m| m.name.as_str()).collect::<Vec<_>>()
@@ -266,7 +268,7 @@ async fn deep_uniform_big_tier_does_not_exclude_smalls() {
     }
 
     let pool = assemble(&node).await;
-    println!("400 uniform big + 600 small -> committee {pool:?}");
+    tracing::debug!("400 uniform big + 600 small -> committee {pool:?}");
     let has_small = pool
         .iter()
         .any(|n| canonical_base_name(n) == canonical_base_name(SMALL_MODELS[0].name));
@@ -305,7 +307,7 @@ async fn deep_uniform_big_tier_does_not_exclude_smalls() {
         seed += 1;
     }
     let pool = assemble(&node).await;
-    println!("200+200 distinct big + 600 small -> committee {pool:?}");
+    tracing::debug!("200+200 distinct big + 600 small -> committee {pool:?}");
     assert!(
         !pool
             .iter()

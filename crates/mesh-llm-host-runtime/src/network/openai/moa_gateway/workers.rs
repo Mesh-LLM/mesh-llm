@@ -413,6 +413,7 @@ where
     Err(last_error)
 }
 
+/// Whether a remote failure is safe to retry on a same-model standby.
 fn is_retryable_replica_error(error: &str) -> bool {
     if !error.starts_with("HTTP ") {
         return true;
@@ -421,7 +422,7 @@ fn is_retryable_replica_error(error: &str) -> bool {
         .split_whitespace()
         .nth(1)
         .and_then(|status| status.trim_end_matches(':').parse::<u16>().ok())
-        .is_some_and(|status| matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
+        .is_none_or(|status| status == 0 || matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
 }
 
 /// Fraction of the remaining worker deadline reserved for a standby attempt.
@@ -725,6 +726,8 @@ mod tests {
             "recv: reset",
             "parse: eof",
             "remote replica timeout after 100ms",
+            "HTTP 0: malformed status line",
+            "HTTP malformed: bad framing",
             "HTTP 429: busy",
             "HTTP 503: unavailable",
         ] {
