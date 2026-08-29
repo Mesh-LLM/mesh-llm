@@ -24,6 +24,7 @@ pub struct StageModel {
 
 struct StageModelInner {
     raw: *mut RawModel,
+    include_output: bool,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -47,6 +48,7 @@ impl StageModel {
         Self {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
+                include_output: true,
             }),
             media: None,
         }
@@ -66,7 +68,10 @@ impl StageModel {
             .map(|projector_path| MediaProjector::open(projector_path, raw))
             .transpose()?;
         Ok(Self {
-            inner: Arc::new(StageModelInner { raw }),
+            inner: Arc::new(StageModelInner {
+                raw,
+                include_output: config.include_output,
+            }),
             media,
         })
     }
@@ -319,6 +324,7 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: 0,
+            include_output: self.inner.include_output,
         })
     }
 
@@ -348,6 +354,7 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
+            include_output: self.inner.include_output,
         })
     }
 

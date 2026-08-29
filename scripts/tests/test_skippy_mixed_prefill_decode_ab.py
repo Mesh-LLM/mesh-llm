@@ -134,6 +134,25 @@ class MixedPrefillDecodeAbTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertAlmostEqual(first["makespan_ms"]["median"], 10.0)
 
+    def test_markdown_survives_missing_and_zero_metrics(self):
+        before = {metric: 1.0 for metric in BENCH.METRICS}
+        after = {metric: 2.0 for metric in BENCH.METRICS}
+        before["makespan_ms"] = 0.0
+        before.pop("anchor_gap_ms_p95")
+        after["prefill_ttft_ms_p95"] = None
+
+        report = BENCH.markdown(
+            before,
+            after,
+            {},
+            {"exact_matches": 0, "comparable_requests": 0},
+        )
+
+        self.assertIn("Mixed scheduling", report)
+        self.assertNotIn("Anchor gap p95 ms", report)
+        self.assertNotIn("Prefill TTFT p95 ms", report)
+        self.assertIn("| Makespan ms | 0.000 | 2.000 | n/a |", report)
+
 
 if __name__ == "__main__":
     unittest.main()

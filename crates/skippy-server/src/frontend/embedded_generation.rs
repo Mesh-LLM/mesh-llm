@@ -480,6 +480,8 @@ impl StageOpenAiBackend {
                 prefill_deferred_replies_drained =
                     prefill_deferred_replies_drained.saturating_add(drained.drained_replies);
                 prefill_downstream_wait_ms += drained.downstream_wait_ms;
+                prefill_downstream_wait_max_ms =
+                    prefill_downstream_wait_max_ms.max(drained.downstream_wait_max_ms);
                 if !prefill_chain_cache_restored {
                     prefill_stage0_full_recorded = self.record_embedded_stage0_full_prefill(
                         &session_key,

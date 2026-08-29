@@ -29,6 +29,7 @@ fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
+    pub(crate) include_output: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {
