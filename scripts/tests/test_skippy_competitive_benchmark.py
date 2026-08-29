@@ -353,12 +353,22 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             19000,
             config["synthetic"],
         )
+        vllm = BENCH.synthetic_benchy_common_command(
+            args,
+            model,
+            "vllm",
+            model["model_id"],
+            19000,
+            config["synthetic"],
+        )
 
         self.assertIn("--exit-on-first-fail", sglang)
         self.assertIn("--no-results-on-fail", sglang)
         sglang_extra = sglang[sglang.index("--extra-body") + 1]
+        vllm_extra = vllm[vllm.index("--extra-body") + 1]
         raw_extra = raw[raw.index("--extra-body") + 1]
         self.assertIn("return_token_ids=false", sglang_extra)
+        self.assertIn("return_token_ids=false", vllm_extra)
         self.assertNotIn("return_token_ids", raw_extra)
 
     def test_synthetic_cell_validation_rejects_hidden_request_failures(self) -> None:
