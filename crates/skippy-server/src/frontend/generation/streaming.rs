@@ -102,10 +102,63 @@ impl ChatStreamDeltas {
 
 pub(in crate::frontend) struct ChatOutputStreamParser {
     pub(in crate::frontend) backend: StageOpenAiBackend,
+    model: StageModelReader,
     pub(in crate::frontend) request: ChatCompletionRequest,
     pub(in crate::frontend) metadata: String,
     pub(in crate::frontend) text: String,
     deltas: ChatStreamDeltas,
+    passthrough_content: bool,
+}
+
+fn empty_metadata_value(metadata: &Value, key: &str) -> bool {
+    metadata.get(key).is_none_or(|value| match value {
+        Value::Null => true,
+        Value::String(value) => value.is_empty(),
+        Value::Array(value) => value.is_empty(),
+        Value::Object(value) => value.is_empty(),
+        _ => false,
+    })
+}
+
+fn chat_stream_can_passthrough_content(
+    request: &ChatCompletionRequest,
+    metadata: &str,
+    emit_reasoning: bool,
+) -> bool {
+    if emit_reasoning
+        || tool_calls_requested(request)
+        || request.response_format.as_ref().is_some_and(|format| {
+            format
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "text")
+        })
+    {
+        return false;
+    }
+    let Ok(metadata) = serde_json::from_str::<Value>(metadata) else {
+        return false;
+    };
+    let content_only_parser = metadata
+        .get("chat_parser")
+        .and_then(Value::as_str)
+        .and_then(|parser| serde_json::from_str::<Value>(parser).ok())
+        .and_then(|parser| parser.get("parsers")?.as_array().cloned())
+        .is_some_and(|parsers| {
+            let tags = parsers
+                .iter()
+                .filter_map(|parser| parser.get("tag").and_then(Value::as_str))
+                .collect::<Vec<_>>();
+            !tags.is_empty() && tags.iter().all(|tag| *tag == "content")
+        });
+    content_only_parser
+        && !metadata
+            .get("parse_tool_calls")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && empty_metadata_value(&metadata, "grammar")
+        && empty_metadata_value(&metadata, "grammar_triggers")
+        && empty_metadata_value(&metadata, "preserved_tokens")
 }
 
 impl ChatOutputStreamParser {
@@ -114,14 +167,24 @@ impl ChatOutputStreamParser {
         request: ChatCompletionRequest,
         metadata: String,
         emit_reasoning: bool,
-    ) -> Self {
-        Self {
+    ) -> OpenAiResult<Self> {
+        let passthrough_content =
+            chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
+        let model = backend
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .model
+            .reader();
+        Ok(Self {
             backend,
+            model,
             request,
             metadata,
             text: String::new(),
             deltas: ChatStreamDeltas::new(emit_reasoning),
-        }
+            passthrough_content,
+        })
     }
 
     pub(in crate::frontend) fn push_delta(
@@ -129,6 +192,10 @@ impl ChatOutputStreamParser {
         delta: &str,
     ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
         self.text.push_str(delta);
+        if self.passthrough_content {
+            self.deltas.emitted_content.push_str(delta);
+            return Ok(vec![GenerationStreamEvent::Delta(delta.to_string())]);
+        }
         self.events_for_text(true)
     }
 
@@ -146,10 +213,11 @@ impl ChatOutputStreamParser {
         &mut self,
         is_partial: bool,
     ) -> OpenAiResult<Vec<GenerationStreamEvent>> {
-        let Some(parsed) = self.backend.parse_chat_output(
+        let Some(parsed) = self.backend.parse_chat_output_with_reader(
+            &self.model,
             &self.text,
             &self.request,
-            Some(&self.metadata),
+            &self.metadata,
             is_partial,
         )?
         else {
@@ -431,5 +499,80 @@ where
             text_emit_ms: self.metrics.text_emit_ms,
             eog_check_ms: self.metrics.eog_check_ms,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn request(extra: Value) -> ChatCompletionRequest {
+        serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true,
+            "response_format": extra.get("response_format"),
+            "tools": extra.get("tools"),
+        }))
+        .expect("valid chat request")
+    }
+
+    #[test]
+    fn content_only_metadata_can_skip_partial_reparsing() {
+        let metadata = json!({
+            "parse_tool_calls": false,
+            "chat_parser": json!({
+                "parsers": [
+                    {"type": "tag", "tag": "content"},
+                    {"type": "end"}
+                ]
+            }).to_string(),
+            "grammar": "",
+            "grammar_triggers": [],
+            "preserved_tokens": [],
+        });
+        assert!(chat_stream_can_passthrough_content(
+            &request(json!({})),
+            &metadata.to_string(),
+            false,
+        ));
+    }
+
+    #[test]
+    fn structured_or_reasoning_metadata_keeps_partial_reparsing() {
+        let base = json!({
+            "parse_tool_calls": false,
+            "chat_parser": json!({
+                "parsers": [
+                    {"type": "tag", "tag": "content"},
+                    {"type": "end"}
+                ]
+            }).to_string(),
+            "grammar": "",
+            "grammar_triggers": [],
+            "preserved_tokens": [],
+        });
+        assert!(!chat_stream_can_passthrough_content(
+            &request(json!({"response_format": {"type": "json_schema"}})),
+            &base.to_string(),
+            false,
+        ));
+
+        let mut reasoning = base;
+        reasoning["chat_parser"] = json!(
+            json!({
+                "parsers": [
+                    {"type": "tag", "tag": "reasoning"},
+                    {"type": "tag", "tag": "content"}
+                ]
+            })
+            .to_string()
+        );
+        assert!(!chat_stream_can_passthrough_content(
+            &request(json!({})),
+            &reasoning.to_string(),
+            false,
+        ));
     }
 }

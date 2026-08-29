@@ -1,10 +1,13 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     env,
+    io::{BufWriter, Write},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
+        mpsc as std_mpsc,
     },
+    thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +35,18 @@ static STDERR_SINK: OnceLock<bool> = OnceLock::new();
 /// Read once: this is consulted on the record and lookup paths, which run per
 /// request.
 fn stderr_sink_enabled() -> bool {
-    *STDERR_SINK.get_or_init(|| env::var_os("SKIPPY_TELEMETRY_STDERR").is_some())
+    *STDERR_SINK.get_or_init(|| {
+        stderr_sink_enabled_from_value(env::var("SKIPPY_TELEMETRY_STDERR").ok().as_deref())
+    })
+}
+
+fn stderr_sink_enabled_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    })
 }
 
 /// The stderr sink acts as a floor on the configured level.
@@ -54,6 +68,7 @@ const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 #[derive(Clone)]
 pub struct Telemetry {
     tx: Option<mpsc::Sender<TelemetryEvent>>,
+    stderr: Option<Arc<StderrTelemetrySink>>,
     stats: Arc<TelemetryCounters>,
     config: Arc<StageConfig>,
     level: TelemetryLevel,
@@ -91,6 +106,69 @@ struct TelemetryEvent {
     end_time_unix_nanos: u64,
 }
 
+#[derive(Serialize)]
+struct StderrTelemetryEvent {
+    event: String,
+    attributes: BTreeMap<String, Value>,
+    start_time_unix_nanos: u64,
+    end_time_unix_nanos: u64,
+}
+
+struct StderrTelemetrySink {
+    tx: Option<std_mpsc::SyncSender<StderrTelemetryEvent>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl StderrTelemetrySink {
+    fn new(capacity: usize) -> Option<Self> {
+        let (tx, rx) = std_mpsc::sync_channel(capacity.max(1));
+        let worker = thread::Builder::new()
+            .name("skippy-telemetry-stderr".to_string())
+            .spawn(move || stderr_telemetry_loop(rx))
+            .ok()?;
+        Some(Self {
+            tx: Some(tx),
+            worker: Some(worker),
+        })
+    }
+
+    fn try_send(&self, event: StderrTelemetryEvent) -> bool {
+        self.tx
+            .as_ref()
+            .is_some_and(|tx| tx.try_send(event).is_ok())
+    }
+}
+
+impl Drop for StderrTelemetrySink {
+    fn drop(&mut self) {
+        self.tx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn stderr_telemetry_loop(rx: std_mpsc::Receiver<StderrTelemetryEvent>) {
+    let stderr = std::io::stderr();
+    let mut writer = BufWriter::new(stderr.lock());
+    while let Ok(event) = rx.recv() {
+        if serde_json::to_writer(&mut writer, &event).is_err() || writer.write_all(b"\n").is_err() {
+            return;
+        }
+        while let Ok(event) = rx.try_recv() {
+            if serde_json::to_writer(&mut writer, &event).is_err()
+                || writer.write_all(b"\n").is_err()
+            {
+                return;
+            }
+        }
+        if writer.flush().is_err() {
+            return;
+        }
+    }
+    let _ = writer.flush();
+}
+
 impl Telemetry {
     pub fn new(
         endpoint: Option<String>,
@@ -123,6 +201,10 @@ impl Telemetry {
 
         Self {
             tx,
+            stderr: stderr_sink_enabled()
+                .then(|| StderrTelemetrySink::new(capacity))
+                .flatten()
+                .map(Arc::new),
             stats,
             config,
             level,
@@ -182,14 +264,26 @@ impl Telemetry {
         start_time_unix_nanos: u64,
         end_time_unix_nanos: u64,
     ) {
-        if stderr_sink_enabled() {
-            let line = json!({
-                "event": name,
-                "attributes": attributes,
-                "start_time_unix_nanos": start_time_unix_nanos,
-                "end_time_unix_nanos": end_time_unix_nanos,
-            });
-            eprintln!("{line}");
+        if let (Some(stderr), None) = (self.stderr.as_ref(), self.tx.as_ref()) {
+            if !stderr.try_send(StderrTelemetryEvent {
+                event: name.to_string(),
+                attributes,
+                start_time_unix_nanos,
+                end_time_unix_nanos,
+            }) {
+                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            return;
+        }
+        if let Some(stderr) = self.stderr.as_ref()
+            && !stderr.try_send(StderrTelemetryEvent {
+                event: name.to_string(),
+                attributes: attributes.clone(),
+                start_time_unix_nanos,
+                end_time_unix_nanos,
+            })
+        {
+            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
         }
         let Some(tx) = self.tx.as_ref() else {
             return;
@@ -496,7 +590,30 @@ fn span_id(counter: u64) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TelemetryLevel, effective_level};
+    use super::{TelemetryLevel, effective_level, stderr_sink_enabled_from_value};
+
+    #[test]
+    fn stderr_sink_false_values_do_not_enable_debug_telemetry() {
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("no"),
+            Some("off"),
+        ] {
+            assert!(!stderr_sink_enabled_from_value(value), "value={value:?}");
+        }
+        for value in [
+            Some("1"),
+            Some("true"),
+            Some("yes"),
+            Some("on"),
+            Some("debug"),
+        ] {
+            assert!(stderr_sink_enabled_from_value(value), "value={value:?}");
+        }
+    }
 
     /// `SKIPPY_TELEMETRY_STDERR` is the only way to see record/lookup
     /// decisions in a single-process embedded run, and the embedded runtime

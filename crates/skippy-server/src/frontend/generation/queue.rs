@@ -55,21 +55,26 @@ struct GenerationServiceState {
 }
 
 pub(in crate::frontend) struct GenerationServiceEstimator {
-    concurrency: usize,
+    concurrency: AtomicUsize,
     state: Mutex<GenerationServiceState>,
 }
 
 impl GenerationServiceEstimator {
     pub(in crate::frontend) fn new(concurrency: usize) -> Self {
         Self {
-            concurrency: concurrency.max(1),
+            concurrency: AtomicUsize::new(concurrency.max(1)),
             state: Mutex::new(GenerationServiceState::default()),
         }
     }
 
     pub(in crate::frontend) fn predicted_wait_ms(&self) -> Option<f64> {
         let state = self.state.lock().ok()?;
-        predicted_wait_ms_for_state(&state, self.concurrency)
+        predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
+    }
+
+    pub(in crate::frontend) fn set_concurrency(&self, concurrency: usize) {
+        self.concurrency
+            .store(concurrency.max(1), Ordering::Release);
     }
 
     pub(in crate::frontend) fn reserve_queued(
@@ -84,7 +89,8 @@ impl GenerationServiceEstimator {
                 queued: false,
             });
         };
-        if let Some(wait_ms) = predicted_wait_ms_for_state(&state, self.concurrency)
+        if let Some(wait_ms) =
+            predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
             && wait_ms > admission_timeout.as_secs_f64() * 1_000.0
         {
             return Err(wait_ms);

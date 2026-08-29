@@ -3649,7 +3649,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 331,
+      "line": 337,
       "macro_name": "eprintln!"
     }
   ],
@@ -4390,12 +4390,6 @@
   "crates/skippy-server/src/runtime_state/lane_lifecycle.rs": [
     {
       "line": 92,
-      "macro_name": "eprintln!"
-    }
-  ],
-  "crates/skippy-server/src/telemetry.rs": [
-    {
-      "line": 192,
       "macro_name": "eprintln!"
     }
   ]

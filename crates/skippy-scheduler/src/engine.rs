@@ -734,6 +734,22 @@ mod tests {
     }
 
     #[test]
+    fn prefilled_generation_resumes_at_the_next_decode_position() {
+        let mut scheduler = Scheduler::new(SchedulerConfig::default());
+        let resumed = sequence("resumed", 3, 4).with_prefilled_generation(vec![42]);
+        scheduler.submit(resumed).unwrap();
+
+        let plan = scheduler.plan_iteration();
+
+        assert_eq!(plan.work.len(), 1);
+        assert_eq!(plan.work[0].sequence_id, "resumed");
+        assert_eq!(plan.work[0].phase, IterationPhase::Decode);
+        assert_eq!(plan.work[0].tokens, vec![42]);
+        assert_eq!(plan.work[0].positions, vec![3]);
+        assert!(plan.work[0].sample_last);
+    }
+
+    #[test]
     fn bounded_prefill_iterations_allow_live_decode_progress() {
         let mut scheduler = Scheduler::new(SchedulerConfig {
             max_tokens_per_iteration: 8,

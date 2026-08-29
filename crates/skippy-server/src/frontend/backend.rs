@@ -2,6 +2,10 @@ use crate::frontend::generation::ChatOutputStreamParser;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationActiveWorkReservation;
 use crate::frontend::generation::GenerationAdmissionWork;
+use crate::frontend::generation::GenerationConcurrencyController;
+use crate::frontend::generation::GenerationConcurrencyDecision;
+use crate::frontend::generation::GenerationConcurrencyObservation;
+use crate::frontend::generation::GenerationConcurrencyPermit;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::GenerationSessionLockEntry;
 use crate::frontend::generation::GenerationStream;
@@ -67,6 +71,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::sync::TryAcquireError;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task;
 
 fn request_cancelled_error() -> OpenAiError {
@@ -171,6 +176,18 @@ impl StreamEventSender {
         if self.receiver_unreachable.load(Ordering::Acquire) {
             return Err(OpenAiError::backend("stream receiver unreachable"));
         }
+        if context.is_cancelled() {
+            return Err(request_cancelled_error());
+        }
+        let event = match self.tx.try_send(event) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(event)) => event,
+            Err(TrySendError::Closed(_)) => {
+                self.emit_lane_freed("receiver_dropped", "in_flight");
+                self.mark_receiver_unreachable(context);
+                return Err(OpenAiError::backend("stream receiver dropped"));
+            }
+        };
         let cancellation = context.cancellation_token();
         // `tokio::time::sleep` needs an entered runtime the instant it is
         // called, not just when polled, so it must be constructed inside the
@@ -350,7 +367,7 @@ fn trusted_generation_session_key(ids: &OpenAiGenerationIds) -> Option<String> {
 
 #[derive(Clone)]
 struct GenerationAdmissionController {
-    generation_limit: Arc<Semaphore>,
+    generation_limit: Arc<GenerationConcurrencyController>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
     generation_service_estimator: Arc<GenerationServiceEstimator>,
@@ -450,6 +467,11 @@ impl GenerationAdmissionController {
                     _lane: permit,
                     _active_work: self.generation_service_estimator.start_active(work),
                     predicted_wait_ms: Some(0.0),
+                    demand_epoch: self.generation_limit.demand_epoch(),
+                    queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
+                    waited_for_lane: false,
+                    at_capacity_at_start: self.generation_limit.is_at_capacity(),
+                    started_at: Instant::now(),
                 });
             }
             Err(TryAcquireError::Closed) => {
@@ -462,6 +484,9 @@ impl GenerationAdmissionController {
             self.generation_queue_limit,
         )
         .ok_or_else(generation_queue_full_error)?;
+        self.generation_limit.note_queued_demand();
+        self.generation_service_estimator
+            .set_concurrency(self.generation_limit.current_limit());
         let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
         let queued_work = self
             .generation_service_estimator
@@ -470,7 +495,7 @@ impl GenerationAdmissionController {
                 generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
             })?;
         let lane = acquire_generation_permit_with_queue_reservation(
-            self.generation_limit.clone(),
+            self.generation_limit.semaphore(),
             reservation,
             admission_timeout,
             deadline,
@@ -478,17 +503,171 @@ impl GenerationAdmissionController {
         )
         .await?;
         Ok(GenerationAdmissionPermit {
-            _lane: lane,
+            _lane: self.generation_limit.wrap_permit(lane),
             _active_work: queued_work.promote(),
             predicted_wait_ms,
+            demand_epoch: self.generation_limit.demand_epoch(),
+            queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
+            waited_for_lane: true,
+            at_capacity_at_start: self.generation_limit.is_at_capacity(),
+            started_at: Instant::now(),
         })
     }
 }
 
 pub(in crate::frontend) struct GenerationAdmissionPermit {
-    _lane: OwnedSemaphorePermit,
+    _lane: GenerationConcurrencyPermit,
     _active_work: GenerationActiveWorkReservation,
     predicted_wait_ms: Option<f64>,
+    demand_epoch: u64,
+    queued_at_start: bool,
+    waited_for_lane: bool,
+    at_capacity_at_start: bool,
+    started_at: Instant,
+}
+
+impl GenerationAdmissionPermit {
+    fn demand_observation(&self) -> GenerationDemandObservation {
+        GenerationDemandObservation {
+            demand_epoch: self.demand_epoch,
+            queued_at_start: self.queued_at_start,
+            waited_for_lane: self.waited_for_lane,
+            at_capacity_at_start: self.at_capacity_at_start,
+            started_at: self.started_at,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GenerationDemandObservation {
+    demand_epoch: u64,
+    queued_at_start: bool,
+    waited_for_lane: bool,
+    at_capacity_at_start: bool,
+    started_at: Instant,
+}
+
+impl StageOpenAiBackend {
+    fn observe_generation_completed(
+        &self,
+        output: &GeneratedText,
+        demand: GenerationDemandObservation,
+    ) {
+        let work = GenerationAdmissionWork::new(
+            usize::try_from(output.prompt_tokens).unwrap_or(usize::MAX),
+            output.completion_tokens,
+        );
+        self.generation_service_estimator.observe_completed(
+            work,
+            output.prompt_ms,
+            output.predicted_ms,
+        );
+        let completed_tokens = work.prompt_tokens.saturating_add(work.decode_tokens);
+        let executed_tokens =
+            u64::from(output.suffix_prefill_tokens).saturating_add(work.decode_tokens);
+        let saturated = demand.waited_for_lane
+            || self.generation_limit.was_saturated_since(
+                demand.demand_epoch,
+                demand.queued_at_start,
+                self.generation_queue_depth.load(Ordering::Acquire) > 0,
+            );
+        let Some(decision) =
+            self.generation_limit
+                .observe_completed(GenerationConcurrencyObservation {
+                    completed_tokens,
+                    executed_tokens,
+                    latency_ms: output.prompt_ms + output.predicted_ms,
+                    saturated,
+                    at_capacity: demand.at_capacity_at_start,
+                    started_at: demand.started_at,
+                })
+        else {
+            return;
+        };
+        self.emit_generation_concurrency_decision(decision);
+    }
+
+    fn observe_generation_failed(&self) {
+        if let Some(decision) = self.generation_limit.observe_failed() {
+            self.emit_generation_concurrency_decision(decision);
+        }
+    }
+
+    fn emit_generation_concurrency_decision(&self, decision: GenerationConcurrencyDecision) {
+        self.generation_service_estimator
+            .set_concurrency(decision.current_limit);
+        let mut attrs = lifecycle_attrs(&self.config);
+        attrs.insert(
+            "llama_stage.generation_concurrency_action".to_string(),
+            json!(decision.action),
+        );
+        attrs.insert(
+            "llama_stage.generation_concurrency_reason".to_string(),
+            json!(decision.reason),
+        );
+        attrs.insert(
+            "llama_stage.generation_concurrency_previous".to_string(),
+            json!(decision.previous_limit),
+        );
+        attrs.insert(
+            "llama_stage.generation_concurrency_current".to_string(),
+            json!(decision.current_limit),
+        );
+        attrs.insert(
+            "llama_stage.generation_concurrency_ceiling".to_string(),
+            json!(self.generation_limit.hard_limit()),
+        );
+        if let Some(throughput) = decision.throughput_tokens_per_second {
+            attrs.insert(
+                "llama_stage.generation_throughput_tokens_per_second".to_string(),
+                json!(throughput),
+            );
+        }
+        if let Some(p95_latency_ms) = decision.p95_latency_ms {
+            attrs.insert(
+                "llama_stage.generation_p95_latency_ms".to_string(),
+                json!(p95_latency_ms),
+            );
+        }
+        if let Some(p95_hardware_ms_per_token) = decision.p95_hardware_ms_per_token {
+            attrs.insert(
+                "llama_stage.generation_p95_hardware_ms_per_token".to_string(),
+                json!(p95_hardware_ms_per_token),
+            );
+        }
+        if let Some(improvement) = decision.throughput_improvement {
+            attrs.insert(
+                "llama_stage.generation_throughput_improvement".to_string(),
+                json!(improvement),
+            );
+        }
+        if let Some(ratio) = decision.p95_latency_ratio {
+            attrs.insert(
+                "llama_stage.generation_p95_latency_ratio".to_string(),
+                json!(ratio),
+            );
+        }
+        if let Some(ratio) = decision.hardware_pressure_ratio {
+            attrs.insert(
+                "llama_stage.generation_hardware_pressure_ratio".to_string(),
+                json!(ratio),
+            );
+        }
+        if let Some(observed_requests) = decision.observed_requests {
+            attrs.insert(
+                "llama_stage.generation_observed_requests".to_string(),
+                json!(observed_requests),
+            );
+        }
+        if let Some(saturated_requests) = decision.saturated_requests {
+            attrs.insert(
+                "llama_stage.generation_saturated_requests".to_string(),
+                json!(saturated_requests),
+            );
+        }
+        self.telemetry
+            .emit("stage.openai_generation_concurrency_adapt", attrs);
+    }
 }
 
 fn insert_generation_admission_attrs(
@@ -711,7 +890,7 @@ impl OpenAiBackend for StageOpenAiBackend {
                 request.stop.clone(),
                 sampling,
                 include_usage,
-                Some(request.clone()),
+                Some(request),
                 parse_chat_output,
                 emit_reasoning,
                 context,
@@ -1023,21 +1202,20 @@ impl StageOpenAiBackend {
         context: OpenAiRequestContext,
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GeneratedText> {
-        let prepared_text = if prompt.has_media() {
-            None
+        let (prompt, prepared_text) = if prompt.has_media() {
+            (prompt, None)
         } else {
             let backend = self.clone();
-            let prompt_for_tokenize = prompt.clone();
             let ids_for_tokenize = ids.clone();
-            Some(
-                task::spawn_blocking(move || {
-                    backend.prepare_text_prompt(&prompt_for_tokenize, max_tokens, &ids_for_tokenize)
-                })
-                .await
-                .map_err(|error| {
-                    OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
-                })??,
-            )
+            task::spawn_blocking(move || {
+                let prepared =
+                    backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
+                Ok::<_, OpenAiError>((prompt, Some(prepared)))
+            })
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
+            })??
         };
         let admission_work =
             self.generation_admission_work(&prompt, max_tokens, prepared_text.as_ref())?;
@@ -1058,6 +1236,7 @@ impl StageOpenAiBackend {
             self.generation_queue_limit,
         );
         self.emit_openai_phase("stage.openai_generation_admit", admit_timer, admit_attrs);
+        let demand = permit.demand_observation();
         let backend = self.clone();
         let hook_runtime = Some(tokio::runtime::Handle::current());
         let worker_context = context.clone();
@@ -1087,14 +1266,9 @@ impl StageOpenAiBackend {
             Err(request_cancelled_error())
         } else {
             if let Ok(output) = &result {
-                self.generation_service_estimator.observe_completed(
-                    GenerationAdmissionWork::new(
-                        usize::try_from(output.prompt_tokens).unwrap_or(usize::MAX),
-                        output.completion_tokens,
-                    ),
-                    output.prompt_ms,
-                    output.predicted_ms,
-                );
+                self.observe_generation_completed(output, demand);
+            } else {
+                self.observe_generation_failed();
             }
             result
         }
@@ -1114,21 +1288,20 @@ impl StageOpenAiBackend {
         context: OpenAiRequestContext,
         ids: OpenAiGenerationIds,
     ) -> OpenAiResult<GenerationStream> {
-        let prepared_text = if prompt.has_media() {
-            None
+        let (prompt, prepared_text) = if prompt.has_media() {
+            (prompt, None)
         } else {
             let backend = self.clone();
-            let prompt_for_tokenize = prompt.clone();
             let ids_for_tokenize = ids.clone();
-            Some(
-                task::spawn_blocking(move || {
-                    backend.prepare_text_prompt(&prompt_for_tokenize, max_tokens, &ids_for_tokenize)
-                })
-                .await
-                .map_err(|error| {
-                    OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
-                })??,
-            )
+            task::spawn_blocking(move || {
+                let prepared =
+                    backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
+                Ok::<_, OpenAiError>((prompt, Some(prepared)))
+            })
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("prompt tokenization task failed: {error}"))
+            })??
         };
         let admit_timer = PhaseTimer::start();
         let admission_work =
@@ -1149,6 +1322,7 @@ impl StageOpenAiBackend {
             self.generation_queue_limit,
         );
         self.emit_openai_phase("stage.openai_generation_admit", admit_timer, admit_attrs);
+        let demand = permit.demand_observation();
         let backend = self.clone();
         let chat_parse_metadata = prompt.chat_parse_metadata.clone();
         let (tx, rx) = mpsc::channel(16);
@@ -1160,18 +1334,31 @@ impl StageOpenAiBackend {
             ids.request_id_string(),
             self.telemetry.clone(),
         );
-        let mut chat_stream_parser = if let (true, Some(request), Some(metadata)) =
-            (parse_chat_output, hook_request.clone(), chat_parse_metadata)
-        {
-            Some(ChatOutputStreamParser::new(
-                backend.clone(),
-                request,
-                metadata,
-                emit_reasoning,
-            ))
+        let generation_request_needed = self.hook_policy.is_some()
+            || hook_request
+                .as_ref()
+                .is_some_and(crate::frontend::generation::tool_calls_requested);
+        let mut hook_request = hook_request;
+        let parser_request = if parse_chat_output {
+            if generation_request_needed {
+                hook_request.clone()
+            } else {
+                hook_request.take()
+            }
         } else {
             None
         };
+        let mut chat_stream_parser =
+            if let (Some(request), Some(metadata)) = (parser_request, chat_parse_metadata) {
+                Some(ChatOutputStreamParser::new(
+                    backend.clone(),
+                    request,
+                    metadata,
+                    emit_reasoning,
+                )?)
+            } else {
+                None
+            };
         task::spawn_blocking(move || {
             let _session_permit = session_permit;
             let _permit = permit;
@@ -1206,14 +1393,7 @@ impl StageOpenAiBackend {
             }
             match result {
                 Ok(output) => {
-                    backend.generation_service_estimator.observe_completed(
-                        GenerationAdmissionWork::new(
-                            usize::try_from(output.prompt_tokens).unwrap_or(usize::MAX),
-                            output.completion_tokens,
-                        ),
-                        output.prompt_ms,
-                        output.predicted_ms,
-                    );
+                    backend.observe_generation_completed(&output, demand);
                     let finish_reason = if let Some(parser) = chat_stream_parser.as_mut() {
                         match parser.finish(&output.text) {
                             Ok(events) => {
@@ -1242,6 +1422,7 @@ impl StageOpenAiBackend {
                     let _ = sender.send_terminal(Ok(GenerationStreamEvent::Done(finish_reason)));
                 }
                 Err(error) => {
+                    backend.observe_generation_failed();
                     let _ = sender.send_terminal(Err(error));
                 }
             }
