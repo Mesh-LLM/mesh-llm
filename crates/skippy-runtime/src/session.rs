@@ -162,6 +162,16 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    pub fn memory_used_cells(&mut self) -> Result<u64> {
+        let mut used_cells = 0u64;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_memory_used_cells(self.raw, &mut used_cells, &mut error)
+        };
+        ensure_ok(status, error)?;
+        Ok(used_cells)
+    }
+
     pub fn prefill_chunk(&mut self, token_ids: &[i32]) -> Result<()> {
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();

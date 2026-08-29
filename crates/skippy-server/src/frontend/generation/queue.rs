@@ -16,6 +16,10 @@ use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
 use skippy_protocol::StageConfig;
+use skippy_scheduler::{
+    CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates_with_anchor,
+};
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -23,11 +27,290 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
 const SERVICE_RATE_EWMA_ALPHA: f64 = 0.25;
 const SERVICE_RATE_WINDOW: usize = 64;
+const ADMISSION_CACHE_AGING_COST_PER_TURN: u64 = 4_096;
+
+pub(in crate::frontend) type GenerationCacheAffinityRefresh =
+    Arc<dyn Fn() -> CacheAffinity + Send + Sync>;
+
+#[derive(Clone)]
+pub(in crate::frontend) struct GenerationAdmissionScheduling {
+    prompt_tokens: Arc<[i32]>,
+    refresh_affinity: GenerationCacheAffinityRefresh,
+}
+
+impl GenerationAdmissionScheduling {
+    pub(in crate::frontend) fn new(
+        prompt_tokens: Arc<[i32]>,
+        refresh_affinity: GenerationCacheAffinityRefresh,
+    ) -> Self {
+        Self {
+            prompt_tokens,
+            refresh_affinity,
+        }
+    }
+}
+
+impl Default for GenerationAdmissionScheduling {
+    fn default() -> Self {
+        Self {
+            prompt_tokens: Arc::from([]),
+            refresh_affinity: Arc::new(CacheAffinity::default),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct GenerationAdmissionWaiter {
+    scheduling: GenerationAdmissionScheduling,
+    enqueued_turn: u64,
+    order: u64,
+}
+
+#[derive(Default)]
+struct GenerationAdmissionQueueState {
+    turn: u64,
+    next_id: u64,
+    selected_id: Option<u64>,
+    last_admitted_prompt: Arc<[i32]>,
+    waiters: BTreeMap<u64, GenerationAdmissionWaiter>,
+}
+
+/// Scheduler-owned waiting room in front of the finite native lane pool.
+///
+/// Tokenized prompts enter this queue before acquiring a generation lane, so
+/// cache affinity and waiting-prefix locality remain visible across the whole
+/// offered backlog instead of only the currently running tranche.
+pub(in crate::frontend) struct GenerationAdmissionQueue {
+    state: Mutex<GenerationAdmissionQueueState>,
+    election: Mutex<()>,
+    changed: Notify,
+}
+
+impl GenerationAdmissionQueue {
+    pub(in crate::frontend) fn new() -> Self {
+        Self {
+            state: Mutex::new(GenerationAdmissionQueueState::default()),
+            election: Mutex::new(()),
+            changed: Notify::new(),
+        }
+    }
+
+    fn enqueue(
+        self: &Arc<Self>,
+        scheduling: GenerationAdmissionScheduling,
+        reservation: GenerationQueueReservation,
+    ) -> GenerationAdmissionQueueLease {
+        let id = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let id = state.next_id;
+            state.next_id = state.next_id.saturating_add(1);
+            let turn = state.turn;
+            // A newly visible prompt can change waiting-prefix weights and
+            // cache value before a lane opens, so invalidate a speculative
+            // election that has not yet acquired a permit.
+            state.selected_id = None;
+            state.waiters.insert(
+                id,
+                GenerationAdmissionWaiter {
+                    scheduling,
+                    enqueued_turn: turn,
+                    order: id,
+                },
+            );
+            id
+        };
+        self.changed.notify_waiters();
+        GenerationAdmissionQueueLease {
+            queue: Arc::clone(self),
+            id,
+            reservation: Some(reservation),
+        }
+    }
+
+    pub(in crate::frontend) fn try_acquire_lane_if_idle(
+        &self,
+        generation_limit: Arc<Semaphore>,
+    ) -> Result<Option<OwnedSemaphorePermit>, tokio::sync::TryAcquireError> {
+        // Keep the empty check and lane claim under the same queue lock. A
+        // prompt entering the scheduler-visible waiting room must not be
+        // overtaken by an arrival racing this fast path.
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.waiters.is_empty() {
+            return Ok(None);
+        }
+        generation_limit.try_acquire_owned().map(Some)
+    }
+
+    pub(in crate::frontend) fn notify_lane_available(&self) {
+        self.changed.notify_waiters();
+    }
+
+    fn selected_waiter(&self) -> Option<u64> {
+        // Notify wakes the whole waiting set. Serialize and memoize one
+        // election per available lane so N waiters do not each refresh and
+        // sort the same N affinities.
+        let _election = self
+            .election
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Refreshing affinity consults the prefix cache and can be more
+        // expensive than queue bookkeeping. Snapshot under the queue lock,
+        // then release it before crossing that subsystem boundary.
+        let (turn, anchor_prompt, waiters) = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(selected_id) = state.selected_id {
+                return Some(selected_id);
+            }
+            (
+                state.turn,
+                Arc::clone(&state.last_admitted_prompt),
+                state
+                    .waiters
+                    .iter()
+                    .map(|(id, waiter)| (*id, waiter.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let affinities = waiters
+            .iter()
+            .map(|(_, waiter)| (waiter.scheduling.refresh_affinity)())
+            .collect::<Vec<_>>();
+        let selected_id = order_cache_aware_candidates_with_anchor(
+            waiters
+                .iter()
+                .map(|(_, waiter)| waiter)
+                .zip(affinities.iter())
+                .enumerate()
+                .map(|(index, (waiter, affinity))| CacheAwareCandidate {
+                    index,
+                    priority: 0,
+                    affinity,
+                    prompt_tokens: &waiter.scheduling.prompt_tokens,
+                    enqueued_turn: waiter.enqueued_turn,
+                    order: waiter.order,
+                }),
+            turn,
+            ADMISSION_CACHE_AGING_COST_PER_TURN,
+            true,
+            (!anchor_prompt.is_empty()).then_some(anchor_prompt.as_ref()),
+        )
+        .first()
+        .and_then(|index| waiters.get(*index).map(|(id, _)| id))
+        .copied();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.selected_id.is_none()
+            && selected_id.is_some_and(|id| state.waiters.contains_key(&id))
+        {
+            state.selected_id = selected_id;
+        }
+        state.selected_id
+    }
+
+    fn remove(&self, id: u64) -> bool {
+        let removed = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let removed = state.waiters.remove(&id).is_some();
+            if state.selected_id == Some(id) {
+                state.selected_id = None;
+            }
+            removed
+        };
+        if removed {
+            self.changed.notify_waiters();
+        }
+        removed
+    }
+
+    fn complete_selection(&self, id: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(waiter) = state.waiters.remove(&id) {
+            state.last_admitted_prompt = waiter.scheduling.prompt_tokens;
+            state.turn = state.turn.saturating_add(1);
+        }
+        if state.selected_id == Some(id) {
+            state.selected_id = None;
+        }
+    }
+}
+
+struct GenerationAdmissionQueueLease {
+    queue: Arc<GenerationAdmissionQueue>,
+    id: u64,
+    reservation: Option<GenerationQueueReservation>,
+}
+
+impl GenerationAdmissionQueueLease {
+    async fn acquire(
+        mut self,
+        generation_limit: Arc<Semaphore>,
+        admission_timeout: Duration,
+        deadline: Instant,
+        cancellation: &CancellationToken,
+    ) -> OpenAiResult<OwnedSemaphorePermit> {
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(OpenAiError::cancelled("request cancelled"));
+            }
+            let notified = self.queue.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.queue.selected_waiter() == Some(self.id) {
+                match generation_limit.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        self.queue.complete_selection(self.id);
+                        self.reservation.take();
+                        self.queue.changed.notify_waiters();
+                        return Ok(permit);
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => {
+                        return Err(generation_lanes_busy_error());
+                    }
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {}
+                }
+            }
+            let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+            tokio::select! {
+                () = &mut notified => {}
+                () = timeout => return Err(generation_queue_timeout_error(admission_timeout)),
+                () = cancellation.cancelled() => {
+                    return Err(OpenAiError::cancelled("request cancelled"));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for GenerationAdmissionQueueLease {
+    fn drop(&mut self) {
+        if self.reservation.is_some() {
+            self.queue.remove(self.id);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::frontend) struct GenerationAdmissionWork {
@@ -262,6 +545,7 @@ impl Drop for GenerationQueueReservation {
     }
 }
 
+#[cfg(test)]
 pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservation(
     generation_limit: Arc<Semaphore>,
     reservation: GenerationQueueReservation,
@@ -295,6 +579,21 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservatio
             Err(OpenAiError::cancelled("request cancelled"))
         }
     }
+}
+
+pub(in crate::frontend) async fn acquire_generation_permit_with_scheduling(
+    generation_limit: Arc<Semaphore>,
+    queue: Arc<GenerationAdmissionQueue>,
+    reservation: GenerationQueueReservation,
+    scheduling: GenerationAdmissionScheduling,
+    admission_timeout: Duration,
+    deadline: Instant,
+    cancellation: &CancellationToken,
+) -> OpenAiResult<OwnedSemaphorePermit> {
+    queue
+        .enqueue(scheduling, reservation)
+        .acquire(generation_limit, admission_timeout, deadline, cancellation)
+        .await
 }
 
 #[cfg(test)]

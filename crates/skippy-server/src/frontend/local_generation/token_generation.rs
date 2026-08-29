@@ -130,6 +130,10 @@ fn insert_resident_capacity_attrs(
         json!(decision.active_tokens),
     );
     attrs.insert(
+        attr_key::KV_CAPACITY_PHYSICAL_USED_TOKENS.to_string(),
+        json!(decision.physical_used_tokens),
+    );
+    attrs.insert(
         attr_key::KV_CAPACITY_PINNED_TOKENS.to_string(),
         json!(decision.pinned_tokens),
     );
@@ -164,6 +168,10 @@ fn insert_resident_capacity_attrs(
     attrs.insert(
         attr_key::KV_CAPACITY_EVICTED_TOKENS.to_string(),
         json!(decision.evicted_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_PHYSICAL_EVICTED_TOKENS.to_string(),
+        json!(decision.physical_evicted_tokens),
     );
     attrs.insert(
         attr_key::KV_CAPACITY_PREDICTED_RECOMPUTE_COST.to_string(),
@@ -654,11 +662,6 @@ impl StageOpenAiBackend {
             .recurrent_cache_prefix_token_ids
             .map(<[i32]>::to_vec);
         let max_tokens = request.max_tokens;
-        let final_prompt_token = *request
-            .prompt_token_ids
-            .last()
-            .expect("checked non-empty prompt");
-        let sampling = request.sampling.enabled.then(|| request.sampling.clone());
         let identity_timer = PhaseTimer::start();
         let (lookup_identities, refresh_cache_affinity) = match self.kv.as_ref() {
             Some(kv) => {
@@ -689,6 +692,7 @@ impl StageOpenAiBackend {
         let scheduler_session_id = session_id.to_string();
         let scheduler_ids = request.ids.clone();
         let scheduler_lookup_identities = Arc::clone(&lookup_identities);
+        let record_prefill_tokens = Arc::clone(&prefill_tokens);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
         let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
@@ -704,27 +708,71 @@ impl StageOpenAiBackend {
                     scheduler_lookup_identities.as_ref(),
                     kv_identity_ms,
                     recurrent_cache_prefix_token_ids.as_deref(),
-                    final_prompt_token,
-                    sampling.as_ref(),
                     max_tokens,
                     &mut scheduler_cache_stats,
                 )?;
                 Ok((outcome, scheduler_cache_stats))
             },
         )?;
-        let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
-        let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+        let mut runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+        let mut runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+        let mut runtime_lock_acquires = 1usize;
         let (outcome, updated_cache_stats) = outcome.value;
         *cache_stats = updated_cache_stats;
         let KvRestoreOutcome {
             runtime_sessions_before,
-            runtime_sessions_after,
+            mut runtime_sessions_after,
             restored_prefill,
             restored_prefill_tokens,
             capacity,
-            record,
-            prompt_prefill_sample,
+            mut record,
+            mut prompt_prefill_sample,
         } = outcome;
+        let mut prefill_chunk_count = 1usize;
+        let mut scheduler_batch_size_max = 1usize;
+        let resident_suffix_deferred = self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::ResidentKv)
+            && max_tokens > 0;
+        if resident_suffix_deferred && capacity.admitted {
+            let suffix_start = restored_prefill_tokens.min(request.prompt_token_ids.len());
+            let suffix = &request.prompt_token_ids[suffix_start..];
+            let suffix_outcome = self.prefill_resident_suffix(
+                session_id,
+                suffix,
+                request.sampling.enabled.then_some(request.sampling),
+            )?;
+            prompt_prefill_sample = Some(suffix_outcome.predicted);
+            prefill_chunk_count = suffix_outcome.chunk_count;
+            scheduler_batch_size_max = suffix_outcome.max_batch_size;
+            runtime_lock_wait_ms += suffix_outcome.runtime_lock_wait_ms;
+            runtime_lock_hold_ms += suffix_outcome.runtime_lock_hold_ms;
+            runtime_lock_acquires = runtime_lock_acquires.saturating_add(prefill_chunk_count);
+
+            let scheduler_backend = self.clone();
+            let scheduler_session_id = session_id.to_string();
+            let scheduler_ids = request.ids.clone();
+            let emit_debug = self.telemetry.is_debug_enabled();
+            let record_outcome = self.iteration_scheduler.execute_runtime_timed(
+                "feature-kv-record",
+                move |runtime| {
+                    let record = scheduler_backend.record_and_evict_kv(
+                        runtime,
+                        &scheduler_session_id,
+                        &scheduler_ids,
+                        record_prefill_tokens.as_ref(),
+                        restored_prefill,
+                        restored_prefill_tokens < record_prefill_tokens.len(),
+                    );
+                    Ok((record, emit_debug.then(|| runtime.session_stats())))
+                },
+            )?;
+            runtime_lock_wait_ms += record_outcome.runtime_lock_wait_ms;
+            runtime_lock_hold_ms += record_outcome.runtime_lock_hold_ms;
+            runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
+            (record, runtime_sessions_after) = record_outcome.value;
+        }
         if prompt_prefill_sample.is_some() {
             cache_stats.suffix_prefill_tokens = saturating_u32(
                 request
@@ -747,7 +795,14 @@ impl StageOpenAiBackend {
                         .saturating_add(prompt_tail_tokens)
                 ),
             );
-            attrs.insert("llama_stage.prefill_chunk_count".to_string(), json!(1));
+            attrs.insert(
+                "llama_stage.prefill_chunk_count".to_string(),
+                json!(prefill_chunk_count),
+            );
+            attrs.insert(
+                "skippy.scheduler.prefill_batch_size_max".to_string(),
+                json!(scheduler_batch_size_max),
+            );
             attrs.insert(
                 "skippy.kv.restored_prefill".to_string(),
                 json!(restored_prefill),
@@ -780,7 +835,10 @@ impl StageOpenAiBackend {
                 "llama_stage.runtime_lock_hold_ms".to_string(),
                 json!(runtime_lock_hold_ms),
             );
-            attrs.insert("llama_stage.runtime_lock_acquires".to_string(), json!(1));
+            attrs.insert(
+                "llama_stage.runtime_lock_acquires".to_string(),
+                json!(runtime_lock_acquires),
+            );
             Self::insert_runtime_session_stats(
                 &mut attrs,
                 "llama_stage.runtime_sessions_before",
@@ -830,23 +888,46 @@ impl StageOpenAiBackend {
         lookup_identities: &[PrefillKvIdentity],
         kv_identity_ms: f64,
         recurrent_cache_prefix_token_ids: Option<&[i32]>,
-        final_prompt_token: i32,
-        sampling: Option<&SamplingConfig>,
         max_tokens: u32,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<KvRestoreOutcome> {
         let emit_debug = self.telemetry.is_debug_enabled();
         let runtime_sessions_before = emit_debug.then(|| runtime.session_stats());
+        let (restored_prefill, restored_prefill_tokens, protected_resident_seq_id) =
+            if let Some(kv) = self.kv.as_ref() {
+                cache_stats.status = "miss";
+                self.lookup_and_restore_kv(
+                    kv,
+                    runtime,
+                    session_id,
+                    ids,
+                    prefill_tokens,
+                    lookup_identities,
+                    kv_identity_ms,
+                    cache_stats,
+                )
+            } else {
+                (false, 0, None)
+            };
         let capacity = if let Some(kv) = self.kv.as_ref() {
             let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
             let target_free_tokens =
                 decode_batch_tokens.saturating_add(u64::from(max_tokens).min(decode_batch_tokens));
+            let request_tokens = if kv.payload == StagePrefixCachePayload::ResidentKv {
+                prefill_tokens
+                    .len()
+                    .saturating_sub(restored_prefill_tokens)
+                    .saturating_add(usize::from(max_tokens > 0)) as u64
+            } else {
+                prefill_tokens.len() as u64
+            };
             kv.admit_resident_capacity(
                 runtime,
                 session_id,
-                prefill_tokens.len() as u64,
+                request_tokens,
                 decode_batch_tokens,
                 target_free_tokens,
+                protected_resident_seq_id,
             )
             .map_err(openai_backend_error)?
         } else {
@@ -866,42 +947,29 @@ impl StageOpenAiBackend {
                 prompt_prefill_sample: None,
             });
         }
-        let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
-            cache_stats.status = "miss";
-            self.lookup_and_restore_kv(
-                kv,
-                runtime,
-                session_id,
-                ids,
-                prefill_tokens,
-                lookup_identities,
-                kv_identity_ms,
-                cache_stats,
-            )
-        } else {
-            (false, 0)
-        };
         let resident_suffix_deferred = self
             .kv
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::ResidentKv);
         let resident_suffix_sampled =
             resident_suffix_sampling_enabled(resident_suffix_deferred, max_tokens);
-        let prompt_prefill_sample = if resident_suffix_sampled {
-            let suffix_start = restored_prefill_tokens.min(prefill_tokens.len());
-            let mut suffix = prefill_tokens[suffix_start..].to_vec();
-            suffix.push(final_prompt_token);
-            Some(
-                runtime
-                    .prefill_chunked_sampled(session_id, &suffix, sampling)
-                    .map_err(openai_backend_error)?,
-            )
-        } else {
-            None
-        };
-        let mut decoded_prefill_suffix =
-            resident_suffix_sampled && restored_prefill_tokens < prefill_tokens.len();
-        if !resident_suffix_sampled && restored_prefill_tokens < prefill_tokens.len() {
+        if resident_suffix_sampled {
+            cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
+            cache_stats.suffix_prefill_tokens =
+                saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
+            return Ok(KvRestoreOutcome {
+                runtime_sessions_before,
+                runtime_sessions_after: emit_debug.then(|| runtime.session_stats()),
+                restored_prefill,
+                restored_prefill_tokens,
+                capacity,
+                record: KvRecordResult::default(),
+                prompt_prefill_sample: None,
+            });
+        }
+        let prompt_prefill_sample = None;
+        let mut decoded_prefill_suffix = false;
+        if restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
             if let Some(checkpoint_tokens) =
                 recurrent_cache_prefix_token_ids.filter(|checkpoint_tokens| {
@@ -994,9 +1062,10 @@ impl StageOpenAiBackend {
         identities: &[PrefillKvIdentity],
         kv_identity_ms: f64,
         cache_stats: &mut GenerationCacheStats,
-    ) -> (bool, usize) {
+    ) -> (bool, usize, Option<i32>) {
         let mut restored_prefill = false;
         let mut restored_prefill_tokens = 0usize;
+        let mut protected_resident_seq_id = None;
         let kv_restore_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
         match kv.restore_exact_state(runtime, session_id, identities) {
             Ok(Some(restored)) => {
@@ -1084,6 +1153,7 @@ impl StageOpenAiBackend {
                             json!(prefill_tokens.len().saturating_sub(restored.token_count)),
                         );
                         restored_prefill_tokens = restored.token_count;
+                        protected_resident_seq_id = Some(restored.seq_id);
                         cache_stats.cached_prompt_tokens = saturating_u32(restored_prefill_tokens);
                         attrs.insert(
                             "skippy.kv.resident_seq_id".to_string(),
@@ -1134,7 +1204,11 @@ impl StageOpenAiBackend {
             );
             self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
         }
-        (restored_prefill, restored_prefill_tokens)
+        (
+            restored_prefill,
+            restored_prefill_tokens,
+            protected_resident_seq_id,
+        )
     }
 
     fn record_and_evict_kv(

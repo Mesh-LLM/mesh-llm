@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use skippy_scheduler::{
     CapacityDemand, ComponentCapacitySnapshot, EvictableCacheEntry, plan_component_capacity,
+    rank_eviction_candidates,
 };
 
 use crate::runtime_state::RuntimeState;
@@ -45,6 +46,7 @@ pub struct ResidentCapacityDecision {
     pub admitted: bool,
     pub capacity_tokens: u64,
     pub active_tokens: u64,
+    pub physical_used_tokens: u64,
     pub pinned_tokens: u64,
     pub request_tokens: u64,
     pub minimum_free_tokens: u64,
@@ -54,6 +56,7 @@ pub struct ResidentCapacityDecision {
     pub required_eviction_tokens: u64,
     pub evicted_entries: usize,
     pub evicted_tokens: u64,
+    pub physical_evicted_tokens: u64,
     pub predicted_recompute_cost: u64,
 }
 
@@ -61,7 +64,8 @@ impl KvStageIntegration {
     /// Admit one resident-KV operation against the native unified KV pool and
     /// release deterministic unreferenced prefixes needed to reach the healthy
     /// free-space watermark. Native sequence deletion always precedes radix
-    /// mutation, so a runtime failure leaves the selected cache entry intact.
+    /// mutation, and each deletion is reflected in the radix before physical
+    /// occupancy is measured again.
     pub fn admit_resident_capacity(
         &self,
         runtime: &mut RuntimeState,
@@ -69,6 +73,7 @@ impl KvStageIntegration {
         request_tokens: u64,
         minimum_free_tokens: u64,
         target_free_tokens: u64,
+        protected_seq_id: Option<i32>,
     ) -> Result<ResidentCapacityDecision> {
         if self.payload != StagePrefixCachePayload::ResidentKv {
             return Ok(ResidentCapacityDecision {
@@ -96,57 +101,73 @@ impl KvStageIntegration {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stats = radix.stats();
         let candidates = radix.resident_eviction_candidates();
-        let plan = plan_component_capacity(
-            &ComponentCapacitySnapshot {
-                component: "resident-kv-tokens".to_string(),
-                capacity_units: capacity_tokens,
-                active_units: active_tokens,
-                pinned_cache_units: stats.resident_pinned_tokens,
-                evictable_entries: candidates
-                    .iter()
-                    .map(|candidate| EvictableCacheEntry {
-                        id: candidate.value.seq_id.to_string(),
-                        units: resident_candidate_units(candidate),
-                        recompute_cost: candidate.value.recompute_cost,
-                        last_used: candidate.last_used,
-                    })
-                    .collect(),
-            },
-            CapacityDemand {
-                request_units: request_tokens,
-                minimum_free_units: minimum_free_tokens,
-                target_free_units: target_free_tokens,
-            },
-        );
+        #[cfg(test)]
+        let mut used_tokens = if runtime.is_modelless_for_test() {
+            active_tokens.saturating_add(stats.resident_tokens)
+        } else {
+            runtime.ensure_session_active(session_id)?;
+            runtime.memory_used_cells(session_id)?
+        };
+        #[cfg(not(test))]
+        let mut used_tokens = {
+            runtime.ensure_session_active(session_id)?;
+            runtime.memory_used_cells(session_id)?
+        };
+        let initial_used_tokens = used_tokens;
+        let occupied_after_request = used_tokens.saturating_add(request_tokens);
+        let available_free = capacity_tokens.saturating_sub(occupied_after_request);
+        let minimum_free = if minimum_free_tokens >= capacity_tokens {
+            available_free
+        } else {
+            minimum_free_tokens
+        };
+        let target_free = if target_free_tokens >= capacity_tokens {
+            available_free
+        } else {
+            target_free_tokens
+        }
+        .max(minimum_free)
+        .min(capacity_tokens);
+        let required_eviction_tokens = occupied_after_request
+            .saturating_add(target_free)
+            .saturating_sub(capacity_tokens);
+        let mut ranked = candidates
+            .iter()
+            .filter(|candidate| Some(candidate.value.seq_id) != protected_seq_id)
+            .map(|candidate| EvictableCacheEntry {
+                id: candidate.value.seq_id.to_string(),
+                units: resident_candidate_units(candidate),
+                recompute_cost: candidate.value.recompute_cost,
+                last_used: candidate.last_used,
+            })
+            .collect::<Vec<_>>();
+        rank_eviction_candidates(&mut ranked);
         let mut decision = ResidentCapacityDecision {
             enabled: true,
             capacity_known: true,
-            admitted: plan.admitted,
             capacity_tokens,
             active_tokens,
+            physical_used_tokens: initial_used_tokens,
             pinned_tokens: stats.resident_pinned_tokens,
             request_tokens,
             minimum_free_tokens,
             target_free_tokens,
-            projected_free_tokens: plan.projected_free_units,
-            admission_deficit_tokens: plan.admission_deficit_units,
-            required_eviction_tokens: plan.required_eviction_units,
-            predicted_recompute_cost: plan.predicted_recompute_cost,
+            required_eviction_tokens,
             ..ResidentCapacityDecision::default()
         };
-        if !plan.admitted {
-            return Ok(decision);
-        }
-
-        if !plan.victim_ids.is_empty() {
-            runtime.ensure_session_active(session_id)?;
-        }
-
         let mut sequences = self
             .resident_sequences
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for victim_id in &plan.victim_ids {
+        for ranked_victim in ranked {
+            if used_tokens
+                .saturating_add(request_tokens)
+                .saturating_add(target_free)
+                <= capacity_tokens
+            {
+                break;
+            }
+            let victim_id = &ranked_victim.id;
             let Some(victim) = candidates
                 .iter()
                 .find(|candidate| candidate.value.seq_id.to_string() == *victim_id)
@@ -163,11 +184,33 @@ impl KvStageIntegration {
                     )
                 })?;
             sequences.release(removed.value.seq_id);
+            #[cfg(test)]
+            let used_after = if runtime.is_modelless_for_test() {
+                active_tokens.saturating_add(radix.stats().resident_tokens)
+            } else {
+                runtime.memory_used_cells(session_id)?
+            };
+            #[cfg(not(test))]
+            let used_after = runtime.memory_used_cells(session_id)?;
             decision.evicted_entries = decision.evicted_entries.saturating_add(1);
             decision.evicted_tokens = decision
                 .evicted_tokens
                 .saturating_add(removed.value.token_count);
+            decision.physical_evicted_tokens = decision
+                .physical_evicted_tokens
+                .saturating_add(used_tokens.saturating_sub(used_after));
+            decision.predicted_recompute_cost = decision
+                .predicted_recompute_cost
+                .saturating_add(removed.value.recompute_cost);
+            used_tokens = used_after;
         }
+        decision.projected_free_tokens =
+            capacity_tokens.saturating_sub(used_tokens.saturating_add(request_tokens));
+        decision.admission_deficit_tokens = used_tokens
+            .saturating_add(request_tokens)
+            .saturating_add(minimum_free)
+            .saturating_sub(capacity_tokens);
+        decision.admitted = decision.admission_deficit_tokens == 0;
         Ok(decision)
     }
 
@@ -305,6 +348,7 @@ impl KvStageIntegration {
             0,
             decode_batch_tokens,
             decode_batch_tokens,
+            None,
         )?;
         if !decision.admitted {
             return self.evict_resident_prefix_for_tokens(runtime, session_id, decode_batch_tokens);

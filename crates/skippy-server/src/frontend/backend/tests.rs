@@ -58,6 +58,67 @@ fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
 }
 
 #[tokio::test]
+async fn queued_admission_groups_shared_prompts_before_the_next_lane_wave() {
+    let controller = admission_controller(1, 4);
+    let work = GenerationAdmissionWork::new(4, 1);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(2),
+            work,
+        )
+        .await
+        .expect("active request admission");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(3);
+    for (label, prompt) in [
+        ("unique", vec![9, 9, 9, 9]),
+        ("shared-a", vec![1, 2, 3, 4]),
+        ("shared-b", vec![1, 2, 3, 5]),
+    ] {
+        let controller = controller.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let cancellation = openai_frontend::CancellationToken::new();
+            let admitted = controller
+                .acquire_scheduled_work(
+                    &trusted_ids(label),
+                    &cancellation,
+                    Duration::from_secs(2),
+                    work,
+                    GenerationAdmissionScheduling::new(
+                        Arc::from(prompt),
+                        Arc::new(skippy_scheduler::CacheAffinity::default),
+                    ),
+                )
+                .await
+                .expect("queued request admission");
+            tx.send((label, admitted)).await.unwrap();
+        });
+    }
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all prompts become scheduler-visible");
+
+    drop(active);
+    let (first_label, first) = rx.recv().await.expect("first queued admission");
+    assert!(first_label.starts_with("shared-"));
+    drop(first);
+    let (second_label, second) = rx.recv().await.expect("second queued admission");
+    assert!(second_label.starts_with("shared-"));
+    assert_ne!(first_label, second_label);
+    drop(second);
+    let (third_label, third) = rx.recv().await.expect("third queued admission");
+    assert_eq!(third_label, "unique");
+    drop(third);
+}
+
+#[tokio::test]
 async fn predicted_wait_rejection_preserves_queue_capacity() {
     let controller = admission_controller(1, 2);
     let work = GenerationAdmissionWork::new(100, 100);

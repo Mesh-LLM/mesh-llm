@@ -217,6 +217,7 @@ dynamic_symbols! {
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_restore_prefix(session: *mut Session, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_memory_used_cells(session: *mut Session, out_used_cells: *mut u64, out_error: *mut *mut Error) -> Status;
     skippy_session_drop_sequence(session: *mut Session, seq_id: i32, out_error: *mut *mut Error) -> Status;
     skippy_tokenize(model: *mut Model, text: *const c_char, add_special: bool, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_detokenize(model: *mut Model, tokens: *const i32, token_count: usize, output_text: *mut c_char, output_text_capacity: usize, out_text_bytes: *mut usize, out_error: *mut *mut Error) -> Status;

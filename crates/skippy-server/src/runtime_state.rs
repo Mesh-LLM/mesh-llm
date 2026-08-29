@@ -55,6 +55,8 @@ pub struct RuntimeState {
     idle_sessions: Vec<RuntimeLaneSession>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    #[cfg(test)]
+    modelless_for_test: bool,
 }
 
 struct RuntimeLaneSession {
@@ -160,6 +162,7 @@ impl RuntimeState {
             idle_sessions: Vec::new(),
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
+            modelless_for_test: true,
         }
     }
 
@@ -181,6 +184,11 @@ impl RuntimeState {
     /// configured default.
     pub fn kv_pool_tokens(&self) -> u32 {
         self.ctx_size
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_modelless_for_test(&self) -> bool {
+        self.modelless_for_test
     }
 }
 
@@ -236,6 +244,8 @@ pub fn load_runtime_with_overrides(
         idle_sessions: Vec::new(),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
 }
 
@@ -285,6 +295,8 @@ pub fn load_runtime_with_overrides_and_open_events(
         idle_sessions: Vec::new(),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
 }
 

@@ -469,6 +469,12 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_memory_used_cells(
+        session: *mut Session,
+        out_used_cells: *mut u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_drop_sequence(
         session: *mut Session,
         seq_id: i32,
