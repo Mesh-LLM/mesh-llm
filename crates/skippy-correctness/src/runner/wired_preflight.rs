@@ -44,7 +44,8 @@ pub struct StageResidency {
 impl StageResidency {
     /// Estimated wired bytes for this stage's context.
     pub fn resident_bytes(&self) -> u64 {
-        self.gpu_weight_bytes.saturating_add(PER_CONTEXT_OVERHEAD_BYTES)
+        self.gpu_weight_bytes
+            .saturating_add(PER_CONTEXT_OVERHEAD_BYTES)
     }
 }
 
@@ -87,9 +88,15 @@ pub fn stage_residency(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreflightDecision {
     /// The pair fits; carry the numbers for reporting.
-    Fits { resident_bytes: u64, budget_bytes: u64 },
+    Fits {
+        resident_bytes: u64,
+        budget_bytes: u64,
+    },
     /// The pair cannot fit; carry the numbers for the error text.
-    Exceeds { resident_bytes: u64, budget_bytes: u64 },
+    Exceeds {
+        resident_bytes: u64,
+        budget_bytes: u64,
+    },
 }
 
 /// Pure arithmetic: does the concurrent stage pair fit `budget_bytes`?
@@ -102,9 +109,15 @@ pub fn stage_pair_fits(
         .resident_bytes()
         .saturating_add(stage1.resident_bytes());
     if resident <= budget_bytes {
-        PreflightDecision::Fits { resident_bytes: resident, budget_bytes }
+        PreflightDecision::Fits {
+            resident_bytes: resident,
+            budget_bytes,
+        }
     } else {
-        PreflightDecision::Exceeds { resident_bytes: resident, budget_bytes }
+        PreflightDecision::Exceeds {
+            resident_bytes: resident,
+            budget_bytes,
+        }
     }
 }
 
@@ -134,7 +147,9 @@ pub fn wired_budget_bytes(memory_total: u64, wired_limit_mb: u64) -> u64 {
 #[cfg(target_os = "macos")]
 pub fn read_iogpu_wired_limit_mb() -> Option<u64> {
     if let Some(value) = std::env::var_os("SKIPPY_WIRED_LIMIT_MB") {
-        return value.to_str().and_then(|text| text.trim().parse::<u64>().ok());
+        return value
+            .to_str()
+            .and_then(|text| text.trim().parse::<u64>().ok());
     }
     let output = std::process::Command::new("sysctl")
         .args(["-n", "iogpu.wired_limit_mb"])
@@ -154,19 +169,23 @@ pub fn read_iogpu_wired_limit_mb() -> Option<u64> {
 /// None when no GPU device is visible (CPU-only run) or the platform is not
 /// macOS - callers skip the preflight then.
 pub fn metal_device_budget() -> Result<Option<(u64, u64)>> {
-    let devices = skippy_runtime::backend_devices().context("failed to enumerate backend devices")?;
+    let devices =
+        skippy_runtime::backend_devices().context("failed to enumerate backend devices")?;
     let Some(gpu) = devices
         .iter()
         .find(|device| device.device_type == skippy_runtime::BackendDeviceType::Gpu)
         .or_else(|| {
-            devices
-                .iter()
-                .find(|device| device.device_type == skippy_runtime::BackendDeviceType::IntegratedGpu)
+            devices.iter().find(|device| {
+                device.device_type == skippy_runtime::BackendDeviceType::IntegratedGpu
+            })
         })
     else {
         return Ok(None);
     };
-    Ok(Some((gpu.memory_total, read_iogpu_wired_limit_mb().unwrap_or(0))))
+    Ok(Some((
+        gpu.memory_total,
+        read_iogpu_wired_limit_mb().unwrap_or(0),
+    )))
 }
 
 /// Full preflight for one split of the boundary lane: estimate both stages'
@@ -196,13 +215,17 @@ pub fn preflight_stage_pair(
     // llama.cpp places the LAST n_gpu_layers layers on the GPU; with the
     // stage filter each stage keeps the intersection of its range with that
     // window (src/llama-model.cpp, stage_gpu_start/stage_gpu_end).
-    let i_gpu_start = layer_end.saturating_sub(n_gpu_layers.clamp(0, u64::try_from(layer_end).unwrap_or(0)) as usize);
+    let i_gpu_start = layer_end
+        .saturating_sub(n_gpu_layers.clamp(0, u64::try_from(layer_end).unwrap_or(0)) as usize);
     let stage0 = stage_residency(&profile, 0, split_layer, i_gpu_start, true, false);
     let stage1 = stage_residency(&profile, split_layer, layer_end, i_gpu_start, false, true);
     let budget = wired_budget_bytes(memory_total, wired_limit_mb);
     match stage_pair_fits(&stage0, &stage1, budget) {
         PreflightDecision::Fits { .. } => Ok(()),
-        PreflightDecision::Exceeds { resident_bytes, budget_bytes } => bail!(
+        PreflightDecision::Exceeds {
+            resident_bytes,
+            budget_bytes,
+        } => bail!(
             "wired-memory preflight: concurrent stage pair for split {split_layer} needs \
              ~{resident_bytes} bytes but only {budget_bytes} bytes are available \
              (memory_total={memory_total}, iogpu.wired_limit_mb={wired_limit_mb}, \
@@ -282,11 +305,17 @@ mod tests {
 
         assert_eq!(
             stage_pair_fits(&s0, &s1, resident),
-            PreflightDecision::Fits { resident_bytes: resident, budget_bytes: resident }
+            PreflightDecision::Fits {
+                resident_bytes: resident,
+                budget_bytes: resident
+            }
         );
         assert_eq!(
             stage_pair_fits(&s0, &s1, resident - 1),
-            PreflightDecision::Exceeds { resident_bytes: resident, budget_bytes: resident - 1 }
+            PreflightDecision::Exceeds {
+                resident_bytes: resident,
+                budget_bytes: resident - 1
+            }
         );
     }
 

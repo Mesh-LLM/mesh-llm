@@ -53,7 +53,6 @@ impl Default for BoundaryTensorInfo {
     }
 }
 
-
 pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
 
 #[repr(C)]

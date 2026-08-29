@@ -950,7 +950,9 @@ pub struct GgufLayerByteProfile {
 /// Extract the repeating-layer index from a GGUF tensor name (`blk.7.mlvm.`,
 /// `model.layers.7.`), if present.
 fn gguf_tensor_layer_index(name: &str) -> Option<usize> {
-    let rest = name.strip_prefix("blk.").or_else(|| name.strip_prefix("model.layers."))?;
+    let rest = name
+        .strip_prefix("blk.")
+        .or_else(|| name.strip_prefix("model.layers."))?;
     let end = rest.find('.')?;
     let index: usize = rest[..end].parse().ok()?;
     Some(index)

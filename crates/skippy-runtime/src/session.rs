@@ -3,9 +3,9 @@ use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
-    BoundaryTensorInfo as RawBoundaryTensorInfo, GenerationSignalWindow as RawGenerationSignalWindow,
-    NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
-    Session as RawSession, TokenSignal as RawTokenSignal,
+    BoundaryTensorInfo as RawBoundaryTensorInfo,
+    GenerationSignalWindow as RawGenerationSignalWindow, NativeMtpDraft as RawNativeMtpDraft,
+    SamplingConfig as RawSamplingConfig, Session as RawSession, TokenSignal as RawTokenSignal,
 };
 
 use crate::error::ensure_ok;
