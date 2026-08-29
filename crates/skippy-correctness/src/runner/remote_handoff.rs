@@ -1009,6 +1009,9 @@ fn handle_receiver_connection(
     local_state_identity: &str,
 ) -> Result<bool> {
     stream.set_nodelay(true).ok();
+    // A per-read socket property: it stays in force for every subsequent
+    // read on this connection, so a sender that stalls mid-stream errors
+    // out after this long rather than wedging the accept loop.
     stream
         .set_read_timeout(Some(Duration::from_secs(args.handshake_timeout_secs)))
         .ok();

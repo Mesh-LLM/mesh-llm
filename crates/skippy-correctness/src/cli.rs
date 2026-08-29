@@ -241,7 +241,11 @@ pub struct RemoteHandoffArgs {
     pub baseline: bool,
     #[arg(long)]
     pub runtime_lane_count: Option<u32>,
-    #[arg(long, default_value_t = 600)]
+    #[arg(
+        long,
+        default_value_t = 600,
+        help = "Per-read socket timeout for the whole connection (not just the handshake): a peer that stalls mid-stream errors out after this long"
+    )]
     pub handshake_timeout_secs: u64,
     #[arg(
         long,
