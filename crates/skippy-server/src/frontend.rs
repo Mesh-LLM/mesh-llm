@@ -39,7 +39,8 @@ pub use self::generation::{
     serve_embedded_openai_with_shutdown, serve_openai,
 };
 pub(crate) use self::generation::{
-    default_generation_queue_capacity, serve_embedded_openai_with_scheduler,
+    default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,
+    serve_embedded_openai_with_scheduler,
 };
 pub use self::generation_receipt::{
     GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,

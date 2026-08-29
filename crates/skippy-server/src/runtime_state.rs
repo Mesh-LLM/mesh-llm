@@ -163,6 +163,12 @@ impl RuntimeState {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn track_session_tokens_for_test(&mut self, session_id: &str, token_count: u64) {
+        self.session_token_counts
+            .insert(session_id.to_string(), token_count);
+    }
+
     pub fn lane_count(&self) -> u32 {
         self.lane_count
     }

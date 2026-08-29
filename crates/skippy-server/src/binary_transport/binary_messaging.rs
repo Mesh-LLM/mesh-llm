@@ -262,6 +262,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         default_max_tokens: openai_options.default_max_tokens,
                         request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
                         generation_concurrency: openai_options.generation_concurrency,
+                        adaptive_generation_min_concurrency: openai_options
+                            .adaptive_generation_min_concurrency,
                         generation_queue_capacity: openai_options.generation_queue_capacity,
                         generation_admission_timeout_secs: openai_options
                             .generation_admission_timeout_secs,

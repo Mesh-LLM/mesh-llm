@@ -295,14 +295,11 @@ fn append_pending_linear_proposal_tokens(pending: &mut Vec<i32>, committed_token
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
-    use anyhow::Result;
-    use skippy_protocol::{LoadMode, StageConfig};
-    use skippy_runtime::SamplingConfig;
-    use tokio::sync::Semaphore;
-
     use super::*;
     use crate::frontend::admission::GenerationTokenBudget;
-    use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
+    use crate::frontend::generation::{
+        GenerationConcurrencyController, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds,
+    };
     use crate::frontend::iteration_scheduler::IterationScheduler;
     use crate::frontend::linear_proposal::{
         LinearProposal, LinearProposalDiscardReason, LinearProposalIngress,
@@ -313,6 +310,9 @@ mod tests {
     use crate::frontend::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
     use crate::runtime_state::RuntimeState;
     use crate::telemetry::{Telemetry, TelemetryLevel};
+    use anyhow::Result;
+    use skippy_protocol::{LoadMode, StageConfig};
+    use skippy_runtime::SamplingConfig;
 
     #[derive(Default)]
     struct PendingTokenIngress {
@@ -414,7 +414,7 @@ mod tests {
             adaptive_speculative_window: false,
             ngram_max: 0,
             speculative: speculative.clone(),
-            generation_limit: Arc::new(Semaphore::new(1)),
+            generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
             generation_queue_depth: Arc::new(AtomicUsize::new(0)),
             generation_queue_limit: 1,
             generation_admission_timeout: std::time::Duration::from_secs(10),
@@ -469,6 +469,7 @@ mod tests {
             native_mtp_span_admitted: false,
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
+            direct_iteration_channel: None,
         };
         let mut emitted = Vec::new();
 

@@ -35,6 +35,7 @@ pub struct EmbeddedOpenAiStageOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub generation_concurrency: usize,
+    pub adaptive_generation_min_concurrency: Option<usize>,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
@@ -92,6 +93,13 @@ impl BinaryStageOptions {
             args.openai_generation_queue_capacity.unwrap_or_else(|| {
                 crate::frontend::default_generation_queue_capacity(openai_generation_concurrency)
             });
+        let adaptive_generation_min_concurrency =
+            crate::frontend::resolve_adaptive_generation_min_concurrency(
+                args.openai_adaptive_generation_concurrency,
+                args.openai_adaptive_generation_min_concurrency,
+                openai_generation_concurrency,
+                "--openai-adaptive-generation-min-concurrency",
+            )?;
         let openai_speculative: SpeculativeDecodeConfig = args
             .openai_speculative_config
             .as_ref()
@@ -107,6 +115,7 @@ impl BinaryStageOptions {
                 model_id: args.openai_model_id,
                 default_max_tokens: args.openai_default_max_tokens,
                 generation_concurrency: openai_generation_concurrency,
+                adaptive_generation_min_concurrency,
                 generation_queue_capacity: openai_generation_queue_capacity,
                 generation_admission_timeout_secs: args.openai_generation_admission_timeout_secs,
                 prefill_chunk_size: args.openai_prefill_chunk_size,

@@ -470,6 +470,12 @@ fn embedded_openai_args_from(
         default_max_tokens: embedded_args.default_max_tokens,
         request_defaults: embedded_args.request_defaults,
         generation_concurrency: embedded_args.generation_concurrency,
+        adaptive_generation_min_concurrency: None,
+        generation_queue_capacity: embedded_args
+            .generation_concurrency
+            .saturating_mul(8)
+            .clamp(16, 256),
+        generation_admission_timeout_secs: 60,
         prefill_chunk_size: embedded_args.prefill_chunk_size,
         prefill_chunk_policy: embedded_args.prefill_chunk_policy,
         prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,

@@ -10,6 +10,7 @@ use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::decode_scheduler::VerifyWindowPipelineStats;
 use crate::frontend::generation::DraftRunner;
+use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::GenerationTokenLimit;
 use crate::frontend::generation::OpenAiGenerationIds;
@@ -60,7 +61,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) adaptive_speculative_window: bool,
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: SpeculativeDecodeConfig,
-    pub(in crate::frontend) generation_limit: Arc<Semaphore>,
+    pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
     pub(in crate::frontend) generation_admission_timeout: Duration,

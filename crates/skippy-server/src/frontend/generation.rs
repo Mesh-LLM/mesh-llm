@@ -1,4 +1,5 @@
 mod cache_hints;
+mod concurrency;
 mod draft_runner;
 mod incremental_text;
 mod parsing;
@@ -25,6 +26,7 @@ pub(in crate::frontend) use cache_hints::{
     ChainPrefixRestore, GENERATION_RETRY_AFTER_SECS, GENERATION_TOKEN_BUDGET_TIMEOUT,
     GenerationCacheStats, MAX_EXACT_REPLAY_TOKENS, OpenAiCacheHints, OpenAiGenerationIds,
 };
+pub(in crate::frontend) use concurrency::*;
 pub(in crate::frontend) use draft_runner::*;
 #[cfg(test)]
 pub(in crate::frontend) use incremental_text::recorded_fixture;
@@ -38,6 +40,8 @@ pub(in crate::frontend) use types::*;
 pub(crate) fn default_generation_queue_capacity(generation_concurrency: usize) -> usize {
     generation_concurrency.saturating_mul(8).clamp(16, 256)
 }
+
+pub(crate) use server::resolve_adaptive_generation_min_concurrency;
 
 #[cfg(test)]
 mod admission_defaults_tests {

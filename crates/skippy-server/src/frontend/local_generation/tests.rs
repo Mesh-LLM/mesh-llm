@@ -4,19 +4,11 @@ use std::sync::{
 };
 use std::{thread, time::Duration};
 
-use anyhow::{Result, bail};
-use openai_frontend::{ChatCompletionRequest, OpenAiBackend};
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
-use skippy_runtime::SamplingConfig;
-use tokio::sync::Semaphore;
-
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::generation::{
-    LocalGeneration, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds, StageOpenAiBackend,
-    TokenControl,
+    GenerationConcurrencyController, LocalGeneration, OpenAiBackendMode, OpenAiCacheHints,
+    OpenAiGenerationIds, StageOpenAiBackend, TokenControl,
 };
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::local_generation::{
@@ -30,6 +22,12 @@ use crate::frontend::{
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::load_runtime;
 use crate::telemetry::{Telemetry, TelemetryLevel};
+use anyhow::{Result, bail};
+use openai_frontend::{ChatCompletionRequest, OpenAiBackend};
+use skippy_protocol::{
+    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
+};
+use skippy_runtime::SamplingConfig;
 
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;
@@ -170,7 +168,7 @@ fn recurrent_test_backend(
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: speculative.clone(),
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),
@@ -516,7 +514,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: speculative.clone(),
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),

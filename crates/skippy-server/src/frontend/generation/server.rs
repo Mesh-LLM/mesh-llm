@@ -8,6 +8,7 @@ use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
@@ -58,7 +59,6 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 
 pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let config = load_json::<StageConfig>(&args.config)
@@ -86,6 +86,12 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let generation_concurrency = args
         .generation_concurrency
         .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
+    let adaptive_generation_min_concurrency = resolve_adaptive_generation_min_concurrency(
+        args.adaptive_generation_concurrency,
+        args.adaptive_generation_min_concurrency,
+        generation_concurrency,
+        "--adaptive-generation-min-concurrency",
+    )?;
     let generation_queue_capacity = args
         .generation_queue_capacity
         .unwrap_or_else(|| super::default_generation_queue_capacity(generation_concurrency));
@@ -115,6 +121,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     insert_generation_admission_config_attrs(
         &mut server_start_attrs,
         generation_concurrency,
+        adaptive_generation_min_concurrency,
         generation_queue_capacity,
         args.generation_admission_timeout_secs,
     );
@@ -158,7 +165,12 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         adaptive_speculative_window: false,
         ngram_max: standalone_ngram_proposal_limit(&speculative),
         speculative,
-        generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
+        generation_limit: Arc::new(match adaptive_generation_min_concurrency {
+            Some(initial_limit) => {
+                GenerationConcurrencyController::adaptive(generation_concurrency, initial_limit)
+            }
+            None => GenerationConcurrencyController::fixed(generation_concurrency),
+        }),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: generation_queue_capacity,
         generation_admission_timeout,
@@ -200,6 +212,7 @@ pub struct EmbeddedOpenAiArgs {
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
+    pub adaptive_generation_min_concurrency: Option<usize>,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
@@ -446,6 +459,7 @@ fn embedded_openai_backend_with_scheduler(
     insert_generation_admission_config_attrs(
         &mut server_start_attrs,
         args.generation_concurrency,
+        args.adaptive_generation_min_concurrency,
         args.generation_queue_capacity,
         args.generation_admission_timeout_secs,
     );
@@ -484,7 +498,13 @@ fn embedded_openai_backend_with_scheduler(
         adaptive_speculative_window: args.adaptive_speculative_window,
         ngram_max: standalone_ngram_proposal_limit(&args.speculative),
         speculative: args.speculative,
-        generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
+        generation_limit: Arc::new(match args.adaptive_generation_min_concurrency {
+            Some(initial_limit) => GenerationConcurrencyController::adaptive(
+                args.generation_concurrency,
+                initial_limit,
+            ),
+            None => GenerationConcurrencyController::fixed(args.generation_concurrency),
+        }),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_queue_capacity,
         generation_admission_timeout: Duration::from_secs(args.generation_admission_timeout_secs),
@@ -531,9 +551,32 @@ fn validate_generation_receipt_topology(
     Ok(())
 }
 
+pub(crate) fn resolve_adaptive_generation_min_concurrency(
+    enabled: bool,
+    configured_minimum: Option<usize>,
+    hard_limit: usize,
+    minimum_arg: &str,
+) -> Result<Option<usize>> {
+    if !enabled {
+        if configured_minimum.is_some() {
+            bail!("{minimum_arg} requires adaptive generation concurrency to be enabled");
+        }
+        return Ok(None);
+    }
+    let minimum = configured_minimum.unwrap_or(1);
+    if minimum == 0 {
+        bail!("{minimum_arg} must be greater than zero");
+    }
+    if minimum > hard_limit {
+        bail!("{minimum_arg} ({minimum}) exceeds generation concurrency ({hard_limit})");
+    }
+    Ok(Some(minimum))
+}
+
 fn insert_generation_admission_config_attrs(
     attrs: &mut BTreeMap<String, Value>,
     generation_concurrency: usize,
+    adaptive_generation_min_concurrency: Option<usize>,
     generation_queue_capacity: usize,
     generation_admission_timeout_secs: u64,
 ) {
@@ -541,6 +584,16 @@ fn insert_generation_admission_config_attrs(
         "llama_stage.generation_concurrency".to_string(),
         json!(generation_concurrency),
     );
+    attrs.insert(
+        "llama_stage.adaptive_generation_concurrency".to_string(),
+        json!(adaptive_generation_min_concurrency.is_some()),
+    );
+    if let Some(minimum) = adaptive_generation_min_concurrency {
+        attrs.insert(
+            "llama_stage.adaptive_generation_min_concurrency".to_string(),
+            json!(minimum),
+        );
+    }
     attrs.insert(
         "llama_stage.generation_queue_capacity".to_string(),
         json!(generation_queue_capacity),
@@ -594,7 +647,9 @@ pub(in crate::frontend) async fn openai_http_telemetry(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_generation_receipt_topology;
+    use super::{
+        resolve_adaptive_generation_min_concurrency, validate_generation_receipt_topology,
+    };
 
     #[test]
     fn generation_receipts_require_local_single_stage_topology() {
@@ -603,5 +658,25 @@ mod tests {
         assert!(validate_generation_receipt_topology(true, true, false).is_err());
         assert!(validate_generation_receipt_topology(true, false, true).is_err());
         assert!(validate_generation_receipt_topology(true, true, true).is_err());
+    }
+
+    #[test]
+    fn adaptive_generation_minimum_is_explicit_and_bounded() {
+        assert_eq!(
+            resolve_adaptive_generation_min_concurrency(true, None, 8, "--minimum")
+                .expect("default minimum"),
+            Some(1)
+        );
+        assert_eq!(
+            resolve_adaptive_generation_min_concurrency(false, None, 8, "--minimum")
+                .expect("fixed mode"),
+            None
+        );
+        assert!(
+            resolve_adaptive_generation_min_concurrency(false, Some(2), 8, "--minimum").is_err()
+        );
+        assert!(
+            resolve_adaptive_generation_min_concurrency(true, Some(9), 8, "--minimum").is_err()
+        );
     }
 }

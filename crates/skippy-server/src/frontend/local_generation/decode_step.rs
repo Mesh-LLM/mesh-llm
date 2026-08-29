@@ -61,7 +61,11 @@ impl StageOpenAiBackend {
                 token_runtime_lock_hold_ms,
             )
         } else {
-            let outcome = self.iteration_scheduler.execute_iteration(
+            let channel = state
+                .direct_iteration_channel
+                .get_or_insert_with(|| self.iteration_scheduler.direct_iteration_channel());
+            let outcome = self.iteration_scheduler.execute_iteration_on(
+                channel,
                 session_id,
                 &[state.current],
                 &[],

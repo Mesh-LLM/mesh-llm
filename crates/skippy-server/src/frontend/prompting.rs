@@ -190,6 +190,23 @@ impl StageOpenAiBackend {
             return Ok(None);
         };
 
+        let model = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .model
+            .reader();
+        self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
+    }
+
+    pub(super) fn parse_chat_output_with_reader(
+        &self,
+        model: &skippy_runtime::StageModelReader,
+        text: &str,
+        request: &ChatCompletionRequest,
+        metadata: &str,
+        is_partial: bool,
+    ) -> OpenAiResult<Option<ParsedChatMessage>> {
         // Emulation path: when tools were requested but the prompt was rendered
         // without native tool support, the model emitted TOOL_CALL text lines.
         // Parse those into OpenAI tool_calls instead of using the native parser.
@@ -199,16 +216,9 @@ impl StageOpenAiBackend {
             return Ok(parse_emulated_chat_output(text, request, is_partial));
         }
 
-        let parsed_json = {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            runtime
-                .model
-                .parse_chat_response_json(text, metadata, is_partial)
-                .map_err(openai_backend_error)?
-        };
+        let parsed_json = model
+            .parse_chat_response_json(text, metadata, is_partial)
+            .map_err(openai_backend_error)?;
         Ok(parsed_chat_message_from_json(&parsed_json, request))
     }
 

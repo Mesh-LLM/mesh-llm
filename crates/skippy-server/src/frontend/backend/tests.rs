@@ -38,7 +38,9 @@ fn admission_controller(
     generation_queue_limit: usize,
 ) -> GenerationAdmissionController {
     GenerationAdmissionController {
-        generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(
+            generation_concurrency,
+        )),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit,
         generation_service_estimator: Arc::new(GenerationServiceEstimator::new(

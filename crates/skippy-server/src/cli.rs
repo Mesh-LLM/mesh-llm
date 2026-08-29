@@ -97,6 +97,16 @@ pub struct ServeBinaryArgs {
     pub openai_generation_concurrency: Option<usize>,
     #[arg(
         long,
+        help = "Adapt active OpenAI generation permits under sustained queued load, up to --openai-generation-concurrency. Disabled by default."
+    )]
+    pub openai_adaptive_generation_concurrency: bool,
+    #[arg(
+        long,
+        help = "Initial committed generation permits when adaptive OpenAI generation concurrency is enabled. Defaults to 1; higher values require an externally validated hardware/model certificate."
+    )]
+    pub openai_adaptive_generation_min_concurrency: Option<usize>,
+    #[arg(
+        long,
         help = "Maximum number of additional OpenAI generation requests allowed to wait. Defaults to clamp(8 * resolved generation concurrency, 16, 256)."
     )]
     pub openai_generation_queue_capacity: Option<usize>,
@@ -184,6 +194,16 @@ pub struct ServeOpenAiArgs {
     pub generation_concurrency: Option<usize>,
     #[arg(
         long,
+        help = "Adapt active generation permits under sustained queued load, up to --generation-concurrency. Disabled by default."
+    )]
+    pub adaptive_generation_concurrency: bool,
+    #[arg(
+        long,
+        help = "Initial committed generation permits when adaptive generation concurrency is enabled. Defaults to 1; higher values require an externally validated hardware/model certificate."
+    )]
+    pub adaptive_generation_min_concurrency: Option<usize>,
+    #[arg(
+        long,
         help = "Maximum number of additional generation requests allowed to wait. Defaults to clamp(8 * resolved generation concurrency, 16, 256)."
     )]
     pub generation_queue_capacity: Option<usize>,
@@ -268,6 +288,8 @@ mod tests {
         assert_eq!(args.openai_prefill_adaptive_max, 384);
         assert_eq!(args.openai_prefill_adaptive_target_ms, 100.0);
         assert_eq!(args.openai_generation_concurrency, None);
+        assert!(!args.openai_adaptive_generation_concurrency);
+        assert_eq!(args.openai_adaptive_generation_min_concurrency, None);
         assert_eq!(args.openai_generation_queue_capacity, None);
         assert_eq!(args.openai_generation_admission_timeout_secs, 60);
 
@@ -283,6 +305,8 @@ mod tests {
         assert_eq!(args.prefill_adaptive_max, 384);
         assert_eq!(args.prefill_adaptive_target_ms, 100.0);
         assert_eq!(args.generation_concurrency, None);
+        assert!(!args.adaptive_generation_concurrency);
+        assert_eq!(args.adaptive_generation_min_concurrency, None);
         assert_eq!(args.generation_queue_capacity, None);
         assert_eq!(args.generation_admission_timeout_secs, 60);
         assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Metrics);

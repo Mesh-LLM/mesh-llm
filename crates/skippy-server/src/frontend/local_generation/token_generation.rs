@@ -12,13 +12,15 @@ use crate::frontend::generation::TokenControl;
 use crate::frontend::generation_receipt::{
     GenerationCommit, GenerationStart, complete_generation_before_cleanup,
 };
+use crate::frontend::iteration_scheduler::DirectIterationChannel;
 use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
+use crate::frontend::iteration_scheduler::ScheduledResumeRequest;
 use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
-use crate::kv_integration::{KvStageIntegration, StagePrefixCachePayload};
+use crate::kv_integration::{KvStageIntegration, PrefillKvIdentity, StagePrefixCachePayload};
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
 use axum::http::StatusCode;
 use openai_frontend::ChatCompletionRequest;
@@ -170,8 +172,8 @@ fn insert_resident_capacity_attrs(
 }
 
 struct KvRestoreOutcome {
-    runtime_sessions_before: RuntimeSessionStats,
-    runtime_sessions_after: RuntimeSessionStats,
+    runtime_sessions_before: Option<RuntimeSessionStats>,
+    runtime_sessions_after: Option<RuntimeSessionStats>,
     restored_prefill: bool,
     restored_prefill_tokens: usize,
     capacity: crate::kv_integration::ResidentCapacityDecision,
@@ -210,6 +212,7 @@ pub(super) struct DecodeState {
     pub(super) native_mtp_span_admitted: bool,
     pub(super) post_prefill_hook_checked: bool,
     pub(super) last_mid_generation_hook_at: Option<usize>,
+    pub(super) direct_iteration_channel: Option<DirectIterationChannel>,
 }
 
 pub(super) enum LinearProposalProgress {
@@ -656,27 +659,39 @@ impl StageOpenAiBackend {
             .last()
             .expect("checked non-empty prompt");
         let sampling = request.sampling.enabled.then(|| request.sampling.clone());
-        let (cache_affinity, refresh_cache_affinity) = match self.kv.as_ref() {
+        let identity_timer = PhaseTimer::start();
+        let (lookup_identities, refresh_cache_affinity) = match self.kv.as_ref() {
             Some(kv) => {
                 let base = self.local_kv_message_base(session_id, request.ids);
-                let identities =
-                    kv.lookup_identities(&self.config, &base, 0, prefill_tokens.as_ref());
-                let affinity = kv.peek_cache_affinity(&self.config, &identities);
+                let identities = Arc::<[PrefillKvIdentity]>::from(kv.lookup_identities(
+                    &self.config,
+                    &base,
+                    0,
+                    prefill_tokens.as_ref(),
+                ));
                 let kv = kv.clone();
                 let config = self.config.clone();
-                let refresh = Box::new(move || kv.peek_cache_affinity(&config, &identities))
-                    as Box<dyn Fn() -> skippy_scheduler::CacheAffinity + Send>;
-                (affinity, Some(refresh))
+                let refresh_identities = Arc::clone(&identities);
+                (
+                    identities,
+                    Box::new(move || kv.peek_cache_affinity(&config, &refresh_identities))
+                        as Box<dyn Fn() -> skippy_scheduler::CacheAffinity + Send>,
+                )
             }
-            None => (skippy_scheduler::CacheAffinity::default(), None),
+            None => (
+                Arc::<[PrefillKvIdentity]>::from([]),
+                Box::new(skippy_scheduler::CacheAffinity::default)
+                    as Box<dyn Fn() -> skippy_scheduler::CacheAffinity + Send>,
+            ),
         };
+        let kv_identity_ms = identity_timer.elapsed_ms();
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
         let scheduler_ids = request.ids.clone();
+        let scheduler_lookup_identities = Arc::clone(&lookup_identities);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
         let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
-            cache_affinity,
             Arc::clone(&prefill_tokens),
             0,
             refresh_cache_affinity,
@@ -686,6 +701,8 @@ impl StageOpenAiBackend {
                     &scheduler_ids,
                     &scheduler_session_id,
                     prefill_tokens.as_ref(),
+                    scheduler_lookup_identities.as_ref(),
+                    kv_identity_ms,
                     recurrent_cache_prefix_token_ids.as_deref(),
                     final_prompt_token,
                     sampling.as_ref(),
@@ -717,63 +734,69 @@ impl StageOpenAiBackend {
             );
         }
         let prompt_tail_tokens = usize::from(prompt_prefill_sample.is_some());
-        let mut attrs = self.openai_attrs(request.ids);
-        attrs.insert(
-            "llama_stage.prefill_token_count".to_string(),
-            json!(
-                request
-                    .prompt_token_ids
-                    .len()
-                    .saturating_sub(1)
-                    .saturating_add(prompt_tail_tokens)
-            ),
-        );
-        attrs.insert("llama_stage.prefill_chunk_count".to_string(), json!(1));
-        attrs.insert(
-            "skippy.kv.restored_prefill".to_string(),
-            json!(restored_prefill),
-        );
-        attrs.insert(
-            "skippy.kv.restored_prefill_tokens".to_string(),
-            json!(restored_prefill_tokens),
-        );
-        attrs.insert(
-            "skippy.kv.prefill_suffix_tokens".to_string(),
-            json!(
-                request
-                    .prompt_token_ids
-                    .len()
-                    .saturating_sub(1)
-                    .saturating_sub(restored_prefill_tokens)
-                    .saturating_add(prompt_tail_tokens)
-            ),
-        );
-        attrs.insert(
-            "skippy.kv.recorded_pages".to_string(),
-            json!(record.resident_recorded_pages),
-        );
-        insert_resident_capacity_attrs(&mut attrs, &capacity);
-        attrs.insert(
-            "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
-        );
-        attrs.insert(
-            "llama_stage.runtime_lock_hold_ms".to_string(),
-            json!(runtime_lock_hold_ms),
-        );
-        attrs.insert("llama_stage.runtime_lock_acquires".to_string(), json!(1));
-        Self::insert_runtime_session_stats(
-            &mut attrs,
-            "llama_stage.runtime_sessions_before",
-            &runtime_sessions_before,
-        );
-        Self::insert_runtime_session_stats(
-            &mut attrs,
-            "llama_stage.runtime_sessions_after",
-            &runtime_sessions_after,
-        );
         cache_stats.prompt_ms = prefill_timer.elapsed_ms();
-        self.emit_openai_phase("stage.openai_prefill", prefill_timer, attrs);
+        if self.telemetry.is_debug_enabled() {
+            let mut attrs = self.openai_attrs(request.ids);
+            attrs.insert(
+                "llama_stage.prefill_token_count".to_string(),
+                json!(
+                    request
+                        .prompt_token_ids
+                        .len()
+                        .saturating_sub(1)
+                        .saturating_add(prompt_tail_tokens)
+                ),
+            );
+            attrs.insert("llama_stage.prefill_chunk_count".to_string(), json!(1));
+            attrs.insert(
+                "skippy.kv.restored_prefill".to_string(),
+                json!(restored_prefill),
+            );
+            attrs.insert(
+                "skippy.kv.restored_prefill_tokens".to_string(),
+                json!(restored_prefill_tokens),
+            );
+            attrs.insert(
+                "skippy.kv.prefill_suffix_tokens".to_string(),
+                json!(
+                    request
+                        .prompt_token_ids
+                        .len()
+                        .saturating_sub(1)
+                        .saturating_sub(restored_prefill_tokens)
+                        .saturating_add(prompt_tail_tokens)
+                ),
+            );
+            attrs.insert(
+                "skippy.kv.recorded_pages".to_string(),
+                json!(record.resident_recorded_pages),
+            );
+            insert_resident_capacity_attrs(&mut attrs, &capacity);
+            attrs.insert(
+                "llama_stage.runtime_lock_wait_ms".to_string(),
+                json!(runtime_lock_wait_ms),
+            );
+            attrs.insert(
+                "llama_stage.runtime_lock_hold_ms".to_string(),
+                json!(runtime_lock_hold_ms),
+            );
+            attrs.insert("llama_stage.runtime_lock_acquires".to_string(), json!(1));
+            Self::insert_runtime_session_stats(
+                &mut attrs,
+                "llama_stage.runtime_sessions_before",
+                runtime_sessions_before
+                    .as_ref()
+                    .expect("debug session snapshot collected"),
+            );
+            Self::insert_runtime_session_stats(
+                &mut attrs,
+                "llama_stage.runtime_sessions_after",
+                runtime_sessions_after
+                    .as_ref()
+                    .expect("debug session snapshot collected"),
+            );
+            self.emit_openai_phase("stage.openai_prefill", prefill_timer, attrs);
+        }
         self.telemetry.emit(
             "stage.openai_kv_record_decision",
             proactive_eviction_attrs(
@@ -804,13 +827,16 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         session_id: &str,
         prefill_tokens: &[i32],
+        lookup_identities: &[PrefillKvIdentity],
+        kv_identity_ms: f64,
         recurrent_cache_prefix_token_ids: Option<&[i32]>,
         final_prompt_token: i32,
         sampling: Option<&SamplingConfig>,
         max_tokens: u32,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<KvRestoreOutcome> {
-        let runtime_sessions_before = runtime.session_stats();
+        let emit_debug = self.telemetry.is_debug_enabled();
+        let runtime_sessions_before = emit_debug.then(|| runtime.session_stats());
         let capacity = if let Some(kv) = self.kv.as_ref() {
             let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
             let target_free_tokens =
@@ -832,7 +858,7 @@ impl StageOpenAiBackend {
         if !capacity.admitted {
             return Ok(KvRestoreOutcome {
                 runtime_sessions_before,
-                runtime_sessions_after: runtime.session_stats(),
+                runtime_sessions_after: emit_debug.then(|| runtime.session_stats()),
                 restored_prefill: false,
                 restored_prefill_tokens: 0,
                 capacity,
@@ -842,7 +868,16 @@ impl StageOpenAiBackend {
         }
         let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
             cache_stats.status = "miss";
-            self.lookup_and_restore_kv(kv, runtime, session_id, ids, prefill_tokens, cache_stats)
+            self.lookup_and_restore_kv(
+                kv,
+                runtime,
+                session_id,
+                ids,
+                prefill_tokens,
+                lookup_identities,
+                kv_identity_ms,
+                cache_stats,
+            )
         } else {
             (false, 0)
         };
@@ -936,7 +971,7 @@ impl StageOpenAiBackend {
             restored_prefill,
             decoded_prefill_suffix,
         );
-        let runtime_sessions_after = runtime.session_stats();
+        let runtime_sessions_after = emit_debug.then(|| runtime.session_stats());
         Ok(KvRestoreOutcome {
             runtime_sessions_before,
             runtime_sessions_after,
@@ -948,6 +983,7 @@ impl StageOpenAiBackend {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lookup_and_restore_kv(
         &self,
         kv: &KvStageIntegration,
@@ -955,16 +991,14 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &OpenAiGenerationIds,
         prefill_tokens: &[i32],
+        identities: &[PrefillKvIdentity],
+        kv_identity_ms: f64,
         cache_stats: &mut GenerationCacheStats,
     ) -> (bool, usize) {
         let mut restored_prefill = false;
         let mut restored_prefill_tokens = 0usize;
-        let base = self.local_kv_message_base(session_id, ids);
-        let kv_identity_timer = PhaseTimer::start();
-        let identities = kv.lookup_identities(&self.config, &base, 0, prefill_tokens);
-        let kv_identity_ms = kv_identity_timer.elapsed_ms();
-        let kv_restore_timer = PhaseTimer::start();
-        match kv.restore_exact_state(runtime, session_id, &identities) {
+        let kv_restore_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
+        match kv.restore_exact_state(runtime, session_id, identities) {
             Ok(Some(restored)) => {
                 restored_prefill = true;
                 cache_stats.status = "hit";
@@ -1029,7 +1063,7 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
             Ok(None) => {
-                match kv.restore_resident_prefix(runtime, session_id, &identities, prefill_tokens) {
+                match kv.restore_resident_prefix(runtime, session_id, identities, prefill_tokens) {
                     Ok(Some(restored)) => {
                         restored_prefill = true;
                         cache_stats.status = "hit";
@@ -1087,17 +1121,19 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
         }
-        let mut attrs = self.openai_attrs(ids);
-        attrs.insert("skippy.kv.identity_ms".to_string(), json!(kv_identity_ms));
-        attrs.insert(
-            "skippy.kv.restore_ms".to_string(),
-            json!(kv_restore_timer.elapsed_ms()),
-        );
-        attrs.insert(
-            "skippy.kv.identity_count".to_string(),
-            json!(identities.len()),
-        );
-        self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
+        if let Some(kv_restore_timer) = kv_restore_timer {
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert("skippy.kv.identity_ms".to_string(), json!(kv_identity_ms));
+            attrs.insert(
+                "skippy.kv.restore_ms".to_string(),
+                json!(kv_restore_timer.elapsed_ms()),
+            );
+            attrs.insert(
+                "skippy.kv.identity_count".to_string(),
+                json!(identities.len()),
+            );
+            self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
+        }
         (restored_prefill, restored_prefill_tokens)
     }
 
@@ -1534,6 +1570,7 @@ impl StageOpenAiBackend {
                 ),
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
+            direct_iteration_channel: None,
         })
     }
 
@@ -1557,6 +1594,40 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
+        let resume_scheduler_decode = prompt_prefill_sample.is_some()
+            && !state.stopped
+            && state.decoded_tokens < request.max_tokens as usize
+            && !recurrent_checkpoint_required
+            && self.linear_proposal_ingress.is_none()
+            && self.draft.is_none()
+            && !request.native_mtp_enabled
+            && !state.generation_hooks_active;
+        if resume_scheduler_decode {
+            let initial_generated_tokens = state.generated_token_ids.clone();
+            let stats = self.iteration_scheduler.resume_generation(
+                ScheduledResumeRequest {
+                    id: session_id,
+                    prompt_tokens: request.prompt_token_ids,
+                    generated_tokens: &initial_generated_tokens,
+                    max_tokens: request.max_tokens,
+                    sampling: request.sampling.enabled.then_some(request.sampling),
+                    cancellation: request.cancellation,
+                },
+                |token| {
+                    state.current = token;
+                    state.decoded_tokens = state.decoded_tokens.saturating_add(1);
+                    state.generated_token_ids.push(token);
+                    emit_token(token)
+                },
+            )?;
+            cache_stats.predicted_ms = stats.predicted_ms;
+            let model_generation_elapsed =
+                self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
+            if state.generated_token_ids.len() > 1 {
+                let _ = self.record_post_decode_exact_state(request, session_id, &state);
+            }
+            return Ok(model_generation_elapsed);
+        }
         // A recurrent request needs one serial decode before proposals can
         // advance the native session beyond the prompt boundary. The serial
         // attempt is the gate: a short prompt may be below the policy's

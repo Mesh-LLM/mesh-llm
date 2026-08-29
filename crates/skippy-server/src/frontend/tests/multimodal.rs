@@ -203,7 +203,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: SpeculativeDecodeConfig::default(),
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),
@@ -407,7 +407,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             effective_strategy: "native-mtp".to_string(),
             ..SpeculativeDecodeConfig::default()
         },
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
         generation_admission_timeout: std::time::Duration::from_secs(10),

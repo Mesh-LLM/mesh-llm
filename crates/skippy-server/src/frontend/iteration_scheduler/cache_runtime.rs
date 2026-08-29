@@ -12,6 +12,7 @@ pub(super) struct CacheAwareRuntimeOperation {
     enqueued_turn: u64,
     order: u64,
     refresh_affinity: Option<CacheAffinityRefresh>,
+    affinity_initialized: bool,
     stale_affinity_fallback: bool,
 }
 
@@ -49,6 +50,7 @@ impl CacheRuntimeQueue {
         self.operations.is_empty()
     }
 
+    #[cfg(test)]
     pub(super) fn enqueue(
         &mut self,
         operation: RuntimeOperation,
@@ -56,6 +58,42 @@ impl CacheRuntimeQueue {
         prompt_tokens: Arc<[i32]>,
         priority: u64,
         refresh_affinity: Option<CacheAffinityRefresh>,
+    ) {
+        self.enqueue_with_affinity_state(
+            operation,
+            affinity,
+            prompt_tokens,
+            priority,
+            refresh_affinity,
+            true,
+        );
+    }
+
+    pub(super) fn enqueue_lazy(
+        &mut self,
+        operation: RuntimeOperation,
+        prompt_tokens: Arc<[i32]>,
+        priority: u64,
+        refresh_affinity: CacheAffinityRefresh,
+    ) {
+        self.enqueue_with_affinity_state(
+            operation,
+            CacheAffinity::default(),
+            prompt_tokens,
+            priority,
+            Some(refresh_affinity),
+            false,
+        );
+    }
+
+    fn enqueue_with_affinity_state(
+        &mut self,
+        operation: RuntimeOperation,
+        affinity: CacheAffinity,
+        prompt_tokens: Arc<[i32]>,
+        priority: u64,
+        refresh_affinity: Option<CacheAffinityRefresh>,
+        affinity_initialized: bool,
     ) {
         let order = self.next_order;
         self.next_order = self.next_order.saturating_add(1);
@@ -67,6 +105,7 @@ impl CacheRuntimeQueue {
             enqueued_turn: self.turn,
             order,
             refresh_affinity,
+            affinity_initialized,
             stale_affinity_fallback: false,
         });
         self.order_dirty = true;
@@ -109,7 +148,11 @@ impl CacheRuntimeQueue {
                 continue;
             };
             let refreshed = refresh();
-            if refreshed != queued.affinity {
+            if !queued.affinity_initialized {
+                queued.affinity = refreshed;
+                queued.affinity_initialized = true;
+                self.order_dirty = true;
+            } else if refreshed != queued.affinity {
                 queued.affinity = refreshed;
                 queued.stale_affinity_fallback = true;
                 self.order_dirty = true;
@@ -178,6 +221,7 @@ pub(super) fn should_serve_cache_runtime(
 mod tests {
     use super::*;
     use skippy_scheduler::StageCacheAffinity;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
     fn operation(selected: &mpsc::Sender<&'static str>, label: &'static str) -> RuntimeOperation {
@@ -308,6 +352,37 @@ mod tests {
         assert_eq!(selected_rx.recv().unwrap(), "fresh-hot");
         assert!(telemetry.stale_affinity_fallback);
         assert_eq!(telemetry.cache_epoch, 2);
+    }
+
+    #[test]
+    fn lazy_affinity_is_computed_once_without_reporting_staleness() {
+        let (selected, selected_rx) = mpsc::channel();
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let refresh_count = Arc::clone(&refreshes);
+        let mut queue = CacheRuntimeQueue::new(4_096, true);
+        queue.enqueue_lazy(
+            operation(&selected, "lazy"),
+            Arc::from([1, 2, 3]),
+            0,
+            Box::new(move || {
+                refresh_count.fetch_add(1, Ordering::Relaxed);
+                CacheAffinity::from_stage(StageCacheAffinity {
+                    stage_index: 0,
+                    matched_tokens: 3,
+                    prefill_cost_per_token: 1,
+                    restore_cost: 0,
+                    cache_epoch: 7,
+                })
+            }),
+        );
+
+        let (queued, telemetry) = queue.pop_next().unwrap();
+        (queued.operation.run)(&fake_runtime());
+
+        assert_eq!(selected_rx.recv().unwrap(), "lazy");
+        assert_eq!(refreshes.load(Ordering::Relaxed), 1);
+        assert!(!telemetry.stale_affinity_fallback);
+        assert_eq!(telemetry.cache_epoch, 7);
     }
 
     fn fake_runtime() -> std::sync::Arc<std::sync::Mutex<crate::runtime_state::RuntimeState>> {

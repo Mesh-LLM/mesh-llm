@@ -3649,7 +3649,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 331,
+      "line": 337,
       "macro_name": "eprintln!"
     }
   ],
@@ -4177,35 +4177,35 @@
   ],
   "crates/skippy-runtime/src/tests.rs": [
     {
-      "line": 103,
+      "line": 119,
       "macro_name": "eprintln!"
     },
     {
-      "line": 196,
+      "line": 212,
       "macro_name": "eprintln!"
     },
     {
-      "line": 267,
+      "line": 283,
       "macro_name": "eprintln!"
     },
     {
-      "line": 289,
+      "line": 305,
       "macro_name": "eprintln!"
     },
     {
-      "line": 343,
+      "line": 359,
       "macro_name": "eprintln!"
     },
     {
-      "line": 409,
+      "line": 425,
       "macro_name": "eprintln!"
     },
     {
-      "line": 433,
+      "line": 449,
       "macro_name": "eprintln!"
     },
     {
-      "line": 522,
+      "line": 538,
       "macro_name": "eprintln!"
     }
   ],
@@ -4217,27 +4217,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 299,
+      "line": 304,
       "macro_name": "eprintln!"
     },
     {
-      "line": 309,
+      "line": 314,
       "macro_name": "println!"
     },
     {
-      "line": 327,
+      "line": 332,
       "macro_name": "eprintln!"
     },
     {
-      "line": 347,
+      "line": 352,
       "macro_name": "eprintln!"
     },
     {
-      "line": 355,
+      "line": 360,
       "macro_name": "eprintln!"
     },
     {
-      "line": 408,
+      "line": 413,
       "macro_name": "eprintln!"
     }
   ],
@@ -4325,11 +4325,11 @@
   ],
   "crates/skippy-server/src/frontend/generation/server.rs": [
     {
-      "line": 157,
+      "line": 192,
       "macro_name": "println!"
     },
     {
-      "line": 275,
+      "line": 318,
       "macro_name": "println!"
     }
   ],
@@ -4353,7 +4353,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 270,
+      "line": 272,
       "macro_name": "eprintln!"
     }
   ],
@@ -4371,39 +4371,33 @@
   ],
   "crates/skippy-server/src/runtime_state.rs": [
     {
-      "line": 534,
+      "line": 540,
       "macro_name": "eprintln!"
     },
     {
-      "line": 614,
+      "line": 620,
       "macro_name": "eprintln!"
     },
     {
-      "line": 656,
+      "line": 662,
       "macro_name": "eprintln!"
     },
     {
-      "line": 693,
+      "line": 699,
       "macro_name": "eprintln!"
     },
     {
-      "line": 697,
+      "line": 703,
       "macro_name": "eprintln!"
     },
     {
-      "line": 702,
+      "line": 708,
       "macro_name": "eprintln!"
     }
   ],
   "crates/skippy-server/src/runtime_state/lane_lifecycle.rs": [
     {
       "line": 79,
-      "macro_name": "eprintln!"
-    }
-  ],
-  "crates/skippy-server/src/telemetry.rs": [
-    {
-      "line": 192,
       "macro_name": "eprintln!"
     }
   ]

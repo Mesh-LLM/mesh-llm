@@ -10,6 +10,22 @@ use skippy_ffi::{
 use crate::error::ensure_ok;
 use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal};
 
+const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
+
+fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
+    // Template metadata can contain a large serialized PEG response parser,
+    // but native sampling only consults grammar fields. The renderer emits
+    // compact JSON, so an empty top-level grammar can use the minimal
+    // equivalent payload and avoid reparsing the unrelated PEG graph before
+    // first-token decode. Escaped JSON nested inside `chat_parser` cannot
+    // contain this unescaped byte sequence.
+    if metadata_json.contains(r#""grammar":"""#) {
+        EMPTY_CHAT_GRAMMAR_METADATA
+    } else {
+        metadata_json
+    }
+}
+
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
@@ -63,7 +79,7 @@ impl StageSession {
         prompt_token_count: u64,
         sampling: Option<&SamplingConfig>,
     ) -> Result<()> {
-        let metadata_json = CString::new(metadata_json)
+        let metadata_json = CString::new(chat_sampling_metadata_for_native(metadata_json))
             .context("chat sampling metadata contains an interior NUL byte")?;
         let raw_sampling = sampling.map(SamplingConfig::as_raw);
         let sampling_ptr = raw_sampling
@@ -400,7 +416,9 @@ impl Drop for StageSession {
 
 #[cfg(test)]
 mod tests {
-    use super::native_position_to_u64;
+    use super::{
+        EMPTY_CHAT_GRAMMAR_METADATA, chat_sampling_metadata_for_native, native_position_to_u64,
+    };
 
     #[test]
     fn native_position_conversion_accepts_non_negative_positions() {
@@ -412,5 +430,16 @@ mod tests {
     fn native_position_conversion_rejects_negative_positions() {
         assert!(native_position_to_u64(-1).is_err());
         assert!(native_position_to_u64(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn empty_chat_grammar_uses_minimal_native_metadata() {
+        let metadata = r#"{"chat_parser":"large","grammar":"","grammar_triggers":[]}"#;
+        assert_eq!(
+            chat_sampling_metadata_for_native(metadata),
+            EMPTY_CHAT_GRAMMAR_METADATA
+        );
+        let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
+        assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
 }
