@@ -1,6 +1,6 @@
 [package]
 name = "skippy-scheduler"
-version = { workspace = true }
+version.workspace = true
 edition = { workspace = true }
 license = { workspace = true }
 description = "Iteration-level scheduler for concurrent staged serving with unified KV"
