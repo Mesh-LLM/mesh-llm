@@ -49,7 +49,15 @@ pub(crate) unsafe fn load(path: &Path) -> Result<Library, String> {
     // dependent DLL, even when the requested DLL has an absolute path. Native
     // runtimes are installed elsewhere, so make the loaded DLL's directory the
     // first dependency search location.
-    let result = unsafe { WindowsLibrary::load_with_flags(path, LOAD_WITH_ALTERED_SEARCH_PATH) };
+    // Native runtime manifests declare their libraries with POSIX separators
+    // and Path::join keeps them, so runtime library paths reach this point
+    // with a mixed-separator tail (`...\lib/llama.dll`). LoadLibraryExW fails
+    // those with ERROR_MOD_NOT_FOUND even though the file exists, and
+    // LOAD_WITH_ALTERED_SEARCH_PATH cannot derive the dependency directory
+    // from them. Rebuilding the path from its components normalizes every
+    // separator to a backslash.
+    let normalized: std::path::PathBuf = path.components().collect();
+    let result = unsafe { WindowsLibrary::load_with_flags(&normalized, LOAD_WITH_ALTERED_SEARCH_PATH) };
     result
         .map(Into::into)
         .map_err(|error| format_load_error(path, &error))
@@ -96,6 +104,17 @@ mod tests {
 
         assert!(message.contains("OS error unavailable"));
         assert!(!message.contains("OS error 0"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn component_collection_normalizes_posix_separators() {
+        // The windows load() relies on this: a manifest-derived path with a
+        // POSIX tail must come out with backslashes only, or LoadLibraryExW
+        // rejects it with ERROR_MOD_NOT_FOUND.
+        let mixed = Path::new(r"C:\runtime\lib/llama.dll");
+        let normalized: std::path::PathBuf = mixed.components().collect();
+        assert_eq!(normalized, Path::new(r"C:\runtime\lib\llama.dll"));
     }
 
     #[cfg(target_os = "windows")]
