@@ -80,6 +80,24 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             (131072, 16),
         )
 
+    def test_mesh_stage_uses_native_sequence_budget_as_resident_ceiling(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stage.json"
+            BENCH.write_stage_config(
+                path,
+                config["models"][0],
+                Path(directory) / "model.gguf",
+                8080,
+                131072,
+                16,
+                True,
+            )
+
+            stage = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(stage["kv_cache"]["max_entries"], 512)
+
     def test_config_rejects_nonpositive_model_trace_shape(self) -> None:
         document = json.loads(CONFIG.read_text(encoding="utf-8"))
         document["models"][0]["thoughtworks_active_lanes"] = 0

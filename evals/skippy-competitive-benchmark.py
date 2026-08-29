@@ -472,7 +472,11 @@ def write_stage_config(
         value["kv_cache"] = {
             "mode": "lookup-record",
             "payload": model["cache_payload"],
-            "max_entries": 64,
+            # `ResidentCacheConfig::from_stage` caps this policy ceiling to
+            # the native sequence IDs left after reserving two IDs per lane.
+            # At 16 lanes that is 224 resident entries, while physical KV
+            # occupancy remains bounded independently by the shared n_ctx.
+            "max_entries": 512,
             "max_bytes": 0,
             "min_tokens": 64,
             "shared_prefix_stride_tokens": 128,
