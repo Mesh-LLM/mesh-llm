@@ -420,15 +420,13 @@ impl KvStageIntegration {
 
             loop {
                 let stats = radix.stats();
-                let over_entries =
-                    stats.resident_entries.saturating_add(1) > self.resident_config.max_entries;
-                let over_bytes = self.resident_config.max_bytes > 0
-                    && stats.resident_logical_bytes.saturating_add(estimated_bytes)
-                        > self.resident_config.max_bytes;
-                let over_tokens = self.resident_config.max_resident_tokens > 0
-                    && stats.resident_tokens.saturating_add(token_count as u64)
-                        > self.resident_config.max_resident_tokens;
-                if !over_entries && !over_bytes && !over_tokens {
+                // `resident_tokens` is a logical sum of every radix checkpoint
+                // depth. Native sequence snapshots share the underlying KV
+                // cells, so using that sum as physical occupancy evicts family
+                // prefixes even when the unified pool still has room. Physical
+                // capacity is enforced before restore/prefill by
+                // `admit_resident_capacity`; recording an alias adds no cells.
+                if !resident_index_over_capacity(self.resident_config, stats, estimated_bytes) {
                     break;
                 }
                 let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
@@ -599,9 +597,37 @@ fn resident_estimated_bytes(token_count: u64, layer_count: u32) -> u64 {
         .saturating_mul(2)
 }
 
+fn resident_index_over_capacity(
+    config: skippy_cache::ResidentCacheConfig,
+    stats: skippy_cache::UnifiedRadixCacheStats,
+    new_entry_bytes: u64,
+) -> bool {
+    stats.resident_entries.saturating_add(1) > config.max_entries
+        || (config.max_bytes > 0
+            && stats.resident_logical_bytes.saturating_add(new_entry_bytes) > config.max_bytes)
+}
+
 #[cfg(test)]
 mod proactive_eviction_tests {
     use super::*;
+
+    #[test]
+    fn logical_checkpoint_depth_does_not_trigger_physical_kv_eviction() {
+        let config = skippy_cache::ResidentCacheConfig {
+            max_entries: 64,
+            max_bytes: 0,
+            min_tokens: 64,
+            reserved_seq_count: 32,
+            max_resident_tokens: 114_688,
+        };
+        let stats = skippy_cache::UnifiedRadixCacheStats {
+            resident_entries: 35,
+            resident_tokens: 140_000,
+            ..skippy_cache::UnifiedRadixCacheStats::default()
+        };
+
+        assert!(!resident_index_over_capacity(config, stats, 8_000));
+    }
 
     #[test]
     fn native_drop_failure_preserves_the_radix_entry_and_sequence_id() {
