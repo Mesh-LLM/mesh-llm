@@ -112,6 +112,7 @@ mod resident_cache_config_tests {
     #[test]
     fn resident_entry_cap_fits_available_sequence_ids() {
         assert_eq!(cap_resident_entries(512, 8), 248);
+        assert_eq!(cap_resident_entries(512, 32), 224);
         assert_eq!(cap_resident_entries(64, 8), 64);
         assert_eq!(cap_resident_entries(64, crate::LLAMA_MAX_SEQ), 0);
     }
