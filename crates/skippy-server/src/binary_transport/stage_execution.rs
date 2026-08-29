@@ -987,16 +987,13 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, prepare_binary_stage_connection,
-        split_native_mtp_reply, take_ready_downstream, take_warm_or_connect_downstream,
-        token_sideband_or_fill, warm_downstream_is_healthy,
-        warm_downstream_preconnect_enabled_from,
+        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        take_ready_downstream, take_warm_or_connect_downstream, token_sideband_or_fill,
+        warm_downstream_is_healthy, warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
-        io,
         net::{Shutdown, TcpListener, TcpStream},
-        os::fd::AsRawFd,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -1006,8 +1003,12 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    #[cfg(unix)]
     #[test]
     fn accepted_binary_stage_connection_is_blocking() {
+        use super::prepare_binary_stage_connection;
+        use std::{io, os::fd::AsRawFd};
+
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
