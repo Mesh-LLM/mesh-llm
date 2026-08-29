@@ -34,6 +34,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) generation: &'a SplitTopologyGeneration,
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
+    pub(super) compact_meta: Option<&'a models::gguf::GgufCompactMeta>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
     pub(super) slots: usize,
     pub(super) cache_type_k_override: Option<&'a str>,
@@ -467,11 +468,10 @@ pub(super) fn split_generation_load_settings<'a>(
         allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
         request_defaults: None,
         package_generation: spec.package.generation.as_ref(),
-        // Split stage load: the split planner (split_effective_kv_cache_quant)
-        // already guards the KV default; stage-load metadata is not plumbed here
-        // yet, so leave the resolver default unguarded (follow-up). Split models
-        // are large and rarely hit the quantised-KV incompatibility cases.
-        compact_meta: None,
+        // Split stage load uses the compact metadata scanned during planning
+        // so the resolver guards both the size-tiered default and the family
+        // K/V default exactly like the split planner does.
+        compact_meta: spec.compact_meta,
     })?;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;

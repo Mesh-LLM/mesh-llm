@@ -239,6 +239,25 @@ fn resolve_kv_defaults(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) 
     }
 }
 
+fn guarded_family_default_kv_cache_type(
+    context: &ResolverContext<'_>,
+    family_policy: &super::super::family_policy::FamilyPolicy,
+) -> Option<&'static str> {
+    family_policy
+        .default_kv_cache_type
+        .and_then(|default| {
+            crate::models::gguf::GgufKvCacheQuant::from_llama_args(default, default)
+        })
+        .map(|quant| {
+            context
+                .request
+                .compact_meta
+                .map(|meta| meta.compatible_default_kv_cache_quant(quant))
+                .unwrap_or(quant)
+        })
+        .map(|quant| quant.k.as_llama_arg())
+}
+
 fn resolve_cache_type_k(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
@@ -251,7 +270,10 @@ fn resolve_cache_type_k(
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = family_policy.default_kv_cache_type {
+    // Guard the family default against the model's quantised-KV compatibility
+    // so an unloadable family default degrades to f16 instead of failing the
+    // context build. Explicit config above and below stays unguarded.
+    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
@@ -287,7 +309,7 @@ fn resolve_cache_type_v(
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = family_policy.default_kv_cache_type {
+    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))

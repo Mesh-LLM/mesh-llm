@@ -1094,6 +1094,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         generation: &generation,
         projector_path: None,
         ctx_size: 4096,
+        compact_meta: None,
         pinned_gpu: None,
         slots: 1,
         cache_type_k_override: None,
@@ -1590,6 +1591,58 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     )
     .unwrap();
     assert!(overridden > planned);
+}
+
+/// The family default must get the same metadata guard as the size-tiered
+/// policy: an Inkling variant whose per-head widths are not q4_0-block-aligned
+/// cannot load quantised K/V, so planning must budget f16 bytes instead of
+/// selecting an unloadable family default.
+#[test]
+fn split_planning_guards_family_kv_default_against_incompatible_meta() {
+    let mut meta = crate::models::gguf::GgufCompactMeta {
+        architecture: "inkling".to_string(),
+        context_length: 65_536,
+        embedding_size: 4096,
+        head_count: 32,
+        kv_head_count: 8,
+        layer_count: 66,
+        // 100 is not a multiple of the q4_0/q8_0 block size (32), so the
+        // quantised family default cannot load.
+        key_length: 100,
+        value_length: 100,
+        ..Default::default()
+    };
+    meta.kv_head_counts = vec![8; 66];
+
+    let mut identity = package(66);
+    identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
+
+    let planned =
+        split_runtime_kv_bytes_per_token(&identity, &meta, "tml/inkling-q2", None, None).unwrap();
+    let expected_f16 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("f16", "f16")
+        .unwrap()
+        .kv_cache_bytes_per_token(&meta)
+        .unwrap();
+    assert_eq!(
+        planned, expected_f16,
+        "incompatible family default must degrade to f16 in split planning"
+    );
+
+    // An explicit override is never guarded — it still selects q4_0 even
+    // though the metadata cannot load it (fails loudly at load instead).
+    let overridden = split_runtime_kv_bytes_per_token(
+        &identity,
+        &meta,
+        "tml/inkling-q2",
+        Some("q4_0"),
+        Some("q4_0"),
+    )
+    .unwrap();
+    let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
+        .unwrap()
+        .kv_cache_bytes_per_token(&meta)
+        .unwrap();
+    assert_eq!(overridden, expected_q4);
 }
 
 /// Validates the finding-#1 fix against a real Inkling layer package.

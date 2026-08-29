@@ -403,6 +403,7 @@ stop = ["END"]
         generation: &generation,
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
+        compact_meta: None,
         pinned_gpu: None,
         slots: 4,
         cache_type_k_override: None,

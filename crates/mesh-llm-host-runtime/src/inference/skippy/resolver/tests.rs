@@ -723,6 +723,39 @@ fn inkling_family_defaults_to_q4_kv() {
     assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
 }
 
+/// The family q4_0 default must be guarded against the model's own metadata:
+/// an Inkling variant with per-head widths not divisible by the q4_0 block
+/// size (32) cannot load quantised KV, so the resolver must degrade the
+/// default to f16 rather than fail the context build.
+#[test]
+fn inkling_family_kv_default_degrades_to_f16_for_incompatible_meta() {
+    let compact_meta = crate::models::gguf::GgufCompactMeta {
+        architecture: "inkling".to_string(),
+        context_length: 65_536,
+        embedding_size: 4096,
+        head_count: 32,
+        kv_head_count: 8,
+        layer_count: 66,
+        key_length: 100,
+        value_length: 100,
+        ..Default::default()
+    };
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &MeshConfig::default(),
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: Path::new("/models/inkling.gguf"),
+        model_bytes: 316 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: Some(&compact_meta),
+    })
+    .unwrap();
+
+    assert_eq!(resolved.model_fit.cache_type_k, "f16");
+    assert_eq!(resolved.model_fit.cache_type_v, "f16");
+}
+
 #[test]
 fn inkling_family_kv_default_beats_generic_saver_macro() {
     let mesh_config = parse_config(
