@@ -4,8 +4,20 @@ Date: Thu, 27 Aug 2026 04:30:00 +0000
 Subject: [PATCH] skippy: vectorize greedy sampling on Apple
 
 ---
+ src/CMakeLists.txt       |  5 +++++
  src/skippy/sampling.cpp | 20 ++++++++++++++++++++
- 1 file changed, 20 insertions(+)
+ 2 files changed, 25 insertions(+)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 7ee82c713..a1f98c1f2 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -81,0 +82,5 @@ target_link_libraries(llama PUBLIC ggml)
++if (APPLE)
++    find_library(SKIPPY_ACCELERATE_FRAMEWORK Accelerate REQUIRED)
++    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
++endif()
++
 
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 index 74eb3aa59..7cf74c2ba 100644
