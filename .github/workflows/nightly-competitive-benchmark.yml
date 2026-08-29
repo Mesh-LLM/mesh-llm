@@ -1,0 +1,149 @@
+name: Nightly Competitive Benchmark
+
+on:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+    inputs:
+      include_adaptive:
+        description: "Compare the staged adaptive Mesh admission policy."
+        required: false
+        type: boolean
+        default: true
+      include_optional_backends:
+        description: "Try vLLM and SGLang when their baked runtimes and model inputs are present."
+        required: false
+        type: boolean
+        default: true
+
+# This workflow executes only trusted default-branch content on the approved
+# repository-scoped Linux GPU runner. It never accepts a ref or runner label.
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-competitive-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_COMPETITIVE_ENABLED == '1' }}
+    runs-on: ${{ fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') }}
+    timeout-minutes: 780
+    env:
+      LLAMA_STAGE_BUILD_DIR: ${{ vars.MESH_NIGHTLY_COMPETITIVE_NATIVE_DIR }}
+      COMPETITIVE_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_MODEL_ROOT }}
+      COMPETITIVE_TOKENIZER_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_TOKENIZER_ROOT }}
+      COMPETITIVE_MANIFEST: ${{ vars.MESH_NIGHTLY_COMPETITIVE_MANIFEST }}
+      COMPETITIVE_LLAMA_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_LLAMA_ROOT }}
+      COMPETITIVE_LLAMA_BINARY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_LLAMA_BINARY }}
+      COMPETITIVE_BENCHY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_BENCHY }}
+      COMPETITIVE_VLLM_BINARY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_VLLM_BINARY }}
+      COMPETITIVE_VLLM_HF_CONFIG_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_VLLM_HF_CONFIG_ROOT }}
+      COMPETITIVE_SGLANG_PYTHON: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_PYTHON }}
+      COMPETITIVE_SGLANG_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_MODEL_ROOT }}
+      COMPETITIVE_OUTPUT: ${{ github.workspace }}/.benchmark-artifacts/${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify baked benchmark environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in cargo just python3 nvidia-smi; do
+            command -v "$command" >/dev/null || {
+              echo "missing on gpu-nvidia runner image: $command" >&2
+              exit 1
+            }
+          done
+          for variable in \
+            LLAMA_STAGE_BUILD_DIR \
+            COMPETITIVE_MODEL_ROOT \
+            COMPETITIVE_TOKENIZER_ROOT \
+            COMPETITIVE_MANIFEST \
+            COMPETITIVE_LLAMA_ROOT \
+            COMPETITIVE_LLAMA_BINARY \
+            COMPETITIVE_BENCHY; do
+            value="${!variable:-}"
+            if [[ -z "$value" || ! -e "$value" ]]; then
+              echo "$variable must name a pre-baked benchmark input" >&2
+              exit 1
+            fi
+          done
+          nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+
+      - name: Build current Mesh benchmark server
+        shell: bash
+        run: just competitive-benchmark-build
+
+      - name: Run competitive matrix
+        id: benchmark
+        continue-on-error: true
+        shell: bash
+        env:
+          INCLUDE_ADAPTIVE: ${{ github.event_name == 'schedule' || inputs.include_adaptive }}
+          INCLUDE_OPTIONAL: ${{ github.event_name == 'schedule' || inputs.include_optional_backends }}
+        run: |
+          set -euo pipefail
+          args=(
+            --platform cuda
+            --output "$COMPETITIVE_OUTPUT"
+            --model-root "$COMPETITIVE_MODEL_ROOT"
+            --tokenizer-root "$COMPETITIVE_TOKENIZER_ROOT"
+            --manifest "$COMPETITIVE_MANIFEST"
+            --mesh-root "$GITHUB_WORKSPACE"
+            --mesh-binary "$GITHUB_WORKSPACE/target/release/skippy-server"
+            --native-dir "$LLAMA_STAGE_BUILD_DIR"
+            --llama-root "$COMPETITIVE_LLAMA_ROOT"
+            --llama-binary "$COMPETITIVE_LLAMA_BINARY"
+            --benchy "$COMPETITIVE_BENCHY"
+          )
+          if [[ "$INCLUDE_ADAPTIVE" == "true" ]]; then
+            args+=(--mesh-adaptive)
+          fi
+          if [[ "$INCLUDE_OPTIONAL" == "true" ]]; then
+            args+=(--comparison-backend vllm --comparison-backend sglang)
+            if [[ -n "${COMPETITIVE_VLLM_BINARY:-}" ]]; then
+              args+=(--vllm-binary "$COMPETITIVE_VLLM_BINARY")
+            fi
+            if [[ -n "${COMPETITIVE_VLLM_HF_CONFIG_ROOT:-}" ]]; then
+              args+=(--vllm-hf-config-root "$COMPETITIVE_VLLM_HF_CONFIG_ROOT")
+            fi
+            if [[ -n "${COMPETITIVE_SGLANG_PYTHON:-}" ]]; then
+              args+=(--sglang-python "$COMPETITIVE_SGLANG_PYTHON")
+            fi
+            if [[ -n "${COMPETITIVE_SGLANG_MODEL_ROOT:-}" ]]; then
+              args+=(--sglang-model-root "$COMPETITIVE_SGLANG_MODEL_ROOT")
+            fi
+          fi
+          python3 evals/skippy-competitive-benchmark.py run "${args[@]}"
+
+      - name: Render report
+        if: ${{ !cancelled() && steps.benchmark.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "$COMPETITIVE_OUTPUT/benchmark-config.json" ]]; then
+            python3 evals/skippy-competitive-benchmark.py report \
+              --artifact "$COMPETITIVE_OUTPUT"
+            cat "$COMPETITIVE_OUTPUT/summary/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: nightly-competitive-${{ github.run_number }}-${{ github.sha }}
+          path: ${{ env.COMPETITIVE_OUTPUT }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail incomplete benchmark
+        if: ${{ !cancelled() && steps.benchmark.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "The competitive matrix failed; inspect the uploaded partial evidence." >&2
+          exit 1

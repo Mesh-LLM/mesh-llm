@@ -31,6 +31,12 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
+`nightly-competitive-benchmark.yml` is an opt-in daily/manual trusted-main
+benchmark on the approved fixed `gpu-nvidia` label set. It has read-only
+permissions, never accepts a ref or runner label, installs no tools, consumes
+pre-baked inputs selected by `MESH_NIGHTLY_COMPETITIVE_*` repository variables,
+and retains complete or partial benchmark/report evidence for 30 days. Its
+promotion gate is report-only; promotion remains a reviewed code/config change.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
 manual dispatch; it is not ordinary push or PR CI. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`

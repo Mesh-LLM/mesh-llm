@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run and report the pinned Mesh-versus-llama.cpp competitive benchmark."""
+"""Run and report the pinned Mesh-versus-llama.cpp competitive benchmark.
+
+Linux runs may opt into vLLM and SGLang comparison arms. Missing optional
+runtimes or model inputs are recorded as skips and never weaken the required
+raw llama.cpp-versus-Mesh matrix.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +35,9 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO / "evals/skippy-competitive-benchmark.json"
 PROMPT_GENERATOR = REPO / "evals/skippy-agentic-prompt-manifest.py"
 ARMS = ("llama", "mesh")
+OPTIONAL_ARMS = ("vllm", "sglang")
+ADAPTIVE_MESH_ARM = "mesh-adaptive"
+KNOWN_ARMS = (*ARMS, ADAPTIVE_MESH_ARM, *OPTIONAL_ARMS)
 CELL_RE = re.compile(r"tg-(\d+)-c-(\d+)\.json$")
 
 
@@ -101,6 +109,7 @@ def load_config(path: Path) -> dict[str, Any]:
             "model_id",
             "sha256",
             "tokenizer_sha256",
+            "vllm_hf_config",
             "layer_end",
             "synthetic_context_size",
             "cache_payload",
@@ -115,6 +124,9 @@ def load_config(path: Path) -> dict[str, Any]:
             len(model["revision"]) != 40
             or len(model["sha256"]) != 64
             or len(model["tokenizer_sha256"]) != 64
+            or len(model["vllm_hf_config"].get("revision", "")) != 40
+            or len(model["vllm_hf_config"].get("sha256", "")) != 64
+            or not model["vllm_hf_config"].get("repo")
         ):
             raise ValueError(
                 f"model {model['key']} needs pinned model and tokenizer inputs"
@@ -159,12 +171,15 @@ def build_plan(
     platforms: Sequence[str],
     models: Sequence[dict[str, Any]],
     workloads: Sequence[str],
+    arms: Sequence[str] = ARMS,
+    arms_by_model: dict[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     cells: list[dict[str, Any]] = []
     for platform in platforms:
         for model in models:
+            model_arms = tuple((arms_by_model or {}).get(model["key"], arms))
             if "synthetic" in workloads:
-                for arm in ARMS:
+                for arm in model_arms:
                     for output_tokens in config["synthetic"]["output_tokens"]:
                         for concurrency in config["concurrency"]:
                             cells.append(
@@ -185,8 +200,12 @@ def build_plan(
                 )
                 minimum = config["thoughtworks"]["minimum_prompts"]
                 for index, concurrency in enumerate(config["concurrency"]):
-                    arms = ARMS if index % 2 == 0 else tuple(reversed(ARMS))
-                    for arm in arms:
+                    ordered_arms = (
+                        model_arms
+                        if index % 2 == 0
+                        else tuple(reversed(model_arms))
+                    )
+                    for arm in ordered_arms:
                         cells.append(
                             {
                                 "platform": platform,
@@ -206,6 +225,7 @@ def build_plan(
         "platforms": list(platforms),
         "models": [model["key"] for model in models],
         "workloads": list(workloads),
+        "arms": list(arms),
         "cell_count": len(cells),
         "cells": cells,
     }
@@ -427,8 +447,8 @@ def server_command(
     output_tokens: int,
     prompt_cache: bool,
 ) -> list[str]:
-    if arm == "mesh":
-        return [
+    if arm in ("mesh", ADAPTIVE_MESH_ARM):
+        command = [
             str(args.mesh_binary),
             "serve-openai",
             "--config",
@@ -448,6 +468,69 @@ def server_command(
             "--telemetry-level",
             "summary" if prompt_cache else "off",
         ]
+        if arm == ADAPTIVE_MESH_ARM:
+            command.extend(
+                [
+                    "--adaptive-generation-concurrency",
+                    "--adaptive-generation-min-concurrency",
+                    "1",
+                ]
+            )
+        return command
+    if arm == "vllm":
+        command = [
+            str(args.vllm_binary),
+            "serve",
+            str(model_path),
+            "--tokenizer",
+            str(args.tokenizer_root / model["key"]),
+            "--hf-config-path",
+            str(args.vllm_hf_config_root / model["key"]),
+            "--served-model-name",
+            model["model_id"],
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--max-model-len",
+            str(ctx_size),
+            "--max-num-seqs",
+            str(lanes),
+            "--load-format",
+            "gguf",
+            "--quantization",
+            "gguf",
+        ]
+        if prompt_cache:
+            command.append("--enable-prefix-caching")
+        return command
+    if arm == "sglang":
+        sglang_path = sglang_model_path(args, model)
+        command = [
+            str(args.sglang_python),
+            "-m",
+            "sglang.launch_server",
+            "--model-path",
+            str(sglang_path),
+            "--tokenizer-path",
+            str(args.tokenizer_root / model["key"]),
+            "--served-model-name",
+            model["model_id"],
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--context-length",
+            str(ctx_size),
+            "--max-running-requests",
+            str(lanes),
+            "--disable-prefill-cuda-graph",
+        ]
+        if sglang_path.is_file() and sglang_path.resolve().suffix.lower() == ".gguf":
+            command.extend(["--load-format", "gguf", "--quantization", "gguf"])
+        return command
+    if arm != "llama":
+        raise ValueError(f"unknown benchmark arm: {arm}")
     command = [
         str(args.llama_binary),
         "--model",
@@ -545,7 +628,6 @@ def running_server(
     environment["LLAMA_STAGE_BUILD_DIR"] = str(args.native_dir)
     environment["SKIPPY_TELEMETRY_STDERR"] = "1" if prompt_cache else "0"
     environment["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
-    environment["SKIPPY_IDLE_ADMISSION_COALESCE_US"] = "10000"
     with (output_dir / "server.log").open("wb") as server_log:
         process = subprocess.Popen(
             command, stdout=server_log, stderr=subprocess.STDOUT, env=environment
@@ -561,6 +643,197 @@ def model_path(model_root: Path, model: dict[str, Any]) -> Path:
     return model_root / model["key"] / model["filename"]
 
 
+def sglang_model_path(args: argparse.Namespace, model: dict[str, Any]) -> Path:
+    if args.sglang_model_root is not None:
+        return args.sglang_model_root / model["key"]
+    return model_path(args.model_root, model)
+
+
+def resolve_optional_comparisons(
+    args: argparse.Namespace, models: Sequence[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    requested = tuple(dict.fromkeys(args.comparison_backend))
+    status: dict[str, dict[str, Any]] = {}
+    linux_cuda = args.platform == "cuda" and platform_module.system() == "Linux"
+    for arm in requested:
+        entry: dict[str, Any] = {
+            "requested": True,
+            "available": False,
+            "models": {},
+        }
+        if not linux_cuda:
+            entry["reason"] = "optional comparisons require a Linux CUDA run"
+            status[arm] = entry
+            continue
+        if arm == "vllm":
+            executable = args.vllm_binary or shutil.which("vllm")
+            if not executable or not Path(executable).is_file():
+                entry["reason"] = "vllm executable not found"
+                status[arm] = entry
+                continue
+            args.vllm_binary = Path(executable)
+            vllm_python = args.vllm_binary.parent / "python"
+            if not vllm_python.is_file():
+                entry["reason"] = (
+                    "vllm executable must be inside a virtual environment so the "
+                    "required GGUF plugin can be verified"
+                )
+                status[arm] = entry
+                continue
+            plugin = subprocess.run(
+                [
+                    str(vllm_python),
+                    "-c",
+                    "import importlib.metadata; print(importlib.metadata.version('vllm-gguf-plugin'))",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if plugin.returncode != 0:
+                entry["reason"] = "vllm-gguf-plugin is not installed in the vLLM environment"
+                status[arm] = entry
+                continue
+            if args.vllm_hf_config_root is None:
+                entry["reason"] = "--vllm-hf-config-root was not provided"
+                status[arm] = entry
+                continue
+            model_status = {}
+            for model in models:
+                path = args.vllm_hf_config_root / model["key"] / "config.json"
+                expected = model["vllm_hf_config"]["sha256"]
+                actual = sha256(path) if path.is_file() else None
+                model_status[model["key"]] = {
+                    "available": actual == expected,
+                    "config_path": str(path.parent),
+                    "config_sha256": actual,
+                    "expected_sha256": expected,
+                    "repo": model["vllm_hf_config"]["repo"],
+                    "revision": model["vllm_hf_config"]["revision"],
+                    "reason": (
+                        None
+                        if actual == expected
+                        else "config.json not found"
+                        if actual is None
+                        else "config.json SHA-256 mismatch"
+                    ),
+                }
+            version = subprocess.run(
+                [str(args.vllm_binary), "--version"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            entry.update(
+                {
+                    "available": any(item["available"] for item in model_status.values()),
+                    "executable": str(args.vllm_binary),
+                    "executable_sha256": sha256(args.vllm_binary),
+                    "version": (version.stdout or version.stderr).strip(),
+                    "gguf_plugin_version": plugin.stdout.strip(),
+                    "models": model_status,
+                }
+            )
+            if not entry["available"]:
+                entry["reason"] = "no verified vLLM Hugging Face config exists"
+        elif arm == "sglang":
+            python = args.sglang_python or Path(sys.executable)
+            if not Path(python).is_file():
+                entry["reason"] = "SGLang Python executable not found"
+                status[arm] = entry
+                continue
+            args.sglang_python = Path(python)
+            imported = subprocess.run(
+                [
+                    str(args.sglang_python),
+                    "-c",
+                    "import importlib.metadata; print(importlib.metadata.version('sglang'))",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if imported.returncode != 0:
+                entry["reason"] = "sglang module not importable"
+                status[arm] = entry
+                continue
+            model_status = {}
+            for model in models:
+                path = sglang_model_path(args, model)
+                available = path.is_file() or (
+                    path.is_dir() and any(candidate.is_file() for candidate in path.rglob("*"))
+                )
+                model_status[model["key"]] = {
+                    "available": available,
+                    "model_path": str(path),
+                    "model_sha256": (
+                        sha256(path)
+                        if available and path.is_file()
+                        else directory_sha256(path)
+                        if available
+                        else None
+                    ),
+                    "source": (
+                        "override"
+                        if args.sglang_model_root is not None
+                        else "pinned-baseline-gguf"
+                    ),
+                    "reason": None if available else "model path not found",
+                }
+            entry.update(
+                {
+                    "available": any(item["available"] for item in model_status.values()),
+                    "python": str(args.sglang_python),
+                    "python_sha256": sha256(args.sglang_python),
+                    "version": imported.stdout.strip(),
+                    "models": model_status,
+                }
+            )
+            if not entry["available"]:
+                entry["reason"] = "no SGLang model input exists"
+        status[arm] = entry
+    return status
+
+
+def arms_for_model(
+    args: argparse.Namespace,
+    model: dict[str, Any],
+    comparisons: dict[str, dict[str, Any]],
+) -> tuple[str, ...]:
+    arms = list(ARMS)
+    if args.mesh_adaptive:
+        arms.append(ADAPTIVE_MESH_ARM)
+    for arm in args.comparison_backend:
+        entry = comparisons.get(arm, {})
+        model_entry = entry.get("models", {}).get(model["key"], {})
+        if entry.get("available") and model_entry.get("available"):
+            arms.append(arm)
+    return tuple(dict.fromkeys(arms))
+
+
+def arm_runtime_sha256(
+    arm: str, provenance: dict[str, Any], model_key: str
+) -> str:
+    if arm in ARMS:
+        return provenance[f"{arm}_binary_sha256"]
+    if arm == ADAPTIVE_MESH_ARM:
+        return stable_hash(
+            {
+                "mesh_binary_sha256": provenance["mesh_binary_sha256"],
+                "policy": "adaptive-generation-hardware-backpressure-v2",
+            }
+        )
+    entry = provenance["optional_comparisons"][arm]
+    identity = {
+        "arm": arm,
+        "version": entry.get("version"),
+        "executable_sha256": entry.get("executable_sha256"),
+        "python_sha256": entry.get("python_sha256"),
+        "model": entry.get("models", {}).get(model_key),
+    }
+    return stable_hash(identity)
+
+
 def preflight_run(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     required = {
         "Mesh release binary": args.mesh_binary,
@@ -573,6 +846,28 @@ def preflight_run(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         if not path.exists():
             raise FileNotFoundError(f"{label} not found: {path}")
     models = selected_models(config, args.model)
+    optional_comparisons = resolve_optional_comparisons(args, models)
+    if args.require_comparison_backends:
+        unavailable = []
+        for arm in args.comparison_backend:
+            entry = optional_comparisons.get(arm, {})
+            if not entry.get("available"):
+                unavailable.append(f"{arm}: {entry.get('reason', 'unavailable')}")
+                continue
+            missing_models = [
+                key
+                for key, model_entry in entry.get("models", {}).items()
+                if not model_entry.get("available")
+            ]
+            if missing_models:
+                unavailable.append(
+                    f"{arm}: missing model inputs for {', '.join(missing_models)}"
+                )
+        if unavailable:
+            raise RuntimeError(
+                "required comparison backends are unavailable: "
+                + "; ".join(unavailable)
+            )
     for model in models:
         verify_file(model_path(args.model_root, model), model["sha256"], model["key"])
         tokenizer = args.tokenizer_root / model["key"]
@@ -633,6 +928,7 @@ def preflight_run(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         "thoughtworks_manifest_sha256": (
             sha256(args.manifest) if manifest is not None else None
         ),
+        "optional_comparisons": optional_comparisons,
     }
     return provenance
 
@@ -775,7 +1071,7 @@ def run_synthetic_arm(
         "arm": arm,
         "workload": "synthetic",
         "config_sha256": stable_hash(config),
-        "binary_sha256": provenance[f"{'mesh' if arm == 'mesh' else 'llama'}_binary_sha256"],
+        "binary_sha256": arm_runtime_sha256(arm, provenance, model["key"]),
     }
     cell_hash = stable_hash(cell)
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
@@ -911,7 +1207,7 @@ def run_trace_cell(
         "prompt_count": limit,
         "config_sha256": stable_hash(config),
         "manifest_sha256": thoughtworks["selection"]["manifest_sha256"],
-        "binary_sha256": provenance[f"{'mesh' if arm == 'mesh' else 'llama'}_binary_sha256"],
+        "binary_sha256": arm_runtime_sha256(arm, provenance, model["key"]),
     }
     cell_hash = stable_hash(cell)
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
@@ -1023,6 +1319,10 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> None:
     raise_file_limit()
     provenance = preflight_run(args, config)
     args.output.mkdir(parents=True, exist_ok=True)
+    write_json(
+        args.output / "comparisons" / args.platform / "availability.json",
+        provenance["optional_comparisons"],
+    )
     write_json(args.output / "benchmark-config.json", config)
     existing = args.output / "provenance" / f"{args.platform}.json"
     if existing.is_file():
@@ -1036,6 +1336,7 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "native_runtime_directory_sha256",
             "tokenizers",
             "thoughtworks_manifest_sha256",
+            "optional_comparisons",
         )
         for key in immutable:
             if previous.get(key) != provenance.get(key):
@@ -1043,17 +1344,43 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> None:
         provenance = {**previous, "last_resumed_utc": utc_now()}
     write_json(existing, provenance)
     models = selected_models(config, args.model)
-    plan = build_plan(config, [args.platform], models, args.workload)
+    arms_by_model = {
+        model["key"]: arms_for_model(
+            args, model, provenance["optional_comparisons"]
+        )
+        for model in models
+    }
+    planned_arms = tuple(
+        dict.fromkeys(
+            arm
+            for model in models
+            for arm in arms_by_model[model["key"]]
+        )
+    )
+    plan = build_plan(
+        config,
+        [args.platform],
+        models,
+        args.workload,
+        planned_arms,
+        arms_by_model,
+    )
     write_json(args.output / "plans" / f"{args.platform}.json", plan)
     manifest = verify_manifest(args.manifest, config) if "thoughtworks" in args.workload else None
     for model in models:
         if "synthetic" in args.workload:
-            for arm in ARMS:
+            model_arms = arms_for_model(
+                args, model, provenance["optional_comparisons"]
+            )
+            for arm in model_arms:
                 run_synthetic_arm(args, config, model, arm, provenance)
         if "thoughtworks" in args.workload:
             assert manifest is not None
             for index, concurrency in enumerate(config["concurrency"]):
-                arms = ARMS if index % 2 == 0 else tuple(reversed(ARMS))
+                model_arms = arms_for_model(
+                    args, model, provenance["optional_comparisons"]
+                )
+                arms = model_arms if index % 2 == 0 else tuple(reversed(model_arms))
                 for arm in arms:
                     run_trace_cell(
                         args, config, model, arm, concurrency, manifest, provenance
@@ -1087,7 +1414,7 @@ def load_synthetic_rows(root: Path) -> list[dict[str, Any]]:
     if not data_root.exists():
         return rows
     for arm_dir in sorted(data_root.glob("*/*/*")):
-        if arm_dir.name not in ARMS:
+        if arm_dir.name not in KNOWN_ARMS:
             continue
         platform = arm_dir.parents[1].name
         model = arm_dir.parent.name
@@ -1157,28 +1484,43 @@ def load_parity_rows(root: Path, concurrency_values: Sequence[int]) -> list[dict
     for platform, model in pairs:
         for concurrency in concurrency_values:
             raw = indexed.get((platform, model, "llama", concurrency), {})
-            mesh = indexed.get((platform, model, "mesh", concurrency), {})
-            indexes = sorted(set(raw) | set(mesh))
-            valid = matches = failures = 0
-            for index in indexes:
-                left = raw.get(index, {})
-                right = mesh.get(index, {})
-                if left.get("status") != 200 or right.get("status") != 200:
-                    failures += 1
-                else:
-                    valid += 1
-                    matches += int(left.get("content_sha256") == right.get("content_sha256"))
-            rows.append(
-                {
-                    "platform": platform,
-                    "model": model,
-                    "concurrency": concurrency,
-                    "matches": matches,
-                    "valid_pairs": valid,
-                    "failures": failures,
-                    "exact_match_pct": 100 * matches / valid if valid else None,
-                }
+            candidates = sorted(
+                key[2]
+                for key in indexed
+                if key[0] == platform
+                and key[1] == model
+                and key[3] == concurrency
+                and key[2] != "llama"
             )
+            for candidate_arm in candidates:
+                candidate = indexed.get(
+                    (platform, model, candidate_arm, concurrency), {}
+                )
+                indexes = sorted(set(raw) | set(candidate))
+                valid = matches = failures = 0
+                for index in indexes:
+                    left = raw.get(index, {})
+                    right = candidate.get(index, {})
+                    if left.get("status") != 200 or right.get("status") != 200:
+                        failures += 1
+                    else:
+                        valid += 1
+                        matches += int(
+                            left.get("content_sha256")
+                            == right.get("content_sha256")
+                        )
+                rows.append(
+                    {
+                        "platform": platform,
+                        "model": model,
+                        "arm": candidate_arm,
+                        "concurrency": concurrency,
+                        "matches": matches,
+                        "valid_pairs": valid,
+                        "failures": failures,
+                        "exact_match_pct": 100 * matches / valid if valid else None,
+                    }
+                )
     return rows
 
 
@@ -1323,7 +1665,7 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
             model_trace = [row for row in trace if row["platform"] == platform and row["model"] == model]
             if not model_synthetic and not model_trace:
                 continue
-            gate = next((row for row in parity if row["platform"] == platform and row["model"] == model and row["concurrency"] == 1), None)
+            gate = next((row for row in parity if row["platform"] == platform and row["model"] == model and row["arm"] == "mesh" and row["concurrency"] == 1), None)
             gate_pass = bool(gate and gate["failures"] == 0 and gate["valid_pairs"] == 1 and gate["matches"] == 1)
             lines.extend([f"### {labels.get(model, model)}", "", f"Correctness gate: **{'PASS' if gate_pass else 'FAIL OR PENDING'}**.", ""])
             for output_tokens in config["synthetic"]["output_tokens"]:
@@ -1357,11 +1699,161 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
                     status = "valid" if gate_pass and complete else "diagnostic"
                     lines.append(f"| {workload} | {output_tokens} | {concurrency} | {raw['throughput']:.2f} | {mesh['throughput']:.2f} | {'—' if delta is None else f'{delta:+.2f}%'} | {status} |")
             lines.append("")
+            comparison_arms = sorted(
+                {row["arm"] for row in model_synthetic + model_trace}
+                - {"llama", "mesh"}
+            )
+            promotion_rows = []
+            for candidate_arm in comparison_arms:
+                synthetic_deltas = []
+                trace_deltas = []
+                complete = True
+                for rows, delta_output, expected_keys in (
+                    (
+                        model_synthetic,
+                        synthetic_deltas,
+                        {
+                            (concurrency, output_tokens)
+                            for concurrency in config["concurrency"]
+                            for output_tokens in config["synthetic"]["output_tokens"]
+                        },
+                    ),
+                    (
+                        [
+                            {**row, "throughput": row["output_tokens_per_second"]}
+                            for row in model_trace
+                        ],
+                        trace_deltas,
+                        {
+                            (concurrency, None)
+                            for concurrency in config["concurrency"]
+                        },
+                    ),
+                ):
+                    indexed = {
+                        (row["arm"], row["concurrency"], row.get("tg")): row
+                        for row in rows
+                    }
+                    candidate_keys = {
+                        (concurrency, tg)
+                        for arm, concurrency, tg in indexed
+                        if arm == candidate_arm
+                    }
+                    baseline_keys = {
+                        (concurrency, tg)
+                        for arm, concurrency, tg in indexed
+                        if arm == "mesh"
+                    }
+                    if candidate_keys != expected_keys or baseline_keys != expected_keys:
+                        complete = False
+                    for concurrency, tg in sorted(candidate_keys):
+                        candidate = indexed[(candidate_arm, concurrency, tg)]
+                        baseline = indexed.get(("mesh", concurrency, tg))
+                        if (
+                            baseline is None
+                            or not baseline["complete"]
+                            or not candidate["complete"]
+                            or not baseline["throughput"]
+                        ):
+                            complete = False
+                            continue
+                        delta_output.append(
+                            100
+                            * (
+                                candidate["throughput"] / baseline["throughput"]
+                                - 1
+                            )
+                        )
+                candidate_gate = next(
+                    (
+                        row
+                        for row in parity
+                        if row["platform"] == platform
+                        and row["model"] == model
+                        and row["arm"] == candidate_arm
+                        and row["concurrency"] == 1
+                    ),
+                    None,
+                )
+                gate_passed = bool(
+                    candidate_gate
+                    and candidate_gate["failures"] == 0
+                    and candidate_gate["valid_pairs"] == 1
+                    and candidate_gate["matches"] == 1
+                )
+                synthetic_mean = (
+                    sum(synthetic_deltas) / len(synthetic_deltas)
+                    if synthetic_deltas
+                    else None
+                )
+                trace_mean = (
+                    sum(trace_deltas) / len(trace_deltas) if trace_deltas else None
+                )
+                eligible = bool(
+                    complete
+                    and gate_passed
+                    and synthetic_mean is not None
+                    and trace_mean is not None
+                    and synthetic_mean > 0
+                    and trace_mean > 0
+                )
+                promotion_rows.append(
+                    {
+                        "arm": candidate_arm,
+                        "synthetic_mean": synthetic_mean,
+                        "trace_mean": trace_mean,
+                        "eligible": eligible,
+                        "gate": gate_passed,
+                        "complete": complete,
+                    }
+                )
+            if promotion_rows:
+                eligible_rows = [row for row in promotion_rows if row["eligible"]]
+                winner = (
+                    max(
+                        eligible_rows,
+                        key=lambda row: row["synthetic_mean"] + row["trace_mean"],
+                    )["arm"]
+                    if eligible_rows
+                    else None
+                )
+                lines.extend(
+                    [
+                        "#### Promotion gate",
+                        "",
+                        "A candidate is promotable only when c1 exact continuation matches raw llama.cpp, every comparable cell completes, and mean throughput beats fixed Mesh in both synthetic and Thoughtworks workloads.",
+                        "",
+                        "| candidate | synthetic vs Mesh | Thoughtworks vs Mesh | correctness | complete | decision |",
+                        "|---|---:|---:|---|---|---|",
+                    ]
+                )
+                for row in promotion_rows:
+                    synthetic_delta = (
+                        "n/a"
+                        if row["synthetic_mean"] is None
+                        else f"{row['synthetic_mean']:+.2f}%"
+                    )
+                    trace_delta = (
+                        "n/a"
+                        if row["trace_mean"] is None
+                        else f"{row['trace_mean']:+.2f}%"
+                    )
+                    decision = (
+                        "**PROMOTION CANDIDATE**"
+                        if row["arm"] == winner
+                        else "hold"
+                    )
+                    lines.append(
+                        f"| {row['arm']} | {synthetic_delta} | {trace_delta} | "
+                        f"{'pass' if row['gate'] else 'fail/pending'} | "
+                        f"{'yes' if row['complete'] else 'no'} | {decision} |"
+                    )
+                lines.append("")
     if parity:
-        lines.extend(["## Exact continuation parity", "", "| platform | model | concurrency | matches | valid pairs | failures | match rate |", "|---|---|---:|---:|---:|---:|---:|"])
+        lines.extend(["## Exact continuation parity", "", "| platform | model | candidate | concurrency | matches | valid pairs | failures | match rate |", "|---|---|---|---:|---:|---:|---:|---:|"])
         for row in parity:
             rate = "n/a" if row["exact_match_pct"] is None else f"{row['exact_match_pct']:.2f}%"
-            lines.append(f"| {row['platform']} | {row['model']} | {row['concurrency']} | {row['matches']} | {row['valid_pairs']} | {row['failures']} | {rate} |")
+            lines.append(f"| {row['platform']} | {row['model']} | {row['arm']} | {row['concurrency']} | {row['matches']} | {row['valid_pairs']} | {row['failures']} | {rate} |")
         lines.append("")
     (summary / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
     write_artifact_hashes(args.artifact)
@@ -1405,6 +1897,36 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument("--llama-root", type=Path, required=True)
     run.add_argument("--llama-binary", type=Path, required=True)
     run.add_argument("--benchy", type=Path, required=True)
+    run.add_argument(
+        "--mesh-adaptive",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="also benchmark Mesh with the staged adaptive generation permit controller",
+    )
+    run.add_argument(
+        "--comparison-backend",
+        action="append",
+        choices=OPTIONAL_ARMS,
+        default=[],
+        help="optional Linux CUDA comparison arm; missing runtimes are recorded as skips",
+    )
+    run.add_argument("--vllm-binary", type=Path)
+    run.add_argument(
+        "--vllm-hf-config-root",
+        type=Path,
+        help="verified per-model Hugging Face configs required by the vLLM GGUF plugin",
+    )
+    run.add_argument("--sglang-python", type=Path)
+    run.add_argument(
+        "--sglang-model-root",
+        type=Path,
+        help="optional override containing one SGLang model input per key; defaults to the pinned GGUF inputs",
+    )
+    run.add_argument(
+        "--require-comparison-backends",
+        action="store_true",
+        help="fail preflight instead of skipping any requested comparison backend or model",
+    )
     run.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     add_filters(run)
 
