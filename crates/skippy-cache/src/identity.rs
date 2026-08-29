@@ -216,6 +216,15 @@ pub struct ExactStateIdentityParams<'a> {
     pub model_id: &'a str,
     pub model_revision: Option<&'a str>,
     pub model_file: Option<&'a str>,
+    /// Content digests of the served weights, when known. `model_id` is a
+    /// display name — two runs can present the same id while serving
+    /// different tensors (requantized artifact, republished package,
+    /// swapped GGUF), and state crossing that boundary is silent numerical
+    /// corruption. Absent digests are tagged distinctly so `None` cannot
+    /// alias a real value.
+    pub manifest_sha256: Option<&'a str>,
+    pub source_model_sha256: Option<&'a str>,
+    pub package_ref: Option<&'a str>,
     pub cache_type_k: &'a str,
     pub cache_type_v: &'a str,
     pub flash_attn_type: FlashAttentionType,
@@ -237,6 +246,9 @@ pub fn exact_state_identity(params: &ExactStateIdentityParams<'_>) -> String {
     for (tag, value) in [
         (&b"revision:"[..], params.model_revision),
         (&b"file:"[..], params.model_file),
+        (&b"manifest:"[..], params.manifest_sha256),
+        (&b"source:"[..], params.source_model_sha256),
+        (&b"package:"[..], params.package_ref),
         (&b"device:"[..], params.backend_device),
     ] {
         hasher.update(tag);
@@ -300,6 +312,9 @@ mod exact_state_identity_tests {
             model_id: "org/model:Q4_K_M",
             model_revision: Some("abc123"),
             model_file: Some("model.gguf"),
+            manifest_sha256: Some("m".repeat(64).leak()),
+            source_model_sha256: Some("s".repeat(64).leak()),
+            package_ref: None,
             cache_type_k: "f16",
             cache_type_v: "f16",
             flash_attn_type: FlashAttentionType::Auto,
@@ -379,6 +394,37 @@ mod exact_state_identity_tests {
         assert_ne!(
             exact_state_identity(&params()),
             exact_state_identity(&absent_revision)
+        );
+    }
+
+    /// Weight content digests must separate state even when the display
+    /// model id matches — the same argument `update_weight_identity` makes
+    /// for KV pages.
+    #[test]
+    fn weight_digests_change_identity() {
+        let requantized = ExactStateIdentityParams {
+            source_model_sha256: Some("t".repeat(64).leak()),
+            ..params()
+        };
+        let repacked = ExactStateIdentityParams {
+            manifest_sha256: Some("n".repeat(64).leak()),
+            ..params()
+        };
+        let absent = ExactStateIdentityParams {
+            manifest_sha256: None,
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&requantized)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&repacked)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&absent)
         );
     }
 

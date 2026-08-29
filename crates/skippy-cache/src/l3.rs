@@ -130,34 +130,100 @@ impl HandoffSegmentStore {
             .join(format!("{payload_digest}.json"))
     }
 
-    fn prefix_path(&self, prefix_key: &str) -> PathBuf {
-        // Prefix keys are `blake3:<hex>` identity hashes; strip the scheme
-        // so the filename stays plain hex.
+    fn namespace_dir(&self, namespace_key: &str) -> PathBuf {
+        let key = namespace_key
+            .strip_prefix("blake3:")
+            .unwrap_or(namespace_key);
+        self.root.join(PREFIX_INDEX_DIR).join(key)
+    }
+
+    fn prefix_entry_path(&self, namespace_key: &str, token_len: u64, prefix_key: &str) -> PathBuf {
+        // Zero-padded length keeps directory listings sorted and lets the
+        // lookup filter by length without parsing every name.
         let key = prefix_key.strip_prefix("blake3:").unwrap_or(prefix_key);
-        self.root.join(PREFIX_INDEX_DIR).join(format!("{key}.key"))
+        self.namespace_dir(namespace_key)
+            .join(format!("{token_len:012}-{key}.key"))
     }
 
-    /// Bind a prefix identity to a committed manifest so radix-style lookups
-    /// can find state by prefix rather than payload digest.
-    pub fn link_prefix(&self, prefix_key: &str, payload_digest: &str) -> Result<()> {
-        write_atomically(&self.prefix_path(prefix_key), payload_digest.as_bytes())
+    /// Bind a (namespace, token-length, prefix-hash) coordinate to a
+    /// committed manifest. Entries at many lengths coexist, which is what
+    /// makes longest-recorded-prefix lookup work: each spill is a complete
+    /// state for its own length, and later, longer prompts find the longest
+    /// spilled length that is a prefix of theirs.
+    pub fn link_prefix(
+        &self,
+        namespace_key: &str,
+        token_len: u64,
+        prefix_key: &str,
+        payload_digest: &str,
+    ) -> Result<()> {
+        let path = self.prefix_entry_path(namespace_key, token_len, prefix_key);
+        fs::create_dir_all(path.parent().context("prefix entry has no parent")?)?;
+        write_atomically(&path, payload_digest.as_bytes())
     }
 
-    /// The manifest a prefix identity points at, pruning dangling links to
-    /// evicted manifests.
-    pub fn manifest_for_prefix(&self, prefix_key: &str) -> Result<Option<HandoffManifest>> {
-        let path = self.prefix_path(prefix_key);
-        let Ok(bytes) = fs::read(&path) else {
-            return Ok(None);
+    /// Recorded token lengths for a namespace, longest first, deduplicated.
+    pub fn recorded_prefix_lengths(&self, namespace_key: &str) -> Result<Vec<u64>> {
+        let dir = self.namespace_dir(namespace_key);
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut lengths = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some((length, _)) = name.split_once('-') else {
+                continue;
+            };
+            if let Ok(length) = length.parse::<u64>() {
+                lengths.push(length);
+            }
+        }
+        lengths.sort_unstable_by(|a, b| b.cmp(a));
+        lengths.dedup();
+        Ok(lengths)
+    }
+
+    /// The manifest recorded at exactly (namespace, token-length,
+    /// prefix-hash), pruning links whose manifest was evicted. Transient
+    /// I/O errors are surfaced, not treated as absence, so a briefly
+    /// unreadable disk cannot delete healthy links.
+    pub fn manifest_for_prefix(
+        &self,
+        namespace_key: &str,
+        token_len: u64,
+        prefix_key: &str,
+    ) -> Result<Option<HandoffManifest>> {
+        let path = self.prefix_entry_path(namespace_key, token_len, prefix_key);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
         };
         let payload_digest = String::from_utf8(bytes).context("malformed prefix link")?;
-        match self.load_manifest(&payload_digest) {
-            Ok(manifest) => Ok(Some(manifest)),
-            Err(_) => {
-                // The manifest was evicted after the link was written.
+        let manifest_path = self.manifest_path(&payload_digest);
+        match fs::read(&manifest_path) {
+            Ok(bytes) => {
+                let manifest: HandoffManifest =
+                    serde_json::from_slice(&bytes).context("malformed manifest")?;
+                if manifest.version != MANIFEST_VERSION {
+                    bail!(
+                        "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
+                        manifest.version
+                    );
+                }
+                Ok(Some(manifest))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // The manifest was evicted after the link was written; only
+                // this definite absence prunes the link.
                 let _ = fs::remove_file(&path);
                 Ok(None)
             }
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -331,27 +397,67 @@ impl HandoffSegmentStore {
     /// Evict oldest manifests (never the newest) and collect unreferenced
     /// segments until the segment footprint fits the budget. Returns bytes
     /// freed.
+    ///
+    /// Single pass over the store regardless of how many manifests evict:
+    /// the footprint, the manifest list, and the reference map are each
+    /// scanned once, then eviction runs against the in-memory model and one
+    /// final GC removes everything that became unreferenced.
     pub fn enforce_budget(&self) -> Result<u64> {
         if self.budget_bytes == 0 {
             return Ok(0);
         }
-        let mut freed = 0u64;
-        loop {
-            if self.segment_footprint_bytes()? <= self.budget_bytes {
-                break;
-            }
-            let manifests = self.list_manifests()?;
-            if manifests.len() <= 1 {
-                // Never evict the newest manifest: the state just committed
-                // must stay loadable even when it alone exceeds the budget.
-                break;
-            }
-            let oldest = manifests.last().expect("len checked above").clone();
-            fs::remove_file(self.manifest_path(&oldest))
-                .with_context(|| format!("failed to evict manifest {oldest}"))?;
-            freed = freed.saturating_add(self.collect_unreferenced_segments()?);
+        let mut footprint = self.segment_footprint_bytes()?;
+        if footprint <= self.budget_bytes {
+            return Ok(0);
         }
-        Ok(freed)
+        // Newest-first manifest list with each manifest's segment refs.
+        let keys = self.list_manifests()?;
+        let mut manifests = Vec::with_capacity(keys.len());
+        let mut reference_counts: std::collections::HashMap<String, (usize, u64)> =
+            std::collections::HashMap::new();
+        for key in &keys {
+            let Ok(manifest) = self.load_manifest(key) else {
+                continue;
+            };
+            for segment in &manifest.segments {
+                let entry = reference_counts
+                    .entry(segment.digest.clone())
+                    .or_insert((0, segment.bytes));
+                entry.0 += 1;
+            }
+            manifests.push(manifest);
+        }
+        if let Some(newest) = manifests.first() {
+            let newest_span: u64 = newest.segments.iter().map(|segment| segment.bytes).sum();
+            if newest_span > self.budget_bytes {
+                eprintln!(
+                    "skippy L3: newest manifest {} spans {newest_span} bytes, exceeding the {} byte budget on its own; keeping it loadable",
+                    newest.payload_digest, self.budget_bytes
+                );
+            }
+        }
+        let mut evicted_any = false;
+        while footprint > self.budget_bytes && manifests.len() > 1 {
+            // Never evict the newest manifest: the state just committed must
+            // stay loadable even when it alone exceeds the budget.
+            let oldest = manifests.pop().expect("len checked above");
+            fs::remove_file(self.manifest_path(&oldest.payload_digest))
+                .with_context(|| format!("failed to evict manifest {}", oldest.payload_digest))?;
+            for segment in &oldest.segments {
+                if let Some(entry) = reference_counts.get_mut(&segment.digest) {
+                    entry.0 = entry.0.saturating_sub(1);
+                    if entry.0 == 0 {
+                        footprint = footprint.saturating_sub(entry.1);
+                    }
+                }
+            }
+            evicted_any = true;
+        }
+        if evicted_any {
+            self.collect_unreferenced_segments()
+        } else {
+            Ok(0)
+        }
     }
 
     /// Remove segments referenced by no manifest. Returns bytes freed.

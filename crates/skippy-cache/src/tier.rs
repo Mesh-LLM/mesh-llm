@@ -26,6 +26,25 @@ pub fn l3_prefix_key(namespace: &str, token_ids: &[i32]) -> String {
     format!("blake3:{}", hasher.finalize().to_hex())
 }
 
+/// The namespace's own index key.
+pub fn l3_namespace_key(namespace: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"l3-namespace-key-v1");
+    hasher.update(namespace.as_bytes());
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+/// A successful fill from the tier.
+pub struct L3Fill {
+    pub payload: ExactStatePayload,
+    /// How many of the query's leading tokens the filled state covers — the
+    /// length the entry was recorded at, which may be shorter than the
+    /// query (longest-recorded-prefix semantics, mirroring the radix).
+    pub token_count: u64,
+    pub kv_desc_json: Option<String>,
+    pub payload_bytes: u64,
+}
+
 pub struct L3Tier {
     store: HandoffSegmentStore,
     state_identity: String,
@@ -50,15 +69,18 @@ impl L3Tier {
         &self.store
     }
 
-    /// Spill an evicted radix payload under its prefix identity. Returns the
-    /// manifest key.
+    /// Spill a radix payload under its (namespace, token-path) coordinates.
+    /// Returns the manifest key. Entries at many lengths coexist — each is a
+    /// complete state for its own length, which is what longest-prefix fill
+    /// leans on.
     pub fn spill(
         &self,
-        prefix_key: &str,
-        token_count: u64,
+        namespace: &str,
+        token_ids: &[i32],
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
     ) -> Result<String> {
+        let token_count = token_ids.len() as u64;
         let (kv, recurrent): (Vec<u8>, Vec<u8>) = match payload.kind() {
             ExactStatePayloadKind::FullState => (
                 payload
@@ -114,41 +136,98 @@ impl L3Tier {
             });
         }
         self.store.commit(&manifest)?;
-        self.store.link_prefix(prefix_key, &payload_digest)?;
+        self.store.link_prefix(
+            &l3_namespace_key(namespace),
+            token_count,
+            &l3_prefix_key(namespace, token_ids),
+            &payload_digest,
+        )?;
         Ok(payload_digest)
     }
 
-    /// Fill a radix miss from the tier: the payload, its token count, and
-    /// the serialized KV page descriptor when one was spilled, or `None`
-    /// when the tier has nothing for this prefix.
-    pub fn fill(
+    /// Fill a radix miss with the longest recorded prefix of the query,
+    /// mirroring the radix cache's longest-component-prefix semantics: probe
+    /// recorded lengths for this namespace from longest to shortest (capped
+    /// at `max_probes`), hashing the query's own leading tokens at each
+    /// length — so a recorded entry only matches when the query genuinely
+    /// starts with the tokens it was recorded for.
+    pub fn fill_longest(
         &self,
-        prefix_key: &str,
-    ) -> Result<Option<(ExactStatePayload, u64, Option<String>)>> {
-        let Some(manifest) = self.store.manifest_for_prefix(prefix_key)? else {
-            return Ok(None);
-        };
-        if manifest.state_identity != self.state_identity {
-            bail!(
-                "L3 entry for this prefix was spilled under state identity {} but the tier serves {}",
-                manifest.state_identity,
-                self.state_identity
-            );
-        }
-        let wire = self.store.assemble(&manifest)?;
-        let kv_bytes = usize::try_from(manifest.kv_bytes).context("kv bytes exceed usize")?;
-        let payload = match manifest.payload_kind.as_str() {
-            "full-state" => ExactStatePayload::full_state(wire),
-            "recurrent-only" => ExactStatePayload::recurrent_only(wire),
-            "kv-recurrent" => {
-                let recurrent = wire[kv_bytes..].to_vec();
-                let mut kv = wire;
-                kv.truncate(kv_bytes);
-                ExactStatePayload::kv_recurrent(kv, recurrent)
+        namespace: &str,
+        token_ids: &[i32],
+        max_probes: usize,
+    ) -> Result<Option<L3Fill>> {
+        let namespace_key = l3_namespace_key(namespace);
+        let query_len = token_ids.len() as u64;
+        let lengths = self.store.recorded_prefix_lengths(&namespace_key)?;
+        for length in lengths
+            .into_iter()
+            .filter(|length| *length > 0 && *length <= query_len)
+            .take(max_probes.max(1))
+        {
+            let prefix_key = l3_prefix_key(namespace, &token_ids[..length as usize]);
+            let Some(manifest) =
+                self.store
+                    .manifest_for_prefix(&namespace_key, length, &prefix_key)?
+            else {
+                continue;
+            };
+            if manifest.state_identity != self.state_identity {
+                bail!(
+                    "L3 entry for this prefix was spilled under state identity {} but the tier serves {}",
+                    manifest.state_identity,
+                    self.state_identity
+                );
             }
-            other => bail!("L3 manifest holds unknown payload kind {other}"),
-        };
-        Ok(Some((payload, manifest.token_count, manifest.kv_desc_json)))
+            if manifest.token_count != length {
+                bail!(
+                    "L3 index length {length} disagrees with manifest token count {}",
+                    manifest.token_count
+                );
+            }
+            // Memory bound: `assemble` materializes the payload once
+            // (`total_bytes`); the kv/recurrent split below reuses that
+            // allocation via `split_off`, so peak extra memory is the
+            // payload itself. Full-state fills are whole-blob by nature;
+            // kv-recurrent fills could stream per segment later.
+            let mut wire = self.store.assemble(&manifest)?;
+            let payload_bytes = wire.len() as u64;
+            let kv_bytes = usize::try_from(manifest.kv_bytes).context("kv bytes exceed usize")?;
+            let payload = match manifest.payload_kind.as_str() {
+                "full-state" => ExactStatePayload::full_state(wire),
+                "recurrent-only" => ExactStatePayload::recurrent_only(wire),
+                "kv-recurrent" => {
+                    let recurrent = wire.split_off(kv_bytes);
+                    ExactStatePayload::kv_recurrent(wire, recurrent)
+                }
+                other => bail!("L3 manifest holds unknown payload kind {other}"),
+            };
+            return Ok(Some(L3Fill {
+                payload,
+                token_count: manifest.token_count,
+                kv_desc_json: manifest.kv_desc_json,
+                payload_bytes,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// What the tier can restore right now: (manifest count, restorable
+    /// token total, segment footprint bytes). Startup visibility so warm
+    /// state is never invisible.
+    pub fn restorable_summary(&self) -> Result<(usize, u64, u64)> {
+        let keys = self.store.list_manifests()?;
+        let mut tokens = 0u64;
+        let mut count = 0usize;
+        for key in &keys {
+            if let Ok(manifest) = self.store.load_manifest(key)
+                && manifest.state_identity == self.state_identity
+            {
+                tokens = tokens.saturating_add(manifest.token_count);
+                count += 1;
+            }
+        }
+        Ok((count, tokens, self.store.segment_footprint_bytes()?))
     }
 }
 
@@ -168,60 +247,142 @@ mod tests {
         L3Tier::open(temp_root(name), 0, identity.to_string(), 4096).expect("open tier")
     }
 
+    fn tokens(len: usize) -> Vec<i32> {
+        (0..len as i32).collect()
+    }
+
     #[test]
     fn spill_and_fill_roundtrip_all_payload_kinds() {
         let tier = tier("roundtrip", "blake3:identity-a");
         let cases = vec![
             (
-                "prefix-full",
+                "namespace-full",
                 ExactStatePayload::full_state((0..50_000u32).map(|v| v as u8).collect()),
             ),
             (
-                "prefix-recurrent",
+                "namespace-recurrent",
                 ExactStatePayload::recurrent_only(vec![9u8; 10_000]),
             ),
             (
-                "prefix-kv",
+                "namespace-kv",
                 ExactStatePayload::kv_recurrent(vec![1u8; 20_000], vec![2u8; 5_000]),
             ),
         ];
-        for (prefix, payload) in cases {
-            tier.spill(prefix, 512, &payload, Some("{\"desc\":1}".to_string()))
-                .expect("spill");
-            let (filled, tokens, kv_desc_json) = tier
-                .fill(prefix)
+        for (namespace, payload) in cases {
+            tier.spill(
+                namespace,
+                &tokens(512),
+                &payload,
+                Some("{\"desc\":1}".to_string()),
+            )
+            .expect("spill");
+            let fill = tier
+                .fill_longest(namespace, &tokens(512), 64)
                 .expect("fill")
                 .expect("tier must hold the prefix");
-            assert_eq!(tokens, 512);
-            assert_eq!(kv_desc_json.as_deref(), Some("{\"desc\":1}"));
-            assert_eq!(filled.kind(), payload.kind());
-            match (payload.kind(), &filled) {
-                (ExactStatePayloadKind::KvRecurrent, _) => {
+            assert_eq!(fill.token_count, 512);
+            assert_eq!(fill.kv_desc_json.as_deref(), Some("{\"desc\":1}"));
+            assert_eq!(fill.payload.kind(), payload.kind());
+            match payload.kind() {
+                ExactStatePayloadKind::KvRecurrent => {
                     assert_eq!(
-                        filled.kv_bytes().unwrap().unwrap().into_owned(),
+                        fill.payload.kv_bytes().unwrap().unwrap().into_owned(),
                         payload.kv_bytes().unwrap().unwrap().into_owned()
                     );
                     assert_eq!(
-                        filled.recurrent_state_bytes().unwrap().into_owned(),
+                        fill.payload.recurrent_state_bytes().unwrap().into_owned(),
                         payload.recurrent_state_bytes().unwrap().into_owned()
                     );
                 }
-                (ExactStatePayloadKind::RecurrentOnly, _) => assert_eq!(
-                    filled.recurrent_state_bytes().unwrap().into_owned(),
+                ExactStatePayloadKind::RecurrentOnly => assert_eq!(
+                    fill.payload.recurrent_state_bytes().unwrap().into_owned(),
                     payload.recurrent_state_bytes().unwrap().into_owned()
                 ),
-                (ExactStatePayloadKind::FullState, _) => assert_eq!(
-                    filled.full_state_bytes_timed().unwrap().0.into_owned(),
+                ExactStatePayloadKind::FullState => assert_eq!(
+                    fill.payload
+                        .full_state_bytes_timed()
+                        .unwrap()
+                        .0
+                        .into_owned(),
                     payload.full_state_bytes_timed().unwrap().0.into_owned()
                 ),
             }
         }
     }
 
+    /// The sacrament case: a later, longer prompt (multi-turn growth) must
+    /// find the longest recorded shorter prefix, not just an exact match.
     #[test]
-    fn unknown_prefix_fills_none() {
+    fn longer_query_fills_from_longest_recorded_prefix() {
+        let tier = tier("longest", "blake3:identity-a");
+        tier.spill(
+            "ns",
+            &tokens(800),
+            &ExactStatePayload::full_state(vec![1u8; 2048]),
+            None,
+        )
+        .expect("spill 800");
+        tier.spill(
+            "ns",
+            &tokens(1200),
+            &ExactStatePayload::full_state(vec![2u8; 2048]),
+            None,
+        )
+        .expect("spill 1200");
+
+        // Query extends the 1200-token path: the longest entry wins.
+        let fill = tier
+            .fill_longest("ns", &tokens(1900), 64)
+            .expect("fill")
+            .expect("hit");
+        assert_eq!(fill.token_count, 1200);
+        assert_eq!(
+            fill.payload
+                .full_state_bytes_timed()
+                .unwrap()
+                .0
+                .into_owned(),
+            vec![2u8; 2048]
+        );
+
+        // Query between the two recorded lengths: the shorter entry wins.
+        let fill = tier
+            .fill_longest("ns", &tokens(1000), 64)
+            .expect("fill")
+            .expect("hit");
+        assert_eq!(fill.token_count, 800);
+    }
+
+    /// A recorded length only matches when the query genuinely starts with
+    /// the recorded tokens — a divergent prompt of the same length must
+    /// miss, not corrupt.
+    #[test]
+    fn divergent_tokens_at_a_recorded_length_miss() {
+        let tier = tier("divergent", "blake3:identity-a");
+        tier.spill(
+            "ns",
+            &tokens(600),
+            &ExactStatePayload::full_state(vec![3u8; 1024]),
+            None,
+        )
+        .expect("spill");
+        let mut divergent = tokens(600);
+        divergent[100] = 999_999;
+        assert!(
+            tier.fill_longest("ns", &divergent, 64)
+                .expect("fill")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unknown_namespace_fills_none() {
         let tier = tier("miss", "blake3:identity-a");
-        assert!(tier.fill("never-spilled").expect("fill").is_none());
+        assert!(
+            tier.fill_longest("never-spilled", &tokens(64), 64)
+                .expect("fill")
+                .is_none()
+        );
     }
 
     #[test]
@@ -230,38 +391,72 @@ mod tests {
         let writer = L3Tier::open(&root, 0, "blake3:identity-a".to_string(), 4096).unwrap();
         writer
             .spill(
-                "prefix",
-                128,
+                "ns",
+                &tokens(128),
                 &ExactStatePayload::full_state(vec![5u8; 1024]),
                 None,
             )
             .expect("spill");
         let reader = L3Tier::open(&root, 0, "blake3:identity-b".to_string(), 4096).unwrap();
-        assert!(reader.fill("prefix").is_err());
+        assert!(reader.fill_longest("ns", &tokens(128), 64).is_err());
     }
 
     #[test]
-    fn respilling_a_prefix_supersedes_the_older_entry() {
+    fn respilling_a_length_supersedes_the_older_entry() {
         let tier = tier("supersede", "blake3:identity-a");
         tier.spill(
-            "prefix",
-            100,
+            "ns",
+            &tokens(100),
             &ExactStatePayload::full_state(vec![1u8; 2048]),
             None,
         )
         .expect("first spill");
         tier.spill(
-            "prefix",
-            200,
+            "ns",
+            &tokens(100),
             &ExactStatePayload::full_state(vec![2u8; 2048]),
             None,
         )
         .expect("second spill");
-        let (filled, tokens, _) = tier.fill("prefix").expect("fill").expect("present");
-        assert_eq!(tokens, 200);
+        let fill = tier
+            .fill_longest("ns", &tokens(100), 64)
+            .expect("fill")
+            .expect("present");
+        assert_eq!(fill.token_count, 100);
         assert_eq!(
-            filled.full_state_bytes_timed().unwrap().0.into_owned(),
+            fill.payload
+                .full_state_bytes_timed()
+                .unwrap()
+                .0
+                .into_owned(),
             vec![2u8; 2048]
         );
+    }
+
+    #[test]
+    fn restorable_summary_counts_matching_identity_only() {
+        let root = temp_root("summary");
+        let tier_a = L3Tier::open(&root, 0, "blake3:identity-a".to_string(), 4096).unwrap();
+        let tier_b = L3Tier::open(&root, 0, "blake3:identity-b".to_string(), 4096).unwrap();
+        tier_a
+            .spill(
+                "ns",
+                &tokens(300),
+                &ExactStatePayload::full_state(vec![1u8; 512]),
+                None,
+            )
+            .unwrap();
+        tier_b
+            .spill(
+                "ns",
+                &tokens(700),
+                &ExactStatePayload::full_state(vec![2u8; 512]),
+                None,
+            )
+            .unwrap();
+        let (count, restorable_tokens, footprint) = tier_a.restorable_summary().unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(restorable_tokens, 300);
+        assert!(footprint >= 1024);
     }
 }
