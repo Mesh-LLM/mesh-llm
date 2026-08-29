@@ -51,6 +51,43 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         trace = [cell for cell in plan["cells"] if cell["workload"] == "thoughtworks"]
         self.assertTrue(all(cell["prompt_count"] % cell["concurrency"] == 0 for cell in trace))
         self.assertTrue(all(cell["prompt_count"] >= cell["concurrency"] for cell in trace))
+        dense_trace = [cell for cell in trace if cell["model"] == "llama32-dense"]
+        self.assertTrue(all(cell["context_size"] == 131072 for cell in dense_trace))
+        self.assertTrue(all(cell["active_lanes"] == 16 for cell in dense_trace))
+        moe_trace = [cell for cell in trace if cell["model"] == "deepseek-v2-moe"]
+        self.assertTrue(all(cell["context_size"] == 16384 for cell in moe_trace))
+        self.assertTrue(all(cell["active_lanes"] == 8 for cell in moe_trace))
+        recurrent_trace = [
+            cell for cell in trace if cell["model"] == "falcon-h1-recurrent"
+        ]
+        self.assertTrue(all(cell["context_size"] == 16384 for cell in recurrent_trace))
+        self.assertTrue(all(cell["active_lanes"] == 2 for cell in recurrent_trace))
+
+    def test_thoughtworks_runtime_shape_allows_per_model_override(self) -> None:
+        thoughtworks = {"context_size": 16384, "active_lanes": 2}
+
+        self.assertEqual(
+            BENCH.thoughtworks_runtime_shape(thoughtworks, {}), (16384, 2)
+        )
+        self.assertEqual(
+            BENCH.thoughtworks_runtime_shape(
+                thoughtworks,
+                {
+                    "thoughtworks_context_size": 131072,
+                    "thoughtworks_active_lanes": 16,
+                },
+            ),
+            (131072, 16),
+        )
+
+    def test_config_rejects_nonpositive_model_trace_shape(self) -> None:
+        document = json.loads(CONFIG.read_text(encoding="utf-8"))
+        document["models"][0]["thoughtworks_active_lanes"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "positive thoughtworks_active_lanes"):
+                BENCH.load_config(path)
 
     def test_trace_arm_order_alternates_to_reduce_time_order_bias(self) -> None:
         config = BENCH.load_config(CONFIG)
@@ -145,6 +182,55 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertFalse(status["sglang"]["available"])
         self.assertIn("Linux CUDA", status["vllm"]["reason"])
 
+    def test_optional_backends_can_match_unified_total_kv_capacity(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][0]
+        common = {
+            "tokenizer_root": Path("tokenizers"),
+            "capacity_match_comparison_kv": True,
+        }
+        vllm = BENCH.server_command(
+            "vllm",
+            SimpleNamespace(
+                **common,
+                vllm_binary=Path("vllm"),
+                vllm_hf_config_root=Path("hf-config"),
+            ),
+            model,
+            Path("model.gguf"),
+            Path("stage.json"),
+            19000,
+            131072,
+            16,
+            8,
+            True,
+        )
+        sglang = BENCH.server_command(
+            "sglang",
+            SimpleNamespace(
+                **common,
+                sglang_python=Path("sglang-python"),
+                sglang_model_root=None,
+                model_root=Path("models"),
+            ),
+            model,
+            Path("model.gguf"),
+            Path("stage.json"),
+            19000,
+            131072,
+            16,
+            8,
+            True,
+        )
+
+        self.assertEqual(vllm[vllm.index("--block-size") + 1], "16")
+        self.assertEqual(
+            vllm[vllm.index("--num-gpu-blocks-override") + 1], "8192"
+        )
+        self.assertEqual(
+            sglang[sglang.index("--max-total-tokens") + 1], "131072"
+        )
+
     def test_sglang_defaults_to_the_pinned_gguf_and_tokenizer(self) -> None:
         config = BENCH.load_config(CONFIG)
         model = config["models"][0]
@@ -172,6 +258,18 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
                 8,
                 True,
             )
+            no_cache_command = BENCH.server_command(
+                "sglang",
+                args,
+                model,
+                gguf,
+                Path("stage.json"),
+                19000,
+                16384,
+                4,
+                8,
+                False,
+            )
 
         self.assertEqual(command[command.index("--model-path") + 1], str(gguf))
         self.assertEqual(
@@ -184,6 +282,8 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         served_name = command[command.index("--served-model-name") + 1]
         self.assertNotIn(":", served_name)
         self.assertEqual(BENCH.served_model_id("sglang", model), served_name)
+        self.assertNotIn("--disable-radix-cache", command)
+        self.assertIn("--disable-radix-cache", no_cache_command)
 
     def test_vllm_uses_the_verified_config_for_the_pinned_gguf(self) -> None:
         config = BENCH.load_config(CONFIG)
@@ -214,6 +314,161 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertEqual(command[command.index("--load-format") + 1], "gguf")
         self.assertEqual(command[command.index("--quantization") + 1], "gguf")
         self.assertIn("--enable-prefix-caching", command)
+
+        no_cache_command = BENCH.server_command(
+            "vllm",
+            args,
+            model,
+            Path("model.gguf"),
+            Path("stage.json"),
+            19000,
+            16384,
+            4,
+            8,
+            False,
+        )
+        self.assertIn("--no-enable-prefix-caching", no_cache_command)
+        self.assertNotIn("--enable-prefix-caching", no_cache_command)
+
+    def test_synthetic_benchy_command_is_fail_closed_and_sglang_compatible(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][0]
+        args = SimpleNamespace(
+            benchy=Path("llama-benchy"), tokenizer_root=Path("tokenizers")
+        )
+
+        sglang = BENCH.synthetic_benchy_common_command(
+            args,
+            model,
+            "sglang",
+            BENCH.served_model_id("sglang", model),
+            19000,
+            config["synthetic"],
+        )
+        raw = BENCH.synthetic_benchy_common_command(
+            args,
+            model,
+            "llama",
+            model["model_id"],
+            19000,
+            config["synthetic"],
+        )
+
+        self.assertIn("--exit-on-first-fail", sglang)
+        self.assertIn("--no-results-on-fail", sglang)
+        sglang_extra = sglang[sglang.index("--extra-body") + 1]
+        raw_extra = raw[raw.index("--extra-body") + 1]
+        self.assertIn("return_token_ids=false", sglang_extra)
+        self.assertNotIn("return_token_ids", raw_extra)
+
+    def test_synthetic_cell_validation_rejects_hidden_request_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stem = Path(directory) / "tg-64-c-2"
+            stem.with_name(stem.name + "-progress.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "request_end",
+                                "error": "",
+                                "total_tokens": 64,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "request_end",
+                                "error": "HTTP 400",
+                                "total_tokens": 0,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            stem.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "benchmarks": [
+                            {
+                                "response_size": 64,
+                                "tg_throughput": {"mean": None},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "1 failures"):
+                BENCH.validate_synthetic_cell(stem, 2, 64)
+
+    def test_synthetic_cell_validation_rejects_null_throughput(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stem = Path(directory) / "tg-64-c-2"
+            stem.with_name(stem.name + "-progress.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "type": "request_end",
+                            "error": "",
+                            "total_tokens": 64,
+                        }
+                    )
+                    for _ in range(2)
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            stem.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "benchmarks": [
+                            {
+                                "response_size": 64,
+                                "tg_throughput": {"mean": None},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "invalid generation throughput"):
+                BENCH.validate_synthetic_cell(stem, 2, 64)
+
+    def test_synthetic_cell_validation_accepts_complete_finite_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stem = Path(directory) / "tg-64-c-2"
+            stem.with_name(stem.name + "-progress.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "type": "request_end",
+                            "error": "",
+                            "total_tokens": 64,
+                        }
+                    )
+                    for _ in range(2)
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            stem.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "benchmarks": [
+                            {
+                                "response_size": 64,
+                                "tg_throughput": {"mean": 123.5},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            BENCH.validate_synthetic_cell(stem, 2, 64)
 
     def test_controlled_run_can_require_all_comparison_backends(self) -> None:
         args = BENCH.parse_args(
@@ -246,11 +501,13 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
                 "--comparison-backend",
                 "sglang",
                 "--require-comparison-backends",
+                "--capacity-match-comparison-kv",
             ]
         )
 
         self.assertEqual(args.comparison_backend, ["vllm", "sglang"])
         self.assertTrue(args.require_comparison_backends)
+        self.assertTrue(args.capacity_match_comparison_kv)
 
     def test_report_writes_csv_svg_markdown_and_hash_manifest(self) -> None:
         config = BENCH.load_config(CONFIG)
@@ -321,10 +578,18 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
                     encoding="utf-8",
                 )
 
+            provenance = root / "provenance"
+            provenance.mkdir()
+            (provenance / "metal.json").write_text(
+                json.dumps({"capacity_match_comparison_kv": True}),
+                encoding="utf-8",
+            )
+
             BENCH.report(argparse.Namespace(artifact=root), config)
 
             report = (root / "summary" / "REPORT.md").read_text(encoding="utf-8")
             self.assertIn("Mesh correctness gate: **PASS**", report)
+            self.assertIn("Capacity-matched comparison", report)
             self.assertIn("+20.00%", report)
             self.assertIn(
                 "| raw llama.cpp tok/s | Mesh tok/s | vLLM tok/s | SGLang tok/s |",
