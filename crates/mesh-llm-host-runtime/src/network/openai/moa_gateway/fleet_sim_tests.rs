@@ -824,3 +824,70 @@ async fn actor_candidates_retain_every_admitted_worker_as_hedge_fallback() {
     seen.dedup();
     assert_eq!(seen.len(), actors.len(), "indices must be unique");
 }
+
+/// `cap_committee` must not fill the committee with deprioritized workers
+/// while healthy ones exist.
+///
+/// The cap keeps `COMMITTEE_CAP_BIG` (4) big-tier models ordered by tier then
+/// stable index, with no availability term. With five big bases resolved and
+/// the four lowest-indexed ones deprioritized, the healthy fifth is capped out
+/// — and `compute_actor_candidates` then ranks a pool that no longer contains
+/// a healthy worker, so its availability term has nothing left to choose.
+/// Admission runs before the cap, so this is the one place availability can
+/// still be lost.
+#[tokio::test]
+async fn committee_cap_keeps_a_healthy_worker_over_deprioritized_ones() {
+    use crate::proto::node::InferenceAdmissionState;
+
+    const EXTRA_BIG: &[FleetModel] = &[
+        FleetModel {
+            name: "Mistral-Small-24B-Q4_K_M",
+            parameter_count_b: 24.0,
+            context_length: 32768,
+        },
+        FleetModel {
+            // Sorts LAST alphabetically and by insertion index, so it is the
+            // first casualty of an index-only cap. A name that happened to
+            // sort early would let this test pass on luck.
+            name: "Zephyr-70B-Q4_K_M",
+            parameter_count_b: 70.0,
+            context_length: 32768,
+        },
+    ];
+
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    // Four deprioritized big bases, then one healthy big base.
+    let deprioritized = [BIG_MODELS[0], BIG_MODELS[1], BIG_MODELS[2], EXTRA_BIG[0]];
+    for (i, model) in deprioritized.iter().enumerate() {
+        node.insert_test_peer(fleet_peer_with_health(
+            i as u32 + 1,
+            *model,
+            Some(InferenceAdmissionState::AcceptingDeprioritized),
+            None,
+        ))
+        .await;
+    }
+    let healthy = EXTRA_BIG[1];
+    node.insert_test_peer(fleet_peer_with_health(
+        99,
+        healthy,
+        Some(InferenceAdmissionState::Accepting),
+        None,
+    ))
+    .await;
+
+    let targets = election::ModelTargets::default();
+    let http = reqwest::Client::new();
+    let (_backends, models) =
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+
+    let kept: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
+    assert!(
+        kept.iter()
+            .any(|name| super::pool::canonical_base_name(name)
+                == super::pool::canonical_base_name(healthy.name)),
+        "the only healthy big worker must survive the committee cap; kept = {kept:?}"
+    );
+}

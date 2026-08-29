@@ -508,19 +508,36 @@ async fn cap_committee(
     if models.len() <= cap {
         return;
     }
+    let routing_hints = model_routing_hints(node).await;
     // Rank by verified size, NOT the tool-actor ranking. The committee serves
     // ordinary answer turns where `tool_use` is irrelevant; ranking by it
     // (i386 P1) could evict a 32B/70B model with `tool_use=None` in favour of
     // four small models whose metadata advertises tool use — the opposite of
     // the admission goal. Keep the largest verified models; a model with no
     // verified size ranks as weakest, and stable index breaks ties.
+    //
+    // Availability sorts *within* a tier, never across one. Admission control
+    // already ran, so this is the last stage that can drop a worker: without
+    // the availability term, enough deprioritized bases of the same tier fill
+    // the cap by index alone and evict the only healthy worker, leaving
+    // `compute_actor_candidates` to rank a pool with nothing healthy left in
+    // it. Keeping it below the tier key preserves the measured admission rule
+    // — a healthy small model still never displaces a big one.
     let mut ranked: Vec<usize> = (0..models.len()).collect();
     ranked.sort_by(|&a, &b| {
-        let key = |i: usize| match tier_for(&models[i].name, &sizes) {
+        let tier_key = |i: usize| match tier_for(&models[i].name, &sizes) {
             SizeTier::Big => 0,
             SizeTier::Small => 1,
         };
-        key(a).cmp(&key(b)).then_with(|| a.cmp(&b))
+        let availability = |i: usize| {
+            routing_hints
+                .get(&canonical_base_name(&models[i].name))
+                .map_or(AvailabilityRank::Healthy, |(rank, _)| *rank)
+        };
+        tier_key(a)
+            .cmp(&tier_key(b))
+            .then_with(|| availability(a).cmp(&availability(b)))
+            .then_with(|| a.cmp(&b))
     });
     let keep: std::collections::HashSet<usize> = ranked.into_iter().take(cap).collect();
 
