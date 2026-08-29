@@ -15,6 +15,7 @@ import hashlib
 import html
 import http.client
 import json
+import math
 import os
 import platform as platform_module
 import re
@@ -138,6 +139,10 @@ def load_config(path: Path) -> dict[str, Any]:
             raise ValueError(
                 f"model {model['key']} needs pinned model and tokenizer inputs"
             )
+        for field in ("thoughtworks_context_size", "thoughtworks_active_lanes"):
+            value = model.get(field)
+            if value is not None and (not isinstance(value, int) or value <= 0):
+                raise ValueError(f"model {model['key']} needs a positive {field}")
     thoughtworks = document.get("thoughtworks", {})
     dataset = thoughtworks.get("dataset", {})
     selection = thoughtworks.get("selection", {})
@@ -173,6 +178,15 @@ def prompt_limit(concurrency: int, minimum: int, available: int) -> int:
     return min(target, available)
 
 
+def thoughtworks_runtime_shape(
+    thoughtworks: dict[str, Any], model: dict[str, Any]
+) -> tuple[int, int]:
+    return (
+        model.get("thoughtworks_context_size", thoughtworks["context_size"]),
+        model.get("thoughtworks_active_lanes", thoughtworks["active_lanes"]),
+    )
+
+
 def build_plan(
     config: dict[str, Any],
     platforms: Sequence[str],
@@ -201,6 +215,9 @@ def build_plan(
                                 }
                             )
             if "thoughtworks" in workloads:
+                trace_context_size, trace_active_lanes = thoughtworks_runtime_shape(
+                    config["thoughtworks"], model
+                )
                 available = (
                     config["thoughtworks"]["selection"]["families"]
                     * config["thoughtworks"]["selection"]["requests_per_family"]
@@ -220,6 +237,8 @@ def build_plan(
                                 "workload": "thoughtworks",
                                 "arm": arm,
                                 "output_tokens": config["thoughtworks"]["output_tokens"],
+                                "context_size": trace_context_size,
+                                "active_lanes": trace_active_lanes,
                                 "concurrency": concurrency,
                                 "prompt_count": prompt_limit(
                                     concurrency, minimum, available
@@ -449,6 +468,16 @@ def served_model_id(arm: str, model: dict[str, Any]) -> str:
     return model_id
 
 
+def comparison_capacity_policy(
+    args: argparse.Namespace, arm: str, ctx_size: int
+) -> dict[str, Any] | None:
+    if arm not in OPTIONAL_ARMS or not getattr(
+        args, "capacity_match_comparison_kv", False
+    ):
+        return None
+    return {"mode": "unified-total-kv-tokens", "token_capacity": ctx_size}
+
+
 def server_command(
     arm: str,
     args: argparse.Namespace,
@@ -515,8 +544,22 @@ def server_command(
             "--quantization",
             "gguf",
         ]
-        if prompt_cache:
-            command.append("--enable-prefix-caching")
+        command.append(
+            "--enable-prefix-caching"
+            if prompt_cache
+            else "--no-enable-prefix-caching"
+        )
+        if comparison_capacity_policy(args, arm, ctx_size) is not None:
+            block_size = 16
+            block_count = (ctx_size + block_size - 1) // block_size
+            command.extend(
+                [
+                    "--block-size",
+                    str(block_size),
+                    "--num-gpu-blocks-override",
+                    str(block_count),
+                ]
+            )
         return command
     if arm == "sglang":
         sglang_path = sglang_model_path(args, model)
@@ -542,6 +585,10 @@ def server_command(
         ]
         if sglang_path.is_file() and sglang_path.resolve().suffix.lower() == ".gguf":
             command.extend(["--load-format", "gguf", "--quantization", "gguf"])
+        if not prompt_cache:
+            command.append("--disable-radix-cache")
+        if comparison_capacity_policy(args, arm, ctx_size) is not None:
+            command.extend(["--max-total-tokens", str(ctx_size)])
         return command
     if arm != "llama":
         raise ValueError(f"unknown benchmark arm: {arm}")
@@ -943,6 +990,7 @@ def preflight_run(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             sha256(args.manifest) if manifest is not None else None
         ),
         "optional_comparisons": optional_comparisons,
+        "capacity_match_comparison_kv": args.capacity_match_comparison_kv,
     }
     return provenance
 
@@ -1070,6 +1118,119 @@ def parity_probe(port: int, model_id: str, concurrency_values: Sequence[int]) ->
     return {"cells": cells}
 
 
+def synthetic_benchy_common_command(
+    args: argparse.Namespace,
+    model: dict[str, Any],
+    arm: str,
+    benchmark_model_id: str,
+    port: int,
+    synthetic: dict[str, Any],
+) -> list[str]:
+    extra_body = [
+        f"temperature={synthetic['temperature']}",
+        f"seed={synthetic['seed']}",
+    ]
+    if arm == "sglang":
+        # SGLang rejects return_token_ids=true on streaming chat completions.
+        # llama-benchy falls back to the streamed usage count when this is false.
+        extra_body.append("return_token_ids=false")
+    return [
+        str(args.benchy),
+        "--base-url",
+        f"http://127.0.0.1:{port}/v1",
+        "--api-key",
+        "EMPTY",
+        "--model",
+        benchmark_model_id,
+        "--served-model-name",
+        benchmark_model_id,
+        "--tokenizer",
+        str(args.tokenizer_root / model["key"]),
+        "--pp",
+        str(synthetic["prompt_tokens"]),
+        "--exact-tg",
+        "--extra-body",
+        ",".join(extra_body),
+        "--depth",
+        "0",
+        "--runs",
+        str(synthetic["runs"]),
+        "--warmup-runs",
+        "0",
+        "--latency-mode",
+        "none",
+        "--skip-coherence",
+        "--no-adapt-prompt",
+        "--no-cache",
+        "--no-warmup",
+        "--exit-on-first-fail",
+        "--no-results-on-fail",
+    ]
+
+
+def validate_synthetic_cell(
+    stem: Path, expected_requests: int, expected_output_tokens: int
+) -> None:
+    progress_path = stem.with_name(stem.name + "-progress.jsonl")
+    if not progress_path.is_file():
+        raise RuntimeError(f"missing progress stream for {stem.name}")
+    events = [
+        json.loads(line)
+        for line in progress_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    ends = [event for event in events if event.get("type") == "request_end"]
+    failures = [event for event in ends if event.get("error")]
+    if len(ends) != expected_requests or failures:
+        raise RuntimeError(
+            f"{stem.name} completed {len(ends)}/{expected_requests} requests "
+            f"with {len(failures)} failures"
+        )
+    wrong_token_counts = [
+        event.get("total_tokens")
+        for event in ends
+        if event.get("total_tokens") != expected_output_tokens
+    ]
+    if wrong_token_counts:
+        raise RuntimeError(
+            f"{stem.name} returned unexpected output token counts: "
+            f"{sorted(set(wrong_token_counts), key=lambda value: str(value))}"
+        )
+    result_path = stem.with_suffix(".json")
+    if not result_path.is_file():
+        raise RuntimeError(f"missing result JSON for {stem.name}")
+    document = json.loads(result_path.read_text(encoding="utf-8"))
+    benchmark = document["benchmarks"][0]
+    throughput = benchmark.get("tg_throughput", {}).get("mean")
+    if (
+        not isinstance(throughput, (int, float))
+        or isinstance(throughput, bool)
+        or not math.isfinite(throughput)
+        or throughput <= 0
+    ):
+        raise RuntimeError(f"{stem.name} has invalid generation throughput: {throughput}")
+    if benchmark.get("response_size") != expected_output_tokens:
+        raise RuntimeError(
+            f"{stem.name} result response_size={benchmark.get('response_size')} "
+            f"expected={expected_output_tokens}"
+        )
+
+
+def write_synthetic_status(path: Path, rows: Sequence[dict[str, Any]]) -> None:
+    fieldnames = (
+        "tg",
+        "concurrency",
+        "exit_code",
+        "failure",
+        "started_utc",
+        "finished_utc",
+    )
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def run_synthetic_arm(
     args: argparse.Namespace,
     config: dict[str, Any],
@@ -1086,6 +1247,9 @@ def run_synthetic_arm(
         "workload": "synthetic",
         "config_sha256": stable_hash(config),
         "binary_sha256": arm_runtime_sha256(arm, provenance, model["key"]),
+        "comparison_capacity_policy": comparison_capacity_policy(
+            args, arm, model["synthetic_context_size"]
+        ),
     }
     cell_hash = stable_hash(cell)
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
@@ -1105,39 +1269,19 @@ def run_synthetic_arm(
         max(synthetic["output_tokens"]),
         False,
     ) as port:
-        common = [
-            str(args.benchy),
-            "--base-url",
-            f"http://127.0.0.1:{port}/v1",
-            "--api-key",
-            "EMPTY",
-            "--model",
-            benchmark_model_id,
-            "--served-model-name",
-            benchmark_model_id,
-            "--tokenizer",
-            str(args.tokenizer_root / model["key"]),
-            "--pp",
-            str(synthetic["prompt_tokens"]),
-            "--exact-tg",
-            "--extra-body",
-            f"temperature={synthetic['temperature']},seed={synthetic['seed']}",
-            "--depth",
-            "0",
-            "--runs",
-            str(synthetic["runs"]),
-            "--warmup-runs",
-            "0",
-            "--latency-mode",
-            "none",
-            "--skip-coherence",
-            "--no-adapt-prompt",
-            "--no-cache",
-            "--no-warmup",
-        ]
+        common = synthetic_benchy_common_command(
+            args, model, arm, benchmark_model_id, port, synthetic
+        )
         warmup = common + ["--tg", "8", "--concurrency", "4", "--format", "json"]
         with (output_dir / "warmup.out").open("wb") as handle:
-            subprocess.run(warmup, stdout=handle, stderr=subprocess.STDOUT, check=False)
+            warmup_result = subprocess.run(
+                warmup, stdout=handle, stderr=subprocess.STDOUT, check=False
+            )
+        if warmup_result.returncode != 0:
+            raise RuntimeError(
+                f"llama-benchy warmup failed for {arm} with exit "
+                f"{warmup_result.returncode}; see {output_dir / 'warmup.out'}"
+            )
         status_rows = []
         for output_tokens in synthetic["output_tokens"]:
             for concurrency in config["concurrency"]:
@@ -1159,19 +1303,32 @@ def run_synthetic_arm(
                     result = subprocess.run(
                         command, stdout=handle, stderr=subprocess.STDOUT, check=False
                     )
+                failure = ""
+                if result.returncode != 0:
+                    failure = f"llama-benchy exited {result.returncode}"
+                else:
+                    try:
+                        validate_synthetic_cell(stem, concurrency, output_tokens)
+                    except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+                        failure = f"invalid llama-benchy artifact: {exc}"
+                    except RuntimeError as exc:
+                        failure = str(exc)
                 status_rows.append(
                     {
                         "tg": output_tokens,
                         "concurrency": concurrency,
                         "exit_code": result.returncode,
+                        "failure": failure,
                         "started_utc": started,
                         "finished_utc": utc_now(),
                     }
                 )
-        with (output_dir / "status.tsv").open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=status_rows[0], delimiter="\t")
-            writer.writeheader()
-            writer.writerows(status_rows)
+                write_synthetic_status(output_dir / "status.tsv", status_rows)
+                if failure:
+                    raise RuntimeError(
+                        f"synthetic benchmark failed for {arm} "
+                        f"tg={output_tokens} c={concurrency}: {failure}"
+                    )
         write_json(
             output_dir / "parity.json",
             parity_probe(port, benchmark_model_id, config["concurrency"]),
@@ -1223,6 +1380,11 @@ def run_trace_cell(
         "config_sha256": stable_hash(config),
         "manifest_sha256": thoughtworks["selection"]["manifest_sha256"],
         "binary_sha256": arm_runtime_sha256(arm, provenance, model["key"]),
+        "comparison_capacity_policy": comparison_capacity_policy(
+            args,
+            arm,
+            thoughtworks_runtime_shape(thoughtworks, model)[0],
+        ),
     }
     cell_hash = stable_hash(cell)
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
@@ -1232,14 +1394,15 @@ def run_trace_cell(
     path = model_path(args.model_root, model)
     benchmark_model_id = served_model_id(arm, model)
     records: list[dict[str, Any]] = []
+    context_size, active_lanes = thoughtworks_runtime_shape(thoughtworks, model)
     with running_server(
         arm,
         args,
         model,
         path,
         output_dir,
-        thoughtworks["context_size"],
-        thoughtworks["active_lanes"],
+        context_size,
+        active_lanes,
         thoughtworks["output_tokens"],
         True,
     ) as port:
@@ -1353,6 +1516,7 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "tokenizers",
             "thoughtworks_manifest_sha256",
             "optional_comparisons",
+            "capacity_match_comparison_kv",
         )
         for key in immutable:
             if previous.get(key) != provenance.get(key):
@@ -1678,12 +1842,36 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
     write_csv(summary / "synthetic.csv", synthetic)
     write_csv(summary / "thoughtworks.csv", trace)
     write_csv(summary / "parity.csv", parity)
+    provenance_files = sorted((args.artifact / "provenance").glob("*.json"))
+    capacity_modes = {
+        bool(json.loads(path.read_text(encoding="utf-8")).get(
+            "capacity_match_comparison_kv", False
+        ))
+        for path in provenance_files
+    }
+    if capacity_modes == {True}:
+        comparison_capacity_note = (
+            "Capacity-matched comparison: vLLM and SGLang are capped to the "
+            "same total KV-token capacity as the unified Mesh/raw context."
+        )
+    elif capacity_modes == {False} or not capacity_modes:
+        comparison_capacity_note = (
+            "Same-hardware comparison: vLLM and SGLang use their default paged "
+            "KV capacity; compare peak VRAM separately from throughput."
+        )
+    else:
+        comparison_capacity_note = (
+            "Mixed comparison capacity policy detected across platform provenance; "
+            "do not aggregate optional-backend results across platforms."
+        )
     lines = [
         "# Skippy competitive benchmark",
         "",
         "Pinned matrix: CUDA and Metal; dense, MoE, and recurrent model families; offered concurrency 1/2/4/8/16/32/64/128/256.",
         "",
         "A throughput row is competitive only when the paired deterministic continuation parity gate passes and both arms complete every request in the cell.",
+        "",
+        comparison_capacity_note,
         "",
     ]
     labels = {model["key"]: model["family"] for model in config["models"]}
@@ -2013,6 +2201,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--require-comparison-backends",
         action="store_true",
         help="fail preflight instead of skipping any requested comparison backend or model",
+    )
+    run.add_argument(
+        "--capacity-match-comparison-kv",
+        action="store_true",
+        help=(
+            "cap vLLM and SGLang to the same total KV-token capacity as the "
+            "Mesh/raw unified context"
+        ),
     )
     run.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     add_filters(run)

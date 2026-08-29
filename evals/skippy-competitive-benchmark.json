@@ -115,6 +115,8 @@
     },
       "layer_end": 16,
       "synthetic_context_size": 32768,
+      "thoughtworks_context_size": 131072,
+      "thoughtworks_active_lanes": 16,
       "cache_payload": "resident-kv"
     },
     {
@@ -133,6 +135,8 @@
     },
       "layer_end": 27,
       "synthetic_context_size": 4096,
+      "thoughtworks_context_size": 16384,
+      "thoughtworks_active_lanes": 8,
       "cache_payload": "resident-kv"
     },
     {
@@ -151,6 +155,8 @@
     },
       "layer_end": 24,
       "synthetic_context_size": 32768,
+      "thoughtworks_context_size": 16384,
+      "thoughtworks_active_lanes": 2,
       "cache_payload": "kv-recurrent"
     }
   ]
