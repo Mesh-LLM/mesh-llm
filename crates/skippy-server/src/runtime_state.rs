@@ -176,6 +176,10 @@ impl RuntimeState {
         self.lane_count
     }
 
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
     /// Total KV cell pool available to this context, in tokens (`n_ctx`).
     ///
     /// In unified-KV mode all lanes share this single pool, so it is the real
