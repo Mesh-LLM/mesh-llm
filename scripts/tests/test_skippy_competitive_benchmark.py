@@ -38,7 +38,7 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             ["synthetic", "thoughtworks"],
         )
 
-        self.assertEqual(plan["cell_count"], 432)
+        self.assertEqual(plan["cell_count"], 576)
         self.assertEqual(
             sorted({cell["concurrency"] for cell in plan["cells"]}),
             [1, 2, 4, 8, 16, 32, 64, 128, 256],
@@ -47,7 +47,7 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             sorted({cell["platform"] for cell in plan["cells"]}),
             ["cuda", "metal"],
         )
-        self.assertEqual(len({cell["model"] for cell in plan["cells"]}), 3)
+        self.assertEqual(len({cell["model"] for cell in plan["cells"]}), 4)
         trace = [cell for cell in plan["cells"] if cell["workload"] == "thoughtworks"]
         self.assertTrue(all(cell["prompt_count"] % cell["concurrency"] == 0 for cell in trace))
         self.assertTrue(all(cell["prompt_count"] >= cell["concurrency"] for cell in trace))
@@ -62,6 +62,11 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         ]
         self.assertTrue(all(cell["context_size"] == 16384 for cell in recurrent_trace))
         self.assertTrue(all(cell["active_lanes"] == 2 for cell in recurrent_trace))
+        hybrid_trace = [
+            cell for cell in trace if cell["model"] == "granite-h1-hybrid"
+        ]
+        self.assertTrue(all(cell["context_size"] == 131072 for cell in hybrid_trace))
+        self.assertTrue(all(cell["active_lanes"] == 16 for cell in hybrid_trace))
 
     def test_thoughtworks_runtime_shape_allows_per_model_override(self) -> None:
         thoughtworks = {"context_size": 16384, "active_lanes": 2}
@@ -418,6 +423,62 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         )
         self.assertIn("--no-enable-prefix-caching", no_cache_command)
         self.assertNotIn("--enable-prefix-caching", no_cache_command)
+
+    def test_vllm_native_override_omits_gguf_loader_flags(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = config["models"][-1]
+        args = SimpleNamespace(
+            vllm_binary=Path("vllm"),
+            vllm_model_root=Path("native-models"),
+            tokenizer_root=Path("tokenizers"),
+            vllm_hf_config_root=Path("hf-configs"),
+        )
+
+        command = BENCH.server_command(
+            "vllm",
+            args,
+            model,
+            Path("baseline.gguf"),
+            Path("stage.json"),
+            19000,
+            131072,
+            16,
+            8,
+            True,
+        )
+
+        self.assertEqual(command[2], str(Path("native-models") / model["key"]))
+        self.assertNotIn("--load-format", command)
+        self.assertNotIn("--quantization", command)
+
+    def test_alternate_container_is_fail_closed_against_pinned_hash(self) -> None:
+        config = BENCH.load_config(CONFIG)
+        model = dict(config["models"][-1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "native-models"
+            model_dir = root / model["key"]
+            model_dir.mkdir(parents=True)
+            (model_dir / "config.json").write_text("{}", encoding="utf-8")
+            actual = BENCH.directory_sha256(model_dir)
+            model["comparison_inputs"] = {
+                "sglang": {
+                    **model["comparison_inputs"]["sglang"],
+                    "sha256": actual,
+                }
+            }
+            args = SimpleNamespace(
+                sglang_model_root=root,
+                model_root=Path("baseline-models"),
+            )
+
+            verified = BENCH.comparison_model_input(args, model, "sglang")
+            (model_dir / "config.json").write_text("drift", encoding="utf-8")
+            drifted = BENCH.comparison_model_input(args, model, "sglang")
+
+        self.assertTrue(verified["available"])
+        self.assertEqual(verified["source"], "pinned-alternate-container")
+        self.assertFalse(drifted["available"])
+        self.assertIn("SHA-256 mismatch", drifted["reason"])
 
     def test_synthetic_benchy_command_is_fail_closed_and_sglang_compatible(self) -> None:
         config = BENCH.load_config(CONFIG)

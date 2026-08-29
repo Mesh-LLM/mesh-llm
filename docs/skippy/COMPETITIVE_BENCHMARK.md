@@ -8,7 +8,8 @@ changing serving code during a run.
 The checked-in contract covers:
 
 - CUDA and Metal;
-- Llama 3.2 1B dense, DeepSeek Coder V2 Lite MoE, and Falcon-H1 recurrent;
+- Llama 3.2 1B dense, DeepSeek Coder V2 Lite MoE, Falcon-H1 recurrent,
+  and Granite 4.0 H 1B hybrid;
 - llama-benchy `pp=512`, `tg=8/64/256`, exact output length;
 - 256 deterministic prompts derived from the Thoughtworks agentic coding
   trajectories dataset;
@@ -31,7 +32,9 @@ and model bytes are never checked into the repository.
 python3 evals/skippy-competitive-benchmark.py plan
 ```
 
-The full matrix contains 432 arm-level cells. Filters are repeatable:
+The full required raw-versus-Mesh matrix contains 576 arm-level cells. Optional
+comparison arms add cells only where their pinned model inputs are available.
+Filters are repeatable:
 
 ```bash
 python3 evals/skippy-competitive-benchmark.py plan \
@@ -67,6 +70,20 @@ data. Put the pinned directories under `<tokenizer-root>/<model-key>`; `run`
 hashes every relative file and fails before timing if a directory differs from
 the checked-in digest.
 
+Granite's alternate container digest is derived only after the model-specific
+value check succeeds. In a Python environment with `gguf`, `numpy`,
+`safetensors`, and `torch`:
+
+```bash
+python3 evals/skippy-granite-tensor-equivalence.py \
+  --gguf /path/to/granite-4.0-h-1b-bf16.gguf \
+  --safetensors /path/to/model.safetensors
+```
+
+The verifier covers every source and GGUF tensor, including the official MLP
+split, q/k permutation, BF16-to-F32 scalar promotion, and Mamba `A_log`
+conversion, then prints the canonical BF16 tensor digest pinned in the config.
+
 ## Run one hardware platform
 
 Build `skippy-server` in release mode before measuring. Run the same entrypoint
@@ -94,12 +111,15 @@ run. `--model` and `--workload` may be repeated for a narrowed diagnosis.
 Resume is on by default. A cell is skipped only when its completion marker
 matches the config, manifest, and relevant binary hashes.
 
-Synthetic cells use four active execution lanes. Thoughtworks cells use two
-active lanes and a 16K unified context so the same model/profile fits the
-16 GB CUDA acceptance host. Offered concurrency still reaches 256: requests
-beyond the active lanes exercise waiting admission, queueing, and scheduler
-behavior. The trace arms alternate raw/Mesh and Mesh/raw across the concurrency
-ladder to reduce time-order bias.
+Synthetic cells use four active execution lanes. Thoughtworks runtime shape is
+pinned per family: dense Llama and Granite use 131,072 total KV tokens and 16
+live sequences, DeepSeek uses 16,384/8, and Falcon uses 16,384/2. Every backend
+inside a family row receives the same context, total KV-token budget, and live
+sequence cap. Offered concurrency still reaches 256: requests beyond the active
+lanes exercise waiting admission, queueing, and scheduler behavior. The trace
+arms alternate raw/Mesh and Mesh/raw across the concurrency ladder to reduce
+time-order bias. Reports keep separate tables and charts per family; they do
+not compare or aggregate absolute throughput across models.
 
 On Linux CUDA, `--mesh-adaptive` adds a staged Mesh arm whose committed active
 generation permit count starts at one. Under sustained queued load it tentatively
@@ -108,12 +128,16 @@ without hardware service-time or p95 latency pressure, and otherwise drains back
 to the last committed limit. Failed generations force immediate rollback or
 backoff, and a cooldown periodically re-probes after workload changes. Use
 `--comparison-backend vllm` and/or `--comparison-backend sglang` for optional
-external comparisons. vLLM serves the pinned GGUF with the pinned tokenizer
-and requires `vllm-gguf-plugin` in the vLLM virtual environment plus the
-pinned per-model configs under `--vllm-hf-config-root`.
-SGLang also serves the same pinned GGUF and tokenizer by default; an alternate
-per-model input may be supplied with `--sglang-model-root` when an architecture
-cannot load that GGUF. Missing optional runtimes or SGLang model inputs are recorded in
+external comparisons. vLLM serves the pinned GGUF with the pinned tokenizer by
+default and requires `vllm-gguf-plugin` in the vLLM virtual environment plus
+the pinned per-model configs under `--vllm-hf-config-root`. A native alternate
+container may be supplied under `--vllm-model-root`.
+SGLang likewise defaults to the pinned GGUF; an alternate per-model input may
+be supplied with `--sglang-model-root`. Alternate containers are accepted only
+when their directory digest, source revision, and canonical tensor-equivalence
+digest are pinned in the model config. Granite uses the official BF16 GGUF for
+raw/Mesh and its value-equivalent official BF16 safetensors for vLLM/SGLang.
+Missing optional runtimes or model inputs are recorded in
 `comparisons/<platform>/availability.json` and skipped without weakening the
 required raw llama.cpp/fixed Mesh matrix.
 Pass `--require-comparison-backends` for a controlled comparison that must
