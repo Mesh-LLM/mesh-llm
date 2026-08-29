@@ -12,4 +12,4 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0-rc7" }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0-rc8" }

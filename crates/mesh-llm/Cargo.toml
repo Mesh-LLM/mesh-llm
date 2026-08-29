@@ -18,14 +18,14 @@ workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 clap.workspace = true
-mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.0-rc7" }
-mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.76.0-rc7" }
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc7" }
-mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.76.0-rc7", default-features = false }
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.0-rc7" }
-mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.0-rc7" }
-mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.0-rc7", features = ["skippy-devices"] }
-mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.76.0-rc7" }
+mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.0-rc8" }
+mesh-llm-commands = { path = "../mesh-llm-commands", version = "0.76.0-rc8" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc8" }
+mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", version = "0.76.0-rc8", default-features = false }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.0-rc8" }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.0-rc8" }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.0-rc8", features = ["skippy-devices"] }
+mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.76.0-rc8" }
 reqwest = { version = "0.12", features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
