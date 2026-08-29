@@ -24,7 +24,6 @@ use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{
     SpeculativeDecodeConfig, load_standalone_speculative_config, standalone_ngram_proposal_limit,
 };
-use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
@@ -59,6 +58,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
+use tokio::net::TcpListener;
 
 pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let config = load_json::<StageConfig>(&args.config)
@@ -200,7 +200,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         args.generation_admission_timeout_secs,
     );
 
-    let listener = bind_serve_listener(args.bind_addr)?;
+    let listener = TcpListener::bind(args.bind_addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -346,7 +346,7 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
         binding.generation_admission_timeout_secs,
     );
 
-    let listener = bind_serve_listener(bind_addr)?;
+    let listener = TcpListener::bind(bind_addr).await?;
     axum::serve(listener, binding.router)
         .with_graceful_shutdown(shutdown)
         .await?;

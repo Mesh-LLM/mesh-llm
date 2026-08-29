@@ -4,11 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use tokio::sync::TryAcquireError;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-
-use crate::frontend::generation::GenerationAdmissionQueue;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 const ADAPTIVE_WINDOW_REQUESTS: usize = 16;
 const MIN_THROUGHPUT_IMPROVEMENT: f64 = 0.03;
@@ -142,7 +138,6 @@ struct PermitRetirement {
 pub(in crate::frontend) struct GenerationConcurrencyPermit {
     permit: Option<OwnedSemaphorePermit>,
     retirement: Arc<PermitRetirement>,
-    admission_queue: Arc<GenerationAdmissionQueue>,
 }
 
 impl Drop for GenerationConcurrencyPermit {
@@ -159,8 +154,6 @@ impl Drop for GenerationConcurrencyPermit {
             retirement.pending -= 1;
             permit.forget();
         }
-        drop(retirement);
-        self.admission_queue.notify_lane_available();
     }
 }
 
@@ -200,7 +193,6 @@ pub(in crate::frontend) struct GenerationConcurrencyObservation {
 pub(in crate::frontend) struct GenerationConcurrencyController {
     semaphore: Arc<Semaphore>,
     retirement: Arc<PermitRetirement>,
-    admission_queue: Arc<GenerationAdmissionQueue>,
     hard_limit: usize,
     current_limit: AtomicUsize,
     demand_epoch: AtomicU64,
@@ -223,7 +215,6 @@ impl GenerationConcurrencyController {
         Self {
             semaphore: Arc::new(Semaphore::new(initial_limit)),
             retirement: Arc::new(PermitRetirement::default()),
-            admission_queue: Arc::new(GenerationAdmissionQueue::new()),
             hard_limit,
             current_limit: AtomicUsize::new(initial_limit),
             demand_epoch: AtomicU64::new(0),
@@ -243,7 +234,6 @@ impl GenerationConcurrencyController {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::frontend) fn try_acquire_owned(
         &self,
     ) -> Result<GenerationConcurrencyPermit, TryAcquireError> {
@@ -257,10 +247,6 @@ impl GenerationConcurrencyController {
         self.semaphore.clone()
     }
 
-    pub(in crate::frontend) fn admission_queue(&self) -> Arc<GenerationAdmissionQueue> {
-        Arc::clone(&self.admission_queue)
-    }
-
     pub(in crate::frontend) fn wrap_permit(
         &self,
         permit: OwnedSemaphorePermit,
@@ -268,7 +254,6 @@ impl GenerationConcurrencyController {
         GenerationConcurrencyPermit {
             permit: Some(permit),
             retirement: Arc::clone(&self.retirement),
-            admission_queue: Arc::clone(&self.admission_queue),
         }
     }
 
