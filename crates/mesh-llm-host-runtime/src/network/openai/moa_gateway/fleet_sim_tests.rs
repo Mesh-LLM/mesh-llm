@@ -891,3 +891,115 @@ async fn committee_cap_keeps_a_healthy_worker_over_deprioritized_ones() {
         "the only healthy big worker must survive the committee cap; kept = {kept:?}"
     );
 }
+
+// ─── Parity with main on a healthy fleet ─────────────────────────────
+//
+// The robustness terms added here (admission health, rendezvous replica
+// choice, availability inside the committee cap) all key off
+// `inference_admission_state`. On a fleet where every peer is healthy — which
+// is the normal case, and every large-model deployment we care about — they
+// must be inert: same workers, same count, same tiering as the previous rule.
+//
+// These tests pin that. They are the cheap answer to "does this change MoA for
+// large models?": assembly is the only code this branch touches, so if
+// assembly is identical on a healthy fleet then the committee, the reducer and
+// the refinement round all receive exactly what they receive on main.
+
+/// A healthy big-tier fleet assembles the same pool the pre-change rule gave:
+/// smalls excluded once two big models are present, capped at
+/// `COMMITTEE_CAP_BIG`.
+#[tokio::test]
+async fn healthy_big_fleet_assembles_the_same_pool_as_before() {
+    // Two distinct big models plus two smalls, all healthy (admission state
+    // None, exactly what a peer that never reported activity advertises).
+    let pool = admitted_pool(&[
+        (BIG_MODELS[0], 2),
+        (BIG_MODELS[1], 2),
+        (SMALL_MODELS[0], 3),
+        (SMALL_MODELS[1], 3),
+    ])
+    .await;
+
+    // The measured admission rule: >=2 big healthy => drop every small.
+    assert_eq!(
+        pool.len(),
+        2,
+        "expected the two big models only, got {pool:?}"
+    );
+    for small in [SMALL_MODELS[0], SMALL_MODELS[1]] {
+        assert!(
+            !pool
+                .iter()
+                .any(|name| super::pool::canonical_base_name(name)
+                    == super::pool::canonical_base_name(small.name)),
+            "small-tier worker {} survived a healthy two-big pool: {pool:?}",
+            small.name
+        );
+    }
+}
+
+/// A healthy single-big + small fleet keeps the small worker, because dropping
+/// it would collapse the committee to a solo model. Unchanged by this branch.
+#[tokio::test]
+async fn healthy_single_big_fleet_still_keeps_the_small_worker() {
+    let pool = admitted_pool(&[(BIG_MODELS[0], 2), (SMALL_MODELS[0], 2)]).await;
+    assert_eq!(
+        pool.len(),
+        2,
+        "one big + one small must stay a mixed committee, got {pool:?}"
+    );
+}
+
+/// Removing a replica that is not our preferred one must not change our
+/// preference.
+///
+/// This is the property `hash % hosts.len()` lacked: the index was computed
+/// against the list *length*, so any peer leaving — even an unrelated one —
+/// changed the modulus and moved every origin onto a different replica,
+/// discarding its prefix cache. Rendezvous hashing scores each peer
+/// independently, so dropping a non-preferred peer leaves the ranking of the
+/// rest untouched.
+///
+/// Note the converse is deliberately NOT asserted: rendezvous hashing does not
+/// promise a *joining* peer never becomes preferred — if its score is highest
+/// it should win, which is how load moves onto new capacity. An earlier version
+/// of this test asserted that and failed, correctly.
+#[tokio::test]
+async fn removing_a_non_preferred_replica_does_not_move_our_preference() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node");
+    for seed in 1..=6u32 {
+        node.insert_test_peer(fleet_peer(seed, BIG_MODELS[0])).await;
+    }
+
+    let hosts = node.hosts_for_model(BIG_MODELS[0].name).await;
+    assert_eq!(hosts.len(), 6);
+    let preferred = hosts[0];
+    let victim = *hosts
+        .last()
+        .expect("six replicas were inserted; last is the least preferred");
+    assert_ne!(
+        victim, preferred,
+        "victim must not be the preferred replica"
+    );
+
+    node.remove_test_peer(victim).await;
+
+    let after = node.hosts_for_model(BIG_MODELS[0].name).await;
+    assert_eq!(after.len(), 5, "exactly the victim should be gone");
+    assert!(!after.contains(&victim));
+    assert_eq!(
+        after[0], preferred,
+        "dropping the least-preferred replica moved our preferred replica"
+    );
+    assert_eq!(
+        after,
+        hosts
+            .iter()
+            .copied()
+            .filter(|id| *id != victim)
+            .collect::<Vec<_>>(),
+        "the surviving order must be the old order minus the victim"
+    );
+}

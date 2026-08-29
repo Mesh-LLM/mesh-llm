@@ -1228,6 +1228,12 @@ impl Node {
     pub async fn insert_test_peer(&self, peer: PeerInfo) {
         self.state.lock().await.peers.insert(peer.id, peer);
     }
+
+    /// Drop a peer from the local mesh view, simulating churn.
+    #[cfg(test)]
+    pub async fn remove_test_peer(&self, id: EndpointId) {
+        self.state.lock().await.peers.remove(&id);
+    }
 }
 impl Node {
     pub fn id(&self) -> EndpointId {
