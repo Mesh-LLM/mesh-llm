@@ -417,6 +417,27 @@ impl KvStageIntegration {
                     resident_tokens: stats.resident_tokens,
                 }));
             }
+            if let Some(existing) = resident_dominating_snapshot(
+                &radix,
+                &identity.namespace,
+                &identity.token_ids[..token_count],
+            ) {
+                // Requests finish out of scheduler order. If a descendant was
+                // recorded first, its native sequence can already be sliced to
+                // this entire prompt. Saving the later ancestor would recreate
+                // a redundant sequence ID after the forward compaction below.
+                let stats = radix.stats();
+                return Ok(Some(ResidentPrefixRecord {
+                    page_id: existing.value.page_id,
+                    token_count,
+                    seq_id: existing.value.seq_id,
+                    stored: false,
+                    evicted_entries: 0,
+                    evicted_tokens: 0,
+                    entries: stats.resident_entries,
+                    resident_tokens: stats.resident_tokens,
+                }));
+            }
 
             // A deeper resident sequence can be sliced by native restore to
             // serve every strict ancestor on the same token path, including a
@@ -596,6 +617,16 @@ fn evict_redundant_resident_ancestors(
     Ok((evicted_entries, evicted_tokens))
 }
 
+fn resident_dominating_snapshot(
+    radix: &skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+    namespace: &str,
+    tokens: &[i32],
+) -> Option<skippy_cache::RadixMatch<RadixResidentEntry>> {
+    let existing = radix.peek_resident(namespace, tokens)?;
+    (existing.matched_tokens == tokens.len() && existing.stored_tokens.len() > tokens.len())
+        .then_some(existing)
+}
+
 fn resident_candidate_units(
     candidate: &skippy_cache::RadixEvictionCandidate<RadixResidentEntry>,
 ) -> u64 {
@@ -754,6 +785,32 @@ mod proactive_eviction_tests {
         assert_eq!(compacted, (0, 0));
         assert!(!dropped);
         assert!(radix.resident_exact("stage", &[1, 2]).is_some());
+    }
+
+    #[test]
+    fn out_of_order_ancestor_record_is_skipped_when_descendant_already_backs_it() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2, 4],
+                3,
+                RadixResidentEntry {
+                    page_id: "descendant".to_string(),
+                    seq_id: 7,
+                    token_count: 3,
+                    recompute_cost: 3,
+                },
+            )
+            .unwrap();
+
+        let existing = resident_dominating_snapshot(&radix, "stage", &[1, 2]).unwrap();
+
+        assert_eq!(existing.matched_tokens, 2);
+        assert_eq!(existing.stored_tokens, vec![1, 2, 4]);
+        assert_eq!(existing.value.seq_id, 7);
+        assert!(resident_dominating_snapshot(&radix, "stage", &[1, 3]).is_none());
+        assert!(resident_dominating_snapshot(&radix, "stage", &[1, 2, 4]).is_none());
     }
 
     #[test]
