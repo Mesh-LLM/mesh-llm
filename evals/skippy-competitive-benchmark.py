@@ -921,6 +921,29 @@ def arms_for_model(
     return tuple(dict.fromkeys(arms))
 
 
+def required_comparison_errors(
+    requested: Sequence[str],
+    comparisons: dict[str, dict[str, Any]],
+) -> list[str]:
+    unavailable = []
+    for arm in requested:
+        entry = comparisons.get(arm, {})
+        if not entry.get("available"):
+            unavailable.append(f"{arm}: {entry.get('reason', 'unavailable')}")
+            continue
+        missing_models = [
+            key
+            for key, model_entry in entry.get("models", {}).items()
+            if not model_entry.get("available")
+            and model_entry.get("source") != "pinned-capability-exclusion"
+        ]
+        if missing_models:
+            unavailable.append(
+                f"{arm}: missing model inputs for {', '.join(missing_models)}"
+            )
+    return unavailable
+
+
 def arm_runtime_sha256(
     arm: str, provenance: dict[str, Any], model_key: str
 ) -> str:
@@ -958,21 +981,9 @@ def preflight_run(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     models = selected_models(config, args.model)
     optional_comparisons = resolve_optional_comparisons(args, models)
     if args.require_comparison_backends:
-        unavailable = []
-        for arm in args.comparison_backend:
-            entry = optional_comparisons.get(arm, {})
-            if not entry.get("available"):
-                unavailable.append(f"{arm}: {entry.get('reason', 'unavailable')}")
-                continue
-            missing_models = [
-                key
-                for key, model_entry in entry.get("models", {}).items()
-                if not model_entry.get("available")
-            ]
-            if missing_models:
-                unavailable.append(
-                    f"{arm}: missing model inputs for {', '.join(missing_models)}"
-                )
+        unavailable = required_comparison_errors(
+            args.comparison_backend, optional_comparisons
+        )
         if unavailable:
             raise RuntimeError(
                 "required comparison backends are unavailable: "
@@ -2279,7 +2290,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument(
         "--require-comparison-backends",
         action="store_true",
-        help="fail preflight instead of skipping any requested comparison backend or model",
+        help=(
+            "fail preflight instead of skipping a requested backend or an "
+            "unpinned model incompatibility"
+        ),
     )
     run.add_argument(
         "--capacity-match-comparison-kv",
