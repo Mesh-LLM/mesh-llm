@@ -57,7 +57,8 @@ pub(crate) unsafe fn load(path: &Path) -> Result<Library, String> {
     // from them. Rebuilding the path from its components normalizes every
     // separator to a backslash.
     let normalized: std::path::PathBuf = path.components().collect();
-    let result = unsafe { WindowsLibrary::load_with_flags(&normalized, LOAD_WITH_ALTERED_SEARCH_PATH) };
+    let result =
+        unsafe { WindowsLibrary::load_with_flags(&normalized, LOAD_WITH_ALTERED_SEARCH_PATH) };
     result
         .map(Into::into)
         .map_err(|error| format_load_error(path, &error))
