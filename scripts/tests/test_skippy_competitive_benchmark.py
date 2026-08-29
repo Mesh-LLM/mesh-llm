@@ -181,6 +181,9 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertEqual(command[command.index("--max-running-requests") + 1], "4")
         self.assertEqual(command[command.index("--load-format") + 1], "gguf")
         self.assertEqual(command[command.index("--quantization") + 1], "gguf")
+        served_name = command[command.index("--served-model-name") + 1]
+        self.assertNotIn(":", served_name)
+        self.assertEqual(BENCH.served_model_id("sglang", model), served_name)
 
     def test_vllm_uses_the_verified_config_for_the_pinned_gguf(self) -> None:
         config = BENCH.load_config(CONFIG)
@@ -253,7 +256,12 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         config = BENCH.load_config(CONFIG)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for arm, throughput in (("llama", 100.0), ("mesh", 120.0)):
+            for arm, throughput in (
+                ("llama", 100.0),
+                ("mesh", 120.0),
+                ("vllm", 130.0),
+                ("sglang", 110.0),
+            ):
                 arm_dir = root / "data" / "metal" / "llama32-dense" / arm
                 arm_dir.mkdir(parents=True)
                 (arm_dir / "tg-8-c-1.json").write_text(
@@ -316,11 +324,22 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             BENCH.report(argparse.Namespace(artifact=root), config)
 
             report = (root / "summary" / "REPORT.md").read_text(encoding="utf-8")
-            self.assertIn("Correctness gate: **PASS**", report)
+            self.assertIn("Mesh correctness gate: **PASS**", report)
             self.assertIn("+20.00%", report)
+            self.assertIn(
+                "| raw llama.cpp tok/s | Mesh tok/s | vLLM tok/s | SGLang tok/s |",
+                report,
+            )
             self.assertTrue((root / "summary" / "synthetic.csv").is_file())
             self.assertTrue((root / "summary" / "thoughtworks.csv").is_file())
-            self.assertTrue(list((root / "summary" / "charts").glob("*.svg")))
+            charts = list((root / "summary" / "charts").glob("*.svg"))
+            self.assertTrue(charts)
+            throughput_chart = next(
+                chart for chart in charts if chart.name.endswith("throughput.svg")
+            )
+            chart_text = throughput_chart.read_text(encoding="utf-8")
+            self.assertIn("vLLM", chart_text)
+            self.assertIn("SGLang", chart_text)
             self.assertTrue((root / "artifact-sha256.txt").is_file())
 
 
