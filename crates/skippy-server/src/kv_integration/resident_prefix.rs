@@ -418,6 +418,21 @@ impl KvStageIntegration {
                 }));
             }
 
+            // A deeper resident sequence can be sliced by native restore to
+            // serve every strict ancestor on the same token path, including a
+            // request that diverges immediately after that ancestor. Retaining
+            // both snapshots only consumes a sequence ID and pushes unrelated
+            // family branches out of the logical entry index.
+            let compacted = evict_redundant_resident_ancestors(
+                &mut radix,
+                &mut sequences,
+                &identity.namespace,
+                &identity.token_ids[..token_count],
+                |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
+            )?;
+            evicted_entries = evicted_entries.saturating_add(compacted.0);
+            evicted_tokens = evicted_tokens.saturating_add(compacted.1);
+
             loop {
                 let stats = radix.stats();
                 // `resident_tokens` is a logical sum of every radix checkpoint
@@ -551,6 +566,36 @@ fn evict_one_resident(
     Ok(Some(removed))
 }
 
+fn evict_redundant_resident_ancestors(
+    radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
+    sequences: &mut ResidentSequencePool,
+    namespace: &str,
+    tokens: &[i32],
+    mut drop_native: impl FnMut(i32) -> Result<()>,
+) -> Result<(usize, u64)> {
+    let ancestors = radix
+        .resident_eviction_candidates()
+        .into_iter()
+        .filter(|candidate| {
+            candidate.namespace == namespace
+                && candidate.tokens.len() < tokens.len()
+                && tokens.starts_with(&candidate.tokens)
+        })
+        .collect::<Vec<_>>();
+    let mut evicted_entries = 0usize;
+    let mut evicted_tokens = 0u64;
+    for ancestor in ancestors {
+        drop_native(ancestor.value.seq_id)?;
+        let removed = radix
+            .evict_resident_candidate(&ancestor.namespace, &ancestor.tokens)
+            .context("redundant resident ancestor disappeared after native deletion")?;
+        sequences.release(removed.value.seq_id);
+        evicted_entries = evicted_entries.saturating_add(1);
+        evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
+    }
+    Ok((evicted_entries, evicted_tokens))
+}
+
 fn resident_candidate_units(
     candidate: &skippy_cache::RadixEvictionCandidate<RadixResidentEntry>,
 ) -> u64 {
@@ -627,6 +672,88 @@ mod proactive_eviction_tests {
         };
 
         assert!(!resident_index_over_capacity(config, stats, 8_000));
+    }
+
+    #[test]
+    fn deeper_snapshot_compacts_only_unreferenced_same_path_ancestors() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let ancestor_seq = sequences.allocate().unwrap();
+        let sibling_seq = sequences.allocate().unwrap();
+        for (tokens, seq_id, page_id) in [
+            (&[1, 2][..], ancestor_seq, "ancestor"),
+            (&[1, 3][..], sibling_seq, "sibling"),
+        ] {
+            radix
+                .insert_resident(
+                    "stage",
+                    tokens,
+                    tokens.len() as u64,
+                    RadixResidentEntry {
+                        page_id: page_id.to_string(),
+                        seq_id,
+                        token_count: tokens.len() as u64,
+                        recompute_cost: tokens.len() as u64,
+                    },
+                )
+                .unwrap();
+        }
+        let mut dropped = Vec::new();
+
+        let compacted = evict_redundant_resident_ancestors(
+            &mut radix,
+            &mut sequences,
+            "stage",
+            &[1, 2, 4],
+            |seq_id| {
+                dropped.push(seq_id);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(compacted, (1, 2));
+        assert_eq!(dropped, vec![ancestor_seq]);
+        assert!(radix.resident_exact("stage", &[1, 2]).is_none());
+        assert!(radix.resident_exact("stage", &[1, 3]).is_some());
+    }
+
+    #[test]
+    fn active_ancestor_is_not_compacted() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        radix
+            .insert_resident(
+                "stage",
+                &[1, 2],
+                2,
+                RadixResidentEntry {
+                    page_id: "active".to_string(),
+                    seq_id,
+                    token_count: 2,
+                    recompute_cost: 2,
+                },
+            )
+            .unwrap();
+        radix.acquire_resident("stage", &[1, 2]).unwrap();
+        let mut dropped = false;
+
+        let compacted = evict_redundant_resident_ancestors(
+            &mut radix,
+            &mut sequences,
+            "stage",
+            &[1, 2, 4],
+            |_| {
+                dropped = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(compacted, (0, 0));
+        assert!(!dropped);
+        assert!(radix.resident_exact("stage", &[1, 2]).is_some());
     }
 
     #[test]
