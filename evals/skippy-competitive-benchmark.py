@@ -38,6 +38,13 @@ ARMS = ("llama", "mesh")
 OPTIONAL_ARMS = ("vllm", "sglang")
 ADAPTIVE_MESH_ARM = "mesh-adaptive"
 KNOWN_ARMS = (*ARMS, ADAPTIVE_MESH_ARM, *OPTIONAL_ARMS)
+REPORT_ARM_ORDER = (*ARMS, *OPTIONAL_ARMS)
+REPORT_ARM_STYLES = {
+    "llama": ("raw llama.cpp", "#64748b"),
+    "mesh": ("Mesh", "#0284c7"),
+    "vllm": ("vLLM", "#16a34a"),
+    "sglang": ("SGLang", "#9333ea"),
+}
 CELL_RE = re.compile(r"tg-(\d+)-c-(\d+)\.json$")
 
 
@@ -435,6 +442,13 @@ def write_stage_config(
     write_json(path, value)
 
 
+def served_model_id(arm: str, model: dict[str, Any]) -> str:
+    model_id = model["model_id"]
+    if arm == "sglang":
+        return model_id.replace(":", "-")
+    return model_id
+
+
 def server_command(
     arm: str,
     args: argparse.Namespace,
@@ -515,7 +529,7 @@ def server_command(
             "--tokenizer-path",
             str(args.tokenizer_root / model["key"]),
             "--served-model-name",
-            model["model_id"],
+            served_model_id(arm, model),
             "--host",
             "127.0.0.1",
             "--port",
@@ -1079,6 +1093,7 @@ def run_synthetic_arm(
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     path = model_path(args.model_root, model)
+    benchmark_model_id = served_model_id(arm, model)
     with running_server(
         arm,
         args,
@@ -1097,9 +1112,9 @@ def run_synthetic_arm(
             "--api-key",
             "EMPTY",
             "--model",
-            model["model_id"],
+            benchmark_model_id,
             "--served-model-name",
-            model["model_id"],
+            benchmark_model_id,
             "--tokenizer",
             str(args.tokenizer_root / model["key"]),
             "--pp",
@@ -1159,7 +1174,7 @@ def run_synthetic_arm(
             writer.writerows(status_rows)
         write_json(
             output_dir / "parity.json",
-            parity_probe(port, model["model_id"], config["concurrency"]),
+            parity_probe(port, benchmark_model_id, config["concurrency"]),
         )
     write_json(
         output_dir / "complete.json",
@@ -1215,6 +1230,7 @@ def run_trace_cell(
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     path = model_path(args.model_root, model)
+    benchmark_model_id = served_model_id(arm, model)
     records: list[dict[str, Any]] = []
     with running_server(
         arm,
@@ -1236,7 +1252,7 @@ def run_trace_cell(
                     warm_prompt = checkpoint(item["prompt"], fraction)
                     result = request_completion(
                         port,
-                        model["model_id"],
+                        benchmark_model_id,
                         warm_prompt,
                         thoughtworks["output_tokens"],
                         True,
@@ -1259,7 +1275,7 @@ def run_trace_cell(
                     executor.submit(
                         request_completion,
                         port,
-                        model["model_id"],
+                        benchmark_model_id,
                         item["prompt"],
                         thoughtworks["output_tokens"],
                         True,
@@ -1549,7 +1565,14 @@ def svg_chart(
     width, height = 960, 520
     left, top, plot_width, plot_height = 90, 80, 800, 350
     indexed = {(row["arm"], row["concurrency"]): row for row in rows if row["complete"]}
-    series: dict[str, list[tuple[int, float]]] = {"llama": [], "mesh": []}
+    active_arms = [
+        arm
+        for arm in REPORT_ARM_ORDER
+        if any(row["arm"] == arm for row in rows)
+    ]
+    series: dict[str, list[tuple[int, float]]] = {
+        arm: [] for arm in active_arms
+    }
     if delta:
         delta_points = []
         for concurrency in concurrency_values:
@@ -1564,7 +1587,7 @@ def svg_chart(
         padding = max((y_max - y_min) * 0.15, 1.0)
         y_min, y_max = y_min - padding, y_max + padding
     else:
-        for arm in ARMS:
+        for arm in active_arms:
             for concurrency in concurrency_values:
                 row = indexed.get((arm, concurrency))
                 if row:
@@ -1609,7 +1632,8 @@ def svg_chart(
         parts.append(polyline(points, "#dc2626"))
         parts.append('<text x="730" y="480" font-family="sans-serif" font-size="13" fill="#dc2626">Mesh delta</text>')
     else:
-        for arm, color in (("llama", "#64748b"), ("mesh", "#0284c7")):
+        for arm in active_arms:
+            _, color = REPORT_ARM_STYLES[arm]
             points = []
             for concurrency, value in series[arm]:
                 index = concurrency_values.index(concurrency)
@@ -1617,8 +1641,15 @@ def svg_chart(
                 y = top + plot_height - plot_height * (value - y_min) / span
                 points.append((x, y))
             parts.append(polyline(points, color))
-        parts.append('<text x="650" y="480" font-family="sans-serif" font-size="13" fill="#64748b">raw llama.cpp</text>')
-        parts.append('<text x="790" y="480" font-family="sans-serif" font-size="13" fill="#0284c7">Mesh</text>')
+        legend_start = 430 if len(active_arms) > 2 else 650
+        legend_step = 125 if len(active_arms) > 2 else 140
+        for index, arm in enumerate(active_arms):
+            label, color = REPORT_ARM_STYLES[arm]
+            x = legend_start + legend_step * index
+            parts.append(
+                f'<text x="{x}" y="480" font-family="sans-serif" '
+                f'font-size="13" fill="{color}">{escape(label)}</text>'
+            )
     if incomplete_mesh:
         parts.append('<text x="90" y="480" font-family="sans-serif" font-size="13" fill="#dc2626">× incomplete Mesh cell</text>')
     parts.append('<text x="480" y="505" text-anchor="middle" font-family="sans-serif" font-size="13">Offered concurrency</text>')
@@ -1648,7 +1679,7 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
     write_csv(summary / "thoughtworks.csv", trace)
     write_csv(summary / "parity.csv", parity)
     lines = [
-        "# Mesh vs raw llama.cpp competitive benchmark",
+        "# Skippy competitive benchmark",
         "",
         "Pinned matrix: CUDA and Metal; dense, MoE, and recurrent model families; offered concurrency 1/2/4/8/16/32/64/128/256.",
         "",
@@ -1667,7 +1698,7 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 continue
             gate = next((row for row in parity if row["platform"] == platform and row["model"] == model and row["arm"] == "mesh" and row["concurrency"] == 1), None)
             gate_pass = bool(gate and gate["failures"] == 0 and gate["valid_pairs"] == 1 and gate["matches"] == 1)
-            lines.extend([f"### {labels.get(model, model)}", "", f"Correctness gate: **{'PASS' if gate_pass else 'FAIL OR PENDING'}**.", ""])
+            lines.extend([f"### {labels.get(model, model)}", "", f"Mesh correctness gate: **{'PASS' if gate_pass else 'FAIL OR PENDING'}**.", ""])
             for output_tokens in config["synthetic"]["output_tokens"]:
                 rows = [row for row in model_synthetic if row["tg"] == output_tokens]
                 if not rows:
@@ -1682,7 +1713,39 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 svg_chart(f"{platform.upper()} {labels.get(model, model)} — Thoughtworks replay", trace_rows, config["concurrency"], charts / f"{slug}-throughput.svg", False)
                 svg_chart(f"{platform.upper()} {labels.get(model, model)} — Thoughtworks Mesh delta", trace_rows, config["concurrency"], charts / f"{slug}-delta.svg", True)
                 lines.extend([f"![Thoughtworks throughput](charts/{slug}-throughput.svg)", "", f"![Thoughtworks Mesh delta](charts/{slug}-delta.svg)", ""])
-            lines.extend(["| workload | tg | concurrency | raw tok/s | Mesh tok/s | delta | status |", "|---|---:|---:|---:|---:|---:|---|"])
+            comparison_arms = [
+                arm
+                for arm in REPORT_ARM_ORDER
+                if any(
+                    row["arm"] == arm
+                    for row in model_synthetic + model_trace
+                )
+            ]
+            candidate_gates = {
+                arm: any(
+                    row["platform"] == platform
+                    and row["model"] == model
+                    and row["arm"] == arm
+                    and row["concurrency"] == 1
+                    and row["failures"] == 0
+                    and row["valid_pairs"] == 1
+                    and row["matches"] == 1
+                    for row in parity
+                )
+                for arm in comparison_arms
+                if arm != "llama"
+            }
+            arm_headers = " | ".join(
+                f"{REPORT_ARM_STYLES[arm][0]} tok/s" for arm in comparison_arms
+            )
+            lines.extend(
+                [
+                    f"| workload | tg | concurrency | {arm_headers} | Mesh vs raw | status |",
+                    "|---|---:|---:|"
+                    + "---:|" * len(comparison_arms)
+                    + "---:|---|",
+                ]
+            )
             groups: list[tuple[str, int, list[dict[str, Any]]]] = []
             for output_tokens in config["synthetic"]["output_tokens"]:
                 groups.append(("pp512", output_tokens, [row for row in model_synthetic if row["tg"] == output_tokens]))
@@ -1690,21 +1753,45 @@ def report(args: argparse.Namespace, config: dict[str, Any]) -> None:
             for workload, output_tokens, rows in groups:
                 indexed = {(row["arm"], row["concurrency"]): row for row in rows}
                 for concurrency in config["concurrency"]:
-                    raw = indexed.get(("llama", concurrency))
-                    mesh = indexed.get(("mesh", concurrency))
+                    arm_rows = {
+                        arm: indexed.get((arm, concurrency))
+                        for arm in comparison_arms
+                    }
+                    raw = arm_rows.get("llama")
+                    mesh = arm_rows.get("mesh")
                     if not raw or not mesh:
                         continue
-                    complete = raw["complete"] and mesh["complete"]
-                    delta = 100 * (mesh["throughput"] / raw["throughput"] - 1) if complete and raw["throughput"] else None
-                    status = "valid" if gate_pass and complete else "diagnostic"
-                    lines.append(f"| {workload} | {output_tokens} | {concurrency} | {raw['throughput']:.2f} | {mesh['throughput']:.2f} | {'—' if delta is None else f'{delta:+.2f}%'} | {status} |")
+                    base_complete = raw["complete"] and mesh["complete"]
+                    complete = all(
+                        row is not None and row["complete"]
+                        for row in arm_rows.values()
+                    )
+                    delta = (
+                        100 * (mesh["throughput"] / raw["throughput"] - 1)
+                        if base_complete and raw["throughput"]
+                        else None
+                    )
+                    gates_pass = all(candidate_gates.values())
+                    status = "valid" if gates_pass and complete else "diagnostic"
+                    throughput_cells = " | ".join(
+                        "—"
+                        if arm_rows[arm] is None
+                        else f"{arm_rows[arm]['throughput']:.2f}"
+                        for arm in comparison_arms
+                    )
+                    lines.append(
+                        f"| {workload} | {output_tokens} | {concurrency} | "
+                        f"{throughput_cells} | "
+                        f"{'—' if delta is None else f'{delta:+.2f}%'} | "
+                        f"{status} |"
+                    )
             lines.append("")
-            comparison_arms = sorted(
+            promotion_arms = sorted(
                 {row["arm"] for row in model_synthetic + model_trace}
                 - {"llama", "mesh"}
             )
             promotion_rows = []
-            for candidate_arm in comparison_arms:
+            for candidate_arm in promotion_arms:
                 synthetic_deltas = []
                 trace_deltas = []
                 complete = True
