@@ -39,6 +39,7 @@ jobs:
       COMPETITIVE_LLAMA_BINARY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_LLAMA_BINARY }}
       COMPETITIVE_BENCHY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_BENCHY }}
       COMPETITIVE_VLLM_BINARY: ${{ vars.MESH_NIGHTLY_COMPETITIVE_VLLM_BINARY }}
+      COMPETITIVE_VLLM_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_VLLM_MODEL_ROOT }}
       COMPETITIVE_VLLM_HF_CONFIG_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_VLLM_HF_CONFIG_ROOT }}
       COMPETITIVE_SGLANG_PYTHON: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_PYTHON }}
       COMPETITIVE_SGLANG_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_MODEL_ROOT }}
@@ -108,6 +109,9 @@ jobs:
             args+=(--comparison-backend vllm --comparison-backend sglang)
             if [[ -n "${COMPETITIVE_VLLM_BINARY:-}" ]]; then
               args+=(--vllm-binary "$COMPETITIVE_VLLM_BINARY")
+            fi
+            if [[ -n "${COMPETITIVE_VLLM_MODEL_ROOT:-}" ]]; then
+              args+=(--vllm-model-root "$COMPETITIVE_VLLM_MODEL_ROOT")
             fi
             if [[ -n "${COMPETITIVE_VLLM_HF_CONFIG_ROOT:-}" ]]; then
               args+=(--vllm-hf-config-root "$COMPETITIVE_VLLM_HF_CONFIG_ROOT")

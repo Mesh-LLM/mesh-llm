@@ -163,6 +163,25 @@ def load_config(path: Path) -> dict[str, Any]:
                     f"model {model['key']} comparison_support for {arm} "
                     "needs an exclusion reason"
                 )
+        comparison_inputs = model.get("comparison_inputs", {})
+        if not isinstance(comparison_inputs, dict) or not set(
+            comparison_inputs
+        ).issubset(OPTIONAL_ARMS):
+            raise ValueError(
+                f"model {model['key']} comparison_inputs has an unknown backend"
+            )
+        for arm, comparison_input in comparison_inputs.items():
+            if (
+                not isinstance(comparison_input, dict)
+                or not comparison_input.get("repo")
+                or len(comparison_input.get("revision", "")) != 40
+                or len(comparison_input.get("sha256", "")) != 64
+                or len(comparison_input.get("tensor_equivalence_sha256", "")) != 64
+            ):
+                raise ValueError(
+                    f"model {model['key']} comparison input for {arm} "
+                    "needs pinned provenance and tensor equivalence"
+                )
     thoughtworks = document.get("thoughtworks", {})
     dataset = thoughtworks.get("dataset", {})
     selection = thoughtworks.get("selection", {})
@@ -545,10 +564,15 @@ def server_command(
             )
         return command
     if arm == "vllm":
+        vllm_path = (
+            args.vllm_model_root / model["key"]
+            if getattr(args, "vllm_model_root", None) is not None
+            else model_path
+        )
         command = [
             str(args.vllm_binary),
             "serve",
-            str(model_path),
+            str(vllm_path),
             "--tokenizer",
             str(args.tokenizer_root / model["key"]),
             "--hf-config-path",
@@ -563,11 +587,11 @@ def server_command(
             str(ctx_size),
             "--max-num-seqs",
             str(lanes),
-            "--load-format",
-            "gguf",
-            "--quantization",
-            "gguf",
         ]
+        if vllm_path.suffix.lower() == ".gguf" or (
+            vllm_path.exists() and vllm_path.resolve().suffix.lower() == ".gguf"
+        ):
+            command.extend(["--load-format", "gguf", "--quantization", "gguf"])
         command.append(
             "--enable-prefix-caching"
             if prompt_cache
@@ -728,10 +752,67 @@ def model_path(model_root: Path, model: dict[str, Any]) -> Path:
     return model_root / model["key"] / model["filename"]
 
 
+def vllm_model_path(args: argparse.Namespace, model: dict[str, Any]) -> Path:
+    if getattr(args, "vllm_model_root", None) is not None:
+        return args.vllm_model_root / model["key"]
+    return model_path(args.model_root, model)
+
+
 def sglang_model_path(args: argparse.Namespace, model: dict[str, Any]) -> Path:
-    if args.sglang_model_root is not None:
+    if getattr(args, "sglang_model_root", None) is not None:
         return args.sglang_model_root / model["key"]
     return model_path(args.model_root, model)
+
+
+def comparison_model_input(
+    args: argparse.Namespace, model: dict[str, Any], arm: str
+) -> dict[str, Any]:
+    if arm == "vllm":
+        path = vllm_model_path(args, model)
+        override = getattr(args, "vllm_model_root", None) is not None
+    elif arm == "sglang":
+        path = sglang_model_path(args, model)
+        override = getattr(args, "sglang_model_root", None) is not None
+    else:  # pragma: no cover - callers pass only optional arms.
+        raise ValueError(f"unknown comparison arm: {arm}")
+
+    available = path.is_file() or (
+        path.is_dir() and any(candidate.is_file() for candidate in path.rglob("*"))
+    )
+    actual = (
+        sha256(path)
+        if available and path.is_file()
+        else directory_sha256(path)
+        if available
+        else None
+    )
+    pin = model.get("comparison_inputs", {}).get(arm) if override else None
+    expected = pin["sha256"] if pin is not None else model["sha256"]
+    if not available:
+        reason = "model path not found"
+    elif override and pin is None and actual != model["sha256"]:
+        reason = "override model input has no pinned comparison_inputs entry"
+    elif actual != expected:
+        reason = "model input SHA-256 mismatch"
+    else:
+        reason = None
+    return {
+        "available": reason is None,
+        "model_path": str(path),
+        "model_sha256": actual,
+        "model_expected_sha256": expected,
+        "source": (
+            "pinned-alternate-container"
+            if override and pin is not None
+            else "pinned-baseline-gguf"
+        ),
+        "model_repo": pin.get("repo") if pin is not None else model["repo"],
+        "model_revision": pin.get("revision") if pin is not None else model["revision"],
+        "tensor_equivalence_sha256": (
+            pin.get("tensor_equivalence_sha256") if pin is not None else None
+        ),
+        "reason": reason,
+    }
 
 
 def resolve_optional_comparisons(
@@ -788,9 +869,11 @@ def resolve_optional_comparisons(
                 path = args.vllm_hf_config_root / model["key"] / "config.json"
                 expected = model["vllm_hf_config"]["sha256"]
                 actual = sha256(path) if path.is_file() else None
+                model_input = comparison_model_input(args, model, "vllm")
                 support = model.get("comparison_support", {}).get("vllm")
                 if support is not None and not support["available"]:
                     model_status[model["key"]] = {
+                        **model_input,
                         "available": False,
                         "config_path": str(path.parent),
                         "config_sha256": actual,
@@ -801,20 +884,22 @@ def resolve_optional_comparisons(
                         "source": "pinned-capability-exclusion",
                     }
                     continue
+                config_reason = (
+                    None
+                    if actual == expected
+                    else "config.json not found"
+                    if actual is None
+                    else "config.json SHA-256 mismatch"
+                )
                 model_status[model["key"]] = {
-                    "available": actual == expected,
+                    **model_input,
+                    "available": actual == expected and model_input["available"],
                     "config_path": str(path.parent),
                     "config_sha256": actual,
                     "expected_sha256": expected,
                     "repo": model["vllm_hf_config"]["repo"],
                     "revision": model["vllm_hf_config"]["revision"],
-                    "reason": (
-                        None
-                        if actual == expected
-                        else "config.json not found"
-                        if actual is None
-                        else "config.json SHA-256 mismatch"
-                    ),
+                    "reason": config_reason or model_input["reason"],
                 }
             version = subprocess.run(
                 [str(args.vllm_binary), "--version"],
@@ -857,43 +942,17 @@ def resolve_optional_comparisons(
                 continue
             model_status = {}
             for model in models:
-                path = sglang_model_path(args, model)
-                available = path.is_file() or (
-                    path.is_dir() and any(candidate.is_file() for candidate in path.rglob("*"))
-                )
+                model_input = comparison_model_input(args, model, "sglang")
                 support = model.get("comparison_support", {}).get("sglang")
                 if support is not None and not support["available"]:
                     model_status[model["key"]] = {
+                        **model_input,
                         "available": False,
-                        "model_path": str(path),
-                        "model_sha256": (
-                            sha256(path)
-                            if available and path.is_file()
-                            else directory_sha256(path)
-                            if available
-                            else None
-                        ),
                         "source": "pinned-capability-exclusion",
                         "reason": support["reason"],
                     }
                     continue
-                model_status[model["key"]] = {
-                    "available": available,
-                    "model_path": str(path),
-                    "model_sha256": (
-                        sha256(path)
-                        if available and path.is_file()
-                        else directory_sha256(path)
-                        if available
-                        else None
-                    ),
-                    "source": (
-                        "override"
-                        if args.sglang_model_root is not None
-                        else "pinned-baseline-gguf"
-                    ),
-                    "reason": None if available else "model path not found",
-                }
+                model_status[model["key"]] = model_input
             entry.update(
                 {
                     "available": any(item["available"] for item in model_status.values()),
@@ -2280,6 +2339,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="optional Linux CUDA comparison arm; missing runtimes are recorded as skips",
     )
     run.add_argument("--vllm-binary", type=Path)
+    run.add_argument(
+        "--vllm-model-root",
+        type=Path,
+        help=(
+            "optional override containing one pinned vLLM model input per key; "
+            "defaults to the baseline GGUF inputs"
+        ),
+    )
     run.add_argument(
         "--vllm-hf-config-root",
         type=Path,

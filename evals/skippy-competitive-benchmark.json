@@ -178,6 +178,40 @@
       "thoughtworks_context_size": 16384,
       "thoughtworks_active_lanes": 2,
       "cache_payload": "kv-recurrent"
+    },
+    {
+      "key": "granite-h1-hybrid",
+      "family": "Granite 4.0 H 1B hybrid",
+      "repo": "ibm-granite/granite-4.0-h-1b-GGUF",
+      "revision": "c2cb1972f511add21f3bae244990b8ff3a3ffb23",
+      "filename": "granite-4.0-h-1b-bf16.gguf",
+      "model_id": "ibm-granite/granite-4.0-h-1b",
+      "sha256": "263ecc8dbe190d61b03639a3e71eec1ba6c70445e8488ce46cfe52d61786eb96",
+      "tokenizer_sha256": "0a7db08641556bc713607cdfc45d32b2b73d2cf6a904a39f95b456dda381bd53",
+      "vllm_hf_config": {
+        "repo": "ibm-granite/granite-4.0-h-1b",
+        "revision": "d18cca4c121edb87d022116d281ce212c9136f57",
+        "sha256": "aafbdabf9b0ff18ab18e6d22b867b1ba006305fd666a8d9f579de7c4a98ca0b8"
+      },
+      "comparison_inputs": {
+        "vllm": {
+          "repo": "ibm-granite/granite-4.0-h-1b",
+          "revision": "d18cca4c121edb87d022116d281ce212c9136f57",
+          "sha256": "0a7db08641556bc713607cdfc45d32b2b73d2cf6a904a39f95b456dda381bd53",
+          "tensor_equivalence_sha256": "f6e06c4d22099e8d55b9af541992a9c25744e27d9485c13ee4b493c229dd9e0e"
+        },
+        "sglang": {
+          "repo": "ibm-granite/granite-4.0-h-1b",
+          "revision": "d18cca4c121edb87d022116d281ce212c9136f57",
+          "sha256": "0a7db08641556bc713607cdfc45d32b2b73d2cf6a904a39f95b456dda381bd53",
+          "tensor_equivalence_sha256": "f6e06c4d22099e8d55b9af541992a9c25744e27d9485c13ee4b493c229dd9e0e"
+        }
+      },
+      "layer_end": 40,
+      "synthetic_context_size": 32768,
+      "thoughtworks_context_size": 131072,
+      "thoughtworks_active_lanes": 16,
+      "cache_payload": "kv-recurrent"
     }
   ]
 }
