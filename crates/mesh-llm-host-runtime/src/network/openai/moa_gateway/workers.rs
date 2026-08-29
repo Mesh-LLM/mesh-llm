@@ -396,7 +396,7 @@ where
     let deadline = tokio::time::Instant::now() + timeout;
     let mut last_error = "no eligible remote replicas".to_string();
     for (index, peer_id) in replicas.iter().copied().enumerate() {
-        let Some(attempt_timeout) = replica_attempt_timeout(deadline, index, replicas.len()) else {
+        let Some(attempt_timeout) = replica_attempt_timeout(deadline) else {
             break;
         };
         match attempt(index, peer_id, attempt_timeout).await {
@@ -425,23 +425,14 @@ fn is_retryable_replica_error(error: &str) -> bool {
         .is_none_or(|status| status == 0 || matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
 }
 
-/// Fraction of the remaining worker deadline reserved for a standby attempt.
+/// Return the remaining shared worker deadline for each replica attempt.
 ///
-/// The primary keeps 75% of a full deadline (45s with the current 60s worker
-/// timeout), which remains above the documented 20-30s large-model first-call
-/// range while guaranteeing the standby a bounded chance after a hung primary.
-const STANDBY_DEADLINE_DENOMINATOR: u32 = 4;
-
-fn replica_attempt_timeout(
-    deadline: tokio::time::Instant,
-    index: usize,
-    total_replicas: usize,
-) -> Option<std::time::Duration> {
-    let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
-    if index == 0 && total_replicas > 1 {
-        return Some(remaining - remaining / STANDBY_DEADLINE_DENOMINATOR);
-    }
-    Some(remaining)
+/// A connected-but-silent primary retains the full timeout it had before
+/// failover support. Explicit transport, protocol, or retryable HTTP failures
+/// can still hand the unused remainder to a standby without extending the
+/// worker deadline.
+fn replica_attempt_timeout(deadline: tokio::time::Instant) -> Option<std::time::Duration> {
+    deadline.checked_duration_since(tokio::time::Instant::now())
 }
 
 async fn call_remote_replica(
@@ -688,7 +679,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn replica_failover_shares_one_deadline() {
+    async fn replica_failover_preserves_primary_timeout_and_shares_deadline() {
         let replicas = vec![
             iroh::SecretKey::generate().public(),
             iroh::SecretKey::generate().public(),
@@ -704,7 +695,7 @@ mod tests {
                 async move {
                     seen.lock().unwrap().push(budget);
                     if index == 0 {
-                        tokio::time::sleep(budget).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
                     }
                     Err::<(), _>("tunnel: failed".to_string())
                 }
@@ -714,8 +705,8 @@ mod tests {
 
         let budgets = budgets.lock().unwrap();
         assert_eq!(budgets.len(), 2);
-        assert_eq!(budgets[0], std::time::Duration::from_millis(7500));
-        assert_eq!(budgets[1], std::time::Duration::from_millis(2500));
+        assert_eq!(budgets[0], std::time::Duration::from_secs(10));
+        assert_eq!(budgets[1], std::time::Duration::from_secs(4));
     }
 
     #[test]
