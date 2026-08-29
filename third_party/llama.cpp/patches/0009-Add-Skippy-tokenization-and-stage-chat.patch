@@ -22,10 +22,10 @@ Subject: [PATCH 09/32] Add Skippy tokenization and stage chat
  create mode 100644 src/skippy/tokenization.cpp
 
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index d7e117e4d..e8e31854f 100644
+index af84ff323..422408d9e 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
-@@ -22,6 +22,18 @@ static void foreach_function(const json & tools, const std::function<void(const
+@@ -23,6 +23,18 @@ static void foreach_function(const json & tools, const std::function<void(const
      }
  }
  
@@ -44,7 +44,7 @@ index d7e117e4d..e8e31854f 100644
  namespace autoparser {
  
  parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
-@@ -102,7 +114,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+@@ -103,7 +115,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
          // Set grammar triggers based on tool section markers (fall back to per-call markers)
          if (data.grammar_lazy) {
              data.grammar_triggers = {
@@ -53,70 +53,64 @@ index d7e117e4d..e8e31854f 100644
              };
              if (autoparser.tools.format.openai_wrapper_trigger) {
                  // model emits the OpenAI function wrapper, trigger on it
-@@ -396,12 +408,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+@@ -397,7 +409,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
          auto schema_info = common_schema_info();
          schema_info.resolve_refs(params);
  
 -        // Build parser for each argument, separating required and optional
--        std::vector<common_peg_parser> required_parsers;
--        std::vector<common_peg_parser> optional_parsers;
-+        // Object member order is semantically irrelevant. Build one choice of
-+        // every declared argument and retain required-field metadata for the
-+        // mapper to validate when the complete tool call closes.
-+        std::vector<common_peg_parser> arg_parsers;
++        // Object member order is semantically irrelevant. Split the declared
++        // arguments into required and optional sets so the grammar can enforce
++        // presence structurally instead of validating after the fact.
+         std::vector<common_peg_parser> required_parsers;
+         std::vector<common_peg_parser> optional_parsers;
          for (const auto & [param_name, param_schema] : properties.items()) {
--            bool is_required = required.find(param_name) != required.end();
--
-             auto arg =
-                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
-                                            arguments.name_suffix) +
-@@ -414,29 +425,19 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
-                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
- 
-             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
--            if (is_required) {
--                required_parsers.push_back(named_arg);
--            } else {
--                optional_parsers.push_back(named_arg);
--            }
-+            arg_parsers.push_back(named_arg);
+@@ -422,22 +436,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+             }
          }
  
 -        // Build required arg sequence in definition order
-         common_peg_parser args_seq = p.eps();
+-        common_peg_parser args_seq = p.eps();
 -        for (size_t i = 0; i < required_parsers.size(); i++) {
 -            if (i > 0) {
 -                args_seq = args_seq + p.space();
 -            }
 -            args_seq = args_seq + required_parsers[i];
-+        for (const auto & required_arg : required) {
-+            args_seq = args_seq + p.tool_required_arg(required_arg);
-         }
+-        }
 -
 -        // Build optional args with flexible ordering
--        if (!optional_parsers.empty()) {
--            common_peg_parser any_opt = p.choice();
--            for (const auto & opt : optional_parsers) {
--                any_opt |= opt;
-+        if (!arg_parsers.empty()) {
-+            common_peg_parser any_arg = p.choice();
-+            for (const auto & arg : arg_parsers) {
-+                any_arg |= arg;
++        // Optional arguments may appear in any order, any number of times, and
++        // interleaved anywhere among the required arguments.
++        common_peg_parser optional_run = p.eps();
+         if (!optional_parsers.empty()) {
+             common_peg_parser any_opt = p.choice();
+             for (const auto & opt : optional_parsers) {
+                 any_opt |= opt;
              }
 -            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
-+            args_seq = args_seq + p.zero_or_more(any_arg + p.space());
++            optional_run = p.rule("tool-" + name + "-optional", p.zero_or_more(any_opt + p.space()));
++        }
++
++        // Required arguments must each appear exactly once, in any order.
++        // permute() generates every ordering while structurally requiring all of
++        // them, so the grammar sampler prevents both omission and duplication --
++        // matching the generic JSON tool path (common/chat.cpp). Optional
++        // arguments are allowed before each required argument (and after the
++        // last) so required and optional fields may be freely interleaved.
++        common_peg_parser args_seq = p.eps();
++        if (!required_parsers.empty()) {
++            std::vector<common_peg_parser> required_slots;
++            required_slots.reserve(required_parsers.size());
++            for (const auto & req : required_parsers) {
++                required_slots.push_back(optional_run + req + p.space());
++            }
++            args_seq = args_seq + p.permute("tool-" + name + "-required", required_slots) + optional_run;
++        } else {
++            args_seq = args_seq + optional_run;
          }
  
          if (!arguments.start.empty()) {
-@@ -461,7 +462,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
- 
-         // Only peek for an arg tag when there are required args that must follow.
-         // When all args are optional, the model may emit no arg tags at all (#20650).
--        auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
-+        auto atomic_peek = (!arguments.name_prefix.empty() && !required.empty()) ?
-             std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
-         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
          tool_choice |= p.rule("tool-" + name, func_parser);
+
 diff --git a/common/chat-diff-analyzer.cpp b/common/chat-diff-analyzer.cpp
 index a7e370578..39ffa20f1 100644
 --- a/common/chat-diff-analyzer.cpp
@@ -158,40 +152,16 @@ index a7e370578..39ffa20f1 100644
      };
  
      template_params params_content_only;
+
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index 79b97a80f..55f0fbe74 100644
+index 06737b165..2bbbb1d4e 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
-@@ -338,6 +338,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
-     bool is_arg_name         = node.tag == common_chat_peg_builder::TOOL_ARG_NAME;
-     bool is_arg_value        = node.tag == common_chat_peg_builder::TOOL_ARG_VALUE;
-     bool is_arg_string_value = node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE;
-+    bool is_required_arg = node.tag.rfind(common_chat_peg_builder::TOOL_REQUIRED_ARG_PREFIX, 0) == 0;
- 
-     if (is_tool_open) {
-         pending_tool_call     = common_chat_tool_call();
-@@ -345,6 +346,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
-         arg_count             = 0;
-         args_buffer.clear();
-         closing_quote_pending = false;
-+        required_args.clear();
-+        seen_args.clear();
-+    }
-+
-+    if (is_required_arg && current_tool) {
-+        required_args.insert(node.tag.substr(std::char_traits<char>::length(
-+            common_chat_peg_builder::TOOL_REQUIRED_ARG_PREFIX)));
-     }
- 
-     if (is_tool_id && current_tool) {
-@@ -386,11 +394,15 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
+@@ -388,11 +388,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
      }
  
      if (is_arg_name && current_tool) {
 +        const std::string arg_name(trim(node.text));
-+        if (!seen_args.insert(arg_name).second) {
-+            throw std::runtime_error("Duplicate tool argument: " + arg_name);
-+        }
          std::string arg_entry;
          if (arg_count > 0) {
              arg_entry = ",";
@@ -201,19 +171,7 @@ index 79b97a80f..55f0fbe74 100644
          ++arg_count;
  
          auto & target = args_target();
-@@ -431,6 +443,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
-     }
- 
-     if (is_tool_close && current_tool) {
-+        for (const auto & required_arg : required_args) {
-+            if (seen_args.find(required_arg) == seen_args.end()) {
-+                throw std::runtime_error("Missing required tool argument: " + required_arg);
-+            }
-+        }
-         // Flush buffer to arguments if tool name was never seen
-         if (current_tool->name.empty() && !args_buffer.empty()) {
-             current_tool->arguments = args_buffer;
-@@ -667,10 +684,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+@@ -669,10 +670,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
          // Arguments — either wrapped in args_key or parsed directly
          common_peg_parser args_parser = eps();
          if (args_key.empty()) {
@@ -226,7 +184,7 @@ index 79b97a80f..55f0fbe74 100644
          }
          inner_fields.push_back(args_parser);
  
-@@ -731,7 +748,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+@@ -733,7 +734,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
          auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                            atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
@@ -235,7 +193,7 @@ index 79b97a80f..55f0fbe74 100644
  
          auto nested_object = literal("{") + space() +
                              nested_name + space() + literal(",") + space() +
-@@ -787,7 +804,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -789,7 +790,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
  
      auto tool_choices    = choice();
      auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -246,7 +204,7 @@ index 79b97a80f..55f0fbe74 100644
  
      for (const auto & tool_def : tools) {
          if (!tool_def.contains("function")) {
-@@ -800,7 +819,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -802,7 +805,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
          auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto tool_args_ = args_key_parser + space() + literal(":") + space() +
@@ -255,8 +213,9 @@ index 79b97a80f..55f0fbe74 100644
  
          // Build ID parsers if keys are provided
          common_peg_parser id_parser = eps();
+
 diff --git a/common/chat-peg-parser.h b/common/chat-peg-parser.h
-index 114fa049f..eb8a3d74b 100644
+index 5d764dbaa..0e86e657d 100644
 --- a/common/chat-peg-parser.h
 +++ b/common/chat-peg-parser.h
 @@ -5,6 +5,7 @@
@@ -267,37 +226,15 @@ index 114fa049f..eb8a3d74b 100644
  #include <vector>
  
  class common_chat_peg_mapper {
-@@ -26,6 +27,8 @@ class common_chat_peg_mapper {
-       int                                  arg_count             = 0;
-       bool                                 closing_quote_pending = false;
-       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
-+      std::set<std::string>                required_args;
-+      std::set<std::string>                seen_args;
- 
-       // Returns a reference to the active argument destination string.
-       // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
-@@ -77,6 +80,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
-     static constexpr const char * TOOL_ARG_NAME         = "tool-arg-name";
-     static constexpr const char * TOOL_ARG_VALUE        = "tool-arg-value";
-     static constexpr const char * TOOL_ARG_STRING_VALUE = "tool-arg-string-value";  // For schema-declared string types
-+    static constexpr const char * TOOL_REQUIRED_ARG_PREFIX = "tool-required-arg:";
- 
-     // Low-level tag methods (from former common_chat_peg_base_builder)
-     common_peg_parser reasoning_block(const common_peg_parser & p) { return tag(REASONING_BLOCK, p); }
-@@ -106,6 +110,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
+@@ -106,7 +107,6 @@ class common_chat_peg_builder : public common_peg_parser_builder {
      common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
      common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
  
-+    // Attach schema metadata to the AST without consuming model output. The
-+    // mapper uses this to enforce required tagged arguments after accepting
-+    // them in arbitrary object-key order.
-+    common_peg_parser tool_required_arg(const std::string & name) {
-+        return tag(std::string(TOOL_REQUIRED_ARG_PREFIX) + name, eps());
-+    }
-+
- 
+-
      // Matches every parser exactly once, in any order.
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
+ 
+
 diff --git a/common/chat.cpp b/common/chat.cpp
 index 743ecde0a..893667722 100644
 --- a/common/chat.cpp
@@ -596,6 +533,7 @@ index 743ecde0a..893667722 100644
      if (is_lfm2_template(src)) {
          LOG_DBG("Using specialized template: LFM2\n");
          return common_chat_params_init_lfm2(tmpl, params, /* tool_list_tokens = */ true);
+
 diff --git a/common/chat.h b/common/chat.h
 index cb39e3458..1826f5f47 100644
 --- a/common/chat.h
@@ -619,6 +557,7 @@ index cb39e3458..1826f5f47 100644
      }
  
      bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
+
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 new file mode 100644
 index 000000000..305b9d081
@@ -921,6 +860,7 @@ index 000000000..305b9d081
 +    skippy_common_copy_output(output, output_message_json);
 +    return skippy_common_success(out_error);
 +}
+
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 1aecf7e67..ec9d59ec3 100644
 --- a/include/skippy/common.h
@@ -934,6 +874,7 @@ index 1aecf7e67..ec9d59ec3 100644
  
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+
 diff --git a/include/skippy/tokenization.h b/include/skippy/tokenization.h
 new file mode 100644
 index 000000000..7b8c4dcc4
@@ -1009,6 +950,7 @@ index 000000000..7b8c4dcc4
 +#endif
 +
 +#endif // SKIPPY_TOKENIZATION_H
+
 diff --git a/src/skippy/tokenization.cpp b/src/skippy/tokenization.cpp
 new file mode 100644
 index 000000000..89d69ff3a
@@ -1152,6 +1094,7 @@ index 000000000..89d69ff3a
 +
 +
 +} // extern "C"
+
 diff --git a/tests/test-chat-auto-parser.cpp b/tests/test-chat-auto-parser.cpp
 index 5aa948251..78df176dd 100644
 --- a/tests/test-chat-auto-parser.cpp
@@ -1233,8 +1176,9 @@ index 5aa948251..78df176dd 100644
  }
  
  static void test_cohere_reasoning_detection(testing & t) {
+
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 7918f0ffc..b15bcf27a 100644
+index c4670da85..62ea85601 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -436,6 +436,21 @@ static common_chat_tool special_function_tool{
@@ -1426,7 +1370,7 @@ index 7918f0ffc..b15bcf27a 100644
          // Pure content (no reasoning)
          tst.test("Hello, world!\nWhat's up?")
              .enable_thinking(false)
-@@ -4331,6 +4462,63 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4331,6 +4462,70 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              .expect_reconstruction()
              .run();
  
@@ -1459,38 +1403,45 @@ index 7918f0ffc..b15bcf27a 100644
 +            .run();
 +
 +        // Flexible ordering must not weaken the schema's presence and
-+        // uniqueness rules.
++        // uniqueness rules. permute() requires every required argument exactly
++        // once, so the grammar itself rejects a call that omits or duplicates a
++        // required argument -- no bespoke mapper-side "missing/duplicate
++        // argument" error, matching the generic JSON tool path.
 +        common_chat_templates_inputs validation_inputs;
 +        validation_inputs.messages = { message_user };
 +        validation_inputs.tools = { terminal_tool, think_tool };
 +        validation_inputs.enable_thinking = false;
 +        auto validation_parser = make_peg_parser(tst.templates(), validation_inputs, detailed_debug);
 +
++        // Omitting a required argument does not match the tool grammar.
 +        try {
 +            validation_parser.parse(
 +                "<tool_call>terminal"
 +                "<arg_key>command</arg_key><arg_value>pwd</arg_value>"
 +                "</tool_call>", false);
-+            throw std::runtime_error("Expected missing required tagged argument to fail");
++            throw std::runtime_error("Expected missing required tagged argument to be rejected by the grammar");
 +        } catch (const std::exception & e) {
-+            assert_contains(e.what(), "Missing required tool argument: security_risk");
++            assert_contains(e.what(), "does not match the expected");
 +        }
 +
++        // Duplicating a required argument does not match either: permute()
++        // consumes each required argument exactly once and the surplus copy has
++        // no slot in the grammar.
 +        try {
 +            validation_parser.parse(
 +                "<tool_call>think"
 +                "<arg_key>thought</arg_key><arg_value>one</arg_value>"
 +                "<arg_key>thought</arg_key><arg_value>two</arg_value>"
 +                "</tool_call>", false);
-+            throw std::runtime_error("Expected duplicate tagged argument to fail");
++            throw std::runtime_error("Expected duplicate required tagged argument to be rejected by the grammar");
 +        } catch (const std::exception & e) {
-+            assert_contains(e.what(), "Duplicate tool argument: thought");
++            assert_contains(e.what(), "does not match the expected");
 +        }
 +
          // Tool call with reasoning (forced-open mode)
          tst.test(
                 "I'm\nthinking</think>"
-@@ -4442,7 +4630,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+@@ -4442,7 +4637,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                  "Thinking.\n"
                  "</think>"
                  "<tool_call>get_weather"
@@ -1499,7 +1450,7 @@ index 7918f0ffc..b15bcf27a 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
-@@ -6815,6 +7003,65 @@ static void test_template_generation_prompt() {
+@@ -6815,6 +7010,65 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -1565,7 +1516,7 @@ index 7918f0ffc..b15bcf27a 100644
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -7157,6 +7404,7 @@ static void test_msg_diffs_compute() {
+@@ -7157,6 +7411,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -1573,7 +1524,7 @@ index 7918f0ffc..b15bcf27a 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -7174,9 +7422,19 @@ int main(int argc, char ** argv) {
+@@ -7174,9 +7429,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
@@ -1593,6 +1544,6 @@ index 7918f0ffc..b15bcf27a 100644
          test_template_output_peg_parsers(detailed_debug);
          std::cout << "\n[chat] All template tests passed!" << '\n';
          return 0;
--- 
-2.55.0
 
+-- 
+2.54.0 (Apple Git-157)
