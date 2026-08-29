@@ -286,21 +286,26 @@ async fn add_worker_backend(
         }
     }
 
-    // Otherwise find a remote host. hosts_for_model returns peers in
-    // hash-preferred order; prefer hosts with enough advertised context.
-    let remote_hosts = resolution.node.hosts_for_model(name).await;
-    if let Some(peer_id) = context_selection::select_remote_host(
+    // Otherwise find ranked remote replicas. The backend retains one standby
+    // so a draft/reducer call is not pinned to a single peer for the life of
+    // the committee. `hosts_for_model` is origin-stable rendezvous order and
+    // the context filter preserves that order, so failover does not create a
+    // static herd on one large replica.
+    let remote_hosts = context_selection::eligible_remote_hosts(
         resolution.node,
         name,
         resolution.required_tokens,
-        remote_hosts,
+        resolution.node.hosts_for_model(name).await,
     )
-    .await
-    {
+    .await;
+    if !remote_hosts.is_empty() {
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(RemoteModelBackend {
             node: resolution.node.clone(),
-            peer_id,
+            peer_ids: remote_hosts
+                .into_iter()
+                .take(super::workers::MAX_REMOTE_REPLICAS_PER_WORKER)
+                .collect(),
         }));
         models.push(
             moa::ModelEntry::new(name, backend_idx)
@@ -618,7 +623,10 @@ async fn self_fill_from_extra_instances(
         }
         endpoints.push(std::sync::Arc::new(RemoteModelBackend {
             node: node.clone(),
-            peer_id,
+            // Self-fill deliberately represents each replica as an independent
+            // sampled worker. Do not let one slot fail over onto another slot
+            // and duplicate that replica's answer.
+            peer_ids: vec![peer_id],
         }));
     }
 
