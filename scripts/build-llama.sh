@@ -286,13 +286,20 @@ if [[ "$USE_SCCACHE" != "0" && -n "$SCCACHE_BIN" ]]; then
       ;;
   esac
   echo "using sccache for llama.cpp C/C++ compilation: $SCCACHE_BIN"
-elif [[ "$USE_SCCACHE" != "0" ]]; then
-  if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
-    echo "sccache is required but was not found" >&2
-    exit 1
-  fi
-  echo "sccache not found; llama.cpp build will run without compiler caching" >&2
 else
+  if [[ "$USE_SCCACHE" != "0" ]]; then
+    if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
+      echo "sccache is required but was not found" >&2
+      exit 1
+    fi
+    echo "sccache not found; llama.cpp build will run without compiler caching" >&2
+  fi
+  # This script owns the compiler-caching decision, so ggml must not make its
+  # own. With GGML_CCACHE left ON, ggml runs find_program(sccache/ccache), which
+  # searches CMAKE_SYSTEM_PREFIX_PATH rather than just PATH and registers a bare
+  # `sccache` launcher. A sanitized build environment that has such a binary
+  # installed but not on PATH then fails every compile with
+  # "/bin/sh: sccache: command not found".
   CMAKE_ARGS+=(-DGGML_CCACHE=OFF)
 fi
 

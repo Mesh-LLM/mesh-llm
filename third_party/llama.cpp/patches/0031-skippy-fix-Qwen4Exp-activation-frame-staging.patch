@@ -1,4 +1,4 @@
-From 17067fe5c8d5cbee04f7974e1d93b98d4d7c4034 Mon Sep 17 00:00:00 2001
+From a4653405a51b0b3a4fe08e7959dddacdb9c9373b Mon Sep 17 00:00:00 2001
 From: Scam
  <44c96d97d4bda5bbcbd62565b0b19bb2e895e1fad5d9e9116f267909f1dae78e@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 08:35:38 +1000
@@ -10,7 +10,7 @@ Subject: [PATCH 31/32] skippy: fix Qwen4Exp activation frame staging
  2 files changed, 26 insertions(+), 6 deletions(-)
 
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 43cba21f3..82d22ebf8 100644
+index 43cba21f3..a598963a7 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -646,9 +646,12 @@ enum skippy_status skippy_decode_activation_frame(
@@ -92,4 +92,5 @@ index eaab6d31f..0124f2f6d 100644
              n_embd,
              qwen4exp_hc);
 -- 
-2.54.0 (Apple Git-157)
+2.55.0
+

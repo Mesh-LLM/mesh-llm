@@ -1,8 +1,8 @@
-From 9775f5531acbd7062551d0f0b6e860f26b6bcbaf Mon Sep 17 00:00:00 2001
+From 507b9515fd39c4bcc60a25e1fa82238d3fe04c9e Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 01:46:31 +1000
-Subject: [PATCH 28/30] skippy: allow Qwen4Exp runtime slices
+Subject: [PATCH 28/32] skippy: allow Qwen4Exp runtime slices
 
 Co-authored-by: michaelneale <14976+michaelneale@users.noreply.github.com>
 
@@ -24,5 +24,5 @@ index 9ad6d4f3a..b13f4d3ec 100644
              model->arch != LLM_ARCH_REFACT &&
              model->arch != LLM_ARCH_RND1 &&
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

@@ -38,7 +38,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-mesh-llm-plugin = "0.76.0-rc7"
+mesh-llm-plugin = "0.76.0-rc8"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
