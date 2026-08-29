@@ -26,6 +26,7 @@ fn resolve_qwen_config_with_request_defaults(
         allocatable_memory_bytes: None,
         request_defaults,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("qwen config should resolve")
 }
@@ -139,6 +140,7 @@ fn resolve_explicit_full_surface_config(
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: Some(request_defaults),
         package_generation: None,
+        compact_meta: None,
     })
     .expect("explicit model should resolve")
 }
@@ -152,6 +154,7 @@ fn resolve_defaults_full_surface_config(fixture: &FullSurfaceFixture) -> Resolve
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("defaults-only model should resolve")
 }
@@ -288,6 +291,7 @@ temperature = 0.4
         allocatable_memory_bytes: Some(16 * 1024 * 1024 * 1024),
         request_defaults: Some(&request_defaults),
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -336,6 +340,7 @@ mlock = true
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -372,6 +377,7 @@ tuning_profile = "throughput"
         allocatable_memory_bytes: Some(12 * 1024 * 1024 * 1024),
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -406,6 +412,7 @@ cache_type_v = "auto"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -434,6 +441,7 @@ cache_type_v = "AUTO"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -459,6 +467,7 @@ cache_type_v = "Auto"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -484,6 +493,7 @@ cache_type_v = "AuTo"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -518,6 +528,7 @@ cache_type_v = "q4_0"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -559,6 +570,7 @@ parallel = 11
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -628,6 +640,7 @@ reasoning_enabled = "on"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -684,6 +697,7 @@ chat_template = "unsafe-template"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -701,6 +715,7 @@ fn inkling_family_defaults_to_q4_kv() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -727,6 +742,7 @@ kv_cache_policy = "saver"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -752,6 +768,7 @@ cache_type_v = "q8_0"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -779,6 +796,7 @@ model = "meshllm/inkling-UD-Q2_K_XL-layers"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -797,6 +815,7 @@ fn family_policy_wires_prefix_cache_by_default_for_supported_models() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -830,6 +849,7 @@ enabled = false
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -881,6 +901,7 @@ draft_max_tokens = 8
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -924,6 +945,7 @@ fn layer_package_translation_does_not_treat_hf_ref_as_direct_gguf() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap();
 
@@ -958,6 +980,7 @@ fn inkling_layer_package_retains_recurrent_cache_policy_before_materialization()
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("Inkling package config should resolve");
 
@@ -995,6 +1018,7 @@ draft_selection_policy = "auto"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("auto draft selection policy should not force draft resolution");
 
@@ -1026,6 +1050,7 @@ draft_min_tokens = 2
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("draft speculative config should resolve");
 
@@ -1073,6 +1098,7 @@ draft_min_tokens = 0
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("benchmark-shaped draft speculative config should resolve");
 
@@ -1119,6 +1145,7 @@ draft_max_tokens = 4
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("benchmark HF identity row should match by pinned model_path");
 
@@ -1150,6 +1177,7 @@ prefill_chunk_size = 128
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -1182,6 +1210,7 @@ draft_max_tokens = 8
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("warn_disable should resolve");
 
@@ -1211,6 +1240,7 @@ draft_max_tokens = 8
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1237,6 +1267,7 @@ stage_layer_end = 24
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("config should resolve");
 
@@ -1271,6 +1302,7 @@ draft_split_probability = 0.3
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("draft_acceptance_threshold and draft_split_probability should be accepted");
 
@@ -1339,6 +1371,7 @@ spec_default = true
             allocatable_memory_bytes: None,
             request_defaults: None,
             package_generation: None,
+            compact_meta: None,
         })
         .unwrap_err()
         .to_string();
@@ -1390,6 +1423,7 @@ model = "Qwen/Qwen3-0.6B:Q4_K_M"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1415,6 +1449,7 @@ placement = "auto"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1440,6 +1475,7 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1457,6 +1493,7 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("staged-only config should resolve before translation gating");
     let staged_only_error = resolved
@@ -1538,6 +1575,7 @@ verify_window_pipeline_depth = 2
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("resolve skippy config");
     let ngram = resolved

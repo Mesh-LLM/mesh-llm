@@ -29,7 +29,13 @@ pub(crate) fn resolve_skippy_config(
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
-    let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
+    // Guard the size-tiered default so a model that cannot load quantised KV
+    // (Flash Attention off, or a head_dim not divisible by the block size)
+    // resolves to f16 instead of failing the context build. Explicit config /
+    // family defaults still take precedence in resolve_cache_type_* below and
+    // are intentionally not guarded here.
+    let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes)
+        .guarded_for_model(context.request.compact_meta);
     let hardware = resolve_hardware_config(&context)?;
     let family_policy = family_policy_for_model_path(
         &hardware.resolved_model_path,

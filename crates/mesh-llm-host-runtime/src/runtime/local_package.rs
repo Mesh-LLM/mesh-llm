@@ -93,7 +93,12 @@ pub(super) fn split_effective_kv_cache_quant(
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> models::gguf::GgufKvCacheQuant {
-    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
+    // Guard the size-tiered default against the model's quantised-KV
+    // compatibility (Flash Attention / block alignment) so planning budgets for
+    // the same cache the stage load can actually allocate. Explicit overrides
+    // below are never guarded — an override that cannot load must fail loudly.
+    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
+        .guarded_for_model(Some(compact_meta));
     let family_default =
         skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref)).default_kv_cache_type;
 

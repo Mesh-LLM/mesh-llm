@@ -525,6 +525,7 @@ max_tokens = 222
         4096,
         3,
         None,
+        None,
     )
     .expect("runtime config should resolve through configured model id");
 

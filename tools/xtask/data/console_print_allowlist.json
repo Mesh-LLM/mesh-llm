@@ -1589,7 +1589,7 @@
   ],
   "crates/mesh-llm-host-runtime/src/inference/skippy/resolver/native_mtp_tests.rs": [
     {
-      "line": 898,
+      "line": 914,
       "macro_name": "eprintln!"
     }
   ],
