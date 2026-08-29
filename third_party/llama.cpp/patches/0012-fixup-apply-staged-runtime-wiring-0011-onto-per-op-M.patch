@@ -1,7 +1,7 @@
-From c5cb567aa5fa2a8754a1245df758d74528168710 Mon Sep 17 00:00:00 2001
+From a50dd009619634b32d588f8af9d2c81984c9a648 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 25 Aug 2026 23:23:33 +1000
-Subject: [PATCH 12/26] fixup: apply staged runtime wiring (0011) onto per-op
+Subject: [PATCH 12/32] fixup: apply staged runtime wiring (0011) onto per-op
  Metal layout
 
 ---
@@ -73,10 +73,10 @@ index 36f1e0cd5..9757ba821 100644
      speculative.h
      subproc.cpp
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 9becf0479..119ac2f41 100644
+index 49102afe9..c8057a232 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -991,6 +991,17 @@ typedef struct {
+@@ -992,6 +992,17 @@ typedef struct {
      uint64_t nb1;
      uint64_t nb2;
      uint64_t nb3;
@@ -94,7 +94,7 @@ index 9becf0479..119ac2f41 100644
  } ggml_metal_kargs_solve_tri;
  
  typedef struct {
-@@ -1203,20 +1214,46 @@ typedef struct {
+@@ -1204,20 +1215,46 @@ typedef struct {
  } ggml_metal_kargs_memset;
  
  typedef struct {
@@ -1037,7 +1037,7 @@ index 644fac937..195dbe88d 100644
      LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
      LLM_KV_FULL_ATTENTION_INTERVAL,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 0b441d8a6..64dfc098d 100644
+index af3fe661f..aa3d6230d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1263,7 +1263,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -1227,7 +1227,7 @@ index 402015415..d5b060efe 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index f56d4b16e..b93addeb4 100644
+index 6ac2fa322..550dd6c15 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -178,6 +178,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -1391,7 +1391,7 @@ index 93a1448b4..000b95cdc 100644
      const uint32_t kv_lora_rank = hparams.n_lora_kv;
  
 diff --git a/src/models/models.h b/src/models/models.h
-index 694fd912b..bcf4745f3 100644
+index 716f4a5e8..39a09fe21 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -1323,10 +1323,6 @@ struct llama_model_glm_dsa : public llama_model_base {

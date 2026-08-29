@@ -1,7 +1,7 @@
-From f4f00f803e7315ac99e46fb2b66686b9bb0c4f7c Mon Sep 17 00:00:00 2001
+From 621c17922f0c9d89b19c004693fc3990f680295e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 17:06:42 +1000
-Subject: [PATCH 03/26] Add Skippy public ABI surface
+Subject: [PATCH 03/32] Add Skippy public ABI surface
 
 ---
  include/skippy.h               |  18 ++++

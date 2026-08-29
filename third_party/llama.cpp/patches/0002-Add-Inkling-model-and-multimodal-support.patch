@@ -1,7 +1,7 @@
-From 79eeaafee1761aa2e620de8f0dac0228223ee413 Mon Sep 17 00:00:00 2001
+From fbd18ddd294ae993872acf4af149a0500783fec3 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/26] Add Inkling model and multimodal support
+Subject: [PATCH 02/32] Add Inkling model and multimodal support
 
 ---
  conversion/__init__.py         |   2 +
@@ -1917,7 +1917,7 @@ index 000000000..5dba09c1d
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index af60764c2..694fd912b 100644
+index 9b87a40d5..716f4a5e8 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
 @@ -1323,6 +1323,10 @@ struct llama_model_glm_dsa : public llama_model_base {

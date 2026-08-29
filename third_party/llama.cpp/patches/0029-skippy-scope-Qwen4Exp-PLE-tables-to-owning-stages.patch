@@ -1,20 +1,20 @@
-From b5aeabdd6829e09376d6467bdb76f177765e3028 Mon Sep 17 00:00:00 2001
+From 063eb2c7d128cc1428f3f7838f6584bc230f578a Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 02:13:55 +1000
-Subject: [PATCH 29/30] skippy: scope Qwen4Exp PLE tables to owning stages
+Subject: [PATCH 29/32] skippy: scope Qwen4Exp PLE tables to owning stages
 
 Co-authored-by: michaelneale <14976+michaelneale@users.noreply.github.com>
 
 Signed-off-by: michaelneale <14976+michaelneale@users.noreply.github.com>
 ---
  src/llama-model-loader.cpp   | 22 ++++++++++++++++++----
- src/models/qwen4exp.cpp      | 15 ++++++++++++++-
+ src/models/qwen4exp.cpp      | 26 ++++++++++++++++++++++++--
  src/skippy/model_package.cpp | 35 +++++++++++++++++++++++++++++++++--
- 3 files changed, 65 insertions(+), 7 deletions(-)
+ 3 files changed, 75 insertions(+), 8 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 742d9f3a3..2f862c56f 100644
+index 4eac8bb40..8ade72322 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1116,6 +1116,19 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
@@ -62,7 +62,7 @@ index 742d9f3a3..2f862c56f 100644
          }
          if (!keep &&
 diff --git a/src/models/qwen4exp.cpp b/src/models/qwen4exp.cpp
-index 4ff718c40..709950cce 100644
+index 0820ca16f..6a9769dfc 100644
 --- a/src/models/qwen4exp.cpp
 +++ b/src/models/qwen4exp.cpp
 @@ -124,8 +124,21 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
@@ -88,6 +88,25 @@ index 4ff718c40..709950cce 100644
          const std::string ple_name = tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str();
          const auto & ple_w = ml.require_weight(ple_name.c_str());
          const int64_t ple_rows = ple_w.tensor->ne[1];
+@@ -328,8 +341,17 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * inp_pos     = build_inp_pos();
+     ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
+ 
++    // a stage that retains no PLE layer also skips the PLE gather table:
++    // load_arch_tensors does not load it when no retained layer reads it
+     ggml_tensor * ple_emb = nullptr;
+-    if (hparams.ple_n_heads > 0) {
++    bool stage_contains_ple = false;
++    for (int il = il_start; il < il_end; ++il) {
++        if (hparams.is_ple(static_cast<uint32_t>(il))) {
++            stage_contains_ple = true;
++            break;
++        }
++    }
++    if (hparams.ple_n_heads > 0 && stage_contains_ple) {
+         ple_emb = build_inp_ple(mctx_hyb);
+         // make sure ple_emb and build_inp_embd are in the same graph split
+         ggml_build_forward_expand(gf, ple_emb);
 diff --git a/src/skippy/model_package.cpp b/src/skippy/model_package.cpp
 index 65d15b717..36f32119a 100644
 --- a/src/skippy/model_package.cpp
@@ -142,5 +161,5 @@ index 65d15b717..36f32119a 100644
          }
      }
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
 

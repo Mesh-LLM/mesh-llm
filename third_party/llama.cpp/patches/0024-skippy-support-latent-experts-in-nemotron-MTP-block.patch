@@ -1,7 +1,7 @@
-From af2db0830634e54cbfd53cd841c3eda497e51903 Mon Sep 17 00:00:00 2001
+From 6aeb4b2c6b3e03767b356068a9ce783e177f5f96 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 14:37:39 +1000
-Subject: [PATCH 24/26] skippy: support latent experts in nemotron MTP block
+Subject: [PATCH 24/32] skippy: support latent experts in nemotron MTP block
 
 ---
  src/models/nemotron-h-moe.cpp | 12 +++++++++++-

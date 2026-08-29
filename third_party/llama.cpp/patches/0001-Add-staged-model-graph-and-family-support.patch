@@ -1,7 +1,7 @@
-From 00df620cdf36386f23eaa875dec70a212fc1c29f Mon Sep 17 00:00:00 2001
+From d76bf95a279692cf6512010d499100b7df73ff5c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 01/26] Add staged model graph and family support
+Subject: [PATCH 01/32] Add staged model graph and family support
 
 ---
  include/llama.h                |   7 +
@@ -126,7 +126,7 @@ Subject: [PATCH 01/26] Add staged model graph and family support
  119 files changed, 4268 insertions(+), 1545 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
-index 49a758db2..4aef38850 100644
+index ef7a012c4..26096355b 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -529,6 +529,13 @@ extern "C" {
@@ -349,7 +349,7 @@ index ca7d55a5f..644fac937 100644
      LLM_TENSOR_VISEXP_ATTN_OUT,
      LLM_TENSOR_VISEXP_FFN_GATE,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 179c526c2..0b441d8a6 100644
+index 9aed80133..af3fe661f 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -121,9 +121,8 @@ llama_context::llama_context(
@@ -3330,7 +3330,7 @@ index 57919accf..ff489d954 100644
      }
      if (cell_count > size) {
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index d9241022c..d0362908b 100644
+index 1b1f852a0..2e985874e 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -18,6 +18,25 @@ static const size_t kiB = 1024;
@@ -3565,7 +3565,7 @@ index d9241022c..d0362908b 100644
      if (cur == NULL) {
          return NULL;
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index 407260e99..9b70ccffc 100644
+index 20f744253..392c1e929 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -14,12 +14,26 @@
@@ -3624,7 +3624,7 @@ index 8860bd3f4..fe0efd30e 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index fc83658dd..f56d4b16e 100644
+index 65a6702ce..6ac2fa322 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -42,8 +42,6 @@
@@ -4097,7 +4097,7 @@ index b7c289263..65e43f671 100644
  
  struct LLM_KV;
 diff --git a/src/llama.cpp b/src/llama.cpp
-index 9c841ee35..ec89f1d44 100644
+index 6ec5d315d..a0f12a7db 100644
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
 @@ -313,9 +313,9 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
@@ -4111,7 +4111,7 @@ index 9c841ee35..ec89f1d44 100644
 +        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, ordered_parts, file, params.load_mode,
              params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
  
-         ml.tensor_read_lazy = params.tensor_read_lazy;
+         ml.lazy_mode = params.lazy_mode;
 @@ -382,6 +382,7 @@ static struct llama_model * llama_model_load_from_file_impl(
          void * set_tensor_data_ud,
          const std::string & path_model,
