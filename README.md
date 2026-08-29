@@ -251,7 +251,7 @@ As of v0.76.0-rc8, three distribution/loading bugs still block the out-of-the-bo
 2. **Install the CUDA runtime from the product bundle** — `mesh-llm runtime install cuda` finds no windows/x86_64 runtimes in the release manifest ([#1511](https://github.com/Mesh-LLM/mesh-llm/issues/1511)). Download `mesh-llm-x86_64-pc-windows-msvc-cuda.zip` for your installed version from the [releases page](https://github.com/Mesh-LLM/mesh-llm/releases), extract it, then:
 
    ```powershell
-   mesh-llm runtime install --bundle-dir <extracted>\mesh-bundle cuda
+   mesh-llm runtime install --bundle-dir "<extracted>\mesh-bundle" cuda
    ```
 
 3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)):
