@@ -364,13 +364,17 @@ cmake "${CMAKE_ARGS[@]}"
 
 BUILD_TARGETS=(llama llama-common mtmd)
 if [[ "${LLAMA_STAGE_BUILD_TESTS:-OFF}" == "ON" ]]; then
-  BUILD_TARGETS+=(skippy-hardware-application-probe)
+  BUILD_TARGETS+=(
+    skippy-hardware-application-probe
+    skippy-model-fixture-generator
+    skippy-model-loader-accounting
+  )
 fi
 
 cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)" --target "${BUILD_TARGETS[@]}"
 
 if [[ "${LLAMA_STAGE_BUILD_TESTS:-OFF}" == "ON" ]]; then
-  ctest --test-dir "$LLAMA_BUILD_DIR" --build-config "${CMAKE_BUILD_TYPE:-Release}" --output-on-failure -R '^skippy_hardware_application_probe$'
+  ctest --test-dir "$LLAMA_BUILD_DIR" --build-config "${CMAKE_BUILD_TYPE:-Release}" --output-on-failure -R '^skippy_'
 fi
 
 printf '%s\n' "$CURRENT_BUILD_STAMP" > "$BUILD_STAMP"
