@@ -32,7 +32,7 @@ Each packaged runtime directory contains `manifest.json`:
 {
   "runtime": {
     "id": "meshllm-native-runtime-linux-x86_64-cuda13-sm120",
-    "mesh_version": "0.76.0-rc7",
+    "mesh_version": "0.76.0-rc8",
     "skippy_abi": "0.1.25",
     "platform": {
       "os": "linux",
@@ -87,18 +87,18 @@ Release jobs publish `native-runtimes.json`:
 
 ```json
 {
-  "mesh_version": "0.76.0-rc7",
+  "mesh_version": "0.76.0-rc8",
   "skippy_abi": "0.1.25",
   "artifacts": [
     {
       "id": "meshllm-native-runtime-linux-x86_64-cpu",
-      "mesh_version": "0.76.0-rc7",
+      "mesh_version": "0.76.0-rc8",
       "skippy_abi": "0.1.25",
       "platform": { "os": "linux", "arch": "x86_64" },
       "backend": { "kind": "cpu" },
       "rank": 0,
       "libraries": ["lib/libllama.so"],
-      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.76.0-rc7/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
+      "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.76.0-rc8/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
       "sha256": "2f1c..."
     }
   ]
@@ -176,7 +176,7 @@ use std::path::PathBuf;
 #     manifest: NativeRuntimeReleaseManifest,
 # ) -> anyhow::Result<()> {
 let cache = NativeRuntimeCache::new("/tmp/mesh-llm/native-runtimes");
-let resolution = NativeRuntimeResolver::new("0.76.0-rc7", profile, manifest, cache)
+let resolution = NativeRuntimeResolver::new("0.76.0-rc8", profile, manifest, cache)
     .with_skippy_abi_version("0.1.25")
     .with_bundle_dirs(vec![PathBuf::from("./meshllm-native-runtime-linux-x86_64-cpu")])
     .resolve(&RuntimeSelection::Recommended)?;
@@ -271,7 +271,7 @@ Generate the release manifest:
 
 ```bash
 scripts/generate-native-runtime-release-manifest.sh \
-  --tag v0.76.0-rc7 \
+  --tag v0.76.0-rc8 \
   --out dist/native-runtimes/native-runtimes.json \
   dist/native-runtimes/*.tar.gz
 ```

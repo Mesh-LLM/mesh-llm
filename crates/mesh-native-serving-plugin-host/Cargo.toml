@@ -11,12 +11,12 @@ readme = "README.md"
 [dependencies]
 anyhow.workspace = true
 libloading = "0.8"
-mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc7" }
-skippy-server = { path = "../skippy-server", version = "0.76.0-rc7" }
-skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc7" }
+mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc8" }
+skippy-server = { path = "../skippy-server", version = "0.76.0-rc8" }
+skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc8" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-skippy-server = { path = "../skippy-server", version = "0.76.0-rc7", features = ["test-support"] }
+skippy-server = { path = "../skippy-server", version = "0.76.0-rc8", features = ["test-support"] }
