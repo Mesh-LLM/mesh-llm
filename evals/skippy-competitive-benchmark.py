@@ -1130,9 +1130,12 @@ def synthetic_benchy_common_command(
         f"temperature={synthetic['temperature']}",
         f"seed={synthetic['seed']}",
     ]
-    if arm == "sglang":
+    if arm in OPTIONAL_ARMS:
         # SGLang rejects return_token_ids=true on streaming chat completions.
-        # llama-benchy falls back to the streamed usage count when this is false.
+        # vLLM can omit special-token chunks while still reporting the full
+        # completion in usage, which makes token-id counting spuriously short.
+        # The OpenAI usage count is the common contract for both comparison
+        # engines and is what llama-benchy falls back to when this is false.
         extra_body.append("return_token_ids=false")
     return [
         str(args.benchy),
