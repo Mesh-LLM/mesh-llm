@@ -904,6 +904,14 @@ impl StageOpenAiBackend {
                     json!(restored.payload_kind.to_string()),
                 );
                 attrs.insert(
+                    "skippy.exact_cache.source".to_string(),
+                    json!(restored.source),
+                );
+                attrs.insert(
+                    "skippy.exact_cache.l3_fill_ms".to_string(),
+                    json!(restored.fill_ms),
+                );
+                attrs.insert(
                     "skippy.exact_cache.restored_tokens".to_string(),
                     json!(restored.token_count),
                 );

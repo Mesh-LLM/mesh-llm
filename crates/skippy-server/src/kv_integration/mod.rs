@@ -153,6 +153,10 @@ pub struct KvStageIntegration {
     /// Durable L3 floor under the radix cache (`SKIPPY_L3_DIR`): exact-state
     /// records write through to it and radix misses fill back from it.
     pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
+    /// Prefix keys with an L3 fill in flight. Concurrent misses on the same
+    /// prefix must not duplicate disk reads: the loser skips L3 and prefill
+    /// proceeds normally while the winner re-warms the radix for everyone.
+    pub(crate) inflight_fills: Arc<Mutex<BTreeSet<String>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

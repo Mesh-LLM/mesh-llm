@@ -84,6 +84,12 @@ pub struct ExactStateRestore {
     pub lookup_ms: f64,
     pub kv_import_ms: f64,
     pub recurrent_import_ms: f64,
+    /// Where the state came from: "radix" (RAM) or "l3" (durable tier).
+    pub source: &'static str,
+    /// Store-side cost of an L3 fill (read + digest verification +
+    /// assembly), separated from the runtime import cost above so restore
+    /// thresholds can be set from real numbers. 0 for radix hits.
+    pub fill_ms: f64,
 }
 
 #[derive(Debug, Clone)]

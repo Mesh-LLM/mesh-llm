@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 use skippy_cache::{
     CacheBlobStore, L3Tier, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
-    UnifiedRadixCache, l3_prefix_key, prefix_namespace_hash,
+    UnifiedRadixCache, prefix_namespace_hash,
 };
 use skippy_protocol::{
     LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
@@ -34,9 +34,17 @@ impl KvStageIntegration {
         if mode == StageKvMode::Disabled {
             return Ok(None);
         }
-        let payload = effective_cache_payload(config, cache_config.payload);
+        let l3 = l3_tier_from_env(config)?;
+        let mut payload = effective_cache_payload(config, cache_config.payload);
         if payload == StagePrefixCachePayload::Disabled {
             return Ok(None);
+        }
+        if l3.is_some() && payload == StagePrefixCachePayload::ResidentKv {
+            // The durable tier needs exportable state, and ResidentKv is
+            // borrow-only. With L3 enabled, dense families record KV pages
+            // (KvRecurrent with an empty recurrent snapshot) so gemma/qwen
+            // reach disk — the acceptance criteria's headline case.
+            payload = StagePrefixCachePayload::KvRecurrent;
         }
         if model_requires_recurrent_state(config)
             && matches!(payload, StagePrefixCachePayload::ResidentKv)
@@ -55,7 +63,6 @@ impl KvStageIntegration {
         let exact_max_bytes = cache_config.max_bytes;
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
-        let l3 = l3_tier_from_env(config)?;
         let (exact_state_record_tx, exact_state_record_rx) =
             std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
         let worker_radix = radix.clone();
@@ -118,6 +125,7 @@ impl KvStageIntegration {
             replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             l3,
+            inflight_fills: Arc::new(Mutex::new(BTreeSet::new())),
         }))
     }
 }
@@ -126,6 +134,12 @@ impl KvStageIntegration {
 /// is the radix tree's own numerical namespace, so restarts reuse it and a
 /// configuration change (weights, cache dtypes, layout, platform) refuses
 /// stale state.
+///
+/// Disk is capped by default (`DEFAULT_L3_BUDGET_BYTES`); set
+/// `SKIPPY_L3_BUDGET_BYTES` to change it, or to `0` to opt in to unbounded
+/// growth explicitly.
+const DEFAULT_L3_BUDGET_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+
 fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
     let Ok(root) = std::env::var("SKIPPY_L3_DIR") else {
         return Ok(None);
@@ -136,9 +150,22 @@ fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
     let budget_bytes = std::env::var("SKIPPY_L3_BUDGET_BYTES")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(DEFAULT_L3_BUDGET_BYTES);
     let identity = prefix_namespace_hash(config, 0, None);
-    let tier = L3Tier::open(root, budget_bytes, identity, 8 * 1024 * 1024)?;
+    let tier = L3Tier::open(&root, budget_bytes, identity, 8 * 1024 * 1024)?;
+    // Warm state must never be invisible: say what the tier can restore
+    // the moment the stage comes up.
+    match tier.restorable_summary() {
+        Ok((manifests, tokens, footprint)) => eprintln!(
+            "skippy L3 tier open at {root}: {manifests} restorable manifests ({tokens} tokens, {footprint} bytes on disk), budget {}",
+            if budget_bytes == 0 {
+                "unbounded (explicit opt-in)".to_string()
+            } else {
+                format!("{budget_bytes} bytes")
+            },
+        ),
+        Err(error) => eprintln!("skippy L3 tier open at {root}: summary unavailable: {error:#}"),
+    }
     Ok(Some(Arc::new(tier)))
 }
 
@@ -160,8 +187,8 @@ fn store_exact_radix_record(
             .as_ref()
             .and_then(|desc| serde_json::to_string(desc).ok());
         if let Err(error) = l3.spill(
-            &l3_prefix_key(&pending.namespace, &pending.token_ids),
-            pending.token_ids.len() as u64,
+            &pending.namespace,
+            &pending.token_ids,
             &pending.payload,
             kv_desc_json,
         ) {
@@ -638,14 +665,19 @@ mod tests {
             "first record must be evicted from RAM"
         );
 
-        // The evicted prefix still fills from the durable tier.
-        let (payload, token_count, _) = tier
-            .fill(&l3_prefix_key("model", &[1, 2]))
+        // The evicted prefix still fills from the durable tier — including
+        // for a longer query that extends the recorded path.
+        let fill = tier
+            .fill_longest("model", &[1, 2, 7, 8], 64)
             .unwrap()
             .expect("evicted record must remain in L3");
-        assert_eq!(token_count, 2);
+        assert_eq!(fill.token_count, 2);
         assert_eq!(
-            payload.full_state_bytes_timed().unwrap().0.into_owned(),
+            fill.payload
+                .full_state_bytes_timed()
+                .unwrap()
+                .0
+                .into_owned(),
             b"first-exact-state".to_vec()
         );
     }
