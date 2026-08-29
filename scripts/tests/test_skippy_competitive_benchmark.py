@@ -325,6 +325,30 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
             sglang[sglang.index("--max-total-tokens") + 1], "131072"
         )
 
+        granite = config["models"][-1]
+        granite_vllm = BENCH.server_command(
+            "vllm",
+            SimpleNamespace(
+                **common,
+                vllm_binary=Path("vllm"),
+                vllm_hf_config_root=Path("hf-config"),
+            ),
+            granite,
+            Path("granite.gguf"),
+            Path("stage.json"),
+            19000,
+            131072,
+            16,
+            8,
+            True,
+        )
+        self.assertEqual(
+            granite_vllm[
+                granite_vllm.index("--num-gpu-blocks-override") + 1
+            ],
+            "2560",
+        )
+
     def test_sglang_defaults_to_the_pinned_gguf_and_tokenizer(self) -> None:
         config = BENCH.load_config(CONFIG)
         model = config["models"][0]
