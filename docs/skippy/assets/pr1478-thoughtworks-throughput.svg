@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920" role="img" aria-labelledby="title desc">
+<title id="title">PR 1478 fixed and adaptive Mesh throughput versus raw llama.cpp on Thoughtworks agent traces</title>
+<desc id="desc">Two panels plot throughput normalized to raw llama.cpp across offered concurrency one through 256. Fixed Mesh wins 17 of 18 correctness-valid cells. Dense wins all nine, while DeepSeek MoE loses only concurrency one. Falcon H1 is excluded because its continuation parity gate failed.</desc>
+<metadata>Source: artifact-full-cuda-c1-final/summary/thoughtworks.csv; benchmarked runtime source 7f8c6ab187c0ddc0ac06425d61012e0b09152436; PR evidence commit ac4beae4ccb140ba6cd639fb55d0abd9fc362372.</metadata>
+<style>
+:root{color-scheme:light dark}.bg{fill:#fff}.fg{fill:#111827}.muted{fill:#4b5563}.grid{stroke:#d1d5db}.frame{stroke:#9ca3af}.baseline{stroke:#111827}.title{font:600 39px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.subtitle{font:400 23px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.metric{font:650 27px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.label{font:600 25px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.small{font:400 20px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.axis{font:400 17px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.line{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}.point{stroke:#fff;stroke-width:2}.card{fill:#f8fafc;stroke:#e2e8f0}@media(prefers-color-scheme:dark){.bg{fill:#0b1020}.fg{fill:#f3f4f6}.muted{fill:#cbd5e1}.grid{stroke:#334155}.frame{stroke:#64748b}.baseline{stroke:#f3f4f6}.point{stroke:#0b1020}.card{fill:#111827;stroke:#334155}}
+</style>
+<rect class="bg" width="1600" height="920"/>
+<text id="title-text" class="title fg" x="70" y="62">Mesh vs raw llama.cpp · Thoughtworks agent traces</text>
+<text class="subtitle muted" x="70" y="103">CUDA RTX 5080 · throughput normalized to raw · higher is better</text>
+<rect class="card" x="70" y="135" width="450" height="86" rx="12"/>
+<text class="metric fg" x="95" y="174">17 / 18</text>
+<text class="small muted" x="95" y="205">fixed-Mesh wins in valid trace cells</text>
+<rect class="card" x="545" y="135" width="450" height="86" rx="12"/>
+<text class="metric fg" x="570" y="174">324 / 324</text>
+<text class="small muted" x="570" y="205">benchmark cells complete · 0 failures</text>
+<rect class="card" x="1020" y="135" width="510" height="86" rx="12"/>
+<text class="metric fg" x="1045" y="174">Correctness gate: PASS</text>
+<text class="small muted" x="1045" y="205">for both families plotted below</text>
+<line x1="70" y1="255" x2="106" y2="255" stroke="#0284c7" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="118" y="262">Fixed Mesh</text>
+<line x1="270" y1="255" x2="306" y2="255" stroke="#7c3aed" stroke-width="5" stroke-dasharray="10 7" stroke-linecap="round"/>
+<text class="small fg" x="318" y="262">Adaptive Mesh</text>
+<line class="baseline" x1="508" y1="255" x2="544" y2="255" stroke-width="2" stroke-dasharray="8 8"/>
+<text class="small fg" x="556" y="262">Raw llama.cpp = 1.00×</text>
+<text class="label fg" x="120" y="282">Llama 3.2 1B dense</text>
+<line class="grid" x1="120" y1="720.0" x2="755" y2="720.0" stroke-width="1"/>
+<text class="axis muted" x="106" y="726.0" text-anchor="end">0.0×</text>
+<line class="grid" x1="120" y1="643.6" x2="755" y2="643.6" stroke-width="1"/>
+<text class="axis muted" x="106" y="649.6" text-anchor="end">1.0×</text>
+<line class="grid" x1="120" y1="567.3" x2="755" y2="567.3" stroke-width="1"/>
+<text class="axis muted" x="106" y="573.3" text-anchor="end">2.0×</text>
+<line class="grid" x1="120" y1="490.9" x2="755" y2="490.9" stroke-width="1"/>
+<text class="axis muted" x="106" y="496.9" text-anchor="end">3.0×</text>
+<line class="grid" x1="120" y1="414.5" x2="755" y2="414.5" stroke-width="1"/>
+<text class="axis muted" x="106" y="420.5" text-anchor="end">4.0×</text>
+<line class="grid" x1="120" y1="338.2" x2="755" y2="338.2" stroke-width="1"/>
+<text class="axis muted" x="106" y="344.2" text-anchor="end">5.0×</text>
+<line class="baseline" x1="120" y1="643.6" x2="755" y2="643.6" stroke-width="2" stroke-dasharray="8 8"/>
+<line class="grid" x1="120.0" y1="300" x2="120.0" y2="720" stroke-width="1"/>
+<text class="axis muted" x="120.0" y="750" text-anchor="middle">1</text>
+<line class="grid" x1="199.4" y1="300" x2="199.4" y2="720" stroke-width="1"/>
+<text class="axis muted" x="199.4" y="750" text-anchor="middle">2</text>
+<line class="grid" x1="278.8" y1="300" x2="278.8" y2="720" stroke-width="1"/>
+<text class="axis muted" x="278.8" y="750" text-anchor="middle">4</text>
+<line class="grid" x1="358.1" y1="300" x2="358.1" y2="720" stroke-width="1"/>
+<text class="axis muted" x="358.1" y="750" text-anchor="middle">8</text>
+<line class="grid" x1="437.5" y1="300" x2="437.5" y2="720" stroke-width="1"/>
+<text class="axis muted" x="437.5" y="750" text-anchor="middle">16</text>
+<line class="grid" x1="516.9" y1="300" x2="516.9" y2="720" stroke-width="1"/>
+<text class="axis muted" x="516.9" y="750" text-anchor="middle">32</text>
+<line class="grid" x1="596.2" y1="300" x2="596.2" y2="720" stroke-width="1"/>
+<text class="axis muted" x="596.2" y="750" text-anchor="middle">64</text>
+<line class="grid" x1="675.6" y1="300" x2="675.6" y2="720" stroke-width="1"/>
+<text class="axis muted" x="675.6" y="750" text-anchor="middle">128</text>
+<line class="grid" x1="755.0" y1="300" x2="755.0" y2="720" stroke-width="1"/>
+<text class="axis muted" x="755.0" y="750" text-anchor="middle">256</text>
+<rect x="120" y="300" width="635" height="420" fill="none" class="frame" stroke-width="1"/>
+<polyline class="line" points="120.0,643.6 199.4,341.7 278.8,402.6 358.1,428.3 437.5,363.9 516.9,366.6 596.2,363.2 675.6,374.0 755.0,365.6" stroke="#0284c7"/>
+<circle class="point" cx="120.0" cy="643.6" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c1 · 1.001× raw (+0.07%)</title></circle>
+<circle class="point" cx="199.4" cy="341.7" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c2 · 4.954× raw (+395.44%)</title></circle>
+<circle class="point" cx="278.8" cy="402.6" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c4 · 4.157× raw (+315.68%)</title></circle>
+<circle class="point" cx="358.1" cy="428.3" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c8 · 3.820× raw (+281.98%)</title></circle>
+<circle class="point" cx="437.5" cy="363.9" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c16 · 4.663× raw (+366.30%)</title></circle>
+<circle class="point" cx="516.9" cy="366.6" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c32 · 4.628× raw (+362.84%)</title></circle>
+<circle class="point" cx="596.2" cy="363.2" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c64 · 4.673× raw (+367.28%)</title></circle>
+<circle class="point" cx="675.6" cy="374.0" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c128 · 4.531× raw (+353.08%)</title></circle>
+<circle class="point" cx="755.0" cy="365.6" r="6" fill="#0284c7"><title>Llama 3.2 1B dense · Fixed Mesh · c256 · 4.641× raw (+364.06%)</title></circle>
+<polyline class="line" points="120.0,643.3 199.4,335.2 278.8,419.5 358.1,438.5 437.5,394.2 516.9,358.4 596.2,342.8 675.6,349.5 755.0,371.2" stroke="#7c3aed" stroke-dasharray="10 7"/>
+<circle class="point" cx="120.0" cy="643.3" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c1 · 1.004× raw (+0.44%)</title></circle>
+<circle class="point" cx="199.4" cy="335.2" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c2 · 5.039× raw (+403.89%)</title></circle>
+<circle class="point" cx="278.8" cy="419.5" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c4 · 3.935× raw (+293.50%)</title></circle>
+<circle class="point" cx="358.1" cy="438.5" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c8 · 3.686× raw (+268.63%)</title></circle>
+<circle class="point" cx="437.5" cy="394.2" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c16 · 4.266× raw (+326.60%)</title></circle>
+<circle class="point" cx="516.9" cy="358.4" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c32 · 4.735× raw (+373.53%)</title></circle>
+<circle class="point" cx="596.2" cy="342.8" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c64 · 4.940× raw (+393.97%)</title></circle>
+<circle class="point" cx="675.6" cy="349.5" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c128 · 4.852× raw (+385.16%)</title></circle>
+<circle class="point" cx="755.0" cy="371.2" r="6" fill="#7c3aed"><title>Llama 3.2 1B dense · Adaptive Mesh · c256 · 4.567× raw (+356.71%)</title></circle>
+<text class="axis fg" x="134.0" y="627.6" text-anchor="start">Fixed Mesh +0.07% at c1</text>
+<text class="small fg" x="437.5" y="790" text-anchor="middle">Offered concurrency</text>
+<text class="label fg" x="880" y="282">DeepSeek Coder V2 Lite MoE</text>
+<line class="grid" x1="880" y1="685.0" x2="1515" y2="685.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="691.0" text-anchor="end">0.8×</text>
+<line class="grid" x1="880" y1="615.0" x2="1515" y2="615.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="621.0" text-anchor="end">1.0×</text>
+<line class="grid" x1="880" y1="545.0" x2="1515" y2="545.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="551.0" text-anchor="end">1.2×</text>
+<line class="grid" x1="880" y1="475.0" x2="1515" y2="475.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="481.0" text-anchor="end">1.4×</text>
+<line class="grid" x1="880" y1="405.0" x2="1515" y2="405.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="411.0" text-anchor="end">1.6×</text>
+<line class="grid" x1="880" y1="335.0" x2="1515" y2="335.0" stroke-width="1"/>
+<text class="axis muted" x="866" y="341.0" text-anchor="end">1.8×</text>
+<line class="baseline" x1="880" y1="615.0" x2="1515" y2="615.0" stroke-width="2" stroke-dasharray="8 8"/>
+<line class="grid" x1="880.0" y1="300" x2="880.0" y2="720" stroke-width="1"/>
+<text class="axis muted" x="880.0" y="750" text-anchor="middle">1</text>
+<line class="grid" x1="959.4" y1="300" x2="959.4" y2="720" stroke-width="1"/>
+<text class="axis muted" x="959.4" y="750" text-anchor="middle">2</text>
+<line class="grid" x1="1038.8" y1="300" x2="1038.8" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1038.8" y="750" text-anchor="middle">4</text>
+<line class="grid" x1="1118.1" y1="300" x2="1118.1" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1118.1" y="750" text-anchor="middle">8</text>
+<line class="grid" x1="1197.5" y1="300" x2="1197.5" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1197.5" y="750" text-anchor="middle">16</text>
+<line class="grid" x1="1276.9" y1="300" x2="1276.9" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1276.9" y="750" text-anchor="middle">32</text>
+<line class="grid" x1="1356.2" y1="300" x2="1356.2" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1356.2" y="750" text-anchor="middle">64</text>
+<line class="grid" x1="1435.6" y1="300" x2="1435.6" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1435.6" y="750" text-anchor="middle">128</text>
+<line class="grid" x1="1515.0" y1="300" x2="1515.0" y2="720" stroke-width="1"/>
+<text class="axis muted" x="1515.0" y="750" text-anchor="middle">256</text>
+<rect x="880" y="300" width="635" height="420" fill="none" class="frame" stroke-width="1"/>
+<polyline class="line" points="880.0,685.8 959.4,384.8 1038.8,493.8 1118.1,441.3 1197.5,441.9 1276.9,365.4 1356.2,389.3 1435.6,347.6 1515.0,395.3" stroke="#0284c7"/>
+<circle class="point" cx="880.0" cy="685.8" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c1 · 0.798× raw (-20.22%)</title></circle>
+<circle class="point" cx="959.4" cy="384.8" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c2 · 1.658× raw (+65.77%)</title></circle>
+<circle class="point" cx="1038.8" cy="493.8" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c4 · 1.346× raw (+34.64%)</title></circle>
+<circle class="point" cx="1118.1" cy="441.3" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c8 · 1.496× raw (+49.64%)</title></circle>
+<circle class="point" cx="1197.5" cy="441.9" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c16 · 1.495× raw (+49.47%)</title></circle>
+<circle class="point" cx="1276.9" cy="365.4" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c32 · 1.713× raw (+71.33%)</title></circle>
+<circle class="point" cx="1356.2" cy="389.3" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c64 · 1.645× raw (+64.49%)</title></circle>
+<circle class="point" cx="1435.6" cy="347.6" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c128 · 1.764× raw (+76.40%)</title></circle>
+<circle class="point" cx="1515.0" cy="395.3" r="6" fill="#0284c7"><title>DeepSeek Coder V2 Lite MoE · Fixed Mesh · c256 · 1.628× raw (+62.77%)</title></circle>
+<polyline class="line" points="880.0,685.8 959.4,486.8 1038.8,534.9 1118.1,504.8 1197.5,525.7 1276.9,449.8 1356.2,432.9 1435.6,418.2 1515.0,456.4" stroke="#7c3aed" stroke-dasharray="10 7"/>
+<circle class="point" cx="880.0" cy="685.8" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c1 · 0.798× raw (-20.22%)</title></circle>
+<circle class="point" cx="959.4" cy="486.8" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c2 · 1.366× raw (+36.63%)</title></circle>
+<circle class="point" cx="1038.8" cy="534.9" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c4 · 1.229× raw (+22.89%)</title></circle>
+<circle class="point" cx="1118.1" cy="504.8" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c8 · 1.315× raw (+31.49%)</title></circle>
+<circle class="point" cx="1197.5" cy="525.7" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c16 · 1.255× raw (+25.52%)</title></circle>
+<circle class="point" cx="1276.9" cy="449.8" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c32 · 1.472× raw (+47.21%)</title></circle>
+<circle class="point" cx="1356.2" cy="432.9" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c64 · 1.520× raw (+52.03%)</title></circle>
+<circle class="point" cx="1435.6" cy="418.2" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c128 · 1.562× raw (+56.23%)</title></circle>
+<circle class="point" cx="1515.0" cy="456.4" r="6" fill="#7c3aed"><title>DeepSeek Coder V2 Lite MoE · Adaptive Mesh · c256 · 1.453× raw (+45.30%)</title></circle>
+<text class="axis fg" x="894.0" y="669.8" text-anchor="start">Fixed Mesh −20.22% at c1</text>
+<text class="small fg" x="1197.5" y="790" text-anchor="middle">Offered concurrency</text>
+<text class="small fg" x="70" y="850">Fixed Mesh beats raw in every plotted c2–c256 cell; dense also clears c1 by +0.07%.</text>
+<text class="axis muted" x="70" y="886">Falcon-H1 omitted: 0% c1 exact-continuation parity makes its throughput diagnostic, not competitive evidence.</text>
+</svg>
