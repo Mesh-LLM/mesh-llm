@@ -58,7 +58,7 @@ fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
 }
 
 #[tokio::test]
-async fn queued_admission_groups_shared_prompts_before_the_next_lane_wave() {
+async fn queued_admission_balances_shared_prefix_families_across_lane_wave() {
     let controller = admission_controller(1, 4);
     let work = GenerationAdmissionWork::new(4, 1);
     let active = controller
@@ -70,11 +70,12 @@ async fn queued_admission_groups_shared_prompts_before_the_next_lane_wave() {
         )
         .await
         .expect("active request admission");
-    let (tx, mut rx) = tokio::sync::mpsc::channel(3);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     for (label, prompt) in [
-        ("unique", vec![9, 9, 9, 9]),
-        ("shared-a", vec![1, 2, 3, 4]),
-        ("shared-b", vec![1, 2, 3, 5]),
+        ("family-a-1", vec![1, 1, 3, 4]),
+        ("family-a-2", vec![1, 1, 3, 5]),
+        ("family-b-1", vec![2, 2, 3, 4]),
+        ("family-b-2", vec![2, 2, 3, 5]),
     ] {
         let controller = controller.clone();
         let tx = tx.clone();
@@ -98,7 +99,7 @@ async fn queued_admission_groups_shared_prompts_before_the_next_lane_wave() {
     }
     drop(tx);
     tokio::time::timeout(Duration::from_secs(1), async {
-        while controller.generation_queue_depth.load(Ordering::Acquire) != 3 {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 4 {
             tokio::task::yield_now().await;
         }
     })
@@ -107,15 +108,18 @@ async fn queued_admission_groups_shared_prompts_before_the_next_lane_wave() {
 
     drop(active);
     let (first_label, first) = rx.recv().await.expect("first queued admission");
-    assert!(first_label.starts_with("shared-"));
     drop(first);
     let (second_label, second) = rx.recv().await.expect("second queued admission");
-    assert!(second_label.starts_with("shared-"));
-    assert_ne!(first_label, second_label);
+    assert_ne!(
+        first_label.split('-').nth(1),
+        second_label.split('-').nth(1),
+        "one family must not drain the whole lane wave"
+    );
     drop(second);
-    let (third_label, third) = rx.recv().await.expect("third queued admission");
-    assert_eq!(third_label, "unique");
+    let (_, third) = rx.recv().await.expect("third queued admission");
     drop(third);
+    let (_, fourth) = rx.recv().await.expect("fourth queued admission");
+    drop(fourth);
 }
 
 #[tokio::test]

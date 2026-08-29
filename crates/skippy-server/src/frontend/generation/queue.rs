@@ -16,9 +16,7 @@ use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
 use skippy_protocol::StageConfig;
-use skippy_scheduler::{
-    CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates_with_anchor,
-};
+use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -77,7 +75,6 @@ struct GenerationAdmissionQueueState {
     turn: u64,
     next_id: u64,
     selected_id: Option<u64>,
-    last_admitted_prompt: Arc<[i32]>,
     waiters: BTreeMap<u64, GenerationAdmissionWaiter>,
 }
 
@@ -168,7 +165,7 @@ impl GenerationAdmissionQueue {
         // Refreshing affinity consults the prefix cache and can be more
         // expensive than queue bookkeeping. Snapshot under the queue lock,
         // then release it before crossing that subsystem boundary.
-        let (turn, anchor_prompt, waiters) = {
+        let (turn, waiters) = {
             let state = self
                 .state
                 .lock()
@@ -178,7 +175,6 @@ impl GenerationAdmissionQueue {
             }
             (
                 state.turn,
-                Arc::clone(&state.last_admitted_prompt),
                 state
                     .waiters
                     .iter()
@@ -190,7 +186,7 @@ impl GenerationAdmissionQueue {
             .iter()
             .map(|(_, waiter)| (waiter.scheduling.refresh_affinity)())
             .collect::<Vec<_>>();
-        let selected_id = order_cache_aware_candidates_with_anchor(
+        let selected_id = order_cache_aware_candidates(
             waiters
                 .iter()
                 .map(|(_, waiter)| waiter)
@@ -207,7 +203,6 @@ impl GenerationAdmissionQueue {
             turn,
             ADMISSION_CACHE_AGING_COST_PER_TURN,
             true,
-            (!anchor_prompt.is_empty()).then_some(anchor_prompt.as_ref()),
         )
         .first()
         .and_then(|index| waiters.get(*index).map(|(id, _)| id))
@@ -247,8 +242,7 @@ impl GenerationAdmissionQueue {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(waiter) = state.waiters.remove(&id) {
-            state.last_admitted_prompt = waiter.scheduling.prompt_tokens;
+        if state.waiters.remove(&id).is_some() {
             state.turn = state.turn.saturating_add(1);
         }
         if state.selected_id == Some(id) {
