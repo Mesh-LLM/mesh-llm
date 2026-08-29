@@ -426,6 +426,10 @@ impl RuntimeState {
         self.active_session(session_id)?.drop_sequence(cache_seq_id)
     }
 
+    pub fn memory_used_cells(&mut self, session_id: &str) -> Result<u64> {
+        self.active_session(session_id)?.memory_used_cells()
+    }
+
     pub(super) fn add_session_tokens(&mut self, session_id: &str, count: u64) {
         self.session_token_counts
             .entry(session_id.to_string())

@@ -48,13 +48,13 @@ fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
     let before = runtime.session_stats();
 
     let first = kv
-        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1)
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1, None)
         .unwrap();
     let second = kv
-        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1)
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1, None)
         .unwrap();
     let recovered = kv
-        .admit_resident_capacity(&mut runtime, "request", 4, 1, 1)
+        .admit_resident_capacity(&mut runtime, "request", 4, 1, 1, None)
         .unwrap();
 
     assert!(!first.admitted);

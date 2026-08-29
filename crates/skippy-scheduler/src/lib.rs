@@ -13,11 +13,11 @@ mod telemetry;
 
 pub use cache_policy::{
     CacheAffinity, CacheAwareCandidate, StageCacheAffinity, order_cache_aware_candidates,
-    select_cache_aware_candidate,
+    order_cache_aware_candidates_with_anchor, select_cache_aware_candidate,
 };
 pub use capacity::{
     CapacityDemand, CapacityPlan, ComponentCapacitySnapshot, EvictableCacheEntry,
-    plan_component_capacity,
+    plan_component_capacity, rank_eviction_candidates,
 };
 pub use config::{MemoryComponent, SchedulerConfig};
 pub use engine::{AdmissionError, Scheduler, SchedulerSnapshot};

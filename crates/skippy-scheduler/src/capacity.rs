@@ -133,6 +133,14 @@ pub fn plan_component_capacity(
     }
 }
 
+/// Order eviction candidates using the scheduler's stable recomputation-value
+/// policy without assuming that their logical sizes equal physical memory
+/// released. Callers with aliasing caches can evict in this order and measure
+/// actual occupancy after each deletion.
+pub fn rank_eviction_candidates(entries: &mut [EvictableCacheEntry]) {
+    entries.sort_by(compare_eviction_value);
+}
+
 fn compare_eviction_value(left: &EvictableCacheEntry, right: &EvictableCacheEntry) -> Ordering {
     let left_units = left.units.max(1);
     let right_units = right.units.max(1);
