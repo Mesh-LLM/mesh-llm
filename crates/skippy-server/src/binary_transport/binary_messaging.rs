@@ -321,10 +321,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 telemetry.emit(
                     "stage.connection_worker_panic",
                     BTreeMap::from([
-                        (
-                            "llama_stage.failure_contained".to_string(),
-                            json!(true),
-                        ),
+                        ("llama_stage.failure_contained".to_string(), json!(true)),
                         (
                             "llama_stage.panicked_workers".to_string(),
                             json!(panicked_workers),
@@ -538,7 +535,10 @@ mod shutdown_tests {
             1,
             "the panicked worker must be counted, not turned into an error"
         );
-        assert!(workers.0.is_empty(), "the panicked worker must still be reaped");
+        assert!(
+            workers.0.is_empty(),
+            "the panicked worker must still be reaped"
+        );
         assert_eq!(workers.reap_finished(), 0);
     }
 
