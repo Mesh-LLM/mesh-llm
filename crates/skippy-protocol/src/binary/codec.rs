@@ -304,12 +304,8 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         writer.write_all(&message.raw_bytes)?;
         return Ok(());
     }
-    for token in &message.tokens {
-        write_i32(&mut writer, *token)?;
-    }
-    for position in &message.positions {
-        write_i32(&mut writer, *position)?;
-    }
+    write_i32_slice(&mut writer, &message.tokens)?;
+    write_i32_slice(&mut writer, &message.positions)?;
     writer.write_all(&message.activation)?;
     Ok(())
 }
@@ -403,14 +399,8 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
         });
     }
 
-    let mut tokens = Vec::with_capacity(token_sideband_count);
-    for _ in 0..token_sideband_count {
-        tokens.push(read_i32(&mut reader)?);
-    }
-    let mut positions = Vec::with_capacity(position_sideband_count);
-    for _ in 0..position_sideband_count {
-        positions.push(read_i32(&mut reader)?);
-    }
+    let tokens = read_i32_values(&mut reader, token_sideband_count)?;
+    let positions = read_i32_values(&mut reader, position_sideband_count)?;
     let activation_bytes =
         if state.source_stage_index < 0 || kind.is_activationless_prefix_cache_control() {
             0
@@ -642,6 +632,41 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
     }
+}
+
+fn read_i32_values(mut reader: impl Read, count: usize) -> io::Result<Vec<i32>> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut values = Vec::with_capacity(count);
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * std::mem::size_of::<i32>()];
+    let mut remaining = count;
+    while remaining > 0 {
+        let chunk_values = remaining.min(VALUES_PER_CHUNK);
+        let chunk_bytes = chunk_values * std::mem::size_of::<i32>();
+        reader.read_exact(&mut bytes[..chunk_bytes])?;
+        values.extend(
+            bytes[..chunk_bytes]
+                .chunks_exact(std::mem::size_of::<i32>())
+                .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("i32 chunk size"))),
+        );
+        remaining -= chunk_values;
+    }
+    Ok(values)
+}
+
+fn write_i32_slice(mut writer: impl Write, values: &[i32]) -> io::Result<()> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * std::mem::size_of::<i32>()];
+    for values in values.chunks(VALUES_PER_CHUNK) {
+        let chunk_bytes = std::mem::size_of_val(values);
+        for (bytes, value) in bytes[..chunk_bytes]
+            .chunks_exact_mut(std::mem::size_of::<i32>())
+            .zip(values)
+        {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+        writer.write_all(&bytes[..chunk_bytes])?;
+    }
+    Ok(())
 }
 
 fn read_i32(mut reader: impl Read) -> io::Result<i32> {
