@@ -472,6 +472,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             n_batch: None,
             n_ubatch: None,
             flash_attention: FlashAttentionType::Auto,
+            local_source_required: false,
             profile: String::new(),
         },
         StartupModelPlan {
@@ -494,6 +495,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             n_batch: None,
             n_ubatch: None,
             flash_attention: FlashAttentionType::Auto,
+            local_source_required: false,
             profile: String::new(),
         },
     ]
@@ -567,6 +569,7 @@ pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model(
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
 
@@ -1169,6 +1172,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 extra_model.parallel,
                 &ctx.config.gpu,
             ),
+            local_source_required: extra_model.local_source_required,
             split_topology_lock: ctx.options.split_topology_lock.clone(),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),

@@ -79,7 +79,7 @@ schema row or stale manifest row from passing review:
 `throughput.threads_batch`, `throughput.priority`, `throughput.poll`,
 `throughput.cpu_affinity`, `throughput.numa`, `throughput.slot_prompt_similarity`,
 `throughput.tuning_profile`, `topology.mode`, `topology.manifest_sha256`,
-`topology.stages`, `skippy.stage_model_path`, `skippy.stage_role`,
+`topology.stages`, `skippy.stage_model_path`, `skippy.source_policy`, `skippy.stage_role`,
 `skippy.stage_topology`, `skippy.activation_wire_dtype`,
 `skippy.binary_stage_transport`, `skippy.lifecycle_startup_timeout_ms`,
 `skippy.lifecycle_readiness_interval_ms`, `skippy.lifecycle_health_interval_ms`,

@@ -996,6 +996,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::Rejected,
     },
     WiringEntry {
+        path: "skippy.source_policy",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "skippy.stage_role",
         status: WiringStatus::Rejected,
         owner: "n/a",

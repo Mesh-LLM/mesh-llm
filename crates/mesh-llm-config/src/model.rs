@@ -504,6 +504,8 @@ pub struct SkippyConfig {
     #[serde(default)]
     pub stage_model_path: Option<String>,
     #[serde(default)]
+    pub source_policy: Option<String>,
+    #[serde(default)]
     pub stage_role: Option<String>,
     #[serde(default)]
     pub stage_topology: Option<String>,

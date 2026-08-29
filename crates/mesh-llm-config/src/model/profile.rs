@@ -23,6 +23,7 @@ impl ModelConfigEntry {
         write_effective_hardware_profile(&mut buffer, self);
         write_effective_throughput_profile(&mut buffer, self);
         write_effective_topology_profile(&mut buffer, self);
+        write_effective_skippy_profile(&mut buffer, self);
 
         if buffer.is_empty() {
             return String::new();
@@ -170,6 +171,17 @@ fn write_effective_topology_profile(buffer: &mut Vec<u8>, entry: &ModelConfigEnt
     write_option!(buffer, "topology_stages", topology.stages);
 }
 
+fn write_effective_skippy_profile(buffer: &mut Vec<u8>, entry: &ModelConfigEntry) {
+    write_option!(
+        buffer,
+        "source_policy",
+        entry
+            .skippy
+            .as_ref()
+            .and_then(|skippy| skippy.source_policy.as_ref())
+    );
+}
+
 fn write_throughput_fields(buffer: &mut Vec<u8>, throughput: &ThroughputConfig) {
     write_option!(
         buffer,
@@ -213,5 +225,26 @@ mod tests {
         };
 
         assert_ne!(entry.derived_profile(), topology_entry.derived_profile());
+    }
+
+    #[test]
+    fn derived_profile_includes_local_source_policy() {
+        let fallback = ModelConfigEntry {
+            model: "shared-model".into(),
+            skippy: Some(super::super::SkippyConfig {
+                source_policy: Some("fallback".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let local_required = ModelConfigEntry {
+            skippy: Some(super::super::SkippyConfig {
+                source_policy: Some("local-required".into()),
+                ..Default::default()
+            }),
+            ..fallback.clone()
+        };
+
+        assert_ne!(fallback.derived_profile(), local_required.derived_profile());
     }
 }

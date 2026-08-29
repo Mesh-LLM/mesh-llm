@@ -39,6 +39,7 @@ tuning_profile        = "balanced"      # "throughput", "balanced", or "saver"
 
 [defaults.skippy]
 stage_model_path      = ""               # Path or repo for a stage model
+source_policy         = "fallback"       # "fallback" or strict "local-required"
 stage_role            = ""               # Stage role override
 stage_topology        = ""               # Stage topology override
 binary_stage_transport = ""              # Binary stage transport override

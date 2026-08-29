@@ -283,6 +283,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
+        || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
         || match (&old.cache_affinity, &new.cache_affinity) {
             (Some(old), Some(new)) => !old.has_same_cache_state(new),
             (None, None) => false,
@@ -383,6 +384,10 @@ pub(super) fn apply_transitive_ann(
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
+    // Strict local-source admission requires capability provenance from the
+    // peer itself. A transitive announcer is not authoritative in either
+    // direction, so it may neither promote nor clear this support bit. Direct
+    // announcements in `add_peer` update it authoritatively.
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     merge_cache_affinity(
         &mut existing.cache_affinity,
@@ -832,6 +837,7 @@ impl Node {
         existing.artifact_transfer_supported = ann.artifact_transfer_supported;
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
+        existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
         merge_cache_affinity(
             &mut existing.cache_affinity,
@@ -1206,6 +1212,7 @@ impl Node {
             artifact_transfer_supported: peer.artifact_transfer_supported,
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
+            local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
             cache_affinity: peer.cache_affinity.clone(),
             latency_ms: latency.latency_ms,
@@ -1272,6 +1279,7 @@ impl Node {
             artifact_transfer_supported: data.artifact_transfer_supported,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            local_gguf_content_id_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             cache_affinity: data.cache_affinity,
             latency_ms: None,
@@ -1931,6 +1939,10 @@ impl Node {
             // epoch (not "now") to avoid incorrectly silencing PeerDown reports.
             // last_mentioned = now keeps the peer alive for the prune window.
             let mut peer = PeerInfo::from_announcement(id, addr.clone(), ann, owner_summary);
+            // Capability provenance must be direct. A bridge can report that a
+            // peer exists, but it cannot make that peer eligible for strict
+            // local-GGUF election on the peer's behalf.
+            peer.local_gguf_content_id_supported = false;
             // Mark as never directly seen — only transitively mentioned.
             peer.admitted = false;
             peer.last_seen =
