@@ -713,7 +713,7 @@ mod tests {
             ignore_eos: true,
             ..SamplingConfig::default()
         };
-        assert_eq!(sampling.as_raw().flags & 0b11, 0b11);
+        assert_eq!(sampling.as_raw().unwrap().flags & 0b11, 0b11);
     }
 
     #[test]

@@ -759,7 +759,7 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
     let sampling = sampling?;
     let mut config = SamplingConfig {
         enabled: true,
-        ignore_eos: (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
+        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,
@@ -788,7 +788,6 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
-        ignore_eos: sampling.ignore_eos,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling

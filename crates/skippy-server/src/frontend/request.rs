@@ -780,7 +780,6 @@ pub(super) fn sampling_config(
         mirostat_entropy,
         mirostat_learning_rate,
         samplers,
-        ignore_eos,
     })
 }
 
@@ -1078,20 +1077,6 @@ pub(super) fn optional_i32_extra(
         .map(|value| {
             serde_json::from_value::<i32>(value.clone())
                 .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
-        })
-        .transpose()
-}
-
-pub(super) fn optional_bool_extra(
-    extra: &std::collections::BTreeMap<String, serde_json::Value>,
-    field: &str,
-) -> OpenAiResult<Option<bool>> {
-    extra
-        .get(field)
-        .filter(|value| !value.is_null())
-        .map(|value| {
-            serde_json::from_value::<bool>(value.clone())
-                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be a boolean")))
         })
         .transpose()
 }
