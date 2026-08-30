@@ -58,7 +58,17 @@ class HfXetPortabilitySmokeTests(unittest.TestCase):
         self.assertIn("advisory smoke skipped", result.stderr)
 
     def test_transient_download_failures_are_retried(self) -> None:
-        self.write_executable("timeout", "#!/bin/sh\nshift\nexec \"$@\"\n")
+        self.write_executable(
+            "timeout",
+            """#!/bin/sh
+if [ "$1" != "--kill-after=10s" ] || [ "$2" != "180s" ]; then
+  echo "unexpected timeout arguments: $*" >&2
+  exit 98
+fi
+shift 2
+exec "$@"
+""",
+        )
         binary = self.write_executable(
             "mesh-llm",
             """#!/bin/sh
@@ -90,7 +100,17 @@ printf '{"path":"%s"}\\n' "$fixture"
         self.assertIn("Xet portability smoke passed", result.stdout)
 
     def test_sigill_remains_a_hard_failure(self) -> None:
-        self.write_executable("timeout", "#!/bin/sh\nshift\nexec \"$@\"\n")
+        self.write_executable(
+            "timeout",
+            """#!/bin/sh
+if [ "$1" != "--kill-after=10s" ] || [ "$2" != "180s" ]; then
+  echo "unexpected timeout arguments: $*" >&2
+  exit 98
+fi
+shift 2
+exec "$@"
+""",
+        )
         binary = self.write_executable("mesh-llm", "#!/bin/sh\nkill -ILL $$\n")
 
         result = self.run_smoke(binary)

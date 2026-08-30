@@ -63,7 +63,7 @@ download_succeeded=false
 for attempt in 1 2 3; do
   echo "Hugging Face/Xet advisory smoke attempt $attempt/3" >&2
   set +e
-  timeout 180 "${command[@]}" >"$output_file" 2>"$error_file"
+  timeout --kill-after=10s 180s "${command[@]}" >"$output_file" 2>"$error_file"
   status=$?
   set -e
   if [[ $status -eq 0 ]]; then
