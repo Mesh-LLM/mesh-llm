@@ -217,6 +217,28 @@ pub(super) fn should_serve_cache_runtime(
     }
 }
 
+/// Keep restoring cache-aware sessions while direct work is waiting for a
+/// batch and there is still room in the native runtime wave. If an operation
+/// does not create a session, the finite queue is drained and direct work can
+/// proceed instead of waiting indefinitely for capacity to change.
+pub(super) fn should_fill_cache_runtime_wave(
+    has_direct_iterations: bool,
+    has_cache_runtime: bool,
+    active_runtime_sessions: usize,
+    max_direct_batch_size: usize,
+) -> bool {
+    has_direct_iterations && has_cache_runtime && active_runtime_sessions < max_direct_batch_size
+}
+
+pub(super) fn should_suppress_cache_runtime(
+    has_cache_runtime: bool,
+    direct_wave_full: bool,
+    active_runtime_sessions: usize,
+    max_direct_batch_size: usize,
+) -> bool {
+    has_cache_runtime && direct_wave_full && active_runtime_sessions >= max_direct_batch_size
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +262,34 @@ mod tests {
         assert!(!should_serve_cache_runtime(true, true, true));
         assert!(should_serve_cache_runtime(true, false, true));
         assert!(!should_serve_cache_runtime(false, true, false));
+    }
+
+    #[test]
+    fn cache_fill_wave_fills_below_direct_batch_capacity() {
+        assert!(should_fill_cache_runtime_wave(true, true, 1, 4));
+    }
+
+    #[test]
+    fn cache_fill_wave_stops_at_direct_batch_capacity() {
+        assert!(!should_fill_cache_runtime_wave(true, true, 4, 4));
+        assert!(!should_fill_cache_runtime_wave(true, true, 5, 4));
+    }
+
+    #[test]
+    fn cache_fill_wave_does_not_change_planned_only_work() {
+        assert!(!should_fill_cache_runtime_wave(false, true, 1, 4));
+    }
+
+    #[test]
+    fn cache_fill_wave_does_not_run_without_cache_work() {
+        assert!(!should_fill_cache_runtime_wave(true, false, 1, 4));
+    }
+
+    #[test]
+    fn cache_runtime_is_suppressed_at_full_direct_capacity() {
+        assert!(should_suppress_cache_runtime(true, true, 4, 4));
+        assert!(!should_suppress_cache_runtime(true, true, 3, 4));
+        assert!(!should_suppress_cache_runtime(false, true, 4, 4));
     }
 
     #[test]

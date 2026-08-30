@@ -1,7 +1,8 @@
 mod cache_runtime;
 
 use self::cache_runtime::{
-    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry, should_serve_cache_runtime,
+    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry, should_fill_cache_runtime_wave,
+    should_serve_cache_runtime, should_suppress_cache_runtime,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
@@ -31,6 +32,7 @@ const MAX_NATIVE_ITERATION_TOKENS: usize = 2048;
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_COMMAND_QUEUE_CAPACITY: usize = 8;
 const MAX_COMMANDS_PER_TURN: usize = 64;
+const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
 
@@ -200,6 +202,8 @@ struct SchedulerWorker {
     max_direct_batch_size: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
+    active_runtime_sessions: usize,
+    direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
     last_served_cache_runtime: bool,
@@ -297,6 +301,8 @@ impl IterationScheduler {
                     max_direct_batch_size: scheduler_lane_count.max(1),
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
+                    active_runtime_sessions: 0,
+                    direct_wave_full: false,
                     telemetry: Some(telemetry),
                     last_served_direct: false,
                     last_served_cache_runtime: false,
@@ -675,6 +681,21 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            if self.should_defer_cache_runtime() {
+                if !self.wait_for_scheduler_command(DIRECT_ITERATION_COALESCE_WINDOW) {
+                    return;
+                }
+                continue;
+            }
+            let cache_fill_wave_pending = should_fill_cache_runtime_wave(
+                !self.direct_iterations.is_empty(),
+                !self.cache_runtime_queue.is_empty(),
+                self.active_runtime_sessions,
+                self.max_direct_batch_size,
+            );
+            if !cache_fill_wave_pending && !self.coalesce_direct_iterations() {
+                return;
+            }
             self.run_work_turn();
             if !self.iteration_interval.is_zero() {
                 match self.commands.recv_timeout(self.iteration_interval) {
@@ -717,14 +738,56 @@ impl SchedulerWorker {
         }
     }
 
+    fn should_defer_cache_runtime(&self) -> bool {
+        self.direct_wave_full
+            && self.active_runtime_sessions >= self.max_direct_batch_size
+            && self.direct_iterations.is_empty()
+            && self.requests.is_empty()
+            && !self.cache_runtime_queue.is_empty()
+    }
+
+    fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
+        match self.commands.recv_timeout(timeout) {
+            Ok(SchedulerCommand::Shutdown) => {
+                self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                false
+            }
+            Ok(command) => {
+                self.handle_command(command);
+                true
+            }
+            Err(std_mpsc::RecvTimeoutError::Timeout) => true,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => false,
+        }
+    }
+
     fn run_work_turn(&mut self) {
         let has_cache_runtime = !self.cache_runtime_queue.is_empty();
-        let has_iteration = !self.requests.is_empty() || !self.direct_iterations.is_empty();
-        let serve_cache_runtime = should_serve_cache_runtime(
+        let has_direct = !self.direct_iterations.is_empty();
+        let has_planned = !self.requests.is_empty();
+        let has_iteration = has_planned || has_direct;
+        if has_direct && self.active_runtime_sessions >= self.max_direct_batch_size {
+            self.direct_wave_full = true;
+        }
+        let suppress_cache_runtime = should_suppress_cache_runtime(
             has_cache_runtime,
-            has_iteration,
-            self.last_served_cache_runtime,
+            self.direct_wave_full,
+            self.active_runtime_sessions,
+            self.max_direct_batch_size,
         );
+        let fill_cache_wave = should_fill_cache_runtime_wave(
+            has_direct,
+            has_cache_runtime,
+            self.active_runtime_sessions,
+            self.max_direct_batch_size,
+        );
+        let serve_cache_runtime = !suppress_cache_runtime
+            && (fill_cache_wave
+                || should_serve_cache_runtime(
+                    has_cache_runtime,
+                    has_iteration,
+                    self.last_served_cache_runtime,
+                ));
         self.cache_runtime_queue.advance_turn();
         if serve_cache_runtime {
             self.last_served_cache_runtime = true;
@@ -743,13 +806,25 @@ impl SchedulerWorker {
     }
 
     fn run_runtime_operation(
-        &self,
+        &mut self,
         operation: RuntimeOperation,
         cache: Option<CacheRuntimeTelemetry>,
     ) {
         let started = Instant::now();
         let label = operation.label;
+        let cache_operation = cache.is_some();
         (operation.run)(&self.runtime);
+        if let Ok(runtime) = self.runtime.lock() {
+            self.active_runtime_sessions = runtime.active_session_count();
+            if self.active_runtime_sessions < self.max_direct_batch_size {
+                self.direct_wave_full = false;
+            } else if cache_operation {
+                // A cache restore may complete before its caller can enqueue
+                // the first direct iteration. Remember the saturated wave so
+                // another cache restore cannot slip in during that gap.
+                self.direct_wave_full = true;
+            }
+        }
         if let Some(telemetry) = self.telemetry.as_ref() {
             let mut attrs = BTreeMap::from([
                 ("skippy.scheduler.operation".to_string(), json!(label)),
@@ -786,6 +861,34 @@ impl SchedulerWorker {
             }
             telemetry.emit_debug("stage.scheduler_feature_runtime", attrs);
         }
+    }
+
+    fn coalesce_direct_iterations(&mut self) -> bool {
+        let target = direct_coalesce_target(
+            self.active_runtime_sessions,
+            self.direct_iterations.len(),
+            self.max_direct_batch_size,
+        );
+        if target <= self.direct_iterations.len() {
+            return true;
+        }
+
+        let deadline = Instant::now() + DIRECT_ITERATION_COALESCE_WINDOW;
+        while self.direct_iterations.len() < target {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match self.commands.recv_timeout(remaining) {
+                Ok(SchedulerCommand::Shutdown) => {
+                    self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                    return false;
+                }
+                Ok(command) => self.handle_command(command),
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        true
     }
 
     fn submit(&mut self, request: ScheduledRequest) {
@@ -1433,10 +1536,19 @@ impl SchedulerWorker {
         }
     }
 
-    fn drop_runtime_sessions<'a>(&self, ids: impl IntoIterator<Item = &'a str>) {
-        if let Ok(mut runtime) = self.runtime.lock() {
+    fn drop_runtime_sessions<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) {
+        let active_runtime_sessions = if let Ok(mut runtime) = self.runtime.lock() {
             for id in ids {
                 let _ = runtime.drop_session_timed(id);
+            }
+            Some(runtime.active_session_count())
+        } else {
+            None
+        };
+        if let Some(active_runtime_sessions) = active_runtime_sessions {
+            self.active_runtime_sessions = active_runtime_sessions;
+            if active_runtime_sessions < self.max_direct_batch_size {
+                self.direct_wave_full = false;
             }
         }
     }
@@ -1448,6 +1560,16 @@ fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: 
     } else {
         has_direct
     }
+}
+
+fn direct_coalesce_target(
+    active_runtime_sessions: usize,
+    queued_direct_iterations: usize,
+    max_direct_batch_size: usize,
+) -> usize {
+    active_runtime_sessions
+        .max(queued_direct_iterations)
+        .min(max_direct_batch_size)
 }
 
 fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
@@ -1705,6 +1827,8 @@ mod tests {
             max_direct_batch_size: 2,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1825,6 +1949,8 @@ mod tests {
             max_direct_batch_size: 1,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1879,6 +2005,8 @@ mod tests {
             max_direct_batch_size: 1,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1931,6 +2059,8 @@ mod tests {
                 max_direct_batch_size: 3,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
@@ -1953,6 +2083,48 @@ mod tests {
         assert!(outcome.queue_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_hold_ms >= 0.0);
+    }
+
+    #[test]
+    fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_empty() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let (selected, selected_rx) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 1,
+            direct_wave_full: true,
+            telemetry: None,
+            last_served_direct: true,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        worker.cache_runtime_queue.enqueue(
+            RuntimeOperation {
+                label: "full-wave-cache",
+                run: Box::new(move |_| {
+                    selected.send(()).unwrap();
+                }),
+            },
+            skippy_scheduler::CacheAffinity::default(),
+            Arc::from([1]),
+            0,
+            None,
+        );
+
+        worker.run_work_turn();
+
+        assert!(selected_rx.try_recv().is_err());
+        assert!(!worker.cache_runtime_queue.is_empty());
     }
 
     #[test]
@@ -2018,6 +2190,8 @@ mod tests {
                 max_direct_batch_size: 1,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
