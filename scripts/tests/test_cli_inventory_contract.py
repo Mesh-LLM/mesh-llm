@@ -61,36 +61,17 @@ class CliInventoryContractTests(unittest.TestCase):
         ):
             self.assertIn(token, generator)
 
-    def test_cli_crate_owns_both_cli_and_website_domains(self) -> None:
+    def test_cli_crate_owns_the_cli_domain(self) -> None:
         ownership = json.loads((ROOT / "ci/ownership.yml").read_text(encoding="utf-8"))
-        website_patterns = {
-            pattern
-            for rule in ownership["path_rules"]
-            if rule["domain"] == "website"
-            for pattern in rule["patterns"]
-        }
-        cli_patterns = {
-            pattern
-            for rule in ownership["path_rules"]
+        cli_crates = {
+            crate
+            for rule in ownership["crate_rules"]
             if rule["domain"] == "cli"
-            for pattern in rule["patterns"]
+            for crate in rule["crates"]
         }
-        self.assertIn("crates/mesh-llm-cli/**", website_patterns)
-        self.assertIn("crates/mesh-llm-cli/**", cli_patterns)
+        self.assertIn("mesh-llm-cli", cli_crates)
 
-    def test_nested_cli_paths_select_web_slice(self) -> None:
-        # Keep this structural assertion independent of cargo metadata. The
-        # planner test exercises the executable routing behavior; this test
-        # protects the broad ownership glob from being narrowed accidentally.
-        ownership = json.loads((ROOT / "ci/ownership.yml").read_text(encoding="utf-8"))
-        all_patterns = [
-            pattern
-            for rule in ownership["path_rules"]
-            if rule["domain"] in {"cli", "website"}
-            for pattern in rule["patterns"]
-        ]
-        self.assertTrue(any(pattern == "crates/mesh-llm-cli/**" for pattern in all_patterns))
-
+    def test_nested_cli_paths_select_inventory_validation(self) -> None:
         derive_outputs = (ROOT / ".github/actions/compute-changes/derive-outputs.sh").read_text(encoding="utf-8")
         self.assertIn("^crates/mesh-llm-cli/", derive_outputs)
 
@@ -103,7 +84,7 @@ class CliInventoryContractTests(unittest.TestCase):
             timeout=60,
         )
         affected_payload = json.loads(affected.stdout)
-        self.assertTrue(affected_payload["website_changed"])
+        self.assertFalse(affected_payload["website_changed"])
         self.assertIn("mesh-llm-cli", affected_payload["affected"])
 
     def test_ci_runs_inventory_and_browser_contracts(self) -> None:

@@ -78,7 +78,6 @@ is_website_input() {
   [[ "$file" =~ ^website/ ]] || \
     [[ "$file" =~ ^install\.sh$ ]] || \
     [[ "$file" =~ ^install\.ps1$ ]] || \
-    [[ "$file" =~ ^crates/mesh-llm-cli/ ]] || \
     [[ "$file" =~ ^docs/(index\.html|CNAME|install\.sh|install\.ps1|mesh-llm-logo\.svg)$ ]] || \
     [[ "$file" =~ ^docs/(assets|catalog|docs|pagefind)(/|$) ]]
 }
