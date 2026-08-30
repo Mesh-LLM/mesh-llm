@@ -78,14 +78,15 @@ pub(super) enum RuntimeResourcePlanningProfile {
 impl RuntimeResourcePlanningProfile {
     /// Number of concurrent lanes to *plan context depth* around.
     ///
-    /// Both profiles now plan context at single-lane (deepest) depth and then
-    /// let [`planned_parallel_slots`] fill in as many lanes as fit at that
-    /// depth. This is the "lanes-first at the 128k floor" behavior: we hold the
-    /// context at `min(native, 128k)` and reduce lanes on a tight node rather
-    /// than shrink context below what an agent can use. The profile axis is kept
-    /// because it is threaded through the serving surfaces and will regain
-    /// distinct behavior in the bandwidth-aware planner follow-up (where a
-    /// shared mesh host and a dedicated local host want different tok/s floors).
+    /// Both profiles plan context at single-lane (deepest) depth — `min(native,
+    /// 128k)` sized to fit one shared `n_ctx` pool in the KV budget — and then
+    /// run [`planned_parallel_slots`] lanes over that shared pool. Because
+    /// `kv_unified = true` makes those lanes share the one pool, the lane count
+    /// is the capped concurrency target and does not shrink with the residual
+    /// budget. The profile axis is kept because it is threaded through the
+    /// serving surfaces and will regain distinct behavior in the bandwidth-aware
+    /// planner follow-up (where a shared mesh host and a dedicated local host
+    /// want different tok/s floors).
     fn context_slot_target(self) -> u64 {
         match self {
             Self::DedicatedLocal | Self::SharedMesh => 1,
@@ -131,7 +132,7 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
         .unwrap_or_else(|| planned_context_length(&input));
     let slots = input
         .parallel_override
-        .unwrap_or_else(|| planned_parallel_slots(&input, context_length));
+        .unwrap_or_else(planned_parallel_slots);
 
     RuntimeResourcePlan {
         context_length,
@@ -193,26 +194,41 @@ fn context_slot_target(input: &RuntimeResourcePlanInput<'_>) -> u64 {
         .unwrap_or_else(|| input.planning_profile.context_slot_target())
 }
 
-fn planned_parallel_slots(input: &RuntimeResourcePlanInput<'_>, context_length: u32) -> usize {
-    let Some(metadata) = input.metadata else {
-        return DEFAULT_PARALLEL_SLOTS;
-    };
-    let Some(kv_bytes_per_token_full) = input.kv_cache_quant.kv_cache_bytes_per_token(metadata)
-    else {
-        return DEFAULT_PARALLEL_SLOTS;
-    };
-
-    let kv_bytes_per_token = scale_by_layer_fraction(kv_bytes_per_token_full, input);
-
-    let Some(bytes_per_slot) = u64::from(context_length).checked_mul(kv_bytes_per_token) else {
-        return DEFAULT_PARALLEL_SLOTS;
-    };
-    if bytes_per_slot == 0 {
-        return DEFAULT_PARALLEL_SLOTS;
-    }
-
-    let raw_slots = usable_kv_cache_budget(input.vram_bytes, input.model_bytes) / bytes_per_slot;
-    snap_parallel_slots_down(raw_slots)
+/// Plan the number of concurrent lanes to run at the chosen context depth.
+///
+/// Under `kv_unified = true` — which skippy's stage runtime sets whenever
+/// `lane_count > 1` (`third_party/llama.cpp/patches/0034-*.patch`) and which
+/// llama-server's `--parallel auto` also selects — every lane shares a single
+/// `n_ctx` cell pool. The attention KV cache is one allocation of
+/// `context_length × kv_bytes_per_token`, **not** one allocation per lane, so
+/// adding a lane over that shared pool costs no additional KV memory.
+/// [`planned_context_length`] already sized that pool to fit the node's KV
+/// budget, so the lane count is a concurrency choice bounded only by the
+/// [`MAX_AUTO_PARALLEL_SLOTS`] safety ceiling — not a division of residual
+/// budget by a per-lane `n_ctx` allocation.
+///
+/// The previous `usable_kv_cache_budget / (context_length × kv_bytes)` math was
+/// the `kv_unified = false` accounting. It matched neither the runtime nor the
+/// split topology planner (`skippy-coordinator/src/topology.rs`
+/// `candidate_bytes_per_layer`, which deliberately does *not* multiply KV by
+/// lanes), and it produced two wrong results:
+///   * On a tight node a deep context consumed most of the budget, so the
+///     residual implied 1–2 lanes — even though the pool is the *same* size a
+///     fat node would hold and the extra lanes are free. That capped concurrency
+///     for no benefit: the shared pool (and thus runtime find-slot contention)
+///     is identical at any lane count.
+///   * It made the lane count depend on the KV quant (q4 vs q8) at a fixed
+///     context, even though quant changes bytes-per-cell, not the *cell* count
+///     that governs how many lanes safely share the pool.
+///
+/// Recurrent/SSM layers do keep per-lane state; that per-lane cost is accounted
+/// for by the split topology planner and is bounded here by the 4-lane cap. A
+/// finer single-node recurrent-aware bound is left to the bandwidth-aware
+/// planner follow-up.
+fn planned_parallel_slots() -> usize {
+    // llama-server's conservative unified-KV auto default, never above our
+    // safety cap. Independent of KV allocation size by construction.
+    DEFAULT_PARALLEL_SLOTS.min(MAX_AUTO_PARALLEL_SLOTS)
 }
 
 fn scale_by_layer_fraction(kv_bytes_per_token: u64, input: &RuntimeResourcePlanInput<'_>) -> u64 {
@@ -243,17 +259,6 @@ fn fallback_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
         8192
     } else {
         DEFAULT_CONTEXT_LENGTH
-    }
-}
-
-fn snap_parallel_slots_down(raw_slots: u64) -> usize {
-    match raw_slots.min(MAX_AUTO_PARALLEL_SLOTS as u64) {
-        0 => 1,
-        1 => 1,
-        2 | 3 => 2,
-        4..=7 => 4,
-        8..=15 => 8,
-        _ => MAX_AUTO_PARALLEL_SLOTS,
     }
 }
 
@@ -431,11 +436,15 @@ mod tests {
     }
 
     #[test]
-    fn tight_budget_holds_128k_floor_and_reduces_lanes() {
-        // A >128k native on a node whose budget affords 128k at only ~1 lane.
-        // The policy holds context at the 128k floor and drops lanes, rather
-        // than shrinking context (pre-change shared-mesh planning would have
-        // divided the budget by 4 lanes and collapsed context to ~32k).
+    fn tight_budget_holds_128k_floor_and_keeps_full_lanes() {
+        // A >128k native on a node whose budget affords 128k at only ~1 lane
+        // under the old per-lane allocation math. Under `kv_unified = true` all
+        // lanes share the single 128k pool, so the tight node runs the same
+        // 4-lane target a fat node would: reducing lanes here buys neither memory
+        // (unified pool) nor contention headroom (the pool — hence runtime
+        // find-slot contention — is identical at any lane count). Regression for
+        // the unified-KV lane-accounting fix; the pre-fix planner returned 1 lane
+        // here because a deep context ate the residual budget.
         let metadata = gqa_metadata(262_144);
         let plan = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
@@ -450,11 +459,12 @@ mod tests {
 
         assert_eq!(
             plan.context_length, 131_072,
-            "context is held at the 128k floor, not shrunk to keep lanes"
+            "context is held at the 128k floor"
         );
-        assert!(
-            plan.slots < 4,
-            "a tight node reduces lanes rather than context; got {} lanes",
+        assert_eq!(
+            plan.slots, 4,
+            "a tight node shares the same n_ctx pool and keeps the full 4-lane \
+             target; got {} lanes",
             plan.slots
         );
     }
@@ -586,35 +596,34 @@ mod tests {
     }
 
     #[test]
-    fn q4_more_slots_than_q8_at_same_context() {
+    fn lane_count_is_independent_of_kv_quant() {
+        // Under `kv_unified = true` the lanes share one `n_ctx` cell pool. The KV
+        // quant changes bytes-per-cell, not the cell count that governs safe
+        // concurrency, so at the same context depth q4_0 and q8_0 must plan the
+        // *same* number of lanes. (The pre-fix `budget / (context × kv_bytes)`
+        // math gave q4 more lanes than q8 purely because q4 cells are smaller —
+        // the accounting bug this follow-up removes.)
         let metadata = gqa_metadata(131_072);
-        let q8_plan = plan_runtime_resources(RuntimeResourcePlanInput {
-            ctx_size_override: None,
-            parallel_override: None,
-            model_bytes: 5_000_000_000,
-            vram_bytes: 80_000_000_000,
-            metadata: Some(&metadata),
-            kv_cache_quant: GgufKvCacheQuant::Q8_0,
-            local_layer_fraction: None,
-            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
-        });
-        let q4_plan = plan_runtime_resources(RuntimeResourcePlanInput {
-            ctx_size_override: None,
-            parallel_override: None,
-            model_bytes: 5_000_000_000,
-            vram_bytes: 80_000_000_000,
-            metadata: Some(&metadata),
-            kv_cache_quant: GgufKvCacheQuant::Q4_0,
-            local_layer_fraction: None,
-            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
-        });
+        let plan_with = |quant| {
+            plan_runtime_resources(RuntimeResourcePlanInput {
+                ctx_size_override: None,
+                parallel_override: None,
+                model_bytes: 5_000_000_000,
+                vram_bytes: 80_000_000_000,
+                metadata: Some(&metadata),
+                kv_cache_quant: quant,
+                local_layer_fraction: None,
+                planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            })
+        };
+        let q8_plan = plan_with(GgufKvCacheQuant::Q8_0);
+        let q4_plan = plan_with(GgufKvCacheQuant::Q4_0);
 
         assert_eq!(q8_plan.context_length, q4_plan.context_length);
-        assert!(
-            q4_plan.slots >= q8_plan.slots,
-            "q4_0 should allow at least as many slots: q4={}, q8={}",
-            q4_plan.slots,
-            q8_plan.slots
+        assert_eq!(
+            q8_plan.slots, q4_plan.slots,
+            "lane count must not depend on KV quant under unified KV: q4={}, q8={}",
+            q4_plan.slots, q8_plan.slots
         );
     }
 }
