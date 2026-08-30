@@ -5,7 +5,10 @@ use crate::{
 };
 
 #[cfg(target_pointer_width = "64")]
-use crate::{MtmdContextParams, MtmdInputText};
+use crate::{
+    MtmdContextParams, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideoInitParams,
+    MtmdInputText,
+};
 
 #[cfg(not(feature = "dynamic-runtime"))]
 use crate::mtmd_context_params_default;
@@ -84,6 +87,29 @@ fn mtmd_input_text_matches_native_layout() {
     assert_eq!(offset_of!(MtmdInputText, text_len), 8);
     assert_eq!(offset_of!(MtmdInputText, add_special), 16);
     assert_eq!(offset_of!(MtmdInputText, parse_special), 17);
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn mtmd_helper_bitmap_types_match_native_layout() {
+    // Mirrors `mtmd_helper_bitmap_wrapper`, `mtmd_helper_init_opt` and
+    // `mtmd_helper_video_init_params` in tools/mtmd/mtmd-helper.h.
+    // `mtmd_helper_bitmap_init_from_buf` returns the wrapper by value and takes
+    // the opt by value, so both layouts are part of the calling convention.
+    assert_eq!(size_of::<MtmdHelperBitmapWrapper>(), 16);
+    assert_eq!(offset_of!(MtmdHelperBitmapWrapper, bitmap), 0);
+    assert_eq!(offset_of!(MtmdHelperBitmapWrapper, video_ctx), 8);
+
+    assert_eq!(size_of::<MtmdHelperVideoInitParams>(), 24);
+    assert_eq!(offset_of!(MtmdHelperVideoInitParams, fps_target), 0);
+    assert_eq!(offset_of!(MtmdHelperVideoInitParams, ffmpeg_bin_dir), 8);
+    assert_eq!(
+        offset_of!(MtmdHelperVideoInitParams, timestamp_interval_ms),
+        16
+    );
+
+    assert_eq!(size_of::<MtmdHelperInitOpt>(), 24);
+    assert_eq!(offset_of!(MtmdHelperInitOpt, video_params), 0);
 }
 
 #[test]

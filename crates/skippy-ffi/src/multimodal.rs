@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::{c_char, c_float, c_int, c_void};
 
 use crate::MtmdProgressCallback;
 
@@ -15,6 +15,34 @@ pub struct MtmdBitmap {
 #[repr(C)]
 pub struct MtmdInputChunks {
     _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct MtmdHelperVideo {
+    _private: [u8; 0],
+}
+
+/// Mirrors llama.cpp's `mtmd_helper_bitmap_wrapper`: the decoded bitmap plus
+/// an optional video context (non-null only for video inputs, which own the
+/// frame storage the bitmap points into).
+#[repr(C)]
+pub struct MtmdHelperBitmapWrapper {
+    pub bitmap: *mut MtmdBitmap,
+    pub video_ctx: *mut MtmdHelperVideo,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MtmdHelperVideoInitParams {
+    pub fps_target: c_float,
+    pub ffmpeg_bin_dir: *const c_char,
+    pub timestamp_interval_ms: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MtmdHelperInitOpt {
+    pub video_params: MtmdHelperVideoInitParams,
 }
 
 #[repr(C)]

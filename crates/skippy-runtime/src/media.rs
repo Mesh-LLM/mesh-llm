@@ -129,12 +129,18 @@ impl StageModel {
 
         struct Bitmap {
             raw: *mut skippy_ffi::MtmdBitmap,
+            video: *mut skippy_ffi::MtmdHelperVideo,
         }
         impl Drop for Bitmap {
             fn drop(&mut self) {
                 if !self.raw.is_null() {
                     unsafe {
                         skippy_ffi::mtmd_bitmap_free(self.raw);
+                    }
+                }
+                if !self.video.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_helper_video_free(self.video);
                     }
                 }
             }
@@ -157,17 +163,25 @@ impl StageModel {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
-            let raw = unsafe {
+            let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
+                    false,
+                    skippy_ffi::mtmd_helper_init_opt_default(),
                 )
             };
-            if raw.is_null() {
+            // Take ownership before the null check: on a partial failure the
+            // wrapper can still carry a video context that has to be freed.
+            let bitmap = Bitmap {
+                raw: wrapper.bitmap,
+                video: wrapper.video_ctx,
+            };
+            if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
-            bitmaps.push(Bitmap { raw });
+            bitmaps.push(bitmap);
         }
 
         let chunks = Chunks {
@@ -289,12 +303,18 @@ impl StageModel {
 
         struct Bitmap {
             raw: *mut skippy_ffi::MtmdBitmap,
+            video: *mut skippy_ffi::MtmdHelperVideo,
         }
         impl Drop for Bitmap {
             fn drop(&mut self) {
                 if !self.raw.is_null() {
                     unsafe {
                         skippy_ffi::mtmd_bitmap_free(self.raw);
+                    }
+                }
+                if !self.video.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_helper_video_free(self.video);
                     }
                 }
             }
@@ -327,17 +347,25 @@ impl StageModel {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
-            let raw = unsafe {
+            let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
+                    false,
+                    skippy_ffi::mtmd_helper_init_opt_default(),
                 )
             };
-            if raw.is_null() {
+            // Take ownership before the null check: on a partial failure the
+            // wrapper can still carry a video context that has to be freed.
+            let bitmap = Bitmap {
+                raw: wrapper.bitmap,
+                video: wrapper.video_ctx,
+            };
+            if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
-            bitmaps.push(Bitmap { raw });
+            bitmaps.push(bitmap);
         }
 
         let chunks = Chunks {
