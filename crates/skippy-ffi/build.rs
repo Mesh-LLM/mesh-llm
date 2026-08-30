@@ -241,8 +241,18 @@ fn main() {
 }
 
 fn default_build_dir(workspace_root: &std::path::Path, target: &str) -> std::path::PathBuf {
-    let suffix = default_backend(target);
+    let backend = std::env::var("LLAMA_STAGE_BACKEND")
+        .or_else(|_| std::env::var("SKIPPY_LLAMA_BACKEND"))
+        .unwrap_or_else(|_| default_backend(target).to_string());
+    let suffix = sanitize_build_component(&backend);
     workspace_root.join(format!(".deps/llama-build/build-stage-abi-static-{suffix}"))
+}
+
+fn sanitize_build_component(component: &str) -> String {
+    component
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 fn default_backend(target: &str) -> &'static str {
