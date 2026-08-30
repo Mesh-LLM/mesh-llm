@@ -57,6 +57,9 @@ pub(crate) fn bind_serve_listener(bind_addr: SocketAddr) -> Result<TcpListener> 
     socket
         .listen(SERVE_LISTEN_BACKLOG)
         .with_context(|| format!("listen on {bind_addr} with backlog {SERVE_LISTEN_BACKLOG}"))?;
+    socket
+        .set_nonblocking(true)
+        .context("set serving listener nonblocking")?;
     let std_listener: std::net::TcpListener = socket.into();
     TcpListener::from_std(std_listener).context("register serving listener with tokio")
 }

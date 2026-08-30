@@ -1,6 +1,7 @@
 use crate::frontend::generation::ChatOutputStreamParser;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationActiveWorkReservation;
+use crate::frontend::generation::GenerationAdmissionScheduling;
 use crate::frontend::generation::GenerationAdmissionWork;
 use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationConcurrencyDecision;
@@ -17,7 +18,7 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::PreparedTextPrompt;
 use crate::frontend::generation::StageOpenAiBackend;
-use crate::frontend::generation::acquire_generation_permit_with_queue_reservation;
+use crate::frontend::generation::acquire_generation_permit_with_scheduling;
 use crate::frontend::generation::apply_reasoning_visibility;
 use crate::frontend::generation::chat_output_parser_required;
 use crate::frontend::generation::chat_response_from_generated_text;
@@ -401,12 +402,31 @@ impl GenerationAdmissionController {
         .await
     }
 
+    #[cfg(test)]
     async fn acquire_work(
         &self,
         ids: &OpenAiGenerationIds,
         cancellation: &openai_frontend::CancellationToken,
         admission_timeout: Duration,
         work: GenerationAdmissionWork,
+    ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+        self.acquire_scheduled_work(
+            ids,
+            cancellation,
+            admission_timeout,
+            work,
+            GenerationAdmissionScheduling::default(),
+        )
+        .await
+    }
+
+    async fn acquire_scheduled_work(
+        &self,
+        ids: &OpenAiGenerationIds,
+        cancellation: &openai_frontend::CancellationToken,
+        admission_timeout: Duration,
+        work: GenerationAdmissionWork,
+        scheduling: GenerationAdmissionScheduling,
     ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         let deadline = Instant::now()
             .checked_add(admission_timeout)
@@ -419,7 +439,13 @@ impl GenerationAdmissionController {
             return Err(generation_queue_timeout_error(admission_timeout));
         }
         let generation_permit = self
-            .acquire_generation_permit_until(deadline, admission_timeout, cancellation, work)
+            .acquire_generation_permit_until(
+                deadline,
+                admission_timeout,
+                cancellation,
+                work,
+                scheduling,
+            )
             .await?;
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
@@ -457,14 +483,19 @@ impl GenerationAdmissionController {
         admission_timeout: Duration,
         cancellation: &openai_frontend::CancellationToken,
         work: GenerationAdmissionWork,
+        scheduling: GenerationAdmissionScheduling,
     ) -> OpenAiResult<GenerationAdmissionPermit> {
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
         }
-        match self.generation_limit.clone().try_acquire_owned() {
-            Ok(permit) => {
+        match self
+            .generation_limit
+            .admission_queue()
+            .try_acquire_lane_if_idle(self.generation_limit.semaphore())
+        {
+            Ok(Some(permit)) => {
                 return Ok(GenerationAdmissionPermit {
-                    _lane: permit,
+                    _lane: self.generation_limit.wrap_permit(permit),
                     _active_work: self.generation_service_estimator.start_active(work),
                     predicted_wait_ms: Some(0.0),
                     demand_epoch: self.generation_limit.demand_epoch(),
@@ -474,10 +505,10 @@ impl GenerationAdmissionController {
                     started_at: Instant::now(),
                 });
             }
+            Ok(None) | Err(TryAcquireError::NoPermits) => {}
             Err(TryAcquireError::Closed) => {
                 return Err(OpenAiError::backend("generation lanes closed"));
             }
-            Err(TryAcquireError::NoPermits) => {}
         }
         let reservation = reserve_generation_queue(
             self.generation_queue_depth.clone(),
@@ -494,9 +525,11 @@ impl GenerationAdmissionController {
             .map_err(|predicted_wait_ms| {
                 generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
             })?;
-        let lane = acquire_generation_permit_with_queue_reservation(
+        let lane = acquire_generation_permit_with_scheduling(
             self.generation_limit.semaphore(),
+            self.generation_limit.admission_queue(),
             reservation,
+            scheduling,
             admission_timeout,
             deadline,
             cancellation,
@@ -681,6 +714,10 @@ fn insert_generation_admission_attrs(
         json!(queue_depth),
     );
     attrs.insert(
+        "skippy.scheduler.admission_waiting".to_string(),
+        json!(queue_depth),
+    );
+    attrs.insert(
         "llama_stage.generation_queue_capacity".to_string(),
         json!(queue_capacity),
     );
@@ -754,7 +791,9 @@ impl OpenAiBackend for StageOpenAiBackend {
         let template_options = chat_template_options(&request, &self.request_defaults)?;
         let parse_chat_output = chat_output_parser_required(&request, &template_options);
         let template_timer = PhaseTimer::start();
-        let prompt = self.prepare_chat_prompt(&request, template_options.clone())?;
+        let prompt = self
+            .prepare_chat_prompt_offloaded(&request, template_options.clone())
+            .await?;
         let mut template_attrs = self.openai_attrs(&ids);
         template_attrs.insert(
             "llama_stage.openai_operation".to_string(),
@@ -859,7 +898,9 @@ impl OpenAiBackend for StageOpenAiBackend {
         let parse_chat_output = chat_output_parser_required(&request, &template_options);
         let emit_reasoning = template_exposes_reasoning(&template_options);
         let template_timer = PhaseTimer::start();
-        let prompt = self.prepare_chat_prompt(&request, template_options)?;
+        let prompt = self
+            .prepare_chat_prompt_offloaded(&request, template_options)
+            .await?;
         let mut template_attrs = self.openai_attrs(&ids);
         template_attrs.insert(
             "llama_stage.openai_operation".to_string(),
@@ -1041,9 +1082,16 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         cancellation: &openai_frontend::CancellationToken,
         work: GenerationAdmissionWork,
+        scheduling: GenerationAdmissionScheduling,
     ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
         let result = GenerationAdmissionController::for_backend(self)
-            .acquire_work(ids, cancellation, self.generation_admission_timeout, work)
+            .acquire_scheduled_work(
+                ids,
+                cancellation,
+                self.generation_admission_timeout,
+                work,
+                scheduling,
+            )
             .await;
         if let Err(error) = &result {
             let mut attrs = self.openai_attrs(ids);
@@ -1073,6 +1121,41 @@ impl StageOpenAiBackend {
                 .emit("stage.openai_generation_admission_rejected", attrs);
         }
         result
+    }
+
+    fn generation_admission_scheduling(
+        &self,
+        prepared_text: Option<&PreparedTextPrompt>,
+        ids: &OpenAiGenerationIds,
+    ) -> GenerationAdmissionScheduling {
+        let Some(prepared) = prepared_text else {
+            return GenerationAdmissionScheduling::default();
+        };
+        let prompt_tokens = Arc::<[i32]>::from(prepared.token_ids.clone());
+        let Some(kv) = self.kv.as_ref() else {
+            return GenerationAdmissionScheduling::new(
+                prompt_tokens,
+                Arc::new(skippy_scheduler::CacheAffinity::default),
+            );
+        };
+        let prefill_tokens = prepared
+            .token_ids
+            .get(..prepared.token_ids.len().saturating_sub(1))
+            .unwrap_or_default();
+        if prefill_tokens.is_empty() {
+            return GenerationAdmissionScheduling::new(
+                prompt_tokens,
+                Arc::new(skippy_scheduler::CacheAffinity::default),
+            );
+        }
+        let base = self.local_kv_message_base(&ids.session_label, ids);
+        let identities = Arc::from(kv.lookup_identities(&self.config, &base, 0, prefill_tokens));
+        let kv = Arc::clone(kv);
+        let config = self.config.clone();
+        GenerationAdmissionScheduling::new(
+            prompt_tokens,
+            Arc::new(move || kv.peek_cache_affinity(&config, &identities)),
+        )
     }
 
     fn generation_admission_work(
@@ -1219,10 +1302,12 @@ impl StageOpenAiBackend {
         };
         let admission_work =
             self.generation_admission_work(&prompt, max_tokens, prepared_text.as_ref())?;
+        let admission_scheduling =
+            self.generation_admission_scheduling(prepared_text.as_ref(), &ids);
         let admit_timer = PhaseTimer::start();
         let cancellation = context.cancellation_token();
         let (permit, session_permit) = self
-            .acquire_generation_admission(&ids, &cancellation, admission_work)
+            .acquire_generation_admission(&ids, &cancellation, admission_work, admission_scheduling)
             .await?;
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
@@ -1306,9 +1391,11 @@ impl StageOpenAiBackend {
         let admit_timer = PhaseTimer::start();
         let admission_work =
             self.generation_admission_work(&prompt, max_tokens, prepared_text.as_ref())?;
+        let admission_scheduling =
+            self.generation_admission_scheduling(prepared_text.as_ref(), &ids);
         let cancellation = context.cancellation_token();
         let (permit, session_permit) = self
-            .acquire_generation_admission(&ids, &cancellation, admission_work)
+            .acquire_generation_admission(&ids, &cancellation, admission_work, admission_scheduling)
             .await?;
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
