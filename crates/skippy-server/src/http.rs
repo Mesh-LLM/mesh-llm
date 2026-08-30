@@ -34,6 +34,33 @@ use crate::{
 
 type KvRecordCandidate = ();
 
+/// Accept backlog for benchmark-facing serving listeners.
+///
+/// `TcpListener::bind` requests a backlog of 128, which a simultaneous
+/// c256 connect burst can overflow before the accept task is polled again
+/// (the kernel then RSTs the excess SYNs, surfacing client-side as
+/// `ECONNRESET` in well under a millisecond). Request an explicit larger
+/// backlog; hosts with a lower `somaxconn` clamp it as they see fit.
+const SERVE_LISTEN_BACKLOG: i32 = 1024;
+
+/// Bind a serving TCP listener with [`SERVE_LISTEN_BACKLOG`].
+pub(crate) fn bind_serve_listener(bind_addr: SocketAddr) -> Result<TcpListener> {
+    let domain = match bind_addr {
+        SocketAddr::V4(_) => socket2::Domain::IPV4,
+        SocketAddr::V6(_) => socket2::Domain::IPV6,
+    };
+    let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
+        .with_context(|| format!("create serving socket for {bind_addr}"))?;
+    socket
+        .bind(&bind_addr.into())
+        .with_context(|| format!("bind serving socket to {bind_addr}"))?;
+    socket
+        .listen(SERVE_LISTEN_BACKLOG)
+        .with_context(|| format!("listen on {bind_addr} with backlog {SERVE_LISTEN_BACKLOG}"))?;
+    let std_listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(std_listener).context("register serving listener with tokio")
+}
+
 #[derive(Clone)]
 struct AppState {
     config: Arc<StageConfig>,
@@ -188,7 +215,7 @@ pub async fn serve_stage_http_with_shutdown(
         bind_addr, stage_id, layer_start, layer_end, load_mode,
     );
 
-    let listener = TcpListener::bind(bind_addr).await?;
+    let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
