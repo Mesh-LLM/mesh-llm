@@ -784,6 +784,9 @@ impl DriverTokenizer {
                 include_output: plan.stages.len() == 1,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: args.stage_load_mode != "runtime-slice",
+                kv_offload: None,
+                kv_unified: None,
+                swa_full: None,
             },
         )
         .with_context(|| format!("open tokenizer model {}", model_path.display()))?;

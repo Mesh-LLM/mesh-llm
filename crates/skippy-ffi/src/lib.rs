@@ -32,8 +32,8 @@ pub use abi::{
     Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
     SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TensorRole,
-    runtime_abi_supported,
+    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO,
+    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
 };
 pub use activation::{ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationDesc, LogitBias, TensorInfo};
 pub use model::{

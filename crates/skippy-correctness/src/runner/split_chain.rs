@@ -291,6 +291,9 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
         flash_attn_type: runtime_flash_attn(args.flash_attn),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let stage0 = StageModel::open(&stage0_resolution.path, &stage0_config)
         .context("failed to open stage 0")?;

@@ -675,6 +675,9 @@ fn run_local_state_handoff(
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
         flash_attn_type: runtime_flash_attn(args.flash_attn),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let model = StageModel::open(&stage_resolution.path, &runtime_config)
         .context("failed to open local state handoff stage")?;
@@ -1420,6 +1423,9 @@ fn build_state_handoff_inputs(
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
         flash_attn_type: runtime_flash_attn(args.flash_attn),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let input_model = StageModel::open(&input_resolution.path, &input_config)
         .context("failed to open state handoff input producer")?;

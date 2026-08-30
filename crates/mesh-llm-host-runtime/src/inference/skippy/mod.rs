@@ -180,6 +180,10 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) n_threads: Option<usize>,
     pub(crate) n_threads_batch: Option<usize>,
     pub(crate) flash_attn_type: FlashAttentionType,
+    pub(crate) kv_offload: Option<bool>,
+    pub(crate) kv_unified: Option<bool>,
+    pub(crate) swa_full: Option<bool>,
+    pub(crate) cache_idle_slots: Option<u32>,
     pub(crate) generation_concurrency: usize,
     pub(crate) default_max_tokens: u32,
     pub(crate) kv_cache: Option<StageKvCacheConfig>,
@@ -281,6 +285,10 @@ impl SkippyModelLoadOptions {
             n_threads: None,
             n_threads_batch: None,
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             generation_concurrency: 1,
             default_max_tokens: DEFAULT_EMBEDDED_MAX_TOKENS,
             kv_cache: None,
@@ -331,6 +339,23 @@ impl SkippyModelLoadOptions {
 
     pub(crate) fn with_flash_attn_type(mut self, flash_attn_type: FlashAttentionType) -> Self {
         self.flash_attn_type = flash_attn_type;
+        self
+    }
+
+    pub(crate) fn with_kv_session_controls(
+        mut self,
+        kv_offload: Option<bool>,
+        kv_unified: Option<bool>,
+        swa_full: Option<bool>,
+    ) -> Self {
+        self.kv_offload = kv_offload;
+        self.kv_unified = kv_unified;
+        self.swa_full = swa_full;
+        self
+    }
+
+    pub(crate) fn with_cache_idle_slots(mut self, cache_idle_slots: Option<u32>) -> Self {
+        self.cache_idle_slots = cache_idle_slots;
         self
     }
 
@@ -1195,6 +1220,10 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         cache_type_k: options.cache_type_k.clone(),
         cache_type_v: options.cache_type_v.clone(),
         flash_attn_type: options.flash_attn_type,
+        kv_offload: options.kv_offload,
+        kv_unified: options.kv_unified,
+        swa_full: options.swa_full,
+        cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,

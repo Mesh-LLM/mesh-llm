@@ -8,9 +8,10 @@ use super::speculative::resolve_speculative_config;
 use super::support::{
     KvMacroDefaults, ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib,
     effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
-    pick_owned, pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
-    reject_unsupported_model_fit_controls, resolve_field_string, resolve_field_value,
-    resolve_prefix_cache, throughput_macro_defaults,
+    parse_kv_offload_string, pick_owned, pick_string, pick_string_owned, pick_value,
+    reject_unsupported_hardware_controls, reject_unsupported_model_fit_controls,
+    resolve_bool_or_auto, resolve_field_string, resolve_field_value, resolve_prefix_cache,
+    throughput_macro_defaults,
 };
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
@@ -197,6 +198,18 @@ fn resolve_model_fit_config(
     let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
     let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
     let kv_offload = resolve_kv_offload(context, &kv);
+    let kv_offload_resolved = parse_kv_offload_string(&kv_offload);
+    let kv_unified = resolve_kv_unified(context)?;
+    let swa_full = pick_owned(
+        context.model_fit.and_then(|fit| fit.swa_full),
+        context.global_model_fit.and_then(|fit| fit.swa_full),
+    );
+    let cache_idle_slots = pick_owned(
+        context.model_fit.and_then(|fit| fit.cache_idle_slots),
+        context
+            .global_model_fit
+            .and_then(|fit| fit.cache_idle_slots),
+    );
     let flash_attention = context
         .model_fit
         .and_then(|fit| fit.flash_attention)
@@ -213,8 +226,28 @@ fn resolve_model_fit_config(
         kv_cache_policy: kv.effective_policy,
         prefix_cache,
         kv_offload,
+        kv_offload_resolved,
+        kv_unified,
+        swa_full,
+        cache_idle_slots,
         flash_attention,
     })
+}
+
+fn resolve_kv_unified(context: &ResolverContext<'_>) -> Result<Option<bool>> {
+    let model = resolve_bool_or_auto(
+        context.model_fit.and_then(|fit| fit.kv_unified.as_ref()),
+        "model_fit.kv_unified",
+    )?;
+    if model.is_some() {
+        return Ok(model);
+    }
+    resolve_bool_or_auto(
+        context
+            .global_model_fit
+            .and_then(|fit| fit.kv_unified.as_ref()),
+        "defaults.model_fit.kv_unified",
+    )
 }
 
 struct KvDefaults {

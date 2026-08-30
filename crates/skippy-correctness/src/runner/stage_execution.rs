@@ -444,6 +444,9 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: runtime_flash_attn(args.flash_attn),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     ))
 }

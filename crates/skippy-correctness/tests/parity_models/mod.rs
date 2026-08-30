@@ -1100,6 +1100,9 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: path.filter_tensors_on_load,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     )
     .with_context(|| {

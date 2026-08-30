@@ -133,11 +133,11 @@ for the activity policy and privacy boundary.
 | `model_fit.batch` | integer | `0` = auto (`n_batch`) | both | model reload | wired | none |
 | `model_fit.ubatch` | integer | `0` = auto (`n_ubatch`); should not exceed `batch` | both | model reload | wired | none |
 | `model_fit.cache_type_k`<br>`model_fit.cache_type_v` | enum (dtype) | `f16` default; explicit value overrides `kv_cache_policy` | both | model reload | wired | none |
-| `model_fit.kv_cache_policy` | enum | `auto`, `quality`, `balanced`, `saver`; expands into cache dtypes | both | model reload | partial (expands cache K/V dtypes; the KV-offload part of the expansion is dropped) | none |
-| `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
-| `model_fit.kv_unified` | bool-or-`auto` | `auto` | both | model reload | unwired (`false`/`auto` are silently discarded; `true` fails at model load) | none |
+| `model_fit.kv_cache_policy` | enum | `auto`, `quality`, `balanced`, `saver`; expands into cache dtypes | both | model reload | wired | none |
+| `model_fit.kv_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
+| `model_fit.kv_unified` | bool-or-`auto` | `auto` | both | model reload | wired (recurrent/hybrid architectures still force this true natively) | none |
 | `model_fit.cache_ram_mib` | integer | unset (no cap) | both | model reload | unwired (any positive value fails at model load) | none |
-| `model_fit.cache_idle_slots` | integer | unset | both | model reload | unwired | none |
+| `model_fit.cache_idle_slots` | integer | unset (unbounded) | both | model reload | wired | none |
 | `model_fit.prompt_cache` | bool-or-`auto` | `auto` | both | model reload | wired | none |
 | `model_fit.prefix_cache.enabled` | boolean | unset (disabled) | both | model reload | wired | none |
 | `model_fit.prefix_cache.max_entries` | integer | runtime default | both | model reload | wired | none |
@@ -148,7 +148,7 @@ for the activity policy and privacy boundary.
 | `model_fit.prefix_cache.payload_mode` | enum | `resident-kv`, `kv-recurrent`, `full-state`, `auto` (default) | both | model reload | wired | none |
 | `model_fit.keep_tokens` | integer | unset | both | model reload | unwired | none |
 | `model_fit.context_shift` | bool-or-`auto` | `auto` | both | model reload | unwired | none |
-| `model_fit.swa_full` | boolean | unset | both | model reload | unwired (no validator, resolver, bridge, or reader consumes it) | none |
+| `model_fit.swa_full` | boolean | unset | both | model reload | wired | none |
 | `model_fit.checkpoint_interval`<br>`model_fit.checkpoint_count` | integer | unset (disabled) | both | model reload | unwired | none |
 | `model_fit.lookup_cache_static`<br>`model_fit.lookup_cache_dynamic` | string | unset | both | model reload | unwired | none |
 | `model_fit.flash_attention` | enum | `auto` (default), `disabled`, `enabled` | both | model reload | wired | none |

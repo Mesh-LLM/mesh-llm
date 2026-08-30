@@ -227,6 +227,9 @@ fn full_runtime_config(args: &VerifyWindowLocalArgs) -> Result<RuntimeConfig> {
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     })
 }
 
@@ -868,6 +871,9 @@ fn split_runtime_configs(
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let stage1 = RuntimeConfig {
         stage_index: 1,
@@ -892,6 +898,9 @@ fn split_runtime_configs(
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     Ok((stage0, stage1))
 }

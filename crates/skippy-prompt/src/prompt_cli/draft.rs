@@ -36,6 +36,9 @@ impl DraftRunner {
                 filter_tensors_on_load: true,
                 mlock: false,
                 mmap: Some(true),
+                kv_offload: None,
+                kv_unified: None,
+                swa_full: None,
             },
         )
         .with_context(|| format!("open draft model {}", path.display()))?;

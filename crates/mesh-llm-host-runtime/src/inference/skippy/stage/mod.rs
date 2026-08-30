@@ -827,6 +827,12 @@ fn stage_config(
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,
+        // Split/multi-node stage loads do not yet carry these controls over
+        // the wire; auto preserves today's derived native defaults.
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: matches!(
             load.load_mode,
             LoadMode::RuntimeSlice | LoadMode::LayerPackage

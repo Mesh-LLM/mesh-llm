@@ -1307,7 +1307,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
-- `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`
+- `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
 - `sampling.h`: `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`

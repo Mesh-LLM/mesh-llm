@@ -539,6 +539,342 @@ cache_type_v = "q4_0"
 }
 
 #[test]
+fn kv_unified_true_resolves_and_reaches_stage_config() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.model_fit]
+kv_unified = true
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("kv_unified = true should resolve instead of bailing");
+
+    resolved
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build with kv_unified = true");
+}
+
+#[test]
+fn swa_full_true_and_false_reach_different_stage_configs() {
+    let model_file = temp_model_file();
+    let mesh_config_true = parse_config(
+        r#"
+[defaults.model_fit]
+swa_full = true
+"#,
+    );
+    let resolved_true = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_true,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap();
+
+    let mesh_config_false = parse_config(
+        r#"
+[defaults.model_fit]
+swa_full = false
+"#,
+    );
+    let resolved_false = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_false,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap();
+
+    let stage_true = resolved_true
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    let stage_false = resolved_false
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+
+    assert_ne!(
+        stage_config_stable_json(&stage_true),
+        stage_config_stable_json(&stage_false),
+        "swa_full=true and swa_full=false must reach the stage config differently \
+         instead of being silently dropped"
+    );
+}
+
+#[test]
+fn kv_offload_true_and_false_reach_different_stage_configs() {
+    let model_file = temp_model_file();
+    let mesh_config_true = parse_config(
+        r#"
+[defaults.model_fit]
+kv_offload = true
+"#,
+    );
+    let resolved_true = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_true,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap();
+
+    let mesh_config_false = parse_config(
+        r#"
+[defaults.model_fit]
+kv_offload = false
+"#,
+    );
+    let resolved_false = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config_false,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap();
+
+    let stage_true = resolved_true
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    let stage_false = resolved_false
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+
+    assert_ne!(
+        stage_config_stable_json(&stage_true),
+        stage_config_stable_json(&stage_false),
+        "kv_offload=true and kv_offload=false must reach the stage config differently \
+         instead of being silently dropped"
+    );
+}
+
+/// JSON representation of a stage config with time-varying identifiers
+/// removed, so two configs built moments apart can be compared for
+/// deterministic content differences.
+fn stage_config_stable_json(config: &skippy_protocol::StageConfig) -> Value {
+    let mut json = serde_json::to_value(config).expect("stage config json");
+    if let Some(object) = json.as_object_mut() {
+        object.remove("run_id");
+        object.remove("topology_id");
+    }
+    json
+}
+#[test]
+fn cache_idle_slots_true_resolves_and_reaches_stage_config() {
+    let model_file = temp_model_file();
+    let mesh_config = parse_config(
+        r#"
+[defaults.model_fit]
+cache_idle_slots = 3
+"#,
+    );
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("cache_idle_slots should resolve instead of bailing");
+
+    let stage_config = resolved
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    assert_eq!(stage_config.cache_idle_slots, Some(3));
+}
+
+#[test]
+fn cache_idle_slots_defaults_layer_and_per_model_override_wins() {
+    let model_file = temp_model_file();
+    let global_two = parse_config(
+        r#"
+[defaults.model_fit]
+cache_idle_slots = 2
+"#,
+    );
+    let resolved_global = resolve_with_config_and_model_path(&global_two, model_file.path());
+    assert_eq!(resolved_global.model_fit.cache_idle_slots, Some(2));
+    let stage_global = resolved_global
+        .to_stage_config(Some(fake_package_identity(28)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    assert_eq!(stage_global.cache_idle_slots, Some(2));
+
+    let global_two_model_seven = parse_config(
+        r#"
+[defaults.model_fit]
+cache_idle_slots = 2
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.model_fit]
+cache_idle_slots = 7
+"#,
+    );
+    let resolved_override = resolve_with_config(&global_two_model_seven);
+    assert_eq!(resolved_override.model_fit.cache_idle_slots, Some(7));
+    assert_ne!(
+        resolved_global.model_fit.cache_idle_slots,
+        resolved_override.model_fit.cache_idle_slots
+    );
+
+    let unset = parse_config("");
+    let resolved_unset = resolve_with_config(&unset);
+    assert_eq!(resolved_unset.model_fit.cache_idle_slots, None);
+}
+
+fn resolve_with_config(mesh_config: &MeshConfig) -> ResolvedSkippyConfig {
+    resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: Path::new("/models/qwen.gguf"),
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap()
+}
+
+fn resolve_with_config_and_model_path(
+    mesh_config: &MeshConfig,
+    model_path: &Path,
+) -> ResolvedSkippyConfig {
+    resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path,
+        model_bytes: 10 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn kv_offload_resolved_reaches_model_load_options_via_kv_cache_policy() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.model_fit]
+kv_cache_policy = "saver"
+"#,
+    );
+
+    let model_file = temp_model_file();
+    let resolved = resolve_with_config_and_model_path(&mesh_config, model_file.path());
+    let load_options = resolved
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+
+    assert_eq!(resolved.model_fit.kv_offload_resolved, Some(true));
+    assert_eq!(load_options.kv_offload, Some(true));
+}
+
+#[test]
+fn kv_unified_defaults_layer_and_per_model_override_wins() {
+    let global_true = parse_config(
+        r#"
+[defaults.model_fit]
+kv_unified = true
+"#,
+    );
+    let model_file = temp_model_file();
+    let resolved_global = resolve_with_config_and_model_path(&global_true, model_file.path());
+    let load_options_global = resolved_global
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+    assert_eq!(resolved_global.model_fit.kv_unified, Some(true));
+    assert_eq!(load_options_global.kv_unified, Some(true));
+
+    let global_true_model_false = parse_config(
+        r#"
+[defaults.model_fit]
+kv_unified = true
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.model_fit]
+kv_unified = false
+"#,
+    );
+    let resolved_override = resolve_with_config(&global_true_model_false);
+    assert_eq!(resolved_override.model_fit.kv_unified, Some(false));
+
+    let unset = parse_config("");
+    let resolved_unset = resolve_with_config(&unset);
+    assert_eq!(resolved_unset.model_fit.kv_unified, None);
+}
+
+#[test]
+fn swa_full_defaults_layer_and_per_model_override_wins() {
+    let global_true = parse_config(
+        r#"
+[defaults.model_fit]
+swa_full = true
+"#,
+    );
+    let model_file = temp_model_file();
+    let resolved_global = resolve_with_config_and_model_path(&global_true, model_file.path());
+    let load_options_global = resolved_global
+        .to_model_load_options(SkippyTelemetryOptions::off())
+        .expect("model load options should build");
+    assert_eq!(resolved_global.model_fit.swa_full, Some(true));
+    assert_eq!(load_options_global.swa_full, Some(true));
+
+    let global_true_model_false = parse_config(
+        r#"
+[defaults.model_fit]
+swa_full = true
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.model_fit]
+swa_full = false
+"#,
+    );
+    let resolved_override = resolve_with_config(&global_true_model_false);
+    assert_eq!(resolved_override.model_fit.swa_full, Some(false));
+
+    let unset = parse_config("");
+    let resolved_unset = resolve_with_config(&unset);
+    assert_eq!(resolved_unset.model_fit.swa_full, None);
+}
+
+#[test]
 fn per_model_throughput_macro_beats_global_explicit_fields_unless_model_explicit_exists() {
     let mesh_config = parse_config(
         r#"

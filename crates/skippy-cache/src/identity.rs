@@ -88,6 +88,18 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
         Some(device) => hasher.update(device.backend_device.as_bytes()),
         None => hasher.update(b"<no-selected-device>"),
     };
+    hasher.update(b"kv-unified:");
+    hasher.update(match config.kv_unified {
+        Some(true) => b"true",
+        Some(false) => b"false",
+        None => b"absent",
+    });
+    hasher.update(b"swa-full:");
+    hasher.update(match config.swa_full {
+        Some(true) => b"true",
+        Some(false) => b"false",
+        None => b"absent",
+    });
 }
 
 /// Hash the identity of the *weights* a stage is serving.
@@ -253,6 +265,10 @@ mod identity_completeness_tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -301,15 +317,81 @@ mod identity_completeness_tests {
     fn flash_attention_changes_page_identity() {
         let enabled = StageConfig {
             flash_attn_type: FlashAttentionType::Enabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
         let disabled = StageConfig {
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
 
         assert_ne!(hash_of(&test_config()), hash_of(&enabled));
         assert_ne!(hash_of(&enabled), hash_of(&disabled));
+    }
+
+    #[test]
+    fn kv_unified_option_changes_page_and_prefix_identity() {
+        let absent = test_config();
+        let disabled = StageConfig {
+            kv_unified: Some(false),
+            ..test_config()
+        };
+        let enabled = StageConfig {
+            kv_unified: Some(true),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&absent), hash_of(&disabled));
+        assert_ne!(hash_of(&absent), hash_of(&enabled));
+        assert_ne!(hash_of(&disabled), hash_of(&enabled));
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+    }
+
+    #[test]
+    fn swa_full_option_changes_page_and_prefix_identity() {
+        let absent = test_config();
+        let disabled = StageConfig {
+            swa_full: Some(false),
+            ..test_config()
+        };
+        let enabled = StageConfig {
+            swa_full: Some(true),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&absent), hash_of(&disabled));
+        assert_ne!(hash_of(&absent), hash_of(&enabled));
+        assert_ne!(hash_of(&disabled), hash_of(&enabled));
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
     }
 
     #[test]
@@ -445,6 +527,10 @@ mod identity_stability_tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,

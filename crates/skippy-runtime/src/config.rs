@@ -2,7 +2,10 @@ use std::ffi::CString;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
-use skippy_ffi::{LoadMode, MtpSource as RawMtpSource, RuntimeConfig as RawRuntimeConfig};
+use skippy_ffi::{
+    LoadMode, MtpSource as RawMtpSource, RuntimeConfig as RawRuntimeConfig, TRISTATE_AUTO,
+    TRISTATE_FALSE, TRISTATE_TRUE,
+};
 
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
@@ -66,6 +69,25 @@ pub struct RuntimeConfig {
     pub include_output: bool,
     pub mtp_source: MtpSource,
     pub filter_tensors_on_load: bool,
+    /// K/V cache backend offload. `None` preserves llama.cpp's derived
+    /// default (offloaded); `Some` forces the value.
+    pub kv_offload: Option<bool>,
+    /// Whether the KV cache is unified across sequences/lanes. `None`
+    /// preserves the lane-count/recurrent-architecture derived default;
+    /// `Some` forces the value. Recurrent/hybrid architectures still force
+    /// this true natively regardless of the requested value.
+    pub kv_unified: Option<bool>,
+    /// Sliding-window-attention full (unshifted) cache window. `None`
+    /// preserves llama.cpp's built-in default (full).
+    pub swa_full: Option<bool>,
+}
+
+fn tristate(value: Option<bool>) -> i32 {
+    match value {
+        None => TRISTATE_AUTO,
+        Some(false) => TRISTATE_FALSE,
+        Some(true) => TRISTATE_TRUE,
+    }
 }
 
 impl RuntimeConfig {
@@ -162,6 +184,9 @@ impl RuntimeConfig {
                 glm_dsa_direct_sparse_decode_max_top_k: 0,
                 glm_dsa_dense_sparse_mask_max_bytes: 0,
                 glm_dsa_compact_flash_min_kv: 0,
+                kv_offload: tristate(self.kv_offload),
+                kv_unified: tristate(self.kv_unified),
+                swa_full: tristate(self.swa_full),
             },
             _selected_backend_device: selected_backend_device,
         })
@@ -234,6 +259,9 @@ impl Default for RuntimeConfig {
             include_output: true,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         }
     }
 }
@@ -436,6 +464,79 @@ mod tests {
         assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
         assert_eq!(raw.raw.n_threads, 12);
         assert_eq!(raw.raw.n_threads_batch, 6);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_defaults_kv_session_controls_to_auto() -> anyhow::Result<()> {
+        let raw = RuntimeConfig::default().as_raw()?.raw;
+
+        assert_eq!(raw.kv_offload, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.kv_unified, skippy_ffi::TRISTATE_AUTO);
+        assert_eq!(raw.swa_full, skippy_ffi::TRISTATE_AUTO);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_forces_kv_offload_when_configured() -> anyhow::Result<()> {
+        let enabled = RuntimeConfig {
+            kv_offload: Some(true),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+        let disabled = RuntimeConfig {
+            kv_offload: Some(false),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+
+        assert_eq!(enabled.kv_offload, skippy_ffi::TRISTATE_TRUE);
+        assert_eq!(disabled.kv_offload, skippy_ffi::TRISTATE_FALSE);
+        assert_ne!(enabled.kv_offload, disabled.kv_offload);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_forces_kv_unified_when_configured() -> anyhow::Result<()> {
+        let enabled = RuntimeConfig {
+            kv_unified: Some(true),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+        let disabled = RuntimeConfig {
+            kv_unified: Some(false),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+
+        assert_eq!(enabled.kv_unified, skippy_ffi::TRISTATE_TRUE);
+        assert_eq!(disabled.kv_unified, skippy_ffi::TRISTATE_FALSE);
+        assert_ne!(enabled.kv_unified, disabled.kv_unified);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_forces_swa_full_when_configured() -> anyhow::Result<()> {
+        let enabled = RuntimeConfig {
+            swa_full: Some(true),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+        let disabled = RuntimeConfig {
+            swa_full: Some(false),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+
+        assert_eq!(enabled.swa_full, skippy_ffi::TRISTATE_TRUE);
+        assert_eq!(disabled.swa_full, skippy_ffi::TRISTATE_FALSE);
+        assert_ne!(enabled.swa_full, disabled.swa_full);
         Ok(())
     }
 }
