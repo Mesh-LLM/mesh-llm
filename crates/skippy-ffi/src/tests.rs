@@ -5,7 +5,7 @@ use crate::{
 };
 
 #[cfg(target_pointer_width = "64")]
-use crate::MtmdContextParams;
+use crate::{MtmdContextParams, MtmdInputText};
 
 #[cfg(not(feature = "dynamic-runtime"))]
 use crate::mtmd_context_params_default;
@@ -60,13 +60,30 @@ fn rejects_major_and_minor_mismatches() {
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn mtmd_context_params_matches_native_layout() {
-    assert_eq!(size_of::<MtmdContextParams>(), 80);
-    assert_eq!(offset_of!(MtmdContextParams, batch_max_tokens), 56);
-    assert_eq!(offset_of!(MtmdContextParams, progress_callback), 64);
+    // Mirrors `struct mtmd_context_params` in tools/mtmd/mtmd.h. `device` sits
+    // second, right after `use_gpu`; leaving it out shifts everything below it
+    // by 8 bytes and makes the struct 16 bytes short, so the C side reads
+    // `progress_callback` from past the end of what Rust allocated.
+    assert_eq!(size_of::<MtmdContextParams>(), 96);
+    assert_eq!(offset_of!(MtmdContextParams, device), 8);
+    assert_eq!(offset_of!(MtmdContextParams, batch_max_tokens), 72);
+    assert_eq!(offset_of!(MtmdContextParams, progress_callback), 80);
     assert_eq!(
         offset_of!(MtmdContextParams, progress_callback_user_data),
-        72
+        88
     );
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn mtmd_input_text_matches_native_layout() {
+    // Mirrors `struct mtmd_input_text` in tools/mtmd/mtmd.h. `mtmd_tokenize`
+    // reads `text_len` to size the prompt, so a missing field here hands the
+    // native side a length built from uninitialised padding.
+    assert_eq!(size_of::<MtmdInputText>(), 24);
+    assert_eq!(offset_of!(MtmdInputText, text_len), 8);
+    assert_eq!(offset_of!(MtmdInputText, add_special), 16);
+    assert_eq!(offset_of!(MtmdInputText, parse_special), 17);
 }
 
 #[test]

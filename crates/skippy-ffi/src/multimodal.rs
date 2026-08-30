@@ -38,6 +38,11 @@ pub struct MtmdDecoderPos {
 #[derive(Debug, Clone, Copy)]
 pub struct MtmdInputText {
     pub text: *const c_char,
+    /// Length of `text` in bytes, excluding the trailing NUL. Added upstream by
+    /// llama.cpp `4114ba18b` (`mtmd: fix silent prompt truncation on embedded
+    /// NUL`); `mtmd_tokenize` reads it directly, so leaving it out makes the
+    /// native side size the prompt from uninitialised padding.
+    pub text_len: usize,
     pub add_special: bool,
     pub parse_special: bool,
 }
@@ -46,6 +51,10 @@ pub struct MtmdInputText {
 #[derive(Debug, Clone, Copy)]
 pub struct MtmdContextParams {
     pub use_gpu: bool,
+    /// `ggml_backend_dev_t`, an opaque device handle. Added upstream by
+    /// llama.cpp `681c29d36` (`mtmd: add --mmproj-device argument`); omitting
+    /// it shifts every following field and truncates the struct.
+    pub device: *mut c_void,
     pub print_timings: bool,
     pub n_threads: c_int,
     pub image_marker: *const c_char,

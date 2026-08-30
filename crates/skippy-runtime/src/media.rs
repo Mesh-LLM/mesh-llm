@@ -180,6 +180,7 @@ impl StageModel {
             .context("multimodal prompt contains an interior NUL byte")?;
         let input_text = skippy_ffi::MtmdInputText {
             text: prompt.as_ptr(),
+            text_len: prompt.as_bytes().len(),
             add_special: true,
             parse_special: true,
         };
@@ -349,6 +350,7 @@ impl StageModel {
             .context("multimodal prompt contains an interior NUL byte")?;
         let input_text = skippy_ffi::MtmdInputText {
             text: prompt.as_ptr(),
+            text_len: prompt.as_bytes().len(),
             add_special: true,
             parse_special: true,
         };
