@@ -925,9 +925,9 @@ pub struct RequestDefaultsConfig {
     #[serde(default)]
     pub frequency_penalty: Option<f64>,
     #[serde(default)]
-    pub dry: Option<ReservedObjectConfig>,
+    pub dry: Option<DrySamplingConfig>,
     #[serde(default)]
-    pub xtc: Option<ReservedObjectConfig>,
+    pub xtc: Option<XtcSamplingConfig>,
     #[serde(default)]
     pub adaptive: Option<ReservedObjectConfig>,
     #[serde(default)]
@@ -974,6 +974,30 @@ pub struct RequestDefaultsConfig {
     pub json_schema: Option<toml::Value>,
     #[serde(default)]
     pub logprobs: Option<toml::Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DrySamplingConfig {
+    #[serde(default)]
+    pub multiplier: Option<f64>,
+    #[serde(default)]
+    pub base: Option<f64>,
+    #[serde(default)]
+    pub allowed_length: Option<i32>,
+    #[serde(default)]
+    pub penalty_last_n: Option<i32>,
+    #[serde(default)]
+    pub sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct XtcSamplingConfig {
+    #[serde(default)]
+    pub probability: Option<f64>,
+    #[serde(default)]
+    pub threshold: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

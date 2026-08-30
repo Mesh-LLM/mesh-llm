@@ -43,15 +43,16 @@ pub use runtime_events::{
 };
 pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
+pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
 };
 pub use types::{
     ActivationDesc, ActivationFrame, ChatReasoningFormat, ChatTemplateJsonOptions,
     ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput,
-    GenerationSignalWindow, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
+    DrySamplingConfig, GenerationSignalWindow, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
     MediaPrefillChunkFrame, MediaPrefillFrame, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig,
-    TensorInfo, TokenSignal,
+    TensorInfo, TokenSignal, XtcSamplingConfig,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

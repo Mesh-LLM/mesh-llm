@@ -768,6 +768,26 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         frequency_penalty: sampling.frequency_penalty,
         repeat_penalty: sampling.repeat_penalty,
         penalty_last_n: sampling.penalty_last_n,
+        typical_p: sampling.typical_p,
+        top_nsigma: sampling.top_nsigma,
+        dynatemp_range: sampling.dynatemp_range,
+        dynatemp_exponent: sampling.dynatemp_exponent,
+        dry: skippy_runtime::DrySamplingConfig {
+            multiplier: sampling.dry_multiplier,
+            base: sampling.dry_base,
+            allowed_length: sampling.dry_allowed_length,
+            penalty_last_n: sampling.dry_penalty_last_n,
+            sequence_breakers: sampling.dry_sequence_breakers.clone(),
+        },
+        xtc: skippy_runtime::XtcSamplingConfig {
+            probability: sampling.xtc_probability,
+            threshold: sampling.xtc_threshold,
+        },
+        mirostat_mode: sampling.mirostat_mode,
+        mirostat_entropy: sampling.mirostat_entropy,
+        mirostat_learning_rate: sampling.mirostat_learning_rate,
+        samplers: sampling.samplers.clone(),
+        ignore_eos: sampling.ignore_eos,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling

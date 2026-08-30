@@ -489,35 +489,17 @@ fn integrated_full_surface_fixture_resolves_defaults_overrides_staged_and_runtim
 }
 
 #[test]
-fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage_staged_knobs() {
+fn integrated_invalid_fixture_accepts_request_defaults_and_rejects_single_stage_staged_knobs() {
     let repaired_batch = FULL_SURFACE_INVALID_FIXTURE.replace("batch = 0", "batch = 64");
     let repaired_device = format!(
         "{repaired_batch}\ndevice = \"CUDA0\"\n",
         repaired_batch = repaired_batch.trim_end()
     );
 
-    let unsupported_request = parse_config(&repaired_device);
+    let config = parse_config(&repaired_device);
     let model_file = temp_model_file();
-    let unsupported_error = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &unsupported_request,
-        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
-        model_path: model_file.path(),
-        model_bytes: 2 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-        compact_meta: None,
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(unsupported_error.contains("defaults.request_defaults.chat_template"));
-
-    let staged_only_config = parse_config(&repaired_device.replace(
-        "\n[defaults.request_defaults]\nchat_template = \"unsafe-template\"\n",
-        "\n",
-    ));
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &staged_only_config,
+        mesh_config: &config,
         model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
         model_path: model_file.path(),
         model_bytes: 2 * 1024 * 1024 * 1024,
@@ -526,7 +508,11 @@ fn integrated_invalid_fixture_fails_closed_for_request_defaults_and_single_stage
         package_generation: None,
         compact_meta: None,
     })
-    .expect("staged-only config should resolve before translation gating");
+    .expect("request defaults should resolve before staged-only translation gating");
+    assert_eq!(
+        resolved.request_defaults.chat_template.as_deref(),
+        Some("unsafe-template")
+    );
     let staged_only_error = resolved
         .to_model_load_options(SkippyTelemetryOptions::off())
         .unwrap_err()

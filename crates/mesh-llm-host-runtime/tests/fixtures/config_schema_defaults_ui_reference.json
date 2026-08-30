@@ -449,6 +449,13 @@
       }
     },
     {
+      "canonical_path": "defaults.request_defaults.dry",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.request_defaults.dynatemp_exponent",
       "support": "supported",
       "source": {
@@ -470,6 +477,13 @@
       }
     },
     {
+      "canonical_path": "defaults.request_defaults.grammar",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.request_defaults.ignore_eos",
       "support": "supported",
       "source": {
@@ -478,6 +492,13 @@
     },
     {
       "canonical_path": "defaults.request_defaults.jinja",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.json_schema",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -646,6 +667,13 @@
     },
     {
       "canonical_path": "defaults.request_defaults.typical_p",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.request_defaults.xtc",
       "support": "supported",
       "source": {
         "kind": "built_in"

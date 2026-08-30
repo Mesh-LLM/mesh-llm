@@ -226,17 +226,6 @@ fn rejected_setting(
     setting
 }
 
-fn unwired_setting(
-    path: &str,
-    value_schema: ConfigValueSchema,
-    description: &str,
-) -> ConfigSettingSchema {
-    let mut setting = basic_setting(path, value_schema);
-    setting.support = ConfigSupportState::Unwired;
-    setting.description = Some(description.to_string());
-    setting
-}
-
 fn hidden_setting(
     path: &str,
     value_schema: ConfigValueSchema,

@@ -857,6 +857,14 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
             }
         }
     }
+    validate_request_sampling_defaults(config, base_path)?;
+    validate_request_chat_defaults(config, base_path)
+}
+
+fn validate_request_sampling_defaults(
+    config: &RequestDefaultsConfig,
+    base_path: &str,
+) -> DiagnosticResult {
     validate_non_negative_f64(config.temperature, &format!("{base_path}.temperature"))?;
     validate_probability(config.top_p, &format!("{base_path}.top_p"))?;
     if let Some(top_k) = config.top_k
@@ -869,7 +877,14 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     }
     validate_probability(config.min_p, &format!("{base_path}.min_p"))?;
     validate_probability(config.typical_p, &format!("{base_path}.typical_p"))?;
-    validate_non_negative_f64(config.top_nsigma, &format!("{base_path}.top_nsigma"))?;
+    if let Some(value) = config.top_nsigma
+        && (!value.is_finite() || value < -1.0)
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.top_nsigma"),
+            format!("{base_path}.top_nsigma must be finite and greater than or equal to -1"),
+        ));
+    }
     validate_non_negative_f64(
         config.dynatemp_range,
         &format!("{base_path}.dynatemp_range"),
@@ -898,6 +913,57 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         config.frequency_penalty,
         &format!("{base_path}.frequency_penalty"),
     )?;
+    if let Some(dry) = &config.dry {
+        let multiplier_path = format!("{base_path}.dry.multiplier");
+        if dry.multiplier.is_some_and(|value| !value.is_finite()) {
+            return Err(validation_diagnostic(
+                &multiplier_path,
+                format!("{multiplier_path} must be finite"),
+            ));
+        }
+        validate_non_negative_f64(dry.multiplier, &multiplier_path)?;
+
+        let base_value_path = format!("{base_path}.dry.base");
+        if dry.base.is_some_and(|value| !value.is_finite()) {
+            return Err(validation_diagnostic(
+                &base_value_path,
+                format!("{base_value_path} must be finite"),
+            ));
+        }
+        validate_positive_f64(dry.base, &base_value_path)?;
+        if dry.allowed_length.is_some_and(|value| value < 0) {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.dry.allowed_length"),
+                format!("{base_path}.dry.allowed_length must be greater than or equal to 0"),
+            ));
+        }
+        if dry.penalty_last_n.is_some_and(|value| value < -1) {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.dry.penalty_last_n"),
+                format!("{base_path}.dry.penalty_last_n must be greater than or equal to -1"),
+            ));
+        }
+        if let Some(breakers) = &dry.sequence_breakers {
+            if breakers.iter().any(String::is_empty) {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.dry.sequence_breakers"),
+                    format!("{base_path}.dry.sequence_breakers must not contain empty values"),
+                ));
+            }
+            if breakers.len() > 8 || breakers.iter().any(|value| value.len() >= 16) {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.dry.sequence_breakers"),
+                    format!(
+                        "{base_path}.dry.sequence_breakers supports at most 8 values shorter than 16 bytes"
+                    ),
+                ));
+            }
+        }
+    }
+    if let Some(xtc) = &config.xtc {
+        validate_probability(xtc.probability, &format!("{base_path}.xtc.probability"))?;
+        validate_probability(xtc.threshold, &format!("{base_path}.xtc.threshold"))?;
+    }
     if let Some(mode) = &config.mirostat_mode {
         match mode {
             IntegerOrString::Integer(value) if *value == 1 || *value == 2 => {}
@@ -924,6 +990,42 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     )?;
     if let Some(samplers) = &config.samplers {
         validate_string_list(samplers, &format!("{base_path}.samplers"))?;
+        if samplers.len() > 16 {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.samplers"),
+                format!("{base_path}.samplers supports at most 16 entries"),
+            ));
+        }
+        for sampler in samplers {
+            validate_allowed(
+                sampler,
+                &[
+                    "penalties",
+                    "dry",
+                    "top_n_sigma",
+                    "top_k",
+                    "typical_p",
+                    "typ_p",
+                    "top_p",
+                    "min_p",
+                    "xtc",
+                    "temperature",
+                    "temp",
+                ],
+                &format!("{base_path}.samplers"),
+            )?;
+        }
+    }
+    if let Some(sequence) = &config.sampler_sequence
+        && let Some(invalid) = sequence.chars().find(|value| {
+            !value.is_whitespace()
+                && !matches!(value, 'e' | 'd' | 's' | 'k' | 'y' | 'p' | 'm' | 'x' | 't')
+        })
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.sampler_sequence"),
+            format!("{base_path}.sampler_sequence contains unsupported sampler code {invalid:?}"),
+        ));
     }
     if config.backend_sampling.is_some() {
         return Err(validation_diagnostic(
@@ -931,6 +1033,13 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
             format!("{base_path}.backend_sampling is documented-rejected and must not be set"),
         ));
     }
+    Ok(())
+}
+
+fn validate_request_chat_defaults(
+    config: &RequestDefaultsConfig,
+    base_path: &str,
+) -> DiagnosticResult {
     validate_optional_enum(
         config.reasoning_format.as_deref(),
         &["auto", "none", "deepseek", "deepseek-legacy", "hidden"],
@@ -960,16 +1069,54 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         config.chat_template_file.as_deref(),
         &format!("{base_path}.chat_template_file"),
     )?;
-    if config.grammar.is_some() {
+    if config.chat_template.is_some() && config.chat_template_file.is_some() {
         return Err(validation_diagnostic(
-            &format!("{base_path}.grammar"),
-            format!("{base_path}.grammar is documented-rejected and must not be set"),
+            base_path,
+            format!(
+                "{base_path}.chat_template and {base_path}.chat_template_file cannot both be set"
+            ),
         ));
     }
-    if config.json_schema.is_some() {
+    if config
+        .chat_template_kwargs
+        .as_ref()
+        .is_some_and(|value| !value.is_table())
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.chat_template_kwargs"),
+            format!("{base_path}.chat_template_kwargs must be a table"),
+        ));
+    }
+    if config
+        .prefill_assistant
+        .as_ref()
+        .is_some_and(|value| !value.is_str() && !value.is_table())
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.prefill_assistant"),
+            format!("{base_path}.prefill_assistant must be a string or table"),
+        ));
+    }
+    if config.grammar.as_ref().is_some_and(|value| !value.is_str()) {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.grammar"),
+            format!("{base_path}.grammar must be a string"),
+        ));
+    }
+    if config
+        .json_schema
+        .as_ref()
+        .is_some_and(|value| !value.is_table())
+    {
         return Err(validation_diagnostic(
             &format!("{base_path}.json_schema"),
-            format!("{base_path}.json_schema is documented-rejected and must not be set"),
+            format!("{base_path}.json_schema must be a table"),
+        ));
+    }
+    if config.grammar.is_some() && config.json_schema.is_some() {
+        return Err(validation_diagnostic(
+            base_path,
+            format!("{base_path}.grammar and {base_path}.json_schema cannot both be set"),
         ));
     }
     if config.logprobs.is_some() {
@@ -1132,7 +1279,7 @@ fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> DiagnosticResu
 mod tests {
     use super::*;
     use crate::diagnostic::legacy_validation_error_text;
-    use crate::{MeshConfig, validate_config, validate_config_diagnostics};
+    use crate::{DrySamplingConfig, MeshConfig, validate_config, validate_config_diagnostics};
 
     #[test]
     fn speculative_strategy_allows_package_declared_names() {
@@ -1629,5 +1776,71 @@ ngram_max_proposal_tokens = 16
 
         let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
         assert!(text.contains("ngram_min must be at least 3"), "{text}");
+    }
+
+    #[test]
+    fn dry_sequence_breakers_accept_whitespace_delimiters_but_reject_empty_values() {
+        let accepted: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.request_defaults.dry]
+sequence_breakers = ["\n", " ", ":"]
+"#,
+        )
+        .expect("DRY sequence breakers should parse");
+        validate_config(&accepted).expect("whitespace delimiters should remain executable");
+
+        let rejected: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.request_defaults.dry]
+sequence_breakers = [""]
+"#,
+        )
+        .expect("empty DRY sequence breaker should parse before validation");
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&rejected));
+        assert!(text.contains("must not contain empty values"), "{text}");
+    }
+
+    #[test]
+    fn dry_multiplier_and_base_reject_non_finite_values() {
+        for (field, dry) in [
+            (
+                "multiplier",
+                DrySamplingConfig {
+                    multiplier: Some(f64::NAN),
+                    ..DrySamplingConfig::default()
+                },
+            ),
+            (
+                "base",
+                DrySamplingConfig {
+                    base: Some(f64::INFINITY),
+                    ..DrySamplingConfig::default()
+                },
+            ),
+        ] {
+            let config = MeshConfig {
+                defaults: Some(ModelConfigDefaults {
+                    request_defaults: Some(RequestDefaultsConfig {
+                        dry: Some(dry),
+                        ..RequestDefaultsConfig::default()
+                    }),
+                    ..ModelConfigDefaults::default()
+                }),
+                ..MeshConfig::default()
+            };
+            let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+            assert!(
+                text.contains(&format!("defaults.request_defaults.dry.{field}")),
+                "missing DRY {field} path: {text}"
+            );
+            assert!(
+                text.contains("must be finite"),
+                "missing finite diagnostic: {text}"
+            );
+        }
     }
 }

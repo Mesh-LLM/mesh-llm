@@ -476,6 +476,11 @@ impl StageModel {
                 enable_thinking: options.enable_thinking,
                 reasoning_format: options.reasoning_format,
                 chat_template_kwargs: options.chat_template_kwargs,
+                chat_template: options.chat_template,
+                use_jinja: options.use_jinja,
+                grammar: options.grammar,
+                json_schema: options.json_schema,
+                skip_chat_parsing: options.skip_chat_parsing,
                 ..ChatTemplateJsonOptions::default()
             },
         )?;
@@ -529,6 +534,12 @@ impl StageModel {
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(ptr::null());
+        let chat_template = optional_c_string(options.chat_template.as_deref(), "chat template")?;
+        let grammar = optional_c_string(options.grammar.as_deref(), "grammar")?;
+        let json_schema = optional_c_string(options.json_schema.as_deref(), "JSON schema")?;
+        let chat_template_ptr = optional_c_string_ptr(&chat_template);
+        let grammar_ptr = optional_c_string_ptr(&grammar);
+        let json_schema_ptr = optional_c_string_ptr(&json_schema);
 
         let mut prompt_bytes = 0usize;
         let mut metadata_bytes = 0usize;
@@ -545,6 +556,11 @@ impl StageModel {
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
                 chat_template_kwargs_ptr,
+                chat_template_ptr,
+                options.use_jinja,
+                grammar_ptr,
+                json_schema_ptr,
+                options.skip_chat_parsing,
                 ptr::null_mut(),
                 0,
                 &mut prompt_bytes,
@@ -575,6 +591,11 @@ impl StageModel {
                 options.parallel_tool_calls,
                 reasoning_format_ptr,
                 chat_template_kwargs_ptr,
+                chat_template_ptr,
+                options.use_jinja,
+                grammar_ptr,
+                json_schema_ptr,
+                options.skip_chat_parsing,
                 prompt.as_mut_ptr().cast(),
                 prompt.len(),
                 &mut prompt_bytes,
@@ -652,4 +673,18 @@ impl Drop for StageModel {
             }
         }
     }
+}
+
+fn optional_c_string(value: Option<&str>, field: &str) -> Result<Option<CString>> {
+    value
+        .map(CString::new)
+        .transpose()
+        .with_context(|| format!("{field} contains an interior NUL byte"))
+}
+
+fn optional_c_string_ptr(value: &Option<CString>) -> *const std::ffi::c_char {
+    value
+        .as_ref()
+        .map(|value| value.as_ptr())
+        .unwrap_or(ptr::null())
 }

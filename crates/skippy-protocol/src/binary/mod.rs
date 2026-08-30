@@ -17,7 +17,8 @@ pub use codec::{
 pub use types::{
     ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_FLAG_RWKV7_V_FIRST,
     LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
-    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
+    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
+    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
     STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
@@ -387,16 +388,9 @@ mod tests {
             raw_bytes: Vec::new(),
         };
 
-        assert_eq!(
-            message.estimated_wire_bytes(),
-            STAGE_WIRE_FIXED_HEADER_BYTES
-                + STAGE_SAMPLING_CONFIG_BASE_BYTES
-                + 2 * STAGE_LOGIT_BIAS_WIRE_BYTES
-                + std::mem::size_of::<u32>()
-                + 2
-                + 3 * std::mem::size_of::<i32>()
-                + 16
-        );
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        assert_eq!(message.estimated_wire_bytes(), bytes.len());
     }
 
     #[test]
@@ -607,7 +601,7 @@ mod tests {
         write_stage_message(&mut bytes, &message).unwrap();
 
         assert_eq!(STAGE_STATE_HEADER_BYTES, 36);
-        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 40);
+        assert_eq!(STAGE_SAMPLING_CONFIG_BASE_BYTES, 108);
         assert_eq!(STAGE_WIRE_FIXED_HEADER_BYTES, 72);
         assert_eq!(
             bytes.len(),

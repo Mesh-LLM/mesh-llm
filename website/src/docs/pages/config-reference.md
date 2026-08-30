@@ -255,9 +255,9 @@ configuration should use typed per-model `topology`; explicit `--model` and
 ## Group 8: sampling, chat templates, reasoning, and request defaults
 
 Request precedence: request payload values still win. Config only supplies a
-fallback for fields the request body leaves absent or null; the merge never
-enters `StageConfig`, runtime load structs, protobuf, or lower runtime
-layers.
+fallback for fields the request body leaves absent or null. Sampling values
+are encoded into the stage protocol and native sampler chain; chat defaults
+are applied by the embedded OpenAI frontend before prompt rendering.
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
@@ -267,28 +267,30 @@ layers.
 | `request_defaults.top_p` | float | `0.0`–`1.0` | both | request-time | wired | none |
 | `request_defaults.top_k` | integer | `>= 0` | both | request-time | wired | none |
 | `request_defaults.min_p` | float | `0.0`–`1.0` | both | request-time | wired | none |
-| `request_defaults.typical_p` | float | `0.0`–`1.0` | both | request-time | unwired | none |
-| `request_defaults.top_nsigma` | float | backend range | both | request-time | unwired | none |
-| `request_defaults.dynatemp_range`<br>`request_defaults.dynatemp_exponent` | float | `>= 0.0` | both | request-time | unwired (native call hardcodes `0.0`/`1.0`) | none |
+| `request_defaults.typical_p` | float | `0.0`–`1.0` | both | request-time | wired | none |
+| `request_defaults.top_nsigma` | float | backend range | both | request-time | wired | none |
+| `request_defaults.dynatemp_range`<br>`request_defaults.dynatemp_exponent` | float | `>= 0.0` | both | request-time | wired | none |
 | `request_defaults.repeat_penalty` | float | `>= 0.0` | both | request-time | wired | none |
 | `request_defaults.repeat_last_n` | integer | `>= -1` | both | request-time | wired | none |
 | `request_defaults.presence_penalty`<br>`request_defaults.frequency_penalty` | float | backend range | both | request-time | wired | none |
-| `request_defaults.dry` | object (reserved, empty) | `{}` | both | request-time | unwired (the empty namespace parses; the real DRY fields fail TOML parsing) | none |
-| `request_defaults.xtc` | object (reserved, empty) | `{}` | both | request-time | unwired | none |
-| `request_defaults.mirostat_mode` | integer-or-enum | `disabled`, `1`, `2` | both | request-time | unwired | none |
-| `request_defaults.mirostat_entropy`<br>`request_defaults.mirostat_learning_rate` | float | `> 0.0` | both | request-time | unwired | none |
-| `request_defaults.samplers`<br>`request_defaults.sampler_sequence` | array of string / string | unset | both | request-time | unwired (native chain is hardcoded) | none |
+| `request_defaults.dry` | object | typed multiplier, base, length, window, and sequence breakers | both | request-time | wired | none |
+| `request_defaults.xtc` | object | probability and threshold | both | request-time | wired | none |
+| `request_defaults.mirostat_mode` | integer-or-enum | `disabled`, `1`, `2` | both | request-time | wired | none |
+| `request_defaults.mirostat_entropy`<br>`request_defaults.mirostat_learning_rate` | float | `> 0.0` | both | request-time | wired | none |
+| `request_defaults.samplers`<br>`request_defaults.sampler_sequence` | array of string / string | supported native sampler names | both | request-time | wired | none |
 | `request_defaults.seed` | integer | unset | both | request-time | wired | none |
-| `request_defaults.logit_bias` | object | unset | both | request-time | unwired | none |
-| `request_defaults.ignore_eos` | boolean | `false` | both | request-time | unwired | none |
-| `request_defaults.reasoning_format` | enum | `auto` (default), `none`, `deepseek`, `deepseek-legacy`, `hidden` | both | request-time | partial (reaches the native call, but a request cannot override it) | none |
+| `request_defaults.logit_bias` | object | unset | both | request-time | wired | none |
+| `request_defaults.ignore_eos` | boolean | `false` | both | request-time | wired | none |
+| `request_defaults.reasoning_format` | enum | `auto` (default), `none`, `deepseek`, `deepseek-legacy`, `hidden` | both | request-time | wired | none |
 | `request_defaults.reasoning_enabled` | bool-or-enum | `auto`, `off`, `on` | both | request-time | wired | none |
-| `request_defaults.reasoning_budget` | integer-or-enum | `auto`, `low`, `medium`, `high` | both | request-time | partial (acts only as an enabled/disabled gate; a numeric budget or effort tier is discarded) | none |
-| `request_defaults.chat_template`<br>`request_defaults.chat_template_file`<br>`request_defaults.jinja` | string / path / boolean | backend auto-detection default | both | request-time | unwired | none |
-| `request_defaults.chat_template_kwargs` | object | unset | both | request-time | partial (request-body kwargs work; a TOML-configured default is rejected) | none |
-| `request_defaults.skip_chat_parsing` | boolean | `false` | both | request-time | unwired | none |
-| `request_defaults.prefill_assistant` | object | unset | both | request-time | unwired | none |
-| `request_defaults.system_prompt` | string | unset | both | request-time | unwired | none |
+| `request_defaults.reasoning_budget` | integer-or-enum | `auto`, `low`, `medium`, `high` | both | request-time | wired | none |
+| `request_defaults.chat_template`<br>`request_defaults.chat_template_file`<br>`request_defaults.jinja` | string / path / boolean | backend auto-detection default | both | request-time | wired | none |
+| `request_defaults.chat_template_kwargs` | object | unset | both | request-time | wired | none |
+| `request_defaults.skip_chat_parsing` | boolean | `false` | both | request-time | wired | none |
+| `request_defaults.prefill_assistant` | string or object | unset | both | request-time | wired | none |
+| `request_defaults.system_prompt` | string | unset | both | request-time | wired | none |
+| `request_defaults.grammar` | string | unset; mutually exclusive with `json_schema` | both | request-time | wired | none |
+| `request_defaults.json_schema` | object | unset; mutually exclusive with `grammar` | both | request-time | wired | none |
 
 Conflict: `request_defaults.mirostat_mode` overrides `top_p`/`top_k`/`min_p`
 sampling at the backend when it selects mode `1` or `2`.
@@ -341,9 +343,7 @@ into an unrelated host-global setting.
 | `throughput.sleep_idle_seconds` | `RejectedField` | Power-management idle sleep stays operational, outside model config. |
 | `skippy.openai_frontend_mode` | `RejectedField` | Frontend surface mode belongs to deployment or service config. |
 | `request_defaults.backend_sampling` | `RejectedField` | Backend-owned sampler blocks are not modeled until a real sampling toggle exists end to end. |
-| `request_defaults.adaptive` | unwired (placeholder namespace) | Reserved for a future adaptive sampler; empty object only. |
-| `request_defaults.grammar` | `RejectedField` | Grammar constraint execution is not implemented in the embedded runtime yet. |
-| `request_defaults.json_schema` | `RejectedField` | JSON-schema response shaping is not implemented in the embedded runtime yet. |
+| `request_defaults.adaptive` | `RejectedField` | Adaptive sampling is reserved until it is implemented end to end. |
 | `request_defaults.logprobs` | `RejectedField` | Logprobs response support is not implemented yet. |
 | `multimodal.embeddings` | `RejectedField` | Embeddings is not an implemented product mode. |
 | `multimodal.reranking` | `RejectedField` | Reranking is not an implemented product mode. |

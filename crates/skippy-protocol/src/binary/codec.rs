@@ -2,7 +2,8 @@ use std::io::{self, Read, Write};
 
 use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
-    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
+    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
+    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
     StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
     StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
@@ -518,6 +519,26 @@ fn write_sampling_config(mut writer: impl Write, sampling: &StageSamplingConfig)
         write_i32(&mut writer, bias.token_id)?;
         write_f32(&mut writer, bias.bias)?;
     }
+    write_f32(&mut writer, sampling.typical_p)?;
+    write_f32(&mut writer, sampling.top_nsigma)?;
+    write_f32(&mut writer, sampling.dynatemp_range)?;
+    write_f32(&mut writer, sampling.dynatemp_exponent)?;
+    write_f32(&mut writer, sampling.dry_multiplier)?;
+    write_f32(&mut writer, sampling.dry_base)?;
+    write_i32(&mut writer, sampling.dry_allowed_length)?;
+    write_i32(&mut writer, sampling.dry_penalty_last_n)?;
+    write_string_list(
+        &mut writer,
+        &sampling.dry_sequence_breakers,
+        MAX_STAGE_DRY_SEQUENCE_BREAKERS,
+    )?;
+    write_f32(&mut writer, sampling.xtc_probability)?;
+    write_f32(&mut writer, sampling.xtc_threshold)?;
+    write_i32(&mut writer, sampling.mirostat_mode)?;
+    write_f32(&mut writer, sampling.mirostat_entropy)?;
+    write_f32(&mut writer, sampling.mirostat_learning_rate)?;
+    write_string_list(&mut writer, &sampling.samplers, MAX_STAGE_SAMPLERS)?;
+    write_u32(&mut writer, u32::from(sampling.ignore_eos))?;
     Ok(())
 }
 
@@ -534,6 +555,7 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
         repeat_penalty: read_f32(&mut reader)?,
         penalty_last_n: read_i32(&mut reader)?,
         logit_bias: Vec::new(),
+        ..StageSamplingConfig::default()
     };
     let logit_bias_count = usize::try_from(read_u32(&mut reader)?)
         .map_err(|_| invalid_data("logit bias count overflows usize"))?;
@@ -547,7 +569,64 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
             bias: read_f32(&mut reader)?,
         });
     }
+    sampling.typical_p = read_f32(&mut reader)?;
+    sampling.top_nsigma = read_f32(&mut reader)?;
+    sampling.dynatemp_range = read_f32(&mut reader)?;
+    sampling.dynatemp_exponent = read_f32(&mut reader)?;
+    sampling.dry_multiplier = read_f32(&mut reader)?;
+    sampling.dry_base = read_f32(&mut reader)?;
+    sampling.dry_allowed_length = read_i32(&mut reader)?;
+    sampling.dry_penalty_last_n = read_i32(&mut reader)?;
+    sampling.dry_sequence_breakers =
+        read_string_list(&mut reader, MAX_STAGE_DRY_SEQUENCE_BREAKERS)?;
+    sampling.xtc_probability = read_f32(&mut reader)?;
+    sampling.xtc_threshold = read_f32(&mut reader)?;
+    sampling.mirostat_mode = read_i32(&mut reader)?;
+    sampling.mirostat_entropy = read_f32(&mut reader)?;
+    sampling.mirostat_learning_rate = read_f32(&mut reader)?;
+    sampling.samplers = read_string_list(&mut reader, MAX_STAGE_SAMPLERS)?;
+    sampling.ignore_eos = read_u32(&mut reader)? != 0;
     Ok(sampling)
+}
+
+fn write_string_list(
+    mut writer: impl Write,
+    values: &[String],
+    maximum_count: usize,
+) -> io::Result<()> {
+    let count = values.len().min(maximum_count);
+    write_u32(&mut writer, count as u32)?;
+    for value in values.iter().take(count) {
+        let bytes = value.as_bytes();
+        if bytes.len() > MAX_STAGE_SAMPLING_STRING_BYTES {
+            return Err(invalid_data("sampling string exceeds maximum length"));
+        }
+        write_u32(&mut writer, bytes.len() as u32)?;
+        writer.write_all(bytes)?;
+    }
+    Ok(())
+}
+
+fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<Vec<String>> {
+    let count = usize::try_from(read_u32(&mut reader)?)
+        .map_err(|_| invalid_data("sampling string count overflows usize"))?;
+    if count > maximum_count {
+        return Err(invalid_data("sampling string count exceeds maximum"));
+    }
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length = usize::try_from(read_u32(&mut reader)?)
+            .map_err(|_| invalid_data("sampling string length overflows usize"))?;
+        if length > MAX_STAGE_SAMPLING_STRING_BYTES {
+            return Err(invalid_data("sampling string exceeds maximum length"));
+        }
+        let mut bytes = vec![0_u8; length];
+        reader.read_exact(&mut bytes)?;
+        values.push(
+            String::from_utf8(bytes).map_err(|_| invalid_data("sampling string is not UTF-8"))?,
+        );
+    }
+    Ok(values)
 }
 
 const REPLY_STATS_FIELD_COUNT: usize = 23;

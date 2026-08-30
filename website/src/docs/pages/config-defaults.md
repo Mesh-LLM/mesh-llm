@@ -73,6 +73,38 @@ presence_penalty = 0.0                   # Presence penalty
 frequency_penalty = 0.0                  # Frequency penalty
 stop          = []                       # Stop sequences
 typical_p     = 0.0                      # Typical sampling
+top_nsigma    = -1.0                     # Top-n-sigma filtering (-1 = disabled)
+dynatemp_range = 0.0                     # Dynamic temperature range
+dynatemp_exponent = 1.0                  # Dynamic temperature exponent
+repeat_last_n = -1                       # Repetition window (-1 = context size)
+mirostat_mode = "disabled"               # "disabled", 1, or 2
+mirostat_entropy = 5.0                    # Mirostat target entropy
+mirostat_learning_rate = 0.1              # Mirostat learning rate
+samplers      = ["penalties", "dry", "top_n_sigma", "top_k", "typical_p", "top_p", "min_p", "xtc", "temperature"]
+seed          = 0                         # 0 = random seed
+ignore_eos    = false                     # Suppress EOS when true
+reasoning_format = "auto"                # Template reasoning parser
+reasoning_enabled = "auto"               # "auto", "off", or "on"
+reasoning_budget = "auto"                # Token count or effort tier
+jinja         = true                      # Use Jinja chat rendering
+skip_chat_parsing = false                 # Return raw template output metadata
+# chat_template = "..."                  # Optional inline template override
+# chat_template_file = "/path/template.jinja"
+# system_prompt = "You are a concise assistant."
+# prefill_assistant = "The answer is"
+# grammar = "root ::= ..."               # Mutually exclusive with json_schema
+# json_schema = { type = "object" }       # Mutually exclusive with grammar
+
+[defaults.request_defaults.dry]
+multiplier = 0.0                          # 0 = disabled
+base = 1.75
+allowed_length = 2
+penalty_last_n = -1
+sequence_breakers = ["\n", ":", "\"", "*"]
+
+[defaults.request_defaults.xtc]
+probability = 0.0                         # 0 = disabled
+threshold = 0.1
 
 [defaults.multimodal]
 mmproj            = ""                   # Path or reference to a multimodal projector

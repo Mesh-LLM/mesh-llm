@@ -1,11 +1,14 @@
 use super::test_support::*;
 use super::*;
 use crate::inference::skippy::SkippyTelemetryOptions;
-use crate::plugin::{MeshConfig, ReasoningBudget, RequestDefaultsConfig};
+use crate::plugin::{
+    MeshConfig, ModelConfigDefaults, ModelConfigEntry, ReasoningBudget, RequestDefaultsConfig,
+};
 use serde_json::Value;
 use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
-use skippy_server::{EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
+use skippy_server::{EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
 use std::path::Path;
+use tempfile::NamedTempFile;
 
 fn resolve_qwen_config_with_request_defaults(
     mesh_config: &MeshConfig,
@@ -166,6 +169,62 @@ temperature = 0.4
     assert!(!object.contains_key("request_defaults"));
     assert!(!object.contains_key("temperature"));
     assert_eq!(object.get("ctx_size").and_then(Value::as_u64), Some(16384));
+}
+
+#[test]
+fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
+    let global = ModelConfigDefaults {
+        request_defaults: Some(RequestDefaultsConfig {
+            chat_template: Some("global-template".to_string()),
+            grammar: Some(toml::Value::String("global-grammar".to_string())),
+            ..RequestDefaultsConfig::default()
+        }),
+        ..ModelConfigDefaults::default()
+    };
+    let model = ModelConfigEntry {
+        request_defaults: Some(RequestDefaultsConfig {
+            chat_template_file: Some("model-template.jinja".to_string()),
+            json_schema: Some(toml::Value::String("model-schema".to_string())),
+            ..RequestDefaultsConfig::default()
+        }),
+        ..ModelConfigEntry::default()
+    };
+    let request = RequestDefaultsConfig {
+        chat_template: Some("request-template".to_string()),
+        json_schema: Some(toml::Value::String("request-schema".to_string())),
+        ..RequestDefaultsConfig::default()
+    };
+
+    let resolved = super::request_defaults::resolve_request_defaults(
+        Some(&global),
+        Some(&model),
+        Some(&request),
+    )
+    .expect("request defaults should resolve");
+    assert_eq!(resolved.chat_template.as_deref(), Some("request-template"));
+    assert_eq!(resolved.chat_template_file, None);
+    assert_eq!(
+        resolved.grammar, None,
+        "the request layer owns the structured-output slot"
+    );
+    assert_eq!(
+        resolved.json_schema,
+        Some(toml::Value::String("request-schema".to_string()))
+    );
+
+    let resolved =
+        super::request_defaults::resolve_request_defaults(Some(&global), Some(&model), None)
+            .expect("request defaults should resolve");
+    assert_eq!(resolved.chat_template, None);
+    assert_eq!(
+        resolved.chat_template_file.as_deref(),
+        Some("model-template.jinja")
+    );
+    assert_eq!(resolved.grammar, None);
+    assert_eq!(
+        resolved.json_schema,
+        Some(toml::Value::String("model-schema".to_string()))
+    );
 }
 
 #[test]
@@ -1466,16 +1525,46 @@ reasoning_enabled = "on"
 }
 
 #[test]
-fn unsupported_request_defaults_fail_closed_during_resolution() {
+fn sampling_chat_and_reasoning_defaults_reach_embedded_openai_translation() {
     let mesh_config = parse_config(
         r#"
 [defaults.request_defaults]
-chat_template = "unsafe-template"
+typical_p = 0.73
+top_nsigma = 1.7
+dynatemp_range = 0.21
+dynatemp_exponent = 1.4
+mirostat_mode = 2
+mirostat_entropy = 4.5
+mirostat_learning_rate = 0.08
+samplers = ["dry", "top_k", "typical_p", "temperature"]
+sampler_sequence = "dky t"
+ignore_eos = true
+reasoning_format = "hidden"
+reasoning_budget = 384
+chat_template = "{{ messages }}"
+jinja = true
+chat_template_kwargs = { custom_mode = 7 }
+skip_chat_parsing = true
+prefill_assistant = "draft answer"
+system_prompt = "configured system"
+grammar = "root ::= 'ok'"
+json_schema = { type = "object" }
+
+[defaults.request_defaults.dry]
+multiplier = 0.8
+base = 1.9
+allowed_length = 3
+penalty_last_n = 48
+sequence_breakers = ["\\n", ":"]
+
+[defaults.request_defaults.xtc]
+probability = 0.24
+threshold = 0.12
 "#,
     );
     let model_file = temp_model_file();
 
-    let err = resolve_skippy_config(SkippyConfigResolveRequest {
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &mesh_config,
         model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
         model_path: model_file.path(),
@@ -1485,10 +1574,50 @@ chat_template = "unsafe-template"
         package_generation: None,
         compact_meta: None,
     })
-    .unwrap_err()
-    .to_string();
+    .expect("sampling, chat, and reasoning defaults should resolve");
 
-    assert!(err.contains("defaults.request_defaults.chat_template"));
+    let openai = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("embedded OpenAI args should carry request defaults");
+    let defaults = openai.request_defaults;
+    assert_eq!(defaults.typical_p, Some(0.73));
+    assert_eq!(defaults.top_nsigma, Some(1.7));
+    assert_eq!(defaults.dynatemp_range, Some(0.21));
+    assert_eq!(defaults.dynatemp_exponent, Some(1.4));
+    assert_eq!(defaults.dry.as_ref().map(|dry| dry.multiplier), Some(0.8));
+    assert_eq!(defaults.xtc.as_ref().map(|xtc| xtc.probability), Some(0.24));
+    assert_eq!(defaults.mirostat_mode, Some(2));
+    assert_eq!(defaults.ignore_eos, Some(true));
+    assert_eq!(
+        defaults.reasoning_budget,
+        Some(EmbeddedReasoningBudget::Tokens(384))
+    );
+    assert_eq!(defaults.chat_template.as_deref(), Some("{{ messages }}"));
+    assert_eq!(defaults.skip_chat_parsing, Some(true));
+    assert_eq!(defaults.system_prompt.as_deref(), Some("configured system"));
+    assert_eq!(defaults.grammar, Some(serde_json::json!("root ::= 'ok'")));
+    assert_eq!(
+        defaults.json_schema,
+        Some(serde_json::json!({"type": "object"}))
+    );
+}
+
+#[test]
+fn oversized_chat_template_file_is_rejected_before_runtime_startup() {
+    let template = NamedTempFile::new().expect("temp chat template");
+    std::fs::write(template.path(), vec![b'x'; 1024 * 1024 + 1]).expect("write chat template");
+    let mesh_config = parse_config(&format!(
+        "[defaults.request_defaults]\nchat_template_file = {:?}\n",
+        template.path().display().to_string()
+    ));
+    let model_file = temp_model_file();
+    let resolved = resolve_qwen_config_with_request_defaults(&mesh_config, model_file.path(), None);
+
+    let error = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect_err("oversized chat template must be rejected");
+
+    assert!(error.to_string().contains("1048576-byte limit"));
 }
 
 #[test]

@@ -128,7 +128,7 @@ fn request_defaults_fill_omitted_chat_fields_only() {
     }))
     .unwrap();
 
-    apply_chat_request_defaults(&mut request, &test_request_defaults());
+    apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
     let sampling = chat_sampling_config(&request).unwrap();
     assert_eq!(request.temperature, Some(0.2));
@@ -162,6 +162,69 @@ fn request_defaults_fill_omitted_chat_fields_only() {
         GenerationTokenLimit::from_request(request.effective_max_tokens(), 64),
         GenerationTokenLimit::Default(64)
     );
+}
+
+#[test]
+fn structured_output_defaults_fill_one_mutually_exclusive_field() {
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        grammar: Some(json!("root ::= 'default'")),
+        json_schema: Some(json!({"type": "object"})),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}]
+    }))
+    .unwrap();
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+    assert_eq!(
+        request.extra.get("grammar"),
+        Some(&json!("root ::= 'default'"))
+    );
+    assert!(!request.extra.contains_key("json_schema"));
+    chat_template_options(&request, &defaults).expect("grammar default should remain valid");
+
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "grammar": "root ::= 'request'"
+    }))
+    .unwrap();
+    apply_chat_request_defaults(
+        &mut request,
+        &EmbeddedOpenAiRequestDefaults {
+            json_schema: Some(json!({"type": "object"})),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        request.extra.get("grammar"),
+        Some(&json!("root ::= 'request'"))
+    );
+    assert!(!request.extra.contains_key("json_schema"));
+    chat_template_options(&request, &defaults).expect("request grammar should remain valid");
+
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "json_schema": {"type": "object"}
+    }))
+    .unwrap();
+    apply_chat_request_defaults(
+        &mut request,
+        &EmbeddedOpenAiRequestDefaults {
+            grammar: Some(json!("root ::= 'default'")),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        request.extra.get("json_schema"),
+        Some(&json!({"type": "object"}))
+    );
+    assert!(!request.extra.contains_key("grammar"));
+    chat_template_options(&request, &defaults).expect("request schema should remain valid");
 }
 
 #[test]
@@ -221,7 +284,7 @@ fn explicit_chat_request_values_override_request_defaults() {
     }))
     .unwrap();
 
-    apply_chat_request_defaults(&mut request, &test_request_defaults());
+    apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
     let sampling = chat_sampling_config(&request).unwrap();
     assert_eq!(request.temperature, Some(0.8));
@@ -306,7 +369,7 @@ fn request_defaults_do_not_make_logprobs_executable() {
     }))
     .unwrap();
 
-    apply_chat_request_defaults(&mut request, &test_request_defaults());
+    apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
     let error = ensure_chat_runtime_features_supported(&request).unwrap_err();
     assert_eq!(
@@ -627,18 +690,64 @@ fn invalid_logit_bias_returns_openai_error() {
 }
 
 #[test]
-fn unsupported_extra_generation_fields_return_openai_error() {
+fn extended_sampling_fields_reach_runtime_sampling_config() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
-        "typical_p": 0.5
+        "typical_p": 0.73,
+        "top_nsigma": 1.7,
+        "dynatemp_range": 0.21,
+        "dynatemp_exponent": 1.4,
+        "dry": {
+            "multiplier": 0.8,
+            "base": 1.9,
+            "allowed_length": 3,
+            "penalty_last_n": 48,
+            "sequence_breakers": ["\\n", ":"]
+        },
+        "xtc": {"probability": 0.24, "threshold": 0.12},
+        "mirostat_mode": 2,
+        "mirostat_entropy": 4.5,
+        "mirostat_learning_rate": 0.08,
+        "samplers": ["dry", "top_k", "typical_p", "temperature"],
+        "sampler_sequence": "dkyt",
+        "ignore_eos": true
     }))
     .unwrap();
 
-    let error = chat_sampling_config(&request).unwrap_err();
+    let sampling = chat_sampling_config(&request).expect("extended sampling should normalize");
+    assert_eq!(sampling.typical_p, 0.73);
+    assert_eq!(sampling.top_nsigma, 1.7);
+    assert_eq!(sampling.dynatemp_range, 0.21);
+    assert_eq!(sampling.dynatemp_exponent, 1.4);
+    assert_eq!(sampling.dry.multiplier, 0.8);
+    assert_eq!(sampling.dry.base, 1.9);
+    assert_eq!(sampling.dry.allowed_length, 3);
+    assert_eq!(sampling.dry.penalty_last_n, 48);
+    assert_eq!(sampling.dry.sequence_breakers, ["\\n", ":"]);
+    assert_eq!(sampling.xtc.probability, 0.24);
+    assert_eq!(sampling.xtc.threshold, 0.12);
+    assert_eq!(sampling.mirostat_mode, 2);
+    assert_eq!(sampling.mirostat_entropy, 4.5);
+    assert_eq!(sampling.mirostat_learning_rate, 0.08);
     assert_eq!(
-        error.body().error.code.as_deref(),
-        Some("unsupported_model_feature")
+        sampling.samplers,
+        ["dry", "top_k", "typical_p", "temperature"]
+    );
+    assert!(sampling.ignore_eos);
+}
+
+#[test]
+fn backend_sampling_is_rejected_as_unsupported() {
+    let extra = std::collections::BTreeMap::from([(
+        "backend_sampling".to_string(),
+        json!({"strategy": "custom"}),
+    )]);
+    let error = sampling_config(Some(0.8), Some(0.95), None, None, None, None, &extra)
+        .expect_err("backend_sampling must not be silently ignored");
+    assert_eq!(
+        unsupported_code(error),
+        Some("unsupported_model_feature".to_string())
     );
 }
 
@@ -654,4 +763,102 @@ fn min_p_is_accepted_and_forwarded() {
     let sampling = chat_sampling_config(&request).unwrap();
     assert!(sampling.enabled);
     assert_eq!(sampling.min_p, 0.1);
+}
+
+#[test]
+fn extended_only_sampling_controls_enable_wire_sampling() {
+    let extra = std::collections::BTreeMap::from([
+        ("top_k".to_string(), json!(0)),
+        ("min_p".to_string(), json!(0.0)),
+        ("typical_p".to_string(), json!(0.7)),
+    ]);
+
+    let sampling = sampling_config(Some(1.0), Some(1.0), None, None, None, None, &extra)
+        .expect("extended sampling should normalize");
+
+    assert!(sampling.enabled);
+    assert!(wire_sampling_config(&sampling).is_some());
+}
+
+#[test]
+fn explicit_auto_reasoning_format_overrides_configured_default() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_format": "auto"
+    }))
+    .unwrap();
+    let defaults = EmbeddedOpenAiRequestDefaults {
+        reasoning_format: Some(EmbeddedReasoningFormat::Hidden),
+        ..EmbeddedOpenAiRequestDefaults::default()
+    };
+
+    apply_chat_request_defaults(&mut request, &defaults).unwrap();
+    let options = chat_template_options(&request, &defaults).unwrap();
+
+    assert_eq!(options.reasoning_format, Some(ChatReasoningFormat::Auto));
+}
+
+#[test]
+fn malformed_nested_sampling_values_are_rejected() {
+    for (field, value) in [
+        ("dry", json!({"multiplier": "high"})),
+        ("dry", json!({"sequence_breakers": ["ok", 7]})),
+        ("dry", json!({"multipler": 0.8})),
+        ("dry", json!({"sequence_breakers": ["1234567890123456"]})),
+        ("dry", json!({"sequence_breakers": ["🐍🐍🐍🐍"]})),
+        ("xtc", json!({"probability": "often"})),
+        ("xtc", json!({"probablity": 0.2})),
+    ] {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            (field): value
+        }))
+        .unwrap();
+
+        assert!(chat_sampling_config(&request).is_err(), "field={field}");
+    }
+}
+
+#[test]
+fn malformed_sampler_controls_are_rejected() {
+    for payload in [
+        json!({"samplers": "top_k"}),
+        json!({"samplers": ["top_k", "unknown"]}),
+        json!({"sampler_sequence": 7}),
+        json!({"sampler_sequence": "k?"}),
+    ] {
+        let mut body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+
+        assert!(chat_sampling_config(&request).is_err());
+    }
+}
+
+#[test]
+fn oversized_structured_output_is_rejected() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "grammar": "x".repeat(1_048_577)
+    }))
+    .unwrap();
+
+    assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
+
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "chat_template_kwargs": {"payload": "x".repeat(1_048_577)}
+    }))
+    .unwrap();
+
+    assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 }
