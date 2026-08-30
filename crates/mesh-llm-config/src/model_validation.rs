@@ -1358,6 +1358,62 @@ ctx_size = 8192
     }
 
     #[test]
+    fn speculative_hf_sources_reject_parent_directory_components() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_hf_repo: Some(" ../outside/draft".to_string()),
+                    draft_hf_file: Some(" ../draft.gguf".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
+    }
+
+    #[test]
+    fn speculative_hf_sources_trim_whitespace_before_rejecting_absolute_paths() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_hf_repo: Some(" /absolute/draft".to_string()),
+                    draft_hf_file: Some(" /draft.gguf".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
+    }
+
+    #[test]
+    fn draft_model_identifier_rejects_parent_directory_components() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_model: Some("../outside/draft:Q4_K_M".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
+    }
+
+    #[test]
     fn legacy_draft_model_path_emits_migration_warning() {
         let config: MeshConfig = toml::from_str(
             r#"

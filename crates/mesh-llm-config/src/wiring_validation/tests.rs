@@ -116,7 +116,7 @@ warmup = true
 }
 
 #[test]
-fn spec_default_true_produces_one_invalid_value_error() {
+fn spec_default_true_produces_no_diagnostic_at_path() {
     let config: MeshConfig = toml::from_str(
         r#"
 [defaults.speculative]
@@ -126,16 +126,10 @@ spec_default = true
     .expect("config should parse");
 
     let diagnostics = wiring_manifest_diagnostics(&config);
-    let matching = diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            diagnostic.path.as_ref().map(ConfigPath::render)
-                == Some("defaults.speculative.spec_default".to_string())
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(matching.len(), 1);
-    assert_eq!(matching[0].code, ConfigDiagnosticCode::InvalidValue);
-    assert_eq!(matching[0].severity, ConfigDiagnosticSeverity::Error);
+    assert!(diagnostics.iter().all(|diagnostic| {
+        diagnostic.path.as_ref().map(ConfigPath::render)
+            != Some("defaults.speculative.spec_default".to_string())
+    }));
 }
 
 #[test]

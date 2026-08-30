@@ -29,9 +29,6 @@ pub(super) fn resolve_speculative_config(
         model_config.and_then(|config| config.spec_default.as_ref()),
         global_config.and_then(|config| config.spec_default.as_ref()),
     );
-    if matches!(spec_default, Some(BoolOrAuto::Bool(true))) {
-        unsupported_speculative_field("speculative.spec_default = true")?;
-    }
     let has_explicit_strategy = model_config
         .and_then(|config| config.strategy.as_ref())
         .is_some()
@@ -40,12 +37,22 @@ pub(super) fn resolve_speculative_config(
             .is_some();
     let auto_defaults_enabled =
         !matches!(spec_default, Some(BoolOrAuto::Bool(false))) || has_explicit_strategy;
-    let mut draft_model_path = pick_owned(
-        model_config.and_then(|config| config.draft_model.clone()),
-        global_config.and_then(|config| config.draft_model.clone()),
-    )
-    .map(resolve_draft_model_path)
-    .map(PathBuf::from);
+    let mut draft_model_path = model_config
+        .and_then(configured_draft_source)
+        .or_else(|| global_config.and_then(configured_draft_source))
+        .map(resolve_draft_model_path)
+        .map(PathBuf::from);
+    let draft_selection_policy = pick_string(
+        model_config.and_then(|config| config.draft_selection_policy.as_deref()),
+        global_config.and_then(|config| config.draft_selection_policy.as_deref()),
+        Some("auto"),
+    );
+    if draft_model_path.is_none()
+        && draft_selection_policy == "auto"
+        && !matches!(spec_default, Some(BoolOrAuto::Bool(false)))
+    {
+        draft_model_path = discover_sibling_draft_model(model_path);
+    }
     let supports_native_mtp = package_generation_supports_native_mtp(package_generation)
         || direct_gguf_supports_native_mtp(model_path)
         || draft_model_path
@@ -68,13 +75,15 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.mode.as_deref()),
         Some("auto"),
     );
-    reject_unsupported_speculative_runtime_fields(model_config, global_config)?;
     let mut mode = mode;
-    let draft_max_tokens = super::support::pick_value(
+    let mut draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
         0,
     );
+    if mode == "draft" && draft_max_tokens == 0 {
+        draft_max_tokens = 3;
+    }
     let draft_min_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_min_tokens),
         global_config.and_then(|config| config.draft_min_tokens),
@@ -157,6 +166,16 @@ pub(super) fn resolve_speculative_config(
     })
 }
 
+fn configured_draft_source(config: &SpeculativeConfig) -> Option<String> {
+    config.draft_model.clone().or_else(|| {
+        config
+            .draft_hf_repo
+            .as_ref()
+            .zip(config.draft_hf_file.as_ref())
+            .map(|(repo, file)| format!("{repo}:{file}"))
+    })
+}
+
 fn resolve_native_mtp_strategy(
     strategy: String,
     auto_defaults_enabled: bool,
@@ -208,6 +227,54 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     let mut config = package_decode_config(input.requested_strategy, input.package_generation)?
         .unwrap_or_else(SpeculativeDecodeConfig::default);
     config.requested_strategy = input.requested_strategy.to_string();
+    config.draft_acceptance_threshold = pick_owned(
+        input
+            .model_config
+            .and_then(|config| config.draft_acceptance_threshold),
+        input
+            .global_config
+            .and_then(|config| config.draft_acceptance_threshold),
+    )
+    .unwrap_or_default();
+    config.draft_split_probability = pick_owned(
+        input
+            .model_config
+            .and_then(|config| config.draft_split_probability),
+        input
+            .global_config
+            .and_then(|config| config.draft_split_probability),
+    )
+    .unwrap_or_default();
+    config.draft_device = pick_owned(
+        input
+            .model_config
+            .and_then(|config| config.draft_device.clone()),
+        input
+            .global_config
+            .and_then(|config| config.draft_device.clone()),
+    );
+    config.draft_threads = pick_owned(
+        input.model_config.and_then(|config| config.draft_threads),
+        input.global_config.and_then(|config| config.draft_threads),
+    );
+    config.draft_cache_type_k = pick_string_owned(
+        input
+            .model_config
+            .and_then(|config| config.draft_cache_type_k.as_deref()),
+        input
+            .global_config
+            .and_then(|config| config.draft_cache_type_k.as_deref()),
+        Some("f16"),
+    );
+    config.draft_cache_type_v = pick_string_owned(
+        input
+            .model_config
+            .and_then(|config| config.draft_cache_type_v.as_deref()),
+        input
+            .global_config
+            .and_then(|config| config.draft_cache_type_v.as_deref()),
+        Some("f16"),
+    );
 
     if input.requested_strategy == "disabled" {
         // A model-level disable must ignore proposer, extension, and native-MTP
@@ -494,6 +561,7 @@ fn package_decode_config(
         ngram,
         extension,
         verify_window,
+        ..SpeculativeDecodeConfig::default()
     }))
 }
 
@@ -613,54 +681,6 @@ fn strategy_uses_native_mtp(
     }
 }
 
-fn reject_unsupported_speculative_runtime_fields(
-    model_config: Option<&SpeculativeConfig>,
-    global_config: Option<&SpeculativeConfig>,
-) -> Result<()> {
-    let unsupported_string_fields = [
-        (
-            model_config.and_then(|config| config.draft_hf_repo.clone()),
-            global_config.and_then(|config| config.draft_hf_repo.clone()),
-            "speculative.draft_hf_repo",
-        ),
-        (
-            model_config.and_then(|config| config.draft_hf_file.clone()),
-            global_config.and_then(|config| config.draft_hf_file.clone()),
-            "speculative.draft_hf_file",
-        ),
-        (
-            model_config.and_then(|config| config.draft_device.clone()),
-            global_config.and_then(|config| config.draft_device.clone()),
-            "speculative.draft_device",
-        ),
-        (
-            model_config.and_then(|config| config.draft_cache_type_k.clone()),
-            global_config.and_then(|config| config.draft_cache_type_k.clone()),
-            "speculative.draft_cache_type_k",
-        ),
-        (
-            model_config.and_then(|config| config.draft_cache_type_v.clone()),
-            global_config.and_then(|config| config.draft_cache_type_v.clone()),
-            "speculative.draft_cache_type_v",
-        ),
-    ];
-    for (model, global, field) in unsupported_string_fields {
-        if pick_owned(model, global).is_some() {
-            unsupported_speculative_field(field)?;
-        }
-    }
-    if pick_owned(
-        model_config.and_then(|config| config.draft_threads),
-        global_config.and_then(|config| config.draft_threads),
-    )
-    .is_some()
-    {
-        unsupported_speculative_field("speculative.draft_threads")?;
-    }
-
-    Ok(())
-}
-
 /// Default native-MTP proposal window when the operator sets no bound.
 ///
 /// Depth 1 is the only depth measured to be a win. On Qwen3.8-27B-UD-Q4_K_XL
@@ -692,6 +712,30 @@ fn resolve_draft_model_path(raw: String) -> String {
         return candidate.to_string_lossy().into_owned();
     }
     raw
+}
+
+fn discover_sibling_draft_model(model_path: &Path) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(model_path.parent()?)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path != model_path)
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+        })
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    let name = name.to_ascii_lowercase();
+                    name.contains("draft") || name.contains("eagle")
+                })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next()
 }
 
 fn resolve_draft_speculative_mode(
@@ -753,10 +797,6 @@ fn speculative_supports_native_mtp(speculative: &PackageSpeculativeDecodingInfo)
 fn direct_gguf_supports_native_mtp(model_path: &Path) -> bool {
     scan_gguf_compact_meta(model_path).is_some_and(|meta| meta.nextn_predict_layers > 0)
         || scan_gguf_tensor_names_any(model_path, |name| name.contains(".nextn.")).unwrap_or(false)
-}
-
-fn unsupported_speculative_field(field: &str) -> Result<()> {
-    bail!("skippy {field} is not supported by the embedded runtime");
 }
 
 fn normalize_pairing_fault(value: &str) -> String {

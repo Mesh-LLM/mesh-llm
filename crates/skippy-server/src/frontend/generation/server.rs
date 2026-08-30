@@ -360,12 +360,14 @@ fn embedded_openai_backend_with_scheduler(
         &args.runtime,
         &args.config,
         args.draft_n_gpu_layers,
+        &args.speculative,
     )?;
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,
         args.draft_n_gpu_layers,
         args.speculative_window,
+        &args.speculative,
     )?;
     let model_id = ModelId::new(
         args.model_id

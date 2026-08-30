@@ -234,23 +234,23 @@ configuration should use typed per-model `topology`; explicit `--model` and
 |---|---|---|---|---|---|---|
 | `speculative.strategy` | string | `auto` | both | model reload | wired | none |
 | `speculative.mode` | enum | `auto` (default), `disabled`, `draft` | both | model reload | wired (legacy draft-model and standalone N-gram compatibility path; prefer `strategy` for native-MTP and package selection) | none |
-| `speculative.draft_model`<br>`speculative.draft_hf_repo`<br>`speculative.draft_hf_file` | string | unset | both | model reload | unwired (fail during resolution) | none |
-| `speculative.draft_selection_policy` | enum | `manual`, `auto` | both | model reload | unwired | none |
+| `speculative.draft_model`<br>`speculative.draft_hf_repo`<br>`speculative.draft_hf_file` | string | unset | both | model reload | wired (resolves an explicit path/model reference or an HF repo/file pair) | none |
+| `speculative.draft_selection_policy` | enum | `manual`, `auto` | both | model reload | wired (`manual` uses the configured source; `auto` may select a sibling draft/EAGLE GGUF) | none |
 | `speculative.pairing_fault` | enum | `warn_disable`, `fail-open`/`fail_open`, `fail-closed`/`fail_closed` | both | model reload | wired | none |
 | `speculative.draft_max_tokens` | integer | native MTP uses `1` unless overridden | both | model reload | wired | none |
 | `speculative.draft_min_tokens` | integer | `0` | both | model reload | wired | none |
-| `speculative.draft_acceptance_threshold` | float | `0.0`–`1.0` | both | model reload | unwired (sweeps are no-ops) | none |
-| `speculative.draft_split_probability` | float | `0.0`–`1.0` | both | model reload | unwired (sweeps are no-ops) | none |
+| `speculative.draft_acceptance_threshold` | float | `0.0`–`1.0` | both | model reload | wired (minimum verified draft acceptance ratio; `0.0` keeps exact-token verification) | none |
+| `speculative.draft_split_probability` | float | `0.0`–`1.0` | both | model reload | wired (deterministic per-window probability for splitting draft verification spans) | none |
 | `speculative.draft_gpu_layers` | integer | planner or runtime default | both | model reload | wired (may propagate on the staged draft path) | none |
-| `speculative.draft_device`<br>`speculative.draft_threads` | string / integer | planner or runtime default | both | model reload | unwired (fail during resolution) | none |
-| `speculative.draft_cache_type_k`<br>`speculative.draft_cache_type_v` | enum (dtype) | runtime draft defaults | both | model reload | unwired (fail during resolution) | none |
+| `speculative.draft_device`<br>`speculative.draft_threads` | string / integer | target device / runtime default | both | model reload | wired (overrides the draft model's native loader device and thread counts) | none |
+| `speculative.draft_cache_type_k`<br>`speculative.draft_cache_type_v` | enum (dtype) | `f16` | both | model reload | wired (draft-model KV cache dtypes: `f16`, `q8_0`, or `q4_0`) | none |
 | `speculative.ngram_min`<br>`speculative.ngram_max` | integer | required for a direct N-gram plan; `0 < min <= max` | both | model reload | wired | none |
 | `speculative.ngram_proposer` | enum | `cache` (default), `suffix` | both | model reload | wired | none |
 | `speculative.ngram_max_proposal_tokens` | integer | N-gram maximum | both | model reload | wired | none |
 | `speculative.extension_max_tokens` | integer | N-gram output budget | both | model reload | wired (requires native MTP plus an N-gram proposer) | none |
 | `speculative.native_mtp_reject_cooldown_tokens`<br>`speculative.native_mtp_suppress_cooldown_drafts`<br>`speculative.native_mtp_suppress_cooldown_draft_limit` | integer / boolean | runtime defaults | both | model reload | wired | none |
 | `speculative.verify_window_min_tokens`<br>`speculative.verify_window_max_tokens`<br>`speculative.verify_window_pipeline_depth` | integer | package policy or runtime defaults; `min <= max` | both | model reload | wired | none |
-| `speculative.spec_default` | bool-or-`auto` | `false`/`auto`/unset participate in native-MTP auto selection | both | model reload | partial (explicit `true` fails during resolution) | none |
+| `speculative.spec_default` | bool-or-`auto` | `auto` | both | model reload | wired (`false` disables automatic speculation; `true`, `auto`, and omission enable supported automatic defaults) | none |
 
 ## Group 8: sampling, chat templates, reasoning, and request defaults
 

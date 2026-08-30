@@ -231,6 +231,7 @@ mod tests {
                 max_tokens: 6,
                 pipeline_depth: 2,
             },
+            ..SpeculativeDecodeConfig::default()
         }
     }
 

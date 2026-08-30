@@ -48,10 +48,19 @@ prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)
 [defaults.speculative]
 mode                 = "auto"            # "auto", "disabled", or "draft"
 draft_model          = ""                # Path or repo for a draft model
+draft_hf_repo        = ""                # Hugging Face draft repository
+draft_hf_file        = ""                # GGUF file within the draft repository
+draft_selection_policy = "auto"          # "auto" sibling discovery or "manual"
 draft_max_tokens     = 0                 # Maximum draft-token window
 draft_min_tokens     = 0                 # Minimum draft-token window
+draft_acceptance_threshold = 0.0         # Minimum accepted fraction (0.0 = no minimum threshold)
+draft_split_probability = 0.0            # Deterministic probability of splitting a draft
 draft_gpu_layers     = 0                 # Draft GPU layers (0 = auto)
 draft_device         = ""                # Draft device override
+# draft_threads      = 4                 # Optional draft thread count
+draft_cache_type_k   = "f16"             # Draft key-cache dtype
+draft_cache_type_v   = "f16"             # Draft value-cache dtype
+spec_default         = "auto"            # Automatic speculative defaults policy
 
 [defaults.request_defaults]
 max_tokens    = 0                        # Max tokens per request (0 = model default)
@@ -83,7 +92,7 @@ alias = ""                               # Optional model alias
 | `hardware` | Device assignment — runtime backend, GPU layers, tensor split |
 | `throughput` | Concurrency — parallel sequences, threading, flash attention |
 | `skippy` | Stage-split serving — stage packages, activation dtypes |
-| `speculative` | Speculative decoding — draft model, GPU layers |
+| `speculative` | Speculative decoding — draft source, verification policy, and runtime controls |
 | `request_defaults` | Sampling — temperature, tokens, penalties, stop sequences |
 | `multimodal` | Vision — CLIP model, projection, GPU assignment |
 | `advanced` | Low-level — slot count, hierarchical slots |
