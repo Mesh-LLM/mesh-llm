@@ -70,6 +70,21 @@ data. Put the pinned directories under `<tokenizer-root>/<model-key>`; `run`
 hashes every relative file and fails before timing if a directory differs from
 the checked-in digest.
 
+`scripts/materialize-competitive-inputs.sh` materializes every pinned input —
+GGUF models, tokenizer directories, per-model vLLM `config.json` files, the
+Thoughtworks parquet, and the deterministic prompt manifest — from Hugging Face
+into the HF cache and verifies each digest before linking a runnable input tree:
+
+```bash
+scripts/materialize-competitive-inputs.sh --root /path/to/competitive
+```
+
+The Python environment needs `transformers` v5 (tokenizer re-exports) and
+`duckdb` (manifest generation). deepseek/falcon tokenizer directories are
+transformers v5 re-exports of the pinned `vllm_hf_config` revisions — verified
+byte-identical to the checked-in digests — and granite's directory is the
+pinned snapshot minus `README.md`; the script header documents each provenance.
+
 Granite's alternate container digest is derived only after the model-specific
 value check succeeds. In a Python environment with `gguf`, `numpy`,
 `safetensors`, and `torch`:
