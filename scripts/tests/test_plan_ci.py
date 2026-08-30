@@ -283,6 +283,7 @@ class PlanCiTests(unittest.TestCase):
         plan = PLANNER.build_plan(payload, root=ROOT)
 
         self.assertEqual(plan["domains"], ["cli", "rust"])
+        self.assertIn("quality", plan["required_slices"])
         self.assertNotIn("web", plan["required_slices"])
         self.assertTrue(plan["signals"]["cli_surface_changed"])
         self.assertFalse(plan["signals"]["website_docs_changed"])
