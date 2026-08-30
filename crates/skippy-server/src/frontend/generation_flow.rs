@@ -118,6 +118,7 @@ impl StageOpenAiBackend {
             .collect::<Vec<_>>();
         let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
         let session_id = ids.session_label.clone();
+        let signal_window_tokens = self.generation_signal_window_tokens();
         let prefill_timer = PhaseTimer::start();
         let (prefill, mut token_signal, mut signal_window) = {
             let scheduler_session_id = session_id.clone();
@@ -141,7 +142,9 @@ impl StageOpenAiBackend {
                         )
                         .map_err(openai_backend_error)?;
                     let token_signal = runtime.last_token_signal(&scheduler_session_id).ok();
-                    let signal_window = runtime.signal_window(&scheduler_session_id, 16).ok();
+                    let signal_window = runtime
+                        .signal_window(&scheduler_session_id, signal_window_tokens)
+                        .ok();
                     let runtime_sessions_after = runtime.session_stats();
                     Ok((
                         prefill,
@@ -354,8 +357,9 @@ impl StageOpenAiBackend {
                                 .map_err(openai_backend_error)?;
                             let token_signal =
                                 runtime.last_token_signal(&scheduler_session_id).ok();
-                            let signal_window =
-                                runtime.signal_window(&scheduler_session_id, 16).ok();
+                            let signal_window = runtime
+                                .signal_window(&scheduler_session_id, signal_window_tokens)
+                                .ok();
                             let sessions_after = runtime.session_stats();
                             Ok((
                                 predicted,

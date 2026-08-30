@@ -228,6 +228,96 @@ fn mutually_exclusive_request_defaults_stop_lower_precedence_fill_in() {
 }
 
 #[test]
+fn multimodal_native_extensions_reach_stage_config_with_model_precedence() {
+    let model = temp_model_file();
+    let config = parse_config(
+        r#"
+[defaults.multimodal]
+mmproj_offload = false
+media_marker = "<defaults-media>"
+image_min_tokens = 16
+image_max_tokens = 1024
+batch_max_tokens = 256
+glm_dsa_policy = "auto"
+generation_signal_window = 8
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+
+[models.multimodal]
+mmproj_offload = true
+media_marker = "<model-media>"
+image_min_tokens = 64
+image_max_tokens = 2048
+batch_max_tokens = 512
+glm_dsa_policy = "v1"
+generation_signal_window = 24
+"#,
+    );
+
+    let resolved = resolve_qwen_config_with_request_defaults(&config, model.path(), None);
+    let stage = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    let stage = serde_json::to_value(stage).expect("stage config should serialize");
+
+    assert_eq!(stage["projector_use_gpu"], true);
+    assert_eq!(stage["media_marker"], "<model-media>");
+    assert_eq!(stage["image_min_tokens"], 64);
+    assert_eq!(stage["image_max_tokens"], 2048);
+    assert_eq!(stage["batch_max_tokens"], 512);
+    assert_eq!(stage["glm_dsa_policy"], "v1");
+    assert_eq!(stage["generation_signal_window"], 24);
+}
+
+#[test]
+fn multimodal_native_extensions_preserve_auto_and_omission() {
+    let model = temp_model_file();
+    let config = parse_config(
+        r#"
+[defaults.multimodal]
+mmproj_offload = "auto"
+glm_dsa_policy = "auto"
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+"#,
+    );
+
+    let resolved = resolve_qwen_config_with_request_defaults(&config, model.path(), None);
+    let stage = resolved
+        .to_stage_config(Some(fake_package_identity(24)), LoadMode::RuntimeSlice)
+        .expect("stage config should build");
+    let stage = serde_json::to_value(stage).expect("stage config should serialize");
+
+    assert!(stage["projector_use_gpu"].is_null());
+    assert!(stage["media_marker"].is_null());
+    assert!(stage["image_min_tokens"].is_null());
+    assert!(stage["image_max_tokens"].is_null());
+    assert!(stage["batch_max_tokens"].is_null());
+    assert_eq!(stage["glm_dsa_policy"], "auto");
+    assert!(stage["generation_signal_window"].is_null());
+}
+
+#[test]
+fn deprecated_image_marker_is_rejected_during_static_validation() {
+    let config = parse_config(
+        r#"
+[defaults.multimodal]
+image_marker = "<image>"
+"#,
+    );
+
+    let error = mesh_llm_config::validate_config(&config)
+        .expect_err("deprecated image_marker must be rejected before model loading");
+
+    assert_eq!(
+        error.to_string(),
+        "defaults.multimodal.image_marker is not supported because mtmd removed custom image markers; use defaults.multimodal.media_marker"
+    );
+}
+
+#[test]
 fn resolver_carries_memory_load_controls_into_single_stage_options() {
     let mesh_config = parse_config(
         r#"

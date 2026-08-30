@@ -212,6 +212,13 @@ pub(super) fn stage_load_to_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         projector_path: load.projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_to_proto(load.glm_dsa_policy) as i32,
+        generation_signal_window: load.generation_signal_window,
         selected_device: load.selected_device.map(stage_device_to_proto),
         bind_addr: load.bind_addr,
         activation_width: load.activation_width.max(0) as u32,
@@ -382,6 +389,13 @@ pub(super) fn stage_load_from_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         projector_path: load.projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_from_proto(load.glm_dsa_policy),
+        generation_signal_window: load.generation_signal_window,
         selected_device: load
             .selected_device
             .map(stage_device_from_proto)
@@ -1131,6 +1145,24 @@ pub(super) fn stage_flash_attn_type_from_proto(value: i32) -> skippy_protocol::F
         skippy_stage_proto::StageFlashAttnType::Enabled => {
             skippy_protocol::FlashAttentionType::Enabled
         }
+    }
+}
+
+fn stage_glm_dsa_policy_to_proto(
+    value: skippy_protocol::GlmDsaPolicy,
+) -> skippy_stage_proto::StageGlmDsaPolicy {
+    match value {
+        skippy_protocol::GlmDsaPolicy::Auto => skippy_stage_proto::StageGlmDsaPolicy::Auto,
+        skippy_protocol::GlmDsaPolicy::V1 => skippy_stage_proto::StageGlmDsaPolicy::V1,
+    }
+}
+
+fn stage_glm_dsa_policy_from_proto(value: i32) -> skippy_protocol::GlmDsaPolicy {
+    match skippy_stage_proto::StageGlmDsaPolicy::try_from(value)
+        .unwrap_or(skippy_stage_proto::StageGlmDsaPolicy::Auto)
+    {
+        skippy_stage_proto::StageGlmDsaPolicy::Auto => skippy_protocol::GlmDsaPolicy::Auto,
+        skippy_stage_proto::StageGlmDsaPolicy::V1 => skippy_protocol::GlmDsaPolicy::V1,
     }
 }
 

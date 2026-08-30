@@ -300,13 +300,14 @@ sampling at the backend when it selects mode `1` or `2`.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `multimodal.mmproj`<br>`hardware.mmproj` | path | unset | both | model reload | wired | `--mmproj` |
-| `multimodal.mmproj_url` | URL | unset | both | model reload | unwired (URL shape is validated; nothing fetches or materializes it) | none |
-| `multimodal.mmproj_offload`<br>`hardware.mmproj_offload` | bool-or-`auto` | `auto` | both | model reload | unwired (projector init always forces GPU) | none |
-| `multimodal.image_min_tokens`<br>`multimodal.image_max_tokens` | integer | family or backend default; `min <= max` | both | model reload | unwired (the Rust call site leaves library defaults in place) | none |
-
-Missing TOML for this group: image/media markers, encoder batch size
-(`batch_max_tokens`), GLM-DSA sparse-attention policy, and generation-signal
-aggregation window. None of these has a schema key yet.
+| `multimodal.mmproj_url` | Hugging Face file URL | unset | both | model reload | wired; downloads only the projector file | none |
+| `multimodal.mmproj_offload`<br>`hardware.mmproj_offload` | bool-or-`auto` | `auto` | both | model reload | wired | none |
+| `multimodal.image_min_tokens`<br>`multimodal.image_max_tokens` | integer | family or backend default; `min <= max` | both | model reload | wired | none |
+| `multimodal.image_marker` | string | unsupported; use `media_marker` | both | model reload | rejected during validation | none |
+| `multimodal.media_marker` | non-empty string | mtmd default when unset | both | model reload | wired | none |
+| `multimodal.batch_max_tokens` | integer `1..=2147483647` | mtmd default when unset | both | model reload | wired | none |
+| `multimodal.glm_dsa_policy` | `auto` or `v1` | `auto` | both | model reload | wired | none |
+| `multimodal.generation_signal_window` | integer `1..=4096` | `16` when unset | both | model reload | wired | none |
 
 ## Group 10: plugins
 

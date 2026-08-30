@@ -393,6 +393,27 @@
       }
     },
     {
+      "canonical_path": "defaults.multimodal.batch_max_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.generation_signal_window",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.glm_dsa_policy",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.multimodal.image_max_tokens",
       "support": "supported",
       "source": {
@@ -401,6 +422,13 @@
     },
     {
       "canonical_path": "defaults.multimodal.image_min_tokens",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.media_marker",
       "support": "supported",
       "source": {
         "kind": "built_in"

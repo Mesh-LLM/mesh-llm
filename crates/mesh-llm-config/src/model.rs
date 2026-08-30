@@ -1,4 +1,5 @@
 mod built_in_schema;
+mod multimodal;
 mod runtime;
 mod schema_types;
 
@@ -7,6 +8,8 @@ pub use built_in_schema::{
     canonicalize_built_in_config_identifier, canonicalize_built_in_config_path,
     resolve_built_in_config_identifier, resolve_built_in_config_path,
 };
+pub use multimodal::MultimodalConfig;
+pub(crate) use multimodal::merge_multimodal;
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
@@ -1000,29 +1003,6 @@ pub struct XtcSamplingConfig {
     pub threshold: Option<f64>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct MultimodalConfig {
-    #[serde(default)]
-    pub mmproj: Option<String>,
-    #[serde(default)]
-    pub mmproj_url: Option<String>,
-    #[serde(default)]
-    pub mmproj_offload: Option<BoolOrAuto>,
-    #[serde(default)]
-    pub image_min_tokens: Option<u32>,
-    #[serde(default)]
-    pub image_max_tokens: Option<u32>,
-    #[serde(default)]
-    pub embeddings: Option<toml::Value>,
-    #[serde(default)]
-    pub reranking: Option<toml::Value>,
-    #[serde(default)]
-    pub pooling: Option<toml::Value>,
-    #[serde(default)]
-    pub vocoder: Option<toml::Value>,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AdvancedConfig {
@@ -1398,19 +1378,6 @@ pub(crate) fn merge_throughput(
     }
 }
 
-pub(crate) fn merge_multimodal(
-    current: Option<MultimodalConfig>,
-    mmproj: Option<String>,
-) -> Option<MultimodalConfig> {
-    let mut config = current.unwrap_or_default();
-    config.mmproj = config.mmproj.or(mmproj);
-    if is_multimodal_empty(&config) {
-        None
-    } else {
-        Some(config)
-    }
-}
-
 fn is_model_fit_empty(config: &ModelFitConfig) -> bool {
     config == &ModelFitConfig::default()
 }
@@ -1421,10 +1388,6 @@ fn is_hardware_empty(config: &HardwareConfig) -> bool {
 
 fn is_throughput_empty(config: &ThroughputConfig) -> bool {
     config == &ThroughputConfig::default()
-}
-
-fn is_multimodal_empty(config: &MultimodalConfig) -> bool {
-    config == &MultimodalConfig::default()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

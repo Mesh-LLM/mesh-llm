@@ -8,10 +8,11 @@ use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
-    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
-    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
-    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, parse_cache_type,
+    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
+    GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchPhase, IterationBatchRequest, MediaInput,
+    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
+    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel,
+    StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -362,6 +363,15 @@ fn runtime_config_from_stage_config(
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,
         projector_path: config.projector_path.clone(),
+        projector_use_gpu: config.projector_use_gpu,
+        media_marker: config.media_marker.clone(),
+        image_min_tokens: config.image_min_tokens,
+        image_max_tokens: config.image_max_tokens,
+        batch_max_tokens: config.batch_max_tokens,
+        glm_dsa_policy: match config.glm_dsa_policy {
+            skippy_protocol::GlmDsaPolicy::Auto => RuntimeGlmDsaPolicy::Auto,
+            skippy_protocol::GlmDsaPolicy::V1 => RuntimeGlmDsaPolicy::V1,
+        },
         include_embeddings: config.layer_start == 0
             || (config.load_mode == LoadMode::LayerPackage && config.downstream.is_none()),
         include_output: config.downstream.is_none(),
@@ -485,6 +495,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let overrides = RuntimeLaunchOverrides {
@@ -560,6 +571,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -636,6 +648,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19001".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         };
 
         let runtime_config =
@@ -715,6 +728,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         };
         Some((package_path, config))
     }
@@ -928,6 +942,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let runtime_config =
@@ -937,6 +952,49 @@ mod tests {
         assert_eq!(runtime_config.n_threads_batch, None);
         assert_eq!(runtime_config.n_batch, None);
         assert_eq!(runtime_config.n_ubatch, None);
+    }
+
+    #[test]
+    fn runtime_config_preserves_multimodal_and_glm_dsa_native_controls() {
+        let config: StageConfig = serde_json::from_value(serde_json::json!({
+            "run_id": "run-a",
+            "topology_id": "topology-a",
+            "model_id": "model-a",
+            "model_path": "/tmp/model.gguf",
+            "projector_path": "/tmp/mmproj.gguf",
+            "projector_use_gpu": false,
+            "media_marker": "<media>",
+            "image_min_tokens": 32,
+            "image_max_tokens": 1536,
+            "batch_max_tokens": 384,
+            "glm_dsa_policy": "v1",
+            "generation_signal_window": 20,
+            "stage_id": "stage-0",
+            "stage_index": 0,
+            "layer_start": 0,
+            "layer_end": 24,
+            "ctx_size": 512,
+            "lane_count": 1,
+            "n_gpu_layers": -1,
+            "cache_type_k": "f16",
+            "cache_type_v": "f16",
+            "native_mtp_enabled": true,
+            "load_mode": "runtime-slice",
+            "bind_addr": "127.0.0.1:0"
+        }))
+        .expect("stage config should deserialize");
+
+        let runtime_config =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
+                .expect("runtime config should build");
+        let debug = format!("{runtime_config:?}");
+
+        assert!(debug.contains("projector_use_gpu: Some(false)"));
+        assert!(debug.contains("media_marker: Some(\"<media>\")"));
+        assert!(debug.contains("image_min_tokens: Some(32)"));
+        assert!(debug.contains("image_max_tokens: Some(1536)"));
+        assert!(debug.contains("batch_max_tokens: Some(384)"));
+        assert!(debug.contains("glm_dsa_policy: V1"));
     }
 
     #[test]
@@ -987,6 +1045,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let error = runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
@@ -1050,6 +1109,7 @@ mod tests {
                 stage_index: 1,
                 endpoint: "tcp://127.0.0.1:19001".to_string(),
             }),
+            ..StageConfig::default()
         };
 
         assert!(should_attach_package_projector(&config));

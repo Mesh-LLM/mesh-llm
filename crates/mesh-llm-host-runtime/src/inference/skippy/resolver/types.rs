@@ -42,6 +42,19 @@ pub(crate) struct ResolvedSkippyConfig {
     pub(crate) skippy: ResolvedSkippyExecutionConfig,
     pub(crate) speculative: ResolvedSpeculativeConfig,
     pub(crate) request_defaults: ResolvedRequestDefaultsConfig,
+    pub(crate) multimodal: ResolvedMultimodalConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedMultimodalConfig {
+    pub(crate) projector_url: Option<String>,
+    pub(crate) projector_use_gpu: Option<bool>,
+    pub(crate) media_marker: Option<String>,
+    pub(crate) image_min_tokens: Option<u32>,
+    pub(crate) image_max_tokens: Option<u32>,
+    pub(crate) batch_max_tokens: Option<u32>,
+    pub(crate) glm_dsa_policy: skippy_protocol::GlmDsaPolicy,
+    pub(crate) generation_signal_window: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

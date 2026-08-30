@@ -19,8 +19,8 @@ mod messages;
 mod validation;
 
 pub use config::{
-    ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, LoadMode,
-    PeerConfig, SplitMode, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig,
+    ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, GlmDsaPolicy,
+    LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig,
     StageKvCacheMode, StageKvCachePayload, StageTopology, StageTopologyEntry,
 };
 pub use messages::{

@@ -867,6 +867,18 @@ fn multimodal_settings(
             ConfigValueSchema::Integer,
         ),
         rejected_setting(
+            &format!("{prefix}.image_marker"),
+            ConfigValueSchema::String,
+            "mtmd removed custom image markers; use media_marker.",
+        ),
+        basic_setting(&format!("{prefix}.media_marker"), ConfigValueSchema::String),
+        basic_setting(&format!("{prefix}.batch_max_tokens"), ConfigValueSchema::Integer),
+        basic_setting(&format!("{prefix}.glm_dsa_policy"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.generation_signal_window"),
+            ConfigValueSchema::Integer,
+        ),
+        rejected_setting(
             &format!("{prefix}.embeddings"),
             ConfigValueSchema::object(),
             "Built-in multimodal embeddings controls are explicitly rejected from persisted config.",

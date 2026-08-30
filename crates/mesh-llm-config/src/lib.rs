@@ -716,8 +716,9 @@ gpu_id = "pci:0000:65:00.0"
 
     fn canonical_public_field_count() -> usize {
         let source_model = include_str!("model.rs");
+        let source_multimodal = include_str!("model/multimodal.rs");
         let source_runtime = include_str!("model/runtime.rs");
-        let sources = [source_model, source_runtime];
+        let sources = [source_model, source_multimodal, source_runtime];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),

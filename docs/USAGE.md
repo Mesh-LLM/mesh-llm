@@ -562,12 +562,16 @@ reasoning_budget  = "auto"   # integer token budget, or "auto"
 # --- Multimodal ----------------------------------------------------------
 [defaults.multimodal]
 mmproj           = "default-mmproj-f16.gguf"  # vision projector path or HF ref
+# mmproj_url     = "https://huggingface.co/org/repo/resolve/main/mmproj.gguf"
 mmproj_offload   = "auto"                     # bool or "auto"
-image_min_tokens = 0
+image_min_tokens = 1
 image_max_tokens = 4096
+media_marker = "<__media__>"
+batch_max_tokens = 1024
+glm_dsa_policy = "auto"                       # "auto" or "v1"
+generation_signal_window = 16
 
 # Schema-reserved (accepted, not yet wired):
-#   mmproj_url  — projector URL source
 #   embeddings, reranking, pooling, vocoder
 
 # --- Advanced server (operational — reject most in model config) ---------

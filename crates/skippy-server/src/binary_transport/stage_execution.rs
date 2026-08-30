@@ -988,6 +988,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
         }),
+        ..StageConfig::default()
     }
 }
 

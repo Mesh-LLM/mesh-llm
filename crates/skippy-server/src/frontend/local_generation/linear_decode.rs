@@ -405,6 +405,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let speculative = SpeculativeDecodeConfig::default();

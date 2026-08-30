@@ -77,6 +77,13 @@ fn load_request() -> StageLoadRequest {
         model_path: Some("/models/model.gguf".to_string()),
         source_model_bytes: Some(64 * 1024 * 1024 * 1024),
         projector_path: Some("/models/mmproj.gguf".to_string()),
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: Some(StageDevice {
             backend_device: "CUDA0".to_string(),
             stable_id: Some("GPU-123".to_string()),

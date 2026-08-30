@@ -28,7 +28,7 @@ use crate::frontend::{
     GenerationReceiptConfig, GenerationReceiptSink, GenerationStart, GenerationTermination,
 };
 use crate::kv_integration::KvStageIntegration;
-use crate::runtime_state::load_runtime;
+use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 
 // The real-model tests below are deliberately ignored by default. The
@@ -157,6 +157,7 @@ fn recurrent_test_backend(
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
@@ -201,6 +202,48 @@ fn single_prefill_sample_requires_prompt_to_fit_session_batch() {
     assert!(!prompt_fits_single_prefill_sample(1, 2048));
     assert!(prompt_fits_single_prefill_sample(2048, 2048));
     assert!(!prompt_fits_single_prefill_sample(2049, 2048));
+}
+
+#[test]
+fn local_generation_signal_window_uses_configured_value() {
+    let config = StageConfig {
+        run_id: "signal-window-test".to_string(),
+        topology_id: "signal-window-test".to_string(),
+        model_id: "signal-window-test".to_string(),
+        generation_signal_window: Some(37),
+        ..StageConfig::default()
+    };
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone()).unwrap();
+    let backend = StageOpenAiBackend {
+        runtime,
+        config,
+        telemetry,
+        model_id: "signal-window-test".to_string(),
+        default_max_tokens: 1,
+        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        ctx_size: 4096,
+        mode: OpenAiBackendMode::LocalRuntime,
+        draft: None,
+        speculative_window: 0,
+        adaptive_speculative_window: false,
+        ngram_max: 0,
+        speculative: SpeculativeDecodeConfig::default(),
+        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+        generation_queue_limit: 1,
+        generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(4096)),
+        hook_policy: None,
+        generation_receipt: None,
+        linear_proposal_ingress: None,
+        kv: None,
+        iteration_scheduler,
+    };
+
+    assert_eq!(backend.generation_signal_window_tokens(), 37);
 }
 
 #[test]
@@ -514,6 +557,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("receipt test runtime was not loaded"))?;

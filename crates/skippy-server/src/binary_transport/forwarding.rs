@@ -173,6 +173,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

@@ -698,7 +698,7 @@ async fn start_local_skippy_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_local_openai_skippy_config(
+    let mut resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         spec.model_bytes,
@@ -707,6 +707,7 @@ async fn start_local_skippy_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    resolved.materialize_projector_url().await?;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -792,7 +793,7 @@ async fn start_local_layer_package_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_local_openai_skippy_config(
+    let mut resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         package.source_model_bytes,
@@ -801,6 +802,7 @@ async fn start_local_layer_package_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    resolved.materialize_projector_url().await?;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",

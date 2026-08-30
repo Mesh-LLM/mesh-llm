@@ -88,6 +88,12 @@ pub struct RuntimeConfig {
     pub flash_attn_type: FlashAttentionType,
     pub load_mode: LoadMode,
     pub projector_path: Option<String>,
+    pub projector_use_gpu: Option<bool>,
+    pub media_marker: Option<String>,
+    pub image_min_tokens: Option<u32>,
+    pub image_max_tokens: Option<u32>,
+    pub batch_max_tokens: Option<u32>,
+    pub glm_dsa_policy: GlmDsaPolicy,
     pub include_embeddings: bool,
     pub include_output: bool,
     pub mtp_source: MtpSource,
@@ -119,6 +125,13 @@ pub struct RuntimeConfig {
     pub main_gpu: Option<u32>,
     /// How to split the model across multiple GPUs.
     pub split_mode: SplitMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GlmDsaPolicy {
+    #[default]
+    Auto,
+    V1,
 }
 
 fn tristate(value: Option<bool>) -> i32 {
@@ -217,12 +230,24 @@ impl RuntimeConfig {
                 include_output: self.include_output,
                 mtp_source: self.mtp_source.as_raw(),
                 selected_backend_device: selected_backend_device_ptr,
-                glm_dsa_policy_profile: 0,
+                glm_dsa_policy_profile: match self.glm_dsa_policy {
+                    GlmDsaPolicy::Auto => 0,
+                    GlmDsaPolicy::V1 => 1,
+                },
                 glm_dsa_policy_flags: 0,
-                glm_dsa_short_prefill_max_tokens: 0,
+                glm_dsa_short_prefill_max_tokens: match self.glm_dsa_policy {
+                    GlmDsaPolicy::Auto => 0,
+                    GlmDsaPolicy::V1 => 2048,
+                },
                 glm_dsa_direct_sparse_decode_max_top_k: 0,
-                glm_dsa_dense_sparse_mask_max_bytes: 0,
-                glm_dsa_compact_flash_min_kv: 0,
+                glm_dsa_dense_sparse_mask_max_bytes: match self.glm_dsa_policy {
+                    GlmDsaPolicy::Auto => 0,
+                    GlmDsaPolicy::V1 => 512 * 1024 * 1024,
+                },
+                glm_dsa_compact_flash_min_kv: match self.glm_dsa_policy {
+                    GlmDsaPolicy::Auto => 0,
+                    GlmDsaPolicy::V1 => 1,
+                },
                 kv_offload: tristate(self.kv_offload),
                 kv_unified: tristate(self.kv_unified),
                 swa_full: tristate(self.swa_full),
@@ -308,6 +333,12 @@ impl Default for RuntimeConfig {
             flash_attn_type: FlashAttentionType::Auto,
             load_mode: LoadMode::RuntimeSlice,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: GlmDsaPolicy::Auto,
             include_embeddings: true,
             include_output: true,
             mtp_source: MtpSource::Disabled,
@@ -611,6 +642,27 @@ mod tests {
         assert_eq!(raw.glm_dsa_compact_flash_min_kv, 0);
         assert_eq!(raw.mtp_source, RawMtpSource::Disabled);
         assert!(raw.selected_backend_device.is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_maps_glm_dsa_v1_policy() -> anyhow::Result<()> {
+        let config = RuntimeConfig {
+            glm_dsa_policy: GlmDsaPolicy::V1,
+            ..RuntimeConfig::default()
+        };
+
+        let raw = config.as_raw()?;
+
+        assert_eq!(raw.raw.glm_dsa_policy_profile, 1);
+        assert_eq!(raw.raw.glm_dsa_policy_flags, 0);
+        assert_eq!(raw.raw.glm_dsa_short_prefill_max_tokens, 2048);
+        assert_eq!(raw.raw.glm_dsa_direct_sparse_decode_max_top_k, 0);
+        assert_eq!(
+            raw.raw.glm_dsa_dense_sparse_mask_max_bytes,
+            512 * 1024 * 1024
+        );
+        assert_eq!(raw.raw.glm_dsa_compact_flash_min_kv, 1);
         Ok(())
     }
 

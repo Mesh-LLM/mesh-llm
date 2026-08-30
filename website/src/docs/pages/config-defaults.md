@@ -108,9 +108,14 @@ threshold = 0.1
 
 [defaults.multimodal]
 mmproj            = ""                   # Path or reference to a multimodal projector
+# mmproj_url      = "https://huggingface.co/org/repo/resolve/main/mmproj.gguf"
 mmproj_offload    = "auto"               # Projector offload policy
-image_min_tokens  = 0                     # Minimum image token budget
-image_max_tokens  = 0                     # Maximum image token budget
+image_min_tokens  = 1                     # Minimum image token budget
+image_max_tokens  = 4096                  # Maximum image token budget
+media_marker      = "<__media__>"         # Marker inserted at media positions
+batch_max_tokens  = 1024                  # Encoder output tokens per batch
+glm_dsa_policy    = "auto"                # auto or v1
+generation_signal_window = 16             # Tokens aggregated for generation signals
 
 [defaults.advanced.server]
 alias = ""                               # Optional model alias

@@ -158,7 +158,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     spec: &SplitGenerationLoadSpec<'_>,
     cleanup_on_error: &mut bool,
 ) -> Result<SplitRuntimeGenerationHandle> {
-    let settings = split_generation_load_settings(spec)?;
+    let settings = split_generation_load_settings(spec).await?;
     anyhow::ensure!(
         settings.stage0.node_id == spec.node.id(),
         "split topology stage 0 moved to {}; local coordinator is {}",
@@ -489,7 +489,14 @@ pub(super) fn split_runtime_stage_load_request(
             spec.model_path,
         )),
         source_model_bytes: Some(spec.package.source_model_bytes),
-        projector_path: spec.projector_path.clone(),
+        projector_path: resolved_config.projector_path.clone(),
+        projector_use_gpu: resolved_config.projector_use_gpu,
+        media_marker: resolved_config.media_marker.clone(),
+        image_min_tokens: resolved_config.image_min_tokens,
+        image_max_tokens: resolved_config.image_max_tokens,
+        batch_max_tokens: resolved_config.batch_max_tokens,
+        glm_dsa_policy: resolved_config.glm_dsa_policy,
+        generation_signal_window: resolved_config.generation_signal_window,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: settings.activation_width,
@@ -527,7 +534,7 @@ pub(super) fn split_runtime_stage_upstream(
     })
 }
 
-pub(super) fn split_generation_load_settings<'a>(
+pub(super) async fn split_generation_load_settings<'a>(
     spec: &'a SplitGenerationLoadSpec<'_>,
 ) -> Result<SplitGenerationLoadSettings<'a>> {
     let stage0 = spec
@@ -551,6 +558,7 @@ pub(super) fn split_generation_load_settings<'a>(
         // K/V default exactly like the split planner does.
         compact_meta: Some(spec.compact_meta),
     })?;
+    resolved.materialize_projector_url().await?;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {

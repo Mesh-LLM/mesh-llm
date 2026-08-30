@@ -44,7 +44,7 @@ impl StageModel {
         let media = config
             .projector_path
             .as_deref()
-            .map(|projector_path| MediaProjector::open(projector_path, raw))
+            .map(|projector_path| MediaProjector::open(projector_path, raw, config))
             .transpose()?;
         Ok(Self { raw, media })
     }

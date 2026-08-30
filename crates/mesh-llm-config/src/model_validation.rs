@@ -1194,6 +1194,40 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Diagnostic
             ),
         ));
     }
+    if config.image_marker.is_some() {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.image_marker"),
+            format!(
+                "{base_path}.image_marker is not supported because mtmd removed custom image markers; use {base_path}.media_marker"
+            ),
+        ));
+    }
+    if config.media_marker.as_deref().is_some_and(str::is_empty) {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.media_marker"),
+            format!("{base_path}.media_marker must not be empty"),
+        ));
+    }
+    validate_optional_u32_range(
+        config.batch_max_tokens,
+        &format!("{base_path}.batch_max_tokens"),
+        1,
+        i32::MAX as u32,
+    )?;
+    if let Some(policy) = config.glm_dsa_policy.as_deref()
+        && !matches!(policy, "auto" | "v1")
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.glm_dsa_policy"),
+            format!("{base_path}.glm_dsa_policy must be \"auto\" or \"v1\""),
+        ));
+    }
+    validate_optional_u32_range(
+        config.generation_signal_window,
+        &format!("{base_path}.generation_signal_window"),
+        1,
+        4096,
+    )?;
     if config.embeddings.is_some() {
         return Err(validation_diagnostic(
             &format!("{base_path}.embeddings"),
