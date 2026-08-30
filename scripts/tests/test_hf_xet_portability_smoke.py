@@ -69,7 +69,12 @@ count=$((count + 1))
 printf '%s\\n' "$count" >"$count_file"
 if [ "$count" -lt 3 ]; then echo transient >&2; exit 1; fi
 fixture="$HF_HOME/fixture.gguf"
-printf 'fixture' >"$fixture"
+python3 - "$fixture" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_bytes(b"x" * 1024 * 1024)
+PY
 printf '{"path":"%s"}\\n' "$fixture"
 """,
         )
