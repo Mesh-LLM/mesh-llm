@@ -7540,3 +7540,1129 @@ body.is-stage2-debug-scrubber-visible .stage2-scroll.is-stage2-scrubbable .stage
     opacity: 0;
   }
 }
+/* ─────────────────────────  CLI EXPLORER  ───────────────────────── */
+/*
+ * The explorer is intentionally a local extension of the docs surface. Keep
+ * every selector scoped: the site has older marketing and catalog components
+ * that use short names such as `.node`, `.search`, and `.toolbar`.
+ */
+.cli-explorer-page {
+  --cli-option: #fbbf24;
+  --cli-option-soft: rgba(245, 158, 11, 0.12);
+  --cli-positional: #a78bfa;
+  --cli-positional-soft: rgba(139, 92, 246, 0.12);
+  --cli-danger: #fca5a5;
+  --cli-explorer-viewport-height: 100svh;
+  width: auto;
+  min-width: 0;
+  min-height: calc(100vh - 64px);
+  margin-left: 304px;
+  padding: 0 32px 76px 28px;
+}
+
+.docs-body .cli-explorer-page.docs-shell {
+  display: block;
+  width: auto;
+  margin-left: 304px;
+  padding: 0 32px 76px 28px;
+}
+
+.docs-body .cli-explorer-page .cli-explorer-main.doc {
+  grid-column: auto;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  overflow: visible;
+}
+
+.cli-explorer-main {
+  width: 100%;
+  min-width: 0;
+}
+
+.cli-explorer-intro {
+  max-width: 980px;
+  margin: 0 0 28px;
+  padding-top: 42px;
+}
+
+.cli-explorer-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.cli-explorer-crumb a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: rgba(147, 197, 253, 0.55);
+  text-underline-offset: 3px;
+}
+
+.cli-explorer-crumb a:hover,
+.cli-explorer-crumb a:focus-visible {
+  color: var(--blue-3);
+}
+
+.cli-explorer-intro h1 {
+  max-width: 12ch;
+  margin: 0 0 18px;
+  color: var(--fg);
+  font-size: clamp(2.25rem, 4.5vw, 4rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+.cli-explorer-intro p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.cli-explorer-intro p + p {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.cli-explorer-intro code,
+.cli-explorer-guide a {
+  color: var(--blue-3);
+  font-family: var(--mono);
+}
+
+.cli-explorer-guide a {
+  text-decoration: underline;
+  text-decoration-color: rgba(147, 197, 253, 0.62);
+  text-underline-offset: 3px;
+}
+
+.cli-explorer-guide a:hover,
+.cli-explorer-guide a:focus-visible {
+  color: var(--fg);
+}
+
+.cli-explorer-app {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  min-width: 0;
+  height: calc(var(--cli-explorer-viewport-height) - 96px);
+  min-height: 720px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surface);
+  contain: layout paint;
+}
+
+@supports (height: 100dvh) {
+  .cli-explorer-page {
+    --cli-explorer-viewport-height: 100dvh;
+  }
+}
+
+.cli-explorer-toolbar {
+  position: relative;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.cli-explorer-search-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.cli-explorer-search {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 44px 0 42px;
+  border: 1px solid var(--line-3);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg-2);
+  color: var(--fg);
+  caret-color: var(--blue-2);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+.cli-explorer-search::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.cli-explorer-search:focus {
+  border-color: rgba(96, 165, 250, 0.76);
+}
+
+.cli-explorer-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  z-index: 1;
+  width: 17px;
+  height: 17px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.cli-explorer-shortcut {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  min-width: 22px;
+  padding: 2px 6px;
+  transform: translateY(-50%);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: 500 11px var(--mono);
+  line-height: 1.35;
+  text-align: center;
+}
+
+.cli-explorer-search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: 0;
+  z-index: 30;
+  display: none;
+  max-height: min(420px, 58vh);
+  overflow: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  scrollbar-color: var(--line-3) transparent;
+  scrollbar-width: thin;
+}
+
+.cli-explorer-search-results.is-open {
+  display: block;
+}
+
+.cli-explorer-search-result {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cli-explorer-search-result:last-child {
+  border-bottom: 0;
+}
+
+.cli-explorer-search-result:hover,
+.cli-explorer-search-result.is-active,
+.cli-explorer-search-result:focus-visible {
+  background: var(--surface-3);
+}
+
+.cli-explorer-result-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-2);
+}
+
+.cli-explorer-search-result[data-kind="option"] .cli-explorer-result-dot {
+  border-radius: 2px;
+  background: var(--cli-option);
+}
+
+.cli-explorer-search-result[data-kind="positional"] .cli-explorer-result-dot {
+  border-radius: 2px;
+  background: var(--cli-positional);
+  transform: rotate(45deg);
+}
+
+.cli-explorer-result-main {
+  min-width: 0;
+}
+
+.cli-explorer-result-name,
+.cli-explorer-result-path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-explorer-result-name {
+  color: var(--fg);
+  font: 500 12px var(--mono);
+}
+
+.cli-explorer-result-name mark {
+  border-radius: 2px;
+  background: rgba(96, 165, 250, 0.22);
+  color: var(--fg);
+}
+
+.cli-explorer-result-path {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cli-explorer-result-kind {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cli-explorer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.cli-explorer-tool-button,
+.cli-explorer-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.cli-explorer-tool-button:hover,
+.cli-explorer-toggle:hover {
+  border-color: var(--line-3);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.cli-explorer-tool-button:active,
+.cli-explorer-toggle:active {
+  transform: translateY(1px);
+}
+
+.cli-explorer-tool-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.cli-explorer-toggle {
+  gap: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cli-explorer-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cli-explorer-toggle[aria-pressed="true"] {
+  border-color: rgba(96, 165, 250, 0.58);
+  background: var(--blue-soft);
+  color: var(--blue-3);
+}
+
+.cli-explorer-orientation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.cli-explorer-orientation-label {
+  color: var(--muted);
+  font: 500 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cli-explorer-orientation-segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.cli-explorer-orientation-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 96px;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: 500 11px/1 var(--font);
+  white-space: nowrap;
+}
+
+.cli-explorer-orientation-button:last-child {
+  border-right: 0;
+}
+
+.cli-explorer-orientation-button:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.cli-explorer-orientation-button:active {
+  transform: translateY(1px);
+}
+
+.cli-explorer-orientation-button[aria-pressed="true"] {
+  background: var(--blue-soft);
+  color: var(--blue-3);
+}
+
+.cli-explorer-orientation-button svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.cli-explorer-orientation-button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--blue-2);
+  outline-offset: -3px;
+}
+
+.cli-explorer-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cli-explorer-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.cli-explorer-tree {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 540px;
+  cursor: grab;
+  outline: none;
+  pointer-events: all;
+  touch-action: none;
+}
+
+.cli-explorer-tree.is-dragging {
+  cursor: grabbing;
+}
+
+.cli-explorer-canvas-status {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  max-width: calc(100% - 28px);
+  pointer-events: none;
+}
+
+.cli-explorer-status-chip {
+  padding: 5px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cli-explorer-help-chip {
+  color: var(--muted);
+}
+
+.cli-explorer-legend {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  max-width: calc(100% - 28px);
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.cli-explorer-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cli-explorer-legend-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-2);
+}
+
+.cli-explorer-legend-mark.option {
+  border-radius: 2px;
+  background: var(--cli-option);
+}
+
+.cli-explorer-legend-mark.positional {
+  border-radius: 2px;
+  background: var(--cli-positional);
+  transform: rotate(45deg);
+}
+
+.cli-explorer-error {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  left: 16px;
+  z-index: 5;
+  max-width: 580px;
+  padding: 12px 14px;
+  border: 1px solid rgba(248, 113, 113, 0.68);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--cli-danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cli-explorer-error[hidden] {
+  display: none;
+}
+
+.cli-explorer-error a {
+  color: var(--blue-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cli-explorer-inspector {
+  min-width: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  scrollbar-color: var(--line-3) transparent;
+  scrollbar-width: thin;
+}
+
+.cli-explorer-inspector-inner {
+  min-width: 0;
+  padding: 24px 22px 36px;
+}
+
+.cli-explorer-kind-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cli-explorer-kind-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-2);
+}
+
+.cli-explorer-kind-marker.option {
+  border-radius: 2px;
+  background: var(--cli-option);
+}
+
+.cli-explorer-kind-marker.positional {
+  border-radius: 2px;
+  background: var(--cli-positional);
+  transform: rotate(45deg);
+}
+
+.cli-explorer-inspector h2 {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font: 600 1.2rem/1.3 var(--mono);
+  letter-spacing: -0.025em;
+}
+
+.cli-explorer-inspector-copy {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cli-explorer-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.cli-explorer-badge {
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cli-explorer-badge.hidden {
+  background: var(--cli-option-soft);
+  color: var(--cli-option);
+}
+
+.cli-explorer-badge.global,
+.cli-explorer-badge.required {
+  background: var(--blue-soft);
+  color: var(--blue-3);
+}
+
+.cli-explorer-badge.synthetic,
+.cli-explorer-badge.external {
+  color: var(--muted);
+}
+
+.cli-explorer-badge.deprecated {
+  color: var(--cli-danger);
+}
+
+.cli-explorer-command-path {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 20px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg-2);
+  font: 400 12px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.cli-explorer-command-path > span {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cli-explorer-pattern-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cli-explorer-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  margin: -5px -5px -5px auto;
+  padding: 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.cli-explorer-copy-button:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.cli-explorer-copy-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cli-explorer-meta-list {
+  display: grid;
+  gap: 0;
+  margin: 22px 0 0;
+}
+
+.cli-explorer-meta-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cli-explorer-meta-row dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cli-explorer-meta-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg-2);
+  font: 400 12px/1.5 var(--mono);
+}
+
+.cli-explorer-inspector-empty {
+  display: grid;
+  align-content: center;
+  min-height: 520px;
+  color: var(--muted);
+}
+
+.cli-explorer-inspector-empty h2 {
+  font-family: var(--font);
+  font-size: 18px;
+  letter-spacing: -0.015em;
+}
+
+.cli-explorer-inspector-empty p {
+  max-width: 28ch;
+  margin: 9px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cli-explorer-copy-status {
+  min-height: 22px;
+  padding: 4px 14px 6px;
+  color: var(--green-3);
+  font-size: 11px;
+}
+
+.cli-explorer-node text {
+  fill: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.cli-explorer-node .cli-explorer-node-shell {
+  fill: var(--surface-2);
+  stroke: var(--line-3);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  transition: fill 160ms ease, stroke 160ms ease;
+}
+
+.cli-explorer-node.command .cli-explorer-node-shell {
+  fill: var(--blue-soft);
+  stroke: rgba(96, 165, 250, 0.58);
+}
+
+.cli-explorer-node.root .cli-explorer-node-shell {
+  fill: var(--blue);
+  stroke: var(--blue-3);
+}
+
+.cli-explorer-node.root text {
+  fill: #fff;
+  font-weight: 600;
+}
+
+.cli-explorer-node.positional .cli-explorer-node-shell {
+  fill: var(--cli-positional-soft);
+  stroke: rgba(167, 139, 250, 0.58);
+}
+
+.cli-explorer-node.hidden .cli-explorer-node-shell {
+  stroke: var(--cli-option);
+  stroke-dasharray: 3 3;
+}
+
+.cli-explorer-node.selected .cli-explorer-node-shell {
+  stroke: var(--blue-2);
+  stroke-width: 2px;
+}
+
+.cli-explorer-node.search-hit .cli-explorer-node-shell {
+  stroke: var(--cli-option);
+  stroke-width: 2px;
+}
+
+.cli-explorer-node:hover .cli-explorer-node-shell,
+.cli-explorer-node:focus-visible .cli-explorer-node-shell {
+  fill: var(--surface-3);
+  stroke: var(--blue-2);
+}
+
+.cli-explorer-node.root:hover .cli-explorer-node-shell,
+.cli-explorer-node.root:focus-visible .cli-explorer-node-shell {
+  fill: #2563eb;
+}
+
+.cli-explorer-node .cli-explorer-node-count {
+  fill: var(--muted);
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cli-explorer-node .cli-explorer-node-disclosure {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8px;
+  pointer-events: none;
+}
+
+.cli-explorer-node.command .cli-explorer-node-disclosure {
+  stroke: var(--blue-3);
+}
+
+.cli-explorer-node.root .cli-explorer-node-disclosure {
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+.cli-explorer-node .cli-explorer-node-marker {
+  fill: var(--blue-2);
+  pointer-events: none;
+}
+
+.cli-explorer-node.option .cli-explorer-node-marker {
+  fill: var(--cli-option);
+}
+
+.cli-explorer-node.positional .cli-explorer-node-marker {
+  fill: var(--cli-positional);
+}
+
+.cli-explorer-node.root .cli-explorer-node-marker {
+  fill: #fff;
+}
+
+.cli-explorer-node.root .cli-explorer-node-count {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.cli-explorer-link,
+.cli-explorer-root-bus,
+.cli-explorer-branch-bus,
+.cli-explorer-mobile-branch-bus,
+.cli-explorer-vertical-bus {
+  fill: none;
+  stroke: var(--line-3);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.cli-explorer-link {
+  stroke: rgba(148, 163, 184, 0.72);
+}
+
+.cli-explorer-root-bus,
+.cli-explorer-mobile-branch-bus {
+  stroke: rgba(96, 165, 250, 0.88);
+}
+
+.cli-explorer-vertical-bus {
+  stroke: rgba(96, 165, 250, 0.94);
+}
+
+.cli-explorer-branch-bus {
+  stroke: rgba(96, 165, 250, 0.94);
+}
+
+.cli-explorer-link.to-option {
+  stroke: rgba(245, 158, 11, 0.58);
+}
+
+.cli-explorer-link.to-positional {
+  stroke: rgba(167, 139, 250, 0.58);
+}
+
+.cli-explorer-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cli-explorer-node:focus-visible,
+.cli-explorer-tool-button:focus-visible,
+.cli-explorer-toggle:focus-visible,
+.cli-explorer-orientation-button:focus-visible,
+.cli-explorer-copy-button:focus-visible,
+.cli-explorer-search-result:focus-visible,
+.cli-explorer-search:focus-visible {
+  outline: 2px solid var(--blue-2);
+  outline-offset: 3px;
+}
+
+.cli-explorer-noscript {
+  max-width: 72ch;
+  margin: 22px auto 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.cli-explorer-noscript h2 {
+  margin: 0 0 8px;
+  color: var(--fg);
+  font-size: 18px;
+}
+
+.cli-explorer-noscript p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.cli-explorer-noscript a {
+  color: var(--blue-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 1200px) {
+  .cli-explorer-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cli-explorer-controls {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 900px) {
+  .cli-explorer-app {
+    height: auto;
+    min-height: 0;
+  }
+
+  .cli-explorer-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cli-explorer-canvas-wrap {
+    height: calc(var(--cli-explorer-viewport-height) - 112px);
+    min-height: 620px;
+  }
+
+  .cli-explorer-inspector {
+    max-height: none;
+    overflow: visible;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .cli-explorer-inspector-empty {
+    min-height: 240px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .docs-body .cli-explorer-page.docs-shell {
+    width: min(100% - 24px, 1180px);
+    margin-inline: auto;
+    margin-left: auto;
+    padding: 0 0 64px;
+  }
+
+  .cli-explorer-page {
+    width: min(100% - 24px, 1180px);
+    margin-inline: auto;
+    margin-left: auto;
+    padding: 0 0 64px;
+  }
+
+  .cli-explorer-intro {
+    padding-top: 34px;
+  }
+}
+
+@media (max-width: 720px) {
+  .cli-explorer-page {
+    width: min(100% - 20px, 760px);
+  }
+
+  .cli-explorer-intro {
+    margin-bottom: 22px;
+    padding-top: 24px;
+  }
+
+  .cli-explorer-intro h1 {
+    font-size: clamp(2rem, 11vw, 3rem);
+  }
+
+  .cli-explorer-intro p {
+    font-size: 15px;
+  }
+
+  .cli-explorer-app {
+    min-height: 0;
+  }
+
+  .cli-explorer-toolbar {
+    padding: 10px;
+  }
+
+  .cli-explorer-controls {
+    display: grid;
+    grid-template-columns: 44px 44px minmax(0, 1.35fr) minmax(0, 0.9fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  .cli-explorer-orientation {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .cli-explorer-orientation-segmented {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
+  .cli-explorer-orientation-button {
+    min-width: 92px;
+    padding-inline: 8px;
+  }
+
+  /* Keep the open search menu clear of the two-row control rail.  The menu
+     remains anchored to the search field, but starts below the controls so
+     orientation, root flags, and hidden toggles stay pointer reachable while
+     a query is active. */
+  .cli-explorer-search-results {
+    top: calc(100% + 112px);
+  }
+
+  .cli-explorer-tool-button,
+  .cli-explorer-toggle {
+    min-width: 0;
+    padding-inline: 6px;
+  }
+
+  .cli-explorer-toggle {
+    gap: 5px;
+    overflow: hidden;
+  }
+
+  .cli-explorer-toggle span {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+
+  .cli-explorer-canvas-wrap {
+    height: calc(var(--cli-explorer-viewport-height) - 120px);
+    min-height: 560px;
+  }
+
+  .cli-explorer-tree {
+    min-height: 560px;
+  }
+
+  .cli-explorer-legend {
+    top: 10px;
+    left: 10px;
+    gap: 8px;
+  }
+
+  .cli-explorer-canvas-status {
+    bottom: 10px;
+    left: 10px;
+  }
+
+  .cli-explorer-help-chip {
+    display: none;
+  }
+
+  .cli-explorer-inspector-inner {
+    padding: 20px 16px 30px;
+  }
+
+  .cli-explorer-meta-row {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cli-explorer-page *,
+  .cli-explorer-page *::before,
+  .cli-explorer-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

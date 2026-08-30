@@ -1,0 +1,105 @@
+---
+title: CLI explorer
+description: Explore the mesh-llm command tree, flags, aliases, defaults, and relationships from the generated CLI inventory.
+layout: docs-base.njk
+cliExplorer: true
+---
+
+<main class="cli-explorer-page docs-shell">
+  {% include "docs-sidebar.njk" %}
+
+  <article class="cli-explorer-main doc" data-pagefind-body>
+    <header class="cli-explorer-intro" data-pagefind-body>
+      <div class="cli-explorer-crumb"><a href="/docs/">Docs</a><span aria-hidden="true">/</span><span>CLI explorer</span></div>
+      <h1>CLI explorer</h1>
+      <p class="cli-explorer-lead">Trace the live <code>mesh-llm</code> command surface as a navigable tree. Search a command or flag, reveal its ancestry, then inspect the generated metadata and copy the exact invocation.</p>
+      <p class="cli-explorer-guide">The explorer is generated from the CLI definition at build time. For task-oriented examples and explanations, continue to the <a href="/docs/pages/CLI/">CLI user guide</a>.</p>
+    </header>
+
+    <section class="cli-explorer-app" data-cli-explorer aria-labelledby="cli-explorer-workspace-title" data-pagefind-ignore="all">
+      <h2 id="cli-explorer-workspace-title" class="cli-explorer-sr-only">Interactive CLI hierarchy</h2>
+      <header class="cli-explorer-toolbar">
+        <div class="cli-explorer-search-wrap">
+          <svg class="cli-explorer-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          <label class="cli-explorer-sr-only" for="cli-explorer-search">Search commands and options</label>
+          <input id="cli-explorer-search" class="cli-explorer-search" type="search" autocomplete="off" placeholder="Search commands and options" aria-controls="cli-explorer-search-results" aria-expanded="false" aria-autocomplete="list" role="combobox">
+          <span class="cli-explorer-shortcut" aria-hidden="true">/</span>
+          <div id="cli-explorer-search-results" class="cli-explorer-search-results" role="listbox" aria-label="CLI search results" aria-hidden="true"></div>
+        </div>
+
+        <div class="cli-explorer-controls" aria-label="Tree controls">
+          <div class="cli-explorer-orientation" role="group" aria-label="Tree orientation">
+            <span class="cli-explorer-orientation-label">Layout</span>
+            <div class="cli-explorer-orientation-segmented">
+              <button class="cli-explorer-orientation-button" type="button" data-action="orientation" data-orientation="horizontal" aria-pressed="false" aria-label="Horizontal tree layout, left to right" title="Horizontal tree layout · left to right">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16"></path><path d="m14 7 5 5-5 5"></path><path d="M4 7v10"></path></svg>
+                <span>Horizontal</span>
+              </button>
+              <button class="cli-explorer-orientation-button" type="button" data-action="orientation" data-orientation="vertical" aria-pressed="false" aria-label="Vertical tree layout, top to bottom" title="Vertical tree layout · top to bottom">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16"></path><path d="m7 14 5 5 5-5"></path><path d="M7 4h10"></path></svg>
+                <span>Vertical</span>
+              </button>
+            </div>
+          </div>
+          <button class="cli-explorer-tool-button" type="button" data-action="collapse" aria-label="Collapse all commands" title="Collapse all">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m7 15 5-5 5 5"></path><path d="M5 20h14"></path></svg>
+          </button>
+          <button class="cli-explorer-tool-button" type="button" data-action="fit" aria-label="Fit visible tree" title="Fit tree">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path></svg>
+          </button>
+          <button class="cli-explorer-toggle" type="button" data-action="root-options" aria-label="Show root flags" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"></circle><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"></circle></svg>
+            <span>Root flags</span>
+          </button>
+          <button class="cli-explorer-toggle" type="button" data-action="hidden" aria-label="Show hidden commands and options" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+            <span>Hidden</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="cli-explorer-workspace" aria-label="CLI hierarchy workspace">
+        <div class="cli-explorer-canvas-wrap">
+          <svg class="cli-explorer-tree" data-tree role="tree" aria-label="Interactive mesh-llm command hierarchy">
+            <defs data-link-defs></defs>
+            <g data-zoom-layer>
+              <g data-links-layer></g>
+              <g data-nodes-layer></g>
+            </g>
+          </svg>
+          <div class="cli-explorer-legend" aria-hidden="true">
+            <span class="cli-explorer-legend-item"><i class="cli-explorer-legend-mark"></i>Command</span>
+            <span class="cli-explorer-legend-item"><i class="cli-explorer-legend-mark option"></i>Option</span>
+            <span class="cli-explorer-legend-item"><i class="cli-explorer-legend-mark positional"></i>Argument</span>
+          </div>
+          <div class="cli-explorer-canvas-status" aria-live="polite">
+            <span class="cli-explorer-status-chip" data-visible-count>Loading inventory…</span>
+            <span class="cli-explorer-status-chip cli-explorer-help-chip">Scroll to zoom · drag to pan · select to expand</span>
+          </div>
+          <div class="cli-explorer-error" data-load-error role="alert" hidden>The generated CLI inventory or graph library could not be loaded. Reload this page, or read the <a href="/docs/pages/CLI/">CLI user guide</a> while the interactive surface is unavailable.</div>
+        </div>
+
+        <aside id="cli-explorer-inspector" class="cli-explorer-inspector" data-cli-inspector aria-label="Selected CLI item">
+          <div class="cli-explorer-inspector-inner" data-inspector>
+            <div class="cli-explorer-inspector-empty">
+              <h2>Select a command</h2>
+              <p>Choose a node to inspect its description, aliases, values, and constraints.</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+      <div class="cli-explorer-copy-status" data-copy-status aria-live="polite"></div>
+    </section>
+
+    <noscript>
+      <div class="cli-explorer-noscript">
+        <h2>Read the CLI guide</h2>
+        <p>The interactive explorer needs JavaScript. The <a href="/docs/pages/CLI/">CLI user guide</a> has the same command examples and operational guidance in a linear format.</p>
+      </div>
+    </noscript>
+  </article>
+</main>
+
+<script id="cli-inventory-data" type="application/json" data-pagefind-ignore="all">{{ cliInventory | jsonScript | safe }}</script>
+<script src="/assets/d3.min.js" defer></script>
+<script src="/assets/cli-explorer.js" defer></script>

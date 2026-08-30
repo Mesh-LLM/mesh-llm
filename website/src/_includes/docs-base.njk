@@ -15,7 +15,15 @@
   <script src="/pagefind/pagefind-component-ui.js" type="module"></script>
   <script>window.addEventListener('DOMContentLoaded', () => { if (typeof lucide !== 'undefined') lucide.createIcons(); });</script>
 </head>
-<body class="docs-body">
+<body class="docs-body">{%- if cliExplorer -%}
+  <!--
+  THESIS: The live CLI should read as navigable topology sourced from code, refusing a static option table as the only representation.
+  OWN-WORLD: Mesh documentation surfaces, precise 1px seams, 8px geometry, Electric Blue interaction, Geist for reading, and Geist Mono only for syntax.
+  STORY: A developer searches or expands from mesh-llm, inspects one authoritative node, and copies a valid invocation while the prose guide remains nearby.
+  FIRST VIEWPORT: Docs navigation stays fixed; the page title and short explanation lead into a wide search-and-tree workspace with a quiet inspector rail.
+  FORM: Established-world local extension in Read mode with an embedded Operate tool; seed key not-applicable-local-extension.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->{%- endif %}
   <pagefind-config bundle-path="/pagefind/" base-url="/"></pagefind-config>
   {% include "nav.njk" %}
   {{ content | safe }}

@@ -89,6 +89,7 @@
       "domain": "website",
       "patterns": [
         "website/**",
+        "crates/mesh-llm-cli/**",
         "install.sh",
         "install.ps1",
         "docs/index.html",
@@ -102,10 +103,7 @@
     {
       "domain": "cli",
       "patterns": [
-        "crates/mesh-llm-cli/src/parser.rs",
-        "crates/mesh-llm-cli/src/models.rs",
-        "crates/mesh-llm-cli/src/runtime.rs",
-        "crates/mesh-llm-cli/src/benchmark.rs"
+        "crates/mesh-llm-cli/**"
       ]
     },
     {

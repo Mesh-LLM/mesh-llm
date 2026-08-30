@@ -6,11 +6,14 @@
     "node": ">=20"
   },
   "scripts": {
+    "generate:cli": "node ./scripts/generate-cli-inventory.mjs",
+    "check:cli": "node ./scripts/generate-cli-inventory.mjs --check",
     "build:css": "tailwindcss -i ./src/assets/site.tailwind.css -o ./src/assets/site.generated.css --minify",
     "build:pagefind": "pagefind --site ../docs",
-    "build": "npm run build:css && eleventy && npm run build:pagefind",
+    "build": "npm run generate:cli && npm run build:css && eleventy && npm run build:pagefind",
     "watch:css": "tailwindcss -i ./src/assets/site.tailwind.css -o ./src/assets/site.generated.css --watch",
-    "dev": "npm run build:css && eleventy && npm run build:pagefind && sh -c 'npm run watch:css & css_pid=$!; eleventy --serve --watch --incremental --port=8765; kill $css_pid'",
+    "dev": "npm run generate:cli && npm run build:css && eleventy && npm run build:pagefind && sh -c 'npm run watch:css & css_pid=$!; eleventy --serve --watch --incremental --port=8765; kill $css_pid'",
+    "test:cli-explorer": "node ./scripts/test-cli-explorer.mjs",
     "clean": "node ./scripts/clean-generated-site.mjs"
   },
   "devDependencies": {
@@ -23,6 +26,7 @@
   },
   "dependencies": {
     "animejs": "^4.5.0",
+    "d3": "^7.9.0",
     "highlight.js": "^11.11.1",
     "lucide": "^1.22.0"
   }
