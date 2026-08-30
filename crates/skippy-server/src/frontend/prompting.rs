@@ -23,6 +23,7 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use skippy_runtime::TokenSignal;
+use tokio::task;
 
 /// Output of a single chat-template application, before it is folded into a
 /// [`PreparedGenerationPrompt`].
@@ -33,6 +34,29 @@ struct RenderedChatPrompt {
 }
 
 impl StageOpenAiBackend {
+    /// Offload [`Self::prepare_chat_prompt`] to a blocking thread.
+    ///
+    /// Template rendering takes the runtime mutex and runs the template
+    /// engine synchronously (FFI). Under a connect burst (e.g. a c256
+    /// benchmark wave) running that on tokio workers starves the accept
+    /// task: every worker blocks on the mutex or renders while SYNs pile
+    /// up behind the listen backlog. Moving it to the blocking pool keeps
+    /// the async workers (and therefore the accept loop) responsive. This
+    /// mirrors the `spawn_blocking` already used for prompt tokenization.
+    pub(super) async fn prepare_chat_prompt_offloaded(
+        &self,
+        request: &ChatCompletionRequest,
+        options: ChatTemplateOptions,
+    ) -> OpenAiResult<PreparedGenerationPrompt> {
+        let backend = self.clone();
+        let request = request.clone();
+        task::spawn_blocking(move || backend.prepare_chat_prompt(&request, options))
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("chat prompt preparation task failed: {error}"))
+            })?
+    }
+
     pub(super) fn prepare_chat_prompt(
         &self,
         request: &ChatCompletionRequest,
