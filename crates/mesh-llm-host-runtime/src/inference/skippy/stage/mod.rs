@@ -447,6 +447,7 @@ impl StageControlState {
             downstream_wire_condition: super::benchmark_downstream_wire_condition()?,
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
+            continuous_batching: effective_load.continuous_batching,
             openai: None,
         });
         self.stages.insert(
@@ -831,27 +832,20 @@ fn stage_config(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock,
-        // Split/multi-node stage loads do not yet carry hardware.repack,
-        // hardware.op_offload, hardware.no_host_buffer,
-        // hardware.check_tensors, hardware.direct_io, hardware.main_gpu, or
-        // hardware.split_mode over the wire; disabled/auto preserves today's
-        // defaults.
-        repack: false,
-        op_offload: None,
-        no_host_buffer: false,
-        check_tensors: false,
-        direct_io: false,
-        main_gpu: None,
-        split_mode: skippy_protocol::SplitMode::Auto,
+        repack: load.runtime_settings.repack,
+        op_offload: load.runtime_settings.op_offload,
+        no_host_buffer: load.runtime_settings.no_host_buffer,
+        check_tensors: load.runtime_settings.check_tensors,
+        direct_io: load.runtime_settings.direct_io,
+        main_gpu: load.runtime_settings.main_gpu,
+        split_mode: load.runtime_settings.split_mode,
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,
-        // Split/multi-node stage loads do not yet carry these controls over
-        // the wire; auto preserves today's derived native defaults.
-        kv_offload: None,
-        kv_unified: None,
-        swa_full: None,
-        cache_idle_slots: None,
+        kv_offload: load.runtime_settings.kv_offload,
+        kv_unified: load.runtime_settings.kv_unified,
+        swa_full: load.runtime_settings.swa_full,
+        cache_idle_slots: load.runtime_settings.cache_idle_slots,
         filter_tensors_on_load: matches!(
             load.load_mode,
             LoadMode::RuntimeSlice | LoadMode::LayerPackage

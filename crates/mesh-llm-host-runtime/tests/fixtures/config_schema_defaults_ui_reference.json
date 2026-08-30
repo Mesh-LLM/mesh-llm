@@ -8,42 +8,7 @@
       }
     },
     {
-      "canonical_path": "defaults.hardware.check_tensors",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.control_vectors",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.cpu_moe",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.hardware.device",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.direct_io",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.fit_context",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -72,20 +37,6 @@
     },
     {
       "canonical_path": "defaults.hardware.hf_repo",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.lora_adapters",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.main_gpu",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -127,56 +78,7 @@
       }
     },
     {
-      "canonical_path": "defaults.hardware.model_runtime",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.n_cpu_moe",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.no_host_buffer",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.op_offload",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.placement",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.repack",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.hardware.safety_margin_gb",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.split_mode",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -197,20 +99,6 @@
       }
     },
     {
-      "canonical_path": "defaults.hardware.tensor_split",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.hardware.warmup",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.model_fit.batch",
       "support": "supported",
       "source": {
@@ -219,13 +107,6 @@
     },
     {
       "canonical_path": "defaults.model_fit.cache_idle_slots",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.cache_ram_mib",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -246,27 +127,6 @@
       }
     },
     {
-      "canonical_path": "defaults.model_fit.checkpoint_count",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.checkpoint_interval",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.context_shift",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.model_fit.ctx_size",
       "support": "supported",
       "source": {
@@ -275,13 +135,6 @@
     },
     {
       "canonical_path": "defaults.model_fit.flash_attention",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.keep_tokens",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -303,20 +156,6 @@
     },
     {
       "canonical_path": "defaults.model_fit.kv_unified",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.lookup_cache_dynamic",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.model_fit.lookup_cache_static",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -708,13 +547,6 @@
       }
     },
     {
-      "canonical_path": "defaults.skippy.binary_stage_transport",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.skippy.lifecycle_health_interval_ms",
       "support": "supported",
       "source": {
@@ -751,27 +583,6 @@
     },
     {
       "canonical_path": "defaults.skippy.prefill_chunking",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.skippy.stage_model_path",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.skippy.stage_role",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.skippy.stage_topology",
       "support": "supported",
       "source": {
         "kind": "built_in"
@@ -981,42 +792,7 @@
       }
     },
     {
-      "canonical_path": "defaults.throughput.cpu_affinity",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.throughput.numa",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
       "canonical_path": "defaults.throughput.parallel",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.throughput.poll",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.throughput.priority",
-      "support": "supported",
-      "source": {
-        "kind": "built_in"
-      }
-    },
-    {
-      "canonical_path": "defaults.throughput.slot_prompt_similarity",
       "support": "supported",
       "source": {
         "kind": "built_in"

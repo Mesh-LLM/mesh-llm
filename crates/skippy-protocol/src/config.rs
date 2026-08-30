@@ -37,6 +37,7 @@ pub enum SplitMode {
     None,
     Layer,
     Row,
+    Tensor,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]

@@ -822,6 +822,44 @@ fn malformed_nested_sampling_values_are_rejected() {
 }
 
 #[test]
+fn extended_sampling_boundaries_are_rejected_with_openai_errors() {
+    let invalid_controls = [
+        json!({"dynatemp_range": -0.1}),
+        json!({"dynatemp_exponent": -0.1}),
+        json!({"top_nsigma": -2.0}),
+        json!({"dry": {"multiplier": -0.1}}),
+        json!({"dry": {"base": 0.0}}),
+        json!({"dry": {"allowed_length": -1}}),
+        json!({"dry": {"penalty_last_n": -2}}),
+        json!({"xtc": {"probability": -0.1}}),
+        json!({"xtc": {"probability": 1.1}}),
+        json!({"xtc": {"threshold": -0.1}}),
+        json!({"xtc": {"threshold": 1.1}}),
+        json!({"mirostat_mode": -1}),
+        json!({"mirostat_mode": 3}),
+        json!({"mirostat_entropy": 0.0}),
+        json!({"mirostat_learning_rate": 0.0}),
+    ];
+
+    for controls in invalid_controls {
+        let mut body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        body.as_object_mut().expect("request body object").extend(
+            controls
+                .as_object()
+                .expect("sampling controls object")
+                .clone(),
+        );
+        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+
+        let error = chat_sampling_config(&request).expect_err("invalid sampling control");
+        assert_eq!(error.body().error.code.as_deref(), Some("invalid_value"));
+    }
+}
+
+#[test]
 fn malformed_sampler_controls_are_rejected() {
     for payload in [
         json!({"samplers": "top_k"}),

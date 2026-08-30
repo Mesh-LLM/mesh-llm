@@ -67,6 +67,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         activation_width: 4096,
         ctx_size: 8192,
         lane_count: 4,
+        continuous_batching: true,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -75,6 +76,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: FlashAttentionType::Auto,
+        runtime_settings: Default::default(),
         native_mtp_enabled: true,
         shutdown_generation: 1,
         coordinator_term: 1,
@@ -344,6 +346,16 @@ async fn split_generation_load_settings_consumes_resolved_skippy_config() {
     let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
         r#"
 [[models]]
+model = "other/model"
+
+[models.hardware]
+model_path = "{model_path}"
+
+[models.throughput]
+threads = 17
+threads_batch = 13
+
+[[models]]
 model = "Qwen"
 
 [models.model_fit]
@@ -406,7 +418,8 @@ stop = ["END"]
     let spec = SplitGenerationLoadSpec {
         node: &node,
         mesh_config: &mesh_config,
-        model_ref: "Qwen",
+        model_ref: "served-qwen",
+        config_model_id: Some("Qwen"),
         model_path: &model_path,
         package: &package,
         generation: &generation,
@@ -533,6 +546,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         node: &node,
         mesh_config: &mesh_config,
         model_ref: "meshllm/inkling-UD-Q2_K_XL-layers",
+        config_model_id: None,
         model_path: &model_path,
         package: &identity,
         generation: &generation,
@@ -565,16 +579,19 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
     // Without metadata the (unguarded) Inkling family default wins over the
     // q8_0 size tier — proving the family path, not the size tier, is under
     // test.
-    let unguarded = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: &mesh_config,
-        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
-        model_path: &model_path,
-        model_bytes: identity.source_model_bytes,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-        compact_meta: None,
-    })
+    let unguarded = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: &mesh_config,
+            model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+            model_path: &model_path,
+            model_bytes: identity.source_model_bytes,
+            allocatable_memory_bytes: None,
+            request_defaults: None,
+            package_generation: None,
+            compact_meta: None,
+        },
+        None,
+    )
     .expect("unguarded resolver settings should resolve");
     assert_eq!(
         unguarded.model_fit.cache_type_k, "q4_0",
@@ -593,6 +610,16 @@ async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
     write_fake_gguf_model(&model_path);
     let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
         r#"
+[[models]]
+model = "other/model-ref"
+
+[models.hardware]
+model_path = "{model_path}"
+
+[models.throughput]
+threads = 17
+threads_batch = 13
+
 [[models]]
 model = "configured/model-ref"
 

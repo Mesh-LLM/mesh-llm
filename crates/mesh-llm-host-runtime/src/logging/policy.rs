@@ -197,12 +197,27 @@ fn http_url_start(value: &str) -> Option<usize> {
     })
 }
 
+fn redactable_url_start(value: &str) -> Option<usize> {
+    let http_start = http_url_start(value);
+    let bytes = value.as_bytes();
+    let tcp_start = (0..bytes.len()).find(|&index| {
+        let suffix = &bytes[index..];
+        suffix.len() >= b"tcp://".len() && suffix[..b"tcp://".len()].eq_ignore_ascii_case(b"tcp://")
+    });
+    match (http_start, tcp_start) {
+        (Some(http), Some(tcp)) => Some(http.min(tcp)),
+        (Some(http), None) => Some(http),
+        (None, Some(tcp)) => Some(tcp),
+        (None, None) => None,
+    }
+}
+
 pub(crate) fn redact_urls_in_text(text: &str) -> String {
     text.split_whitespace()
         .map(|word| {
             let mut redacted = String::with_capacity(word.len());
             let mut cursor = 0;
-            while let Some(relative_start) = http_url_start(&word[cursor..]) {
+            while let Some(relative_start) = redactable_url_start(&word[cursor..]) {
                 let url_start = cursor + relative_start;
                 redacted.push_str(&word[cursor..url_start]);
 
@@ -211,11 +226,16 @@ pub(crate) fn redact_urls_in_text(text: &str) -> String {
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
                 {
                     b"https://".len()
-                } else {
+                } else if word.as_bytes()[url_start..]
+                    .get(..b"http://".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"http://"))
+                {
                     b"http://".len()
+                } else {
+                    b"tcp://".len()
                 };
                 let after_scheme = url_start + scheme_len;
-                let url_end = http_url_start(&word[after_scheme..])
+                let url_end = redactable_url_start(&word[after_scheme..])
                     .map_or(word.len(), |next_start| after_scheme + next_start);
                 let url_with_separator = &word[url_start..url_end];
                 let url_len = url_with_separator

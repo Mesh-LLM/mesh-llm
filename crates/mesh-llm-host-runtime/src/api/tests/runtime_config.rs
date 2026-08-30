@@ -23,7 +23,8 @@ async fn runtime_config_schema_api_exposes_control_metadata() {
     assert_eq!(temperature["source"]["kind"], "built_in");
     assert_eq!(temperature["support"], "supported");
     assert_eq!(temperature["value_schema"]["kind"], "float");
-    assert_eq!(temperature["restart_scope"], "model_reload");
+    assert_eq!(temperature["apply_mode"], "dynamic_apply");
+    assert_eq!(temperature["restart_scope"], "none");
     assert_eq!(temperature["presentation"]["label"], "Temperature");
     assert_eq!(
         temperature["presentation"]["category_id"],

@@ -710,6 +710,13 @@ pub(super) fn sampling_config(
     validate_sampling_range("min_p", min_p, 0.0..=1.0)?;
     validate_sampling_range("repeat_penalty", repeat_penalty, 0.0..=100.0)?;
     validate_sampling_range("typical_p", typical_p, 0.0..=1.0)?;
+    validate_sampling_range("top_nsigma", top_nsigma, -1.0..=f32::MAX)?;
+    validate_sampling_range("dynatemp_range", dynatemp_range, 0.0..=f32::MAX)?;
+    validate_sampling_range("dynatemp_exponent", dynatemp_exponent, 0.0..=f32::MAX)?;
+    validate_dry_sampling(&dry)?;
+    validate_sampling_range("xtc.probability", xtc.probability, 0.0..=1.0)?;
+    validate_sampling_range("xtc.threshold", xtc.threshold, 0.0..=1.0)?;
+    validate_mirostat_sampling(mirostat_mode, mirostat_entropy, mirostat_learning_rate)?;
     if top_k < 0 {
         return Err(OpenAiError::invalid_request(
             "top_k must be greater than or equal to zero",
@@ -773,6 +780,41 @@ pub(super) fn sampling_config(
         samplers,
         ignore_eos,
     })
+}
+
+fn validate_dry_sampling(dry: &DrySamplingConfig) -> OpenAiResult<()> {
+    validate_sampling_range("dry.multiplier", dry.multiplier, 0.0..=f32::MAX)?;
+    validate_positive_sampling_value("dry.base", dry.base)?;
+    if dry.allowed_length < 0 {
+        return Err(OpenAiError::invalid_request(
+            "dry.allowed_length must be greater than or equal to zero",
+        ));
+    }
+    if dry.penalty_last_n < -1 {
+        return Err(OpenAiError::invalid_request(
+            "dry.penalty_last_n must be greater than or equal to -1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mirostat_sampling(mode: i32, entropy: f32, learning_rate: f32) -> OpenAiResult<()> {
+    if !matches!(mode, 0..=2) {
+        return Err(OpenAiError::invalid_request(
+            "mirostat_mode must be one of: 0 (disabled), 1, 2",
+        ));
+    }
+    validate_positive_sampling_value("mirostat_entropy", entropy)?;
+    validate_positive_sampling_value("mirostat_learning_rate", learning_rate)
+}
+
+fn validate_positive_sampling_value(name: &str, value: f32) -> OpenAiResult<()> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(OpenAiError::invalid_request(format!(
+            "{name} is outside the supported range"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_dry_sampling(value: Option<&Value>) -> OpenAiResult<DrySamplingConfig> {

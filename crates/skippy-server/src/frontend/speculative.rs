@@ -277,9 +277,50 @@ mod standalone_speculative_config_tests {
         )
         .expect("classify verify window");
 
+        assert_eq!(decision.kind, VerifyWindowDecisionKind::EarlyReject);
         assert_eq!(decision.accepted_before_reject, 0);
         assert_eq!(decision.commit_count, 1);
         assert!(decision.rejected());
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_accepted_stop() {
+        let decision = classify_verify_window_with_threshold(
+            &[10, 20, 30],
+            &[10, 99, 99],
+            0,
+            16,
+            1.0,
+            |token| Ok(token == 10),
+        )
+        .expect("classify accepted stop");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::AcceptedStop,
+                accepted_before_reject: 1,
+                commit_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_early_reject_stop() {
+        let decision =
+            classify_verify_window_with_threshold(&[10, 20, 30], &[10, 99, 30], 0, 2, 1.0, |_| {
+                Ok(false)
+            })
+            .expect("classify early reject stop");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
     }
 
     #[test]
@@ -1089,6 +1130,12 @@ where
         decision.accepted_before_reject,
         draft_tokens.len(),
         acceptance_threshold,
+    ) {
+        return Ok(decision);
+    }
+    if matches!(
+        decision.kind,
+        VerifyWindowDecisionKind::AcceptedStop | VerifyWindowDecisionKind::EarlyRejectStop
     ) {
         return Ok(decision);
     }

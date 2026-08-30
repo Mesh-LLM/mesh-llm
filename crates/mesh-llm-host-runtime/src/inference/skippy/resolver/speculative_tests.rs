@@ -273,7 +273,7 @@ draft_min_tokens = 0
 }
 
 #[test]
-fn benchmark_shaped_hf_identity_row_matches_by_pinned_model_path_after_canonicalization() {
+fn benchmark_shaped_hf_identity_row_uses_canonical_selector_for_served_alias() {
     let model_file = temp_model_file();
     let toml = format!(
         r#"
@@ -294,18 +294,30 @@ draft_max_tokens = 4
         model_file.path().display()
     );
     let mesh_config = parse_config(&toml);
+    let config_model_id = mesh_config
+        .models
+        .first()
+        .expect("benchmark model config should be present")
+        .model
+        .as_str();
 
-    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
-        mesh_config: &mesh_config,
-        model_id: "Qwen/Qwen3-GGUF:Q4_K_M",
-        model_path: model_file.path(),
-        model_bytes: 4 * 1024 * 1024 * 1024,
-        allocatable_memory_bytes: None,
-        request_defaults: None,
-        package_generation: None,
-        compact_meta: None,
-    })
-    .expect("benchmark HF identity row should match by pinned model_path");
+    // Runtime startup keeps the served alias in `model_id` and passes the
+    // exact configured entry selector separately. The resolver must use that
+    // canonical selector rather than guessing from the served identity/path.
+    let resolved = resolve_skippy_config_for_selector(
+        SkippyConfigResolveRequest {
+            mesh_config: &mesh_config,
+            model_id: "Qwen/Qwen3-GGUF:Q4_K_M",
+            model_path: model_file.path(),
+            model_bytes: 4 * 1024 * 1024 * 1024,
+            allocatable_memory_bytes: None,
+            request_defaults: None,
+            package_generation: None,
+            compact_meta: None,
+        },
+        Some(config_model_id),
+    )
+    .expect("benchmark HF identity row should match by canonical selector");
 
     let openai = resolved
         .to_embedded_openai_args(0, false)
@@ -713,10 +725,8 @@ fn automatic_draft_selection_chooses_a_sibling_draft_gguf() {
         r#"
 [defaults.speculative]
 strategy = "disabled"
-mode = "draft"
 draft_selection_policy = "auto"
 pairing_fault = "fail_open"
-draft_max_tokens = 4
 "#,
     );
 
@@ -736,6 +746,44 @@ draft_max_tokens = 4
         resolved.speculative.draft_model_path.as_deref(),
         Some(draft.as_path())
     );
+    assert_eq!(resolved.speculative.mode, "draft");
+    assert_eq!(resolved.speculative.draft_max_tokens, 3);
+}
+
+#[test]
+fn automatic_draft_selection_preserves_explicit_draft_max_tokens() {
+    let directory = tempfile::tempdir().expect("create model directory");
+    let target = directory.path().join("qwen3-target.gguf");
+    let draft = directory.path().join("qwen3-draft.gguf");
+    std::fs::write(&target, []).expect("write target fixture");
+    std::fs::write(&draft, []).expect("write draft fixture");
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+strategy = "disabled"
+draft_selection_policy = "auto"
+pairing_fault = "fail_open"
+draft_max_tokens = 7
+"#,
+    );
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "qwen3-target",
+        model_path: &target,
+        model_bytes: 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("auto policy should select sibling draft");
+
+    assert_eq!(
+        resolved.speculative.draft_model_path.as_deref(),
+        Some(draft.as_path())
+    );
+    assert_eq!(resolved.speculative.draft_max_tokens, 7);
 }
 
 #[test]

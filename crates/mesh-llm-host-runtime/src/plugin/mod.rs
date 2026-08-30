@@ -6,6 +6,8 @@ mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
 mod startup;
+#[cfg(test)]
+mod startup_tests;
 mod support;
 mod transport;
 mod types;
@@ -145,7 +147,7 @@ impl PluginManager {
             rpc_bridge.clone(),
             &runtime_data,
         )
-        .await;
+        .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
                 plugins,
@@ -231,7 +233,7 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
-    ) -> (BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>) {
+    ) -> Result<(BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>)> {
         let mut plugins = BTreeMap::new();
         let mut failed = Vec::new();
         for spec in &specs.externals {
@@ -249,11 +251,20 @@ impl PluginManager {
                     plugins.insert(spec.name.clone(), plugin);
                 }
                 Err(error) => {
-                    failed.push(Self::plugin_load_failure_summary(spec, &error));
+                    if spec.startup.optional {
+                        failed.push(Self::plugin_load_failure_summary(spec, &error));
+                    } else {
+                        for plugin in plugins.values() {
+                            plugin.shutdown().await;
+                        }
+                        return Err(error).with_context(|| {
+                            format!("Required plugin '{}' failed to start", spec.name)
+                        });
+                    }
                 }
             }
         }
-        (plugins, failed)
+        Ok((plugins, failed))
     }
 
     async fn load_external_plugin(
@@ -303,12 +314,12 @@ impl PluginManager {
         spec: &ExternalPluginSpec,
         error: &anyhow::Error,
     ) -> PluginSummary {
-        let error_message = error.to_string();
+        let error_message = crate::logging::policy::redact_urls_in_text(&error.to_string());
         tracing::warn!(
             plugin = %spec.name,
             command = %spec.command,
             args = %format_args_for_log(&spec.args),
-            error = %error,
+            error = %error_message,
             "Plugin disabled after load failure"
         );
         PluginSummary {
@@ -319,7 +330,7 @@ impl PluginManager {
             pid: None,
             version: None,
             capabilities: Vec::new(),
-            command: Some(spec.command.clone()),
+            command: (!spec.command.is_empty()).then(|| spec.command.clone()),
             args: spec.args.clone(),
             tools: Vec::new(),
             manifest: None,
@@ -1548,6 +1559,7 @@ mod tests {
         let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
         assert_eq!(resolved.externals.len(), 1);
         assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
+        assert!(resolved.externals[0].startup.optional);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -1577,87 +1589,30 @@ mod tests {
     }
 
     #[test]
-    fn external_plugin_startup_policy_is_resolved() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "metrics".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: Some("mesh-llm-plugin-metrics".into()),
-                args: Vec::new(),
-                url: None,
-                settings: Default::default(),
-                startup: PluginStartupConfig {
-                    connect_timeout_secs: Some(75),
-                    init_timeout_secs: Some(90),
-                    optional: true,
-                    lazy_start: true,
-                },
-            }],
-            defaults: None,
-            ..MeshConfig::default()
+    fn failed_plugin_summary_redacts_urls_before_serialization() {
+        let spec = ExternalPluginSpec {
+            name: "remote".into(),
+            command: "mesh-llm-plugin-remote".into(),
+            args: Vec::new(),
+            url: Some("https://plugin.example.test/v1".into()),
+            env: BTreeMap::new(),
+            startup: PluginStartupOptions {
+                optional: true,
+                ..PluginStartupOptions::default()
+            },
+            web_ui_enabled: None,
+            installed_metadata: None,
         };
-
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        let spec = resolved
-            .externals
-            .iter()
-            .find(|spec| spec.name == "metrics")
-            .expect("configured plugin should resolve");
-
-        assert_eq!(spec.startup.connect_timeout().as_secs(), 75);
-        assert_eq!(spec.startup.init_timeout().as_secs(), 90);
-        assert!(spec.startup.optional);
-        assert!(spec.startup.lazy_start);
-    }
-
-    #[test]
-    fn optional_missing_installed_plugin_becomes_inactive_summary() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: "missing-optional".into(),
-                enabled: Some(true),
-                web_ui_enabled: None,
-                command: None,
-                args: Vec::new(),
-                url: None,
-                settings: Default::default(),
-                startup: PluginStartupConfig {
-                    optional: true,
-                    ..PluginStartupConfig::default()
-                },
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-
-        assert_eq!(
-            resolved
-                .inactive
-                .iter()
-                .filter(|summary| summary.name == "missing-optional")
-                .count(),
-            1
+        let error = anyhow::anyhow!(
+            "connection to tcp://user:secret@127.0.0.1:19091/control?token=private failed"
         );
-        let summary = resolved
-            .inactive
-            .iter()
-            .find(|summary| summary.name == "missing-optional")
-            .unwrap();
-        assert_eq!(summary.status, "missing");
-        assert_eq!(
-            summary.startup.as_ref().map(|startup| startup.optional),
-            Some(true)
-        );
-        assert!(
-            summary
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("optional")
-        );
+
+        let summary = PluginManager::plugin_load_failure_summary(&spec, &error);
+        let serialized = serde_json::to_string(&summary).expect("summary serializes");
+
+        assert!(!serialized.contains("user"));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("private"));
     }
 
     #[test]
@@ -1705,6 +1660,55 @@ mod tests {
         assert_eq!(spec.command, "endpoint-plugin");
         assert!(spec.args.is_empty());
         assert_eq!(spec.url.as_deref(), Some("http://gpu-box:8000/v1"));
+    }
+
+    #[test]
+    fn external_plugin_rejects_url_that_is_empty_after_normalization() {
+        let config = MeshConfig {
+            plugins: vec![PluginConfigEntry {
+                name: "endpoint-plugin".into(),
+                enabled: Some(true),
+                web_ui_enabled: None,
+                command: Some("endpoint-plugin".into()),
+                args: Vec::new(),
+                url: Some("\u{2003}\t\n".into()),
+                settings: Default::default(),
+                startup: Default::default(),
+            }],
+            ..MeshConfig::default()
+        };
+
+        let error = resolve_plugins(&config, private_host_mode())
+            .expect_err("normalized plugin URL must not be empty");
+        assert!(error.to_string().contains("plugin URL must not be empty"));
+    }
+
+    #[test]
+    fn remote_plugin_control_url_is_rejected_without_authentication() {
+        let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
+        let config = MeshConfig {
+            plugins: vec![PluginConfigEntry {
+                name: "remote-plugin".into(),
+                enabled: Some(true),
+                web_ui_enabled: None,
+                command: None,
+                args: Vec::new(),
+                url: Some(raw_url.into()),
+                settings: Default::default(),
+                startup: Default::default(),
+            }],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+
+        let error = resolve_plugins(&config, private_host_mode())
+            .expect_err("unauthenticated remote plugin control must be rejected");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("authenticated capability handshake"));
+        assert!(!diagnostic.contains("user"));
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains("private"));
+        assert!(!diagnostic.contains(raw_url));
     }
 
     #[test]
@@ -1791,35 +1795,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_load_failure_becomes_inactive_summary() {
-        let specs = ResolvedPlugins {
-            externals: vec![ExternalPluginSpec {
-                name: "broken".into(),
-                command: "mesh-llm-definitely-missing-plugin-binary".into(),
-                args: vec!["--stdio".into()],
-                url: None,
-                env: BTreeMap::new(),
-                startup: PluginStartupOptions::default(),
-                web_ui_enabled: None,
-                installed_metadata: None,
-            }],
-            inactive: Vec::new(),
-        };
-        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
-
-        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
-            .await
-            .expect("broken plugin should not stop manager startup");
-        let summaries = manager.list().await;
-        manager.shutdown().await;
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].name, "broken");
-        assert_eq!(summaries[0].status, "error");
-        assert!(!summaries[0].error.as_deref().unwrap_or_default().is_empty());
-    }
-
-    #[tokio::test]
     async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
         let specs = ResolvedPlugins {
             externals: vec![ExternalPluginSpec {
@@ -1828,7 +1803,10 @@ mod tests {
                 args: Vec::new(),
                 url: None,
                 env: BTreeMap::new(),
-                startup: PluginStartupOptions::default(),
+                startup: PluginStartupOptions {
+                    optional: true,
+                    ..PluginStartupOptions::default()
+                },
                 web_ui_enabled: None,
                 installed_metadata: Some(installed_metadata_with_web_ui(
                     InstalledPluginWebUiValidationStatus::Valid,
@@ -1854,53 +1832,6 @@ mod tests {
         );
         assert_eq!(summaries[0].web_ui.pages.len(), 1);
         assert_eq!(summaries[0].web_ui.config_sections.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn lazy_start_plugin_does_not_block_manager_startup() {
-        let specs = ResolvedPlugins {
-            externals: vec![ExternalPluginSpec {
-                name: "lazy".into(),
-                command: "mesh-llm-definitely-missing-plugin-binary".into(),
-                args: Vec::new(),
-                url: None,
-                env: BTreeMap::new(),
-                startup: PluginStartupOptions {
-                    optional: true,
-                    lazy_start: true,
-                    ..PluginStartupOptions::default()
-                },
-                web_ui_enabled: None,
-                installed_metadata: None,
-            }],
-            inactive: Vec::new(),
-        };
-        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
-
-        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
-            .await
-            .expect("lazy plugin should not start during manager startup");
-        let summaries = manager.list().await;
-        manager.shutdown().await;
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].name, "lazy");
-        assert_eq!(summaries[0].status, "deferred");
-        assert_eq!(
-            summaries[0]
-                .startup
-                .as_ref()
-                .map(|startup| startup.lazy_start),
-            Some(true)
-        );
-        assert!(summaries[0].pid.is_none());
-        assert!(
-            summaries[0]
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("lazy")
-        );
     }
 
     #[test]

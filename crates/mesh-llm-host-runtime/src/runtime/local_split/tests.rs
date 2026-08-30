@@ -43,7 +43,7 @@ lifecycle_health_interval_ms = 5000
 
 #[tokio::test(start_paused = true)]
 async fn configured_startup_timeout_drives_real_timeout_deadline() {
-    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), Some("test/model"));
     let started = tokio::time::Instant::now();
 
     let result = await_stage_startup(intervals.startup_timeout, std::future::pending::<()>()).await;
@@ -54,7 +54,7 @@ async fn configured_startup_timeout_drives_real_timeout_deadline() {
 
 #[tokio::test(start_paused = true)]
 async fn configured_readiness_interval_drives_real_poll_sleep() {
-    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), Some("test/model"));
     let started = tokio::time::Instant::now();
 
     wait_for_stage_readiness_poll(intervals.readiness_interval).await;
@@ -64,7 +64,7 @@ async fn configured_readiness_interval_drives_real_poll_sleep() {
 
 #[tokio::test(start_paused = true)]
 async fn configured_health_interval_drives_real_periodic_tick() {
-    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), "test/model");
+    let intervals = configured_stage_lifecycle_intervals(&lifecycle_config(), Some("test/model"));
     let mut ticks = stage_health_ticks(intervals.health_interval);
     ticks.tick().await;
     let started = tokio::time::Instant::now();
@@ -237,8 +237,8 @@ lifecycle_health_interval_ms = 5000
     )
     .expect("lifecycle config");
 
-    let configured = configured_stage_lifecycle_intervals(&config, "test/model");
-    let defaults = configured_stage_lifecycle_intervals(&config, "other/model");
+    let configured = configured_stage_lifecycle_intervals(&config, Some("test/model"));
+    let defaults = configured_stage_lifecycle_intervals(&config, None);
 
     assert_eq!(configured.startup_timeout, Duration::from_secs(120));
     assert_eq!(configured.readiness_interval, Duration::from_millis(125));
@@ -1303,6 +1303,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         node: &node,
         mesh_config: &mesh_config,
         model_ref: "Qwen",
+        config_model_id: None,
         model_path: &model_path,
         package: &package,
         generation: &generation,

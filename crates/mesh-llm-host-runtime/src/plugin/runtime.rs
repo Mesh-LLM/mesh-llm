@@ -1,7 +1,9 @@
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
-use super::transport::{LocalListener, LocalStream, bind_local_listener, connection_loop};
+use super::transport::{
+    LocalListener, LocalStream, bind_local_listener, connection_loop, reject_remote_control,
+};
 use super::{
     PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, PluginWebUiState,
     PluginWebUiStateInput, REQUEST_TIMEOUT_SECS, ToolCallResult, ToolSummary,
@@ -38,12 +40,22 @@ pub(crate) struct ExternalPlugin {
 
 pub(crate) struct PluginRuntime {
     pub(crate) generation: u64,
-    pub(crate) _child: Child,
+    pub(crate) _child: Option<Child>,
+    connection_task: tokio::task::JoinHandle<()>,
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
     pub(crate) pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>,
 }
 
 type PendingResponses = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>;
+
+async fn stop_runtime(runtime: PluginRuntime, reason: &str) {
+    runtime.connection_task.abort();
+    let _ = runtime.connection_task.await;
+    let mut pending = runtime.pending.lock().await;
+    for (_, response) in pending.drain() {
+        let _ = response.send(Err(anyhow::anyhow!(reason.to_string())));
+    }
+}
 
 impl ExternalPlugin {
     pub(crate) async fn spawn(
@@ -67,7 +79,7 @@ impl ExternalPlugin {
                 pid: None,
                 version: None,
                 capabilities: Vec::new(),
-                command: Some(spec.command.clone()),
+                command: (!spec.command.is_empty()).then(|| spec.command.clone()),
                 args: spec.args.clone(),
                 tools: Vec::new(),
                 manifest: None,
@@ -207,7 +219,7 @@ impl ExternalPlugin {
 
     async fn install_runtime(
         &self,
-        child: Child,
+        child: Option<Child>,
         stream: LocalStream,
     ) -> (u64, mpsc::Sender<proto::Envelope>, PendingResponses) {
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
@@ -215,13 +227,7 @@ impl ExternalPlugin {
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let outbound_tx_for_runtime = outbound_tx.clone();
         let outbound_tx_for_init = outbound_tx.clone();
-        *self.runtime.lock().await = Some(PluginRuntime {
-            generation,
-            _child: child,
-            outbound_tx,
-            pending: pending.clone(),
-        });
-        tokio::spawn(connection_loop(
+        let connection_task = tokio::spawn(connection_loop(
             stream,
             outbound_rx,
             pending.clone(),
@@ -233,6 +239,13 @@ impl ExternalPlugin {
             outbound_tx_for_runtime,
             generation,
         ));
+        *self.runtime.lock().await = Some(PluginRuntime {
+            generation,
+            _child: child,
+            connection_task,
+            outbound_tx,
+            pending: pending.clone(),
+        });
         (generation, outbound_tx_for_init, pending)
     }
 
@@ -394,6 +407,25 @@ impl ExternalPlugin {
 
         self.publish_starting_summary().await;
 
+        #[cfg(test)]
+        if let Some(address) = self
+            .spec
+            .url
+            .as_deref()
+            .and_then(|url| url.strip_prefix("test+tcp://"))
+        {
+            let stream = tokio::net::TcpStream::connect(address).await?;
+            let (generation, outbound_tx, pending) =
+                self.install_runtime(None, LocalStream::Tcp(stream)).await;
+            return self.finish_startup(generation, outbound_tx, pending).await;
+        }
+
+        if let Some(remote_url) = self.spec.url.as_deref()
+            && url::Url::parse(remote_url).is_ok_and(|url| url.scheme() == "tcp")
+        {
+            return reject_remote_control(remote_url);
+        }
+
         let listener = bind_local_listener(&self.instance_id, &self.spec.name).await?;
         let endpoint = listener.endpoint();
         let transport = listener.transport_name();
@@ -404,7 +436,41 @@ impl ExternalPlugin {
         self.summary.lock().await.pid = pid;
 
         let stream = self.await_plugin_connection(listener).await?;
-        let (generation, outbound_tx, pending) = self.install_runtime(child, stream).await;
+        let (generation, outbound_tx, pending) = self.install_runtime(Some(child), stream).await;
+        self.finish_startup(generation, outbound_tx, pending).await
+    }
+
+    async fn finish_startup(
+        &self,
+        generation: u64,
+        outbound_tx: mpsc::Sender<proto::Envelope>,
+        pending: PendingResponses,
+    ) -> Result<()> {
+        match self
+            .finish_initialize(generation, outbound_tx, pending)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if self.is_disabled().await {
+                    return Ok(());
+                }
+                self.handle_runtime_failure(
+                    Some(generation),
+                    format!("Plugin '{}' failed startup: {error}", self.spec.name),
+                )
+                .await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn finish_initialize(
+        &self,
+        generation: u64,
+        outbound_tx: mpsc::Sender<proto::Envelope>,
+        pending: PendingResponses,
+    ) -> Result<()> {
         let init = self
             .initialize_runtime(generation, outbound_tx, pending)
             .await?;
@@ -495,10 +561,7 @@ impl ExternalPlugin {
 
         let runtime = self.runtime.lock().await.take();
         if let Some(runtime) = runtime {
-            let mut pending = runtime.pending.lock().await;
-            for (_, response) in pending.drain() {
-                let _ = response.send(Err(anyhow::anyhow!("plugin shutting down")));
-            }
+            stop_runtime(runtime, "plugin shutting down").await;
         }
 
         *self.server_info.lock().await = None;
@@ -788,19 +851,34 @@ impl ExternalPlugin {
     }
 
     async fn handle_runtime_failure(&self, generation: Option<u64>, reason: String) {
-        let mut runtime = self.runtime.lock().await;
-        let should_clear = generation
-            .map(|generation| runtime.as_ref().map(|r| r.generation) == Some(generation))
-            .unwrap_or(true);
-        if should_clear {
-            *runtime = None;
+        let reason = crate::logging::policy::redact_urls_in_text(&reason);
+        let failed_runtime = {
+            let mut runtime = self.runtime.lock().await;
+            let is_current_generation = generation
+                .map(|generation| runtime.as_ref().map(|r| r.generation) == Some(generation))
+                .unwrap_or(true);
+            if !is_current_generation {
+                return;
+            }
+
+            let failed_runtime = runtime.take();
+            *self.server_info.lock().await = None;
+            *self.manifest.lock().await = None;
+            let mut summary = self.summary.lock().await;
+            summary.status = "restarting".into();
+            summary.pid = None;
+            summary.version = None;
+            summary.capabilities.clear();
+            summary.tools.clear();
+            summary.error = Some(reason.clone());
+            drop(summary);
+            self.runtime_data_producer
+                .clear_plugin_reports(&self.spec.name);
+            failed_runtime
+        };
+        if let Some(runtime) = failed_runtime {
+            stop_runtime(runtime, &reason).await;
         }
-        drop(runtime);
-        let mut summary = self.summary.lock().await;
-        summary.status = "restarting".into();
-        summary.pid = None;
-        summary.error = Some(reason);
-        drop(summary);
         self.publish_summary().await;
     }
 
@@ -836,10 +914,14 @@ impl ExternalPlugin {
 
     async fn mark_disabled(&self, generation: u64, reason: String) {
         let mut runtime = self.runtime.lock().await;
-        if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
-            *runtime = None;
-        }
+        let disabled_runtime = (runtime.as_ref().map(|runtime| runtime.generation)
+            == Some(generation))
+        .then(|| runtime.take())
+        .flatten();
         drop(runtime);
+        if let Some(runtime) = disabled_runtime {
+            stop_runtime(runtime, "plugin disabled").await;
+        }
 
         let mut server_info = self.server_info.lock().await;
         *server_info = None;
@@ -856,7 +938,7 @@ impl ExternalPlugin {
         summary.version = None;
         summary.capabilities.clear();
         summary.tools.clear();
-        summary.error = Some(reason);
+        summary.error = Some(crate::logging::policy::redact_urls_in_text(&reason));
         drop(summary);
         self.publish_summary().await;
     }
@@ -890,8 +972,13 @@ fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::{MeshConfig, PluginConfigEntry, resolve_plugins};
+    use super::super::transport::{read_envelope, write_envelope};
+    use super::super::{PluginCapabilityProvider, PluginEndpointSummary};
     use super::*;
-    use crate::runtime_data::{PluginDataKey, RuntimeDataCollector, RuntimeDataSource};
+    use crate::runtime_data::{
+        PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
+    };
     use mesh_llm_plugin::MeshVisibility;
     use mesh_llm_plugin_manager::store::{
         InstalledPluginManifestMetadata, InstalledPluginMetadata,
@@ -901,6 +988,7 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn test_host_mode() -> PluginHostMode {
@@ -1002,7 +1090,7 @@ mod tests {
                 pid: None,
                 version: None,
                 capabilities: Vec::new(),
-                command: Some(spec.command.clone()),
+                command: (!spec.command.is_empty()).then(|| spec.command.clone()),
                 args: spec.args.clone(),
                 tools: Vec::new(),
                 manifest: None,
@@ -1072,7 +1160,8 @@ mod tests {
         let (outbound_tx, _outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation,
-            _child: child,
+            _child: Some(child),
+            connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
         });
@@ -1082,6 +1171,158 @@ mod tests {
         summary.version = Some("v1.0.0".into());
         summary.capabilities = vec!["operation:echo".into()];
         summary.error = None;
+    }
+
+    fn generation_manifest(label: &str) -> proto::PluginManifest {
+        proto::PluginManifest {
+            capabilities: vec![format!("capability:{label}")],
+            operations: vec![proto::OperationManifest {
+                name: format!("{label}.echo"),
+                description: format!("{label} echo operation"),
+                input_schema_json: r#"{"type":"object"}"#.into(),
+                output_schema_json: None,
+                title: None,
+            }],
+            ..proto::PluginManifest::default()
+        }
+    }
+
+    async fn install_test_generation(plugin: &ExternalPlugin, generation: u64, label: &str) {
+        if let Some(runtime) = plugin.runtime.lock().await.take() {
+            stop_runtime(runtime, "test runtime replaced").await;
+        }
+        mark_plugin_running(plugin, generation).await;
+
+        let manifest = generation_manifest(label);
+        *plugin.server_info.lock().await = Some(ServerInfo::default());
+        *plugin.manifest.lock().await = Some(manifest.clone());
+        {
+            let mut summary = plugin.summary.lock().await;
+            summary.version = Some(format!("{label}-version"));
+            summary.capabilities = vec![format!("capability:{label}")];
+            summary.tools = manifest_tool_summaries(&manifest);
+            summary.error = None;
+        }
+        plugin.publish_summary().await;
+        plugin
+            .runtime_data_producer
+            .publish_plugin_manifest(plugin_manifest_overview(&manifest));
+        plugin
+            .runtime_data_producer
+            .publish_plugin_providers(vec![PluginCapabilityProvider {
+                capability: format!("capability:{label}"),
+                plugin_name: plugin.name().into(),
+                plugin_status: "running".into(),
+                endpoint_id: Some(format!("{label}-endpoint")),
+                available: true,
+                detail: None,
+            }]);
+        plugin
+            .runtime_data_producer
+            .publish_plugin_payload("generation", serde_json::json!(label));
+        plugin
+            .runtime_data_producer
+            .collector()
+            .producer(RuntimeDataSource {
+                scope: "test",
+                plugin_data_key: None,
+                plugin_endpoint_key: Some(PluginEndpointKey {
+                    plugin_name: plugin.name().into(),
+                    endpoint_id: format!("{label}-endpoint"),
+                }),
+            })
+            .publish_plugin_endpoint(PluginEndpointSummary {
+                plugin_name: plugin.name().into(),
+                plugin_status: "running".into(),
+                endpoint_id: format!("{label}-endpoint"),
+                state: "healthy".into(),
+                available: true,
+                kind: "mcp".into(),
+                transport_kind: "http".into(),
+                protocol: Some("http".into()),
+                address: Some(format!("http://127.0.0.1/{label}")),
+                args: Vec::new(),
+                namespace: Some(format!("demo.{label}")),
+                supports_streaming: true,
+                managed_by_plugin: true,
+                detail: None,
+                models: Vec::new(),
+            });
+    }
+
+    #[tokio::test]
+    async fn stale_runtime_failure_preserves_replacement_generation_metadata() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (plugin, runtime_data) = plugin_for_spec_with_runtime_data(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        ));
+        install_test_generation(&plugin, 41, "generation-a").await;
+        install_test_generation(&plugin, 42, "generation-b").await;
+
+        let replacement_summary = plugin.summary().await;
+        let replacement_server_info = plugin.server_info.lock().await.clone();
+        let replacement_manifest = plugin.manifest.lock().await.clone();
+        let replacement_reports = runtime_data.plugin_snapshot(plugin.name());
+
+        plugin
+            .handle_runtime_failure(Some(41), "generation A failed late".into())
+            .await;
+
+        assert_eq!(
+            plugin
+                .runtime
+                .lock()
+                .await
+                .as_ref()
+                .map(|runtime| runtime.generation),
+            Some(42)
+        );
+        assert_eq!(*plugin.server_info.lock().await, replacement_server_info);
+        assert_eq!(*plugin.manifest.lock().await, replacement_manifest);
+        assert_eq!(plugin.summary().await, replacement_summary);
+        assert_eq!(
+            runtime_data.plugin_snapshot(plugin.name()),
+            replacement_reports
+        );
+
+        plugin.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn current_runtime_failure_clears_its_generation_metadata() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (plugin, runtime_data) = plugin_for_spec_with_runtime_data(plugin_spec(
+            &temp_dir,
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        ));
+        install_test_generation(&plugin, 51, "current-generation").await;
+
+        plugin
+            .handle_runtime_failure(Some(51), "current generation failed".into())
+            .await;
+
+        assert!(plugin.runtime.lock().await.is_none());
+        assert!(plugin.server_info.lock().await.is_none());
+        assert!(plugin.manifest.lock().await.is_none());
+        let summary = plugin.summary().await;
+        assert_eq!(summary.status, "restarting");
+        assert!(summary.pid.is_none());
+        assert!(summary.version.is_none());
+        assert!(summary.capabilities.is_empty());
+        assert!(summary.tools.is_empty());
+        assert_eq!(summary.error.as_deref(), Some("current generation failed"));
+
+        let reports = runtime_data.plugin_snapshot(plugin.name());
+        assert_eq!(reports.summary, Some(summary));
+        assert!(reports.manifest.is_none());
+        assert!(reports.providers.is_empty());
+        assert!(reports.payloads.is_empty());
+        assert!(reports.endpoints.is_empty());
     }
 
     #[test]
@@ -1102,6 +1343,235 @@ mod tests {
             command_env_value(&command, "MESH_LLM_PLUGIN_WEB_UI_DIR"),
             Some(asset_root.display().to_string())
         );
+    }
+
+    #[test]
+    fn configured_plugin_url_is_normalized_before_child_env_export() {
+        let config = MeshConfig {
+            plugins: vec![PluginConfigEntry {
+                name: "demo".into(),
+                enabled: Some(true),
+                web_ui_enabled: None,
+                command: Some("mesh-llm-plugin-demo".into()),
+                args: Vec::new(),
+                url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
+                settings: BTreeMap::new(),
+                startup: Default::default(),
+            }],
+            ..MeshConfig::default()
+        };
+        let spec = resolve_plugins(&config, test_host_mode())
+            .expect("configured plugin should resolve")
+            .externals
+            .into_iter()
+            .find(|spec| spec.name == "demo")
+            .expect("configured plugin spec should be stored");
+
+        assert_eq!(spec.url.as_deref(), Some("https://plugin.example.test/v1"));
+        let plugin = plugin_for_spec(spec);
+
+        let command = plugin.configured_child_command("endpoint", "unix");
+
+        assert_eq!(
+            command_env_value(&command, "MESH_LLM_PLUGIN_URL"),
+            Some("https://plugin.example.test/v1".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn locally_connected_stream_completes_plugin_initialize_without_child_process() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("remote plugin listener");
+        let address = listener.local_addr().expect("listener address");
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("remote connection");
+            let mut stream = LocalStream::Tcp(stream);
+            let request = read_envelope(&mut stream)
+                .await
+                .expect("initialize request");
+            assert!(matches!(
+                request.payload,
+                Some(proto::envelope::Payload::InitializeRequest(_))
+            ));
+            write_envelope(
+                &mut stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    plugin_id: "remote-demo".into(),
+                    payload: Some(proto::envelope::Payload::InitializeResponse(
+                        proto::InitializeResponse {
+                            plugin_id: "remote-demo".into(),
+                            plugin_protocol_version: PROTOCOL_VERSION,
+                            plugin_version: "v1.0.0".into(),
+                            server_info_json: serde_json::to_string(&ServerInfo::default())
+                                .expect("server info"),
+                            capabilities: Vec::new(),
+                            manifest: None,
+                        },
+                    )),
+                },
+            )
+            .await
+            .expect("initialize response");
+            let _ = release_rx.await;
+        });
+        let mut spec = plugin_spec(
+            &TempDir::new().expect("temp dir"),
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        );
+        spec.name = "remote-demo".into();
+        spec.command.clear();
+        let plugin = plugin_for_spec(spec);
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("local test connection");
+        let (generation, outbound_tx, pending) =
+            plugin.install_runtime(None, LocalStream::Tcp(stream)).await;
+        plugin
+            .finish_startup(generation, outbound_tx, pending)
+            .await
+            .expect("locally connected plugin should initialize");
+        let summary = plugin.summary().await;
+
+        assert_eq!(summary.status, "running");
+        assert_eq!(summary.pid, None);
+        assert_eq!(summary.command, None);
+        let _ = release_tx.send(());
+        server.await.expect("remote server task");
+    }
+
+    #[tokio::test]
+    async fn startup_disabled_response_remains_a_successful_disabled_plugin() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("remote plugin listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("remote connection");
+            let mut stream = LocalStream::Tcp(stream);
+            let request = read_envelope(&mut stream)
+                .await
+                .expect("initialize request");
+            write_envelope(
+                &mut stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    plugin_id: "remote-disabled".into(),
+                    payload: Some(proto::envelope::Payload::ErrorResponse(
+                        proto::ErrorResponse {
+                            code: STARTUP_DISABLED_ERROR_CODE,
+                            message: "operator disabled this plugin".into(),
+                            data_json: String::new(),
+                        },
+                    )),
+                },
+            )
+            .await
+            .expect("disabled response");
+            let mut byte = [0_u8; 1];
+            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .expect("self-disable must close the remote control socket")
+                .unwrap_or(0);
+            assert_eq!(read, 0);
+        });
+        let mut spec = plugin_spec(
+            &TempDir::new().expect("temp dir"),
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        );
+        spec.name = "remote-disabled".into();
+        spec.command.clear();
+        let plugin = plugin_for_spec(spec);
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("local test connection");
+        let (generation, outbound_tx, pending) =
+            plugin.install_runtime(None, LocalStream::Tcp(stream)).await;
+        plugin
+            .finish_startup(generation, outbound_tx, pending)
+            .await
+            .expect("plugin-owned disable is a successful startup outcome");
+        let summary = plugin.summary().await;
+
+        assert!(!summary.enabled);
+        assert_eq!(summary.status, "disabled");
+        assert_eq!(
+            summary.error.as_deref(),
+            Some("operator disabled this plugin")
+        );
+        assert!(plugin.runtime.lock().await.is_none());
+        server.await.expect("remote server task");
+    }
+
+    #[tokio::test]
+    async fn malformed_initialize_metadata_rolls_back_remote_runtime() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("remote plugin listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("remote connection");
+            let mut stream = LocalStream::Tcp(stream);
+            let request = read_envelope(&mut stream)
+                .await
+                .expect("initialize request");
+            write_envelope(
+                &mut stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    plugin_id: "remote-malformed".into(),
+                    payload: Some(proto::envelope::Payload::InitializeResponse(
+                        proto::InitializeResponse {
+                            plugin_id: "remote-malformed".into(),
+                            plugin_protocol_version: PROTOCOL_VERSION,
+                            plugin_version: "v1.0.0".into(),
+                            server_info_json: "not-json".into(),
+                            capabilities: Vec::new(),
+                            manifest: None,
+                        },
+                    )),
+                },
+            )
+            .await
+            .expect("initialize response");
+            let mut byte = [0_u8; 1];
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut byte))
+                    .await
+                    .expect("failed startup should close connection")
+                    .unwrap_or(0);
+            assert_eq!(read, 0);
+        });
+        let mut spec = plugin_spec(
+            &TempDir::new().expect("temp dir"),
+            None,
+            InstalledPluginWebUiValidationStatus::Valid,
+            None,
+        );
+        spec.name = "remote-malformed".into();
+        spec.command.clear();
+        let plugin = plugin_for_spec(spec);
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("local test connection");
+        let (generation, outbound_tx, pending) =
+            plugin.install_runtime(None, LocalStream::Tcp(stream)).await;
+        let error = plugin
+            .finish_startup(generation, outbound_tx, pending)
+            .await
+            .expect_err("malformed initialize metadata must fail startup");
+
+        assert!(error.to_string().contains("invalid server_info_json"));
+        server.await.expect("remote server task");
     }
 
     #[test]

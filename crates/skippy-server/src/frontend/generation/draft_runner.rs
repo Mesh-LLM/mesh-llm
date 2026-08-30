@@ -22,6 +22,7 @@ fn map_split_mode(mode: skippy_protocol::SplitMode) -> skippy_runtime::SplitMode
         skippy_protocol::SplitMode::None => skippy_runtime::SplitMode::None,
         skippy_protocol::SplitMode::Layer => skippy_runtime::SplitMode::Layer,
         skippy_protocol::SplitMode::Row => skippy_runtime::SplitMode::Row,
+        skippy_protocol::SplitMode::Tensor => skippy_runtime::SplitMode::Tensor,
     }
 }
 

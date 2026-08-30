@@ -49,6 +49,7 @@ pub enum RuntimeControlRequest {
     },
     Load {
         spec: String,
+        config_model_id: Option<String>,
         profile: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
     },

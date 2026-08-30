@@ -382,8 +382,8 @@
       "control_surfaces": [
         "config_file"
       ],
-      "apply_mode": "static_on_load",
-      "restart_scope": "model_reload",
+      "apply_mode": "dynamic_apply",
+      "restart_scope": "none",
       "visibility": "advanced",
       "description": "defaults.request_defaults.dry",
       "presentation": {
@@ -415,7 +415,7 @@
         "config_file"
       ],
       "apply_mode": "static_on_load",
-      "restart_scope": "model_reload",
+      "restart_scope": "process_restart",
       "visibility": "user",
       "description": "Choose automatic GPU placement, or require configured model entries to name a concrete GPU device.",
       "presentation": {
@@ -890,17 +890,18 @@
       "value_schema": {
         "kind": "boolean"
       },
-      "support": "unsupported",
+      "support": "supported",
       "control_surfaces": [
-        "config_file"
+        "config_file",
+        "api"
       ],
       "apply_mode": "static_on_load",
-      "restart_scope": "none",
+      "restart_scope": "process_restart",
       "visibility": "advanced",
-      "description": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
+      "description": "telemetry.prompt_shape_metrics",
       "presentation": {
         "label": "Prompt Shape Metrics",
-        "help": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
+        "help": "telemetry.prompt_shape_metrics",
         "category_id": "telemetry",
         "category_label": "Telemetry",
         "category_summary": "Opt-in metrics export and local telemetry queue settings",
@@ -909,11 +910,7 @@
         "control_hint": "toggle"
       },
       "control_behavior": {
-        "availability": {
-          "enabled": false,
-          "reason": "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
-          "source": "static"
-        }
+        "options_source": "static"
       }
     },
     {
@@ -930,7 +927,7 @@
         "config_file"
       ],
       "apply_mode": "static_on_load",
-      "restart_scope": "model_reload",
+      "restart_scope": "process_restart",
       "visibility": "internal",
       "description": "version"
     }

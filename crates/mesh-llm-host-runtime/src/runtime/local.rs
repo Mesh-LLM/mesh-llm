@@ -311,16 +311,19 @@ pub(super) fn resolve_local_openai_skippy_config(
     fallback_projector_path: Option<PathBuf>,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<skippy::ResolvedSkippyConfig> {
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.config_model_id.unwrap_or(model_name),
-        model_path: spec.model_path,
-        model_bytes,
-        allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
-        request_defaults: None,
-        package_generation: None,
-        compact_meta,
-    })?;
+    let mut resolved = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: spec.mesh_config,
+            model_id: model_name,
+            model_path: spec.model_path,
+            model_bytes,
+            allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
+            request_defaults: None,
+            package_generation: None,
+            compact_meta,
+        },
+        spec.config_model_id,
+    )?;
     resolved.model_id = model_name.to_string();
     resolved.model_fit.ctx_size = context_length;
     resolved.throughput.parallel = slots;

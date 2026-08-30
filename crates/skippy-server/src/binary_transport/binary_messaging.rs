@@ -185,6 +185,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        continuous_batching,
         openai,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
@@ -237,7 +238,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         runtime.clone(),
         &config,
         max_inflight.max(1),
-        true,
+        continuous_batching,
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
@@ -267,7 +268,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         default_max_tokens: openai_options.default_max_tokens,
                         request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
                         generation_concurrency: openai_options.generation_concurrency,
-                        continuous_batching: true,
+                        continuous_batching,
                         prefill_chunk_size: openai_options.prefill_chunk_size,
                         prefill_chunk_policy: openai_options.prefill_chunk_policy,
                         prefill_chunk_schedule: openai_options.prefill_chunk_schedule,

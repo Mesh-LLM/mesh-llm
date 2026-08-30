@@ -224,6 +224,7 @@ pub(super) fn stage_load_to_proto(
         activation_width: load.activation_width.max(0) as u32,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
+        continuous_batching: Some(load.continuous_batching),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -232,6 +233,7 @@ pub(super) fn stage_load_to_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
+        runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -250,6 +252,30 @@ pub(super) fn stage_load_to_proto(
         },
         upstream: load.upstream.map(stage_peer_to_proto),
         downstream: load.downstream.map(stage_peer_to_proto),
+    }
+}
+
+fn stage_runtime_settings_to_proto(
+    settings: crate::inference::skippy::StageLoadRuntimeSettings,
+) -> skippy_stage_proto::StageLoadRuntimeSettings {
+    skippy_stage_proto::StageLoadRuntimeSettings {
+        repack: Some(settings.repack),
+        op_offload: settings.op_offload,
+        no_host_buffer: Some(settings.no_host_buffer),
+        check_tensors: Some(settings.check_tensors),
+        direct_io: Some(settings.direct_io),
+        main_gpu: settings.main_gpu,
+        split_mode: Some(match settings.split_mode {
+            skippy_protocol::SplitMode::Auto => -1,
+            skippy_protocol::SplitMode::None => 0,
+            skippy_protocol::SplitMode::Layer => 1,
+            skippy_protocol::SplitMode::Row => 2,
+            skippy_protocol::SplitMode::Tensor => 3,
+        }),
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
     }
 }
 
@@ -409,6 +435,7 @@ pub(super) fn stage_load_from_proto(
         } else {
             load.lane_count
         },
+        continuous_batching: load.continuous_batching.unwrap_or(true),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -417,6 +444,7 @@ pub(super) fn stage_load_from_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
+        runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings),
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -430,6 +458,33 @@ pub(super) fn stage_load_from_proto(
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
     })
+}
+
+fn stage_runtime_settings_from_proto(
+    settings: Option<skippy_stage_proto::StageLoadRuntimeSettings>,
+) -> crate::inference::skippy::StageLoadRuntimeSettings {
+    let Some(settings) = settings else {
+        return crate::inference::skippy::StageLoadRuntimeSettings::default();
+    };
+    crate::inference::skippy::StageLoadRuntimeSettings {
+        repack: settings.repack.unwrap_or(false),
+        op_offload: settings.op_offload,
+        no_host_buffer: settings.no_host_buffer.unwrap_or(false),
+        check_tensors: settings.check_tensors.unwrap_or(false),
+        direct_io: settings.direct_io.unwrap_or(false),
+        main_gpu: settings.main_gpu,
+        split_mode: match settings.split_mode.unwrap_or(-1) {
+            0 => skippy_protocol::SplitMode::None,
+            1 => skippy_protocol::SplitMode::Layer,
+            2 => skippy_protocol::SplitMode::Row,
+            3 => skippy_protocol::SplitMode::Tensor,
+            _ => skippy_protocol::SplitMode::Auto,
+        },
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
+    }
 }
 
 pub(super) fn stage_coordinator_claim_from_proto(
@@ -1275,5 +1330,87 @@ pub(super) fn stage_preparation_state_to_proto(
         crate::inference::skippy::StagePreparationState::Cancelled => {
             skippy_stage_proto::StagePreparationState::Cancelled
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+
+    #[derive(Clone, PartialEq, Message)]
+    struct LegacyLoadStage {}
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatLoadStage {
+        #[prost(message, optional, tag = "43")]
+        runtime_settings: Option<CompatRuntimeSettings>,
+    }
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatRuntimeSettings {
+        #[prost(bool, optional, tag = "1")]
+        repack: Option<bool>,
+        #[prost(bool, optional, tag = "2")]
+        op_offload: Option<bool>,
+        #[prost(bool, optional, tag = "3")]
+        no_host_buffer: Option<bool>,
+        #[prost(bool, optional, tag = "4")]
+        check_tensors: Option<bool>,
+        #[prost(bool, optional, tag = "5")]
+        direct_io: Option<bool>,
+        #[prost(uint32, optional, tag = "6")]
+        main_gpu: Option<u32>,
+        #[prost(int32, optional, tag = "7")]
+        split_mode: Option<i32>,
+        #[prost(bool, optional, tag = "8")]
+        kv_offload: Option<bool>,
+        #[prost(bool, optional, tag = "9")]
+        kv_unified: Option<bool>,
+        #[prost(bool, optional, tag = "10")]
+        swa_full: Option<bool>,
+        #[prost(uint32, optional, tag = "11")]
+        cache_idle_slots: Option<u32>,
+    }
+
+    #[test]
+    fn stage_load_wire_round_trip_preserves_runtime_controls() {
+        let settings = CompatRuntimeSettings {
+            repack: Some(true),
+            op_offload: Some(false),
+            no_host_buffer: Some(true),
+            check_tensors: Some(true),
+            direct_io: Some(true),
+            main_gpu: Some(2),
+            split_mode: Some(3),
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        };
+        let mut encoded = skippy_stage_proto::LoadStage::default().encode_to_vec();
+        CompatLoadStage {
+            runtime_settings: Some(settings.clone()),
+        }
+        .encode(&mut encoded)
+        .expect("compat runtime settings encode");
+
+        let legacy = LegacyLoadStage::decode(encoded.as_slice())
+            .expect("legacy schema ignores additive runtime settings");
+        assert!(legacy.encode_to_vec().is_empty());
+
+        let decoded = skippy_stage_proto::LoadStage::decode(encoded.as_slice())
+            .expect("production load stage decode");
+        let request = stage_load_from_proto(decoded).expect("domain load request");
+        let reencoded = stage_load_to_proto(request).encode_to_vec();
+        let observed = CompatLoadStage::decode(reencoded.as_slice())
+            .expect("compat runtime settings decode")
+            .runtime_settings
+            .expect("runtime settings must survive production round trip");
+
+        assert_eq!(observed, settings);
+        assert_eq!(
+            stage_runtime_settings_from_proto(None),
+            crate::inference::skippy::StageLoadRuntimeSettings::default()
+        );
     }
 }

@@ -81,7 +81,8 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.draft_max_tokens),
         0,
     );
-    if mode == "draft" && draft_max_tokens == 0 {
+    if (mode == "draft" || (mode == "auto" && draft_model_path.is_some())) && draft_max_tokens == 0
+    {
         draft_max_tokens = 3;
     }
     let draft_min_tokens = super::support::pick_value(

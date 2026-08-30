@@ -10,9 +10,14 @@
 //! CI job is required to catch drift.
 
 #[cfg(test)]
+#[path = "website_docs_parity/metadata.rs"]
+mod metadata_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::{
-        CANONICAL_MODEL_REF_SEGMENT, CANONICAL_PLUGIN_NAME_SEGMENT, built_in_config_settings,
+        CANONICAL_MODEL_REF_SEGMENT, CANONICAL_PLUGIN_NAME_SEGMENT, ConfigValueSchema,
+        built_in_config_settings,
     };
     use std::collections::BTreeMap;
 
@@ -181,6 +186,30 @@ mod tests {
             "the website configuration reference documents these key paths more than once, \
              violating the one-canonical-entry-per-field rule: {duplicates:#?}"
         );
+    }
+
+    #[test]
+    fn website_split_mode_values_match_the_exported_schema() {
+        let settings = built_in_config_settings();
+        let setting = settings
+            .iter()
+            .find(|setting| setting.path.render() == "defaults.hardware.split_mode")
+            .expect("split mode schema setting");
+        let ConfigValueSchema::Enum { values } = &setting.value_schema else {
+            panic!("split mode must remain an enum");
+        };
+
+        assert!(values.iter().any(|value| value == "tensor"));
+        let row = CONFIG_REFERENCE_MD
+            .lines()
+            .find(|line| line.starts_with("| `hardware.split_mode` |"))
+            .expect("website split mode row");
+        for value in values {
+            assert!(
+                row.contains(&format!("`{value}`")),
+                "website split mode row is missing schema value {value:?}: {row}"
+            );
+        }
     }
 
     const SKIPPY_CONFIGURATION_MD: &str = include_str!(concat!(

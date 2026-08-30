@@ -54,6 +54,7 @@ pub enum SplitMode {
     None,
     Layer,
     Row,
+    Tensor,
 }
 
 impl SplitMode {
@@ -63,6 +64,7 @@ impl SplitMode {
             Self::None => 0,
             Self::Layer => 1,
             Self::Row => 2,
+            Self::Tensor => 3,
         }
     }
 }
@@ -595,13 +597,21 @@ mod tests {
         }
         .as_raw()?
         .raw;
+        let tensor = RuntimeConfig {
+            split_mode: SplitMode::Tensor,
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
 
         assert_eq!(auto.split_mode, skippy_ffi::TRISTATE_AUTO);
         assert_eq!(none.split_mode, 0);
         assert_eq!(layer.split_mode, 1);
         assert_eq!(row.split_mode, 2);
+        assert_eq!(tensor.split_mode, 3);
         assert_ne!(none.split_mode, layer.split_mode);
         assert_ne!(layer.split_mode, row.split_mode);
+        assert_ne!(row.split_mode, tensor.split_mode);
         Ok(())
     }
 

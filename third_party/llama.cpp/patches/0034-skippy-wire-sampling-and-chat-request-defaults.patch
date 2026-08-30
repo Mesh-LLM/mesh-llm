@@ -335,7 +335,7 @@ index 49d4eaa59..1bb2c6129 100644
  llama_sampler * skippy_build_sampling_chain(
          skippy_session * session,
          const skippy_sampling_config * sampling) {
-@@ -369,41 +504,77 @@ llama_sampler * skippy_build_sampling_chain(
+@@ -369,41 +504,81 @@ llama_sampler * skippy_build_sampling_chain(
          return sampler;
      }
  
@@ -397,6 +397,10 @@ index 49d4eaa59..1bb2c6129 100644
 +                seed);
 +    } else if (configured_count == 0) {
 +        for (const uint32_t sampler_type : default_samplers) {
++            if (sampler_type == SKIPPY_SAMPLER_TOP_P
++                    && !(sampling->top_p > 0.0f && sampling->top_p < 1.0f)) {
++                continue;
++            }
 +            skippy_add_configured_sampler(
 +                    sampler,
 +                    session,
@@ -442,4 +446,3 @@ index 49d4eaa59..1bb2c6129 100644
  
 -- 
 2.50.1 (Apple Git-155)
-

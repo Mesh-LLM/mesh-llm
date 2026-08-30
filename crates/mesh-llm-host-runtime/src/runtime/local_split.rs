@@ -226,6 +226,7 @@ pub(super) async fn start_runtime_split_model(
         node: spec.node,
         mesh_config: spec.mesh_config,
         model_ref,
+        config_model_id: spec.config_model_id,
         model_path: spec.model_path,
         package: &package,
         generation: &active,
@@ -253,6 +254,7 @@ pub(super) async fn start_runtime_split_model(
         model_name: model_ref.to_string(),
         model_path: spec.model_path.to_path_buf(),
         model_ref: model_ref.to_string(),
+        config_model_id: spec.config_model_id.map(str::to_string),
         package: package.clone(),
         compact_meta: compact_meta.clone(),
         active,
@@ -279,8 +281,11 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         topology_locked,
-        health_interval: loading::configured_stage_lifecycle_intervals(spec.mesh_config, model_ref)
-            .health_interval,
+        health_interval: loading::configured_stage_lifecycle_intervals(
+            spec.mesh_config,
+            spec.config_model_id,
+        )
+        .health_interval,
     }));
 
     Ok(SplitRuntimeStart::Started(Box::new(loaded)))

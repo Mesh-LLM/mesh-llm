@@ -26,6 +26,12 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    /// Whether the iteration scheduler may serve multiple active lanes.
+    ///
+    /// Binary stages launched by the standalone CLI retain the historical
+    /// enabled default. Mesh-launched stages receive the resolved value from
+    /// the stage-control load request.
+    pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -119,6 +125,7 @@ impl BinaryStageOptions {
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
+            continuous_batching: true,
             openai,
         })
     }

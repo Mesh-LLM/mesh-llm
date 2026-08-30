@@ -99,7 +99,7 @@ keep_tokens = 32
 }
 
 #[test]
-fn silent_no_op_field_produces_warning() {
+fn silent_no_op_field_produces_error() {
     let config: MeshConfig = toml::from_str(
         r#"
 [defaults.hardware]
@@ -111,7 +111,7 @@ warmup = true
     let diagnostics = wiring_manifest_diagnostics(&config);
     assert!(diagnostics.iter().any(|d| {
         d.path.as_ref().map(ConfigPath::render) == Some("defaults.hardware.warmup".to_string())
-            && d.severity == ConfigDiagnosticSeverity::Warning
+            && d.severity == ConfigDiagnosticSeverity::Error
     }));
 }
 

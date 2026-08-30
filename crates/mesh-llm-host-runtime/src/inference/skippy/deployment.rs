@@ -6,7 +6,8 @@ use super::family_policy::FamilyPolicy;
 use super::materialization::StagePackageInfo;
 use super::topology::MeshStagePlan;
 use super::{
-    KvCachePolicy, StageLoadRequest, StagePeerDescriptor, StageStatusSnapshot, StageStopRequest,
+    KvCachePolicy, StageLoadRequest, StageLoadRuntimeSettings, StagePeerDescriptor,
+    StageStatusSnapshot, StageStopRequest,
 };
 use crate::mesh;
 
@@ -19,6 +20,7 @@ pub(crate) struct StageDeploymentContext<'a> {
     pub(crate) activation_width: i32,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
+    pub(crate) continuous_batching: bool,
     pub(crate) n_batch: Option<u32>,
     pub(crate) n_ubatch: Option<u32>,
     pub(crate) kv_cache: KvCachePolicy,
@@ -30,6 +32,7 @@ pub(crate) struct StageDeploymentContext<'a> {
     pub(crate) mlock: bool,
     pub(crate) projector_path: Option<String>,
     pub(crate) native_mtp_enabled: bool,
+    pub(crate) runtime_settings: StageLoadRuntimeSettings,
 }
 
 pub(crate) fn remote_stage_load_request(
@@ -63,6 +66,7 @@ pub(crate) fn remote_stage_load_request(
         activation_width: context.activation_width,
         ctx_size: context.ctx_size,
         lane_count: context.lane_count,
+        continuous_batching: context.continuous_batching,
         n_batch: context.n_batch,
         n_ubatch: context.n_ubatch,
         n_gpu_layers: -1,
@@ -71,6 +75,7 @@ pub(crate) fn remote_stage_load_request(
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,
+        runtime_settings: context.runtime_settings,
         native_mtp_enabled: context.native_mtp_enabled,
         shutdown_generation: 1,
         coordinator_term: 0,
@@ -123,26 +128,20 @@ pub(crate) fn stage0_config(
         n_gpu_layers: -1,
         mmap: context.mmap,
         mlock: context.mlock,
-        // Split/multi-node deployment does not yet resolve a per-stage value
-        // for hardware.repack, hardware.op_offload, hardware.no_host_buffer,
-        // hardware.check_tensors, hardware.direct_io, hardware.main_gpu, or
-        // hardware.split_mode; disabled/auto preserves today's defaults.
-        repack: false,
-        op_offload: None,
-        no_host_buffer: false,
-        check_tensors: false,
-        direct_io: false,
-        main_gpu: None,
-        split_mode: skippy_protocol::SplitMode::Auto,
+        repack: context.runtime_settings.repack,
+        op_offload: context.runtime_settings.op_offload,
+        no_host_buffer: context.runtime_settings.no_host_buffer,
+        check_tensors: context.runtime_settings.check_tensors,
+        direct_io: context.runtime_settings.direct_io,
+        main_gpu: context.runtime_settings.main_gpu,
+        split_mode: context.runtime_settings.split_mode,
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,
-        kv_offload: context.kv_offload,
-        kv_unified: context.kv_unified,
-        swa_full: context.swa_full,
-        // Split/multi-node deployment does not yet resolve a per-stage idle
-        // pool budget; auto preserves today's unbounded idle-pool behavior.
-        cache_idle_slots: None,
+        kv_offload: context.runtime_settings.kv_offload,
+        kv_unified: context.runtime_settings.kv_unified,
+        swa_full: context.runtime_settings.swa_full,
+        cache_idle_slots: context.runtime_settings.cache_idle_slots,
         filter_tensors_on_load: true,
         selected_device,
         kv_cache: None,
@@ -268,6 +267,7 @@ mod tests {
             activation_width: 1024,
             ctx_size: 8192,
             lane_count: 2,
+            continuous_batching: true,
             n_batch: None,
             n_ubatch: None,
             kv_cache: KvCachePolicy::for_model_size(0),
@@ -279,6 +279,19 @@ mod tests {
             mlock: true,
             projector_path: Some("/models/mmproj.gguf".to_string()),
             native_mtp_enabled: false,
+            runtime_settings: StageLoadRuntimeSettings {
+                repack: true,
+                op_offload: Some(false),
+                no_host_buffer: true,
+                check_tensors: true,
+                direct_io: true,
+                main_gpu: Some(2),
+                split_mode: skippy_protocol::SplitMode::Row,
+                kv_offload: Some(false),
+                kv_unified: Some(true),
+                swa_full: Some(false),
+                cache_idle_slots: Some(3),
+            },
         };
         let request = remote_stage_load_request(
             &context,
@@ -304,6 +317,7 @@ mod tests {
         assert_eq!((request.layer_start, request.layer_end), (4, 8));
         assert!(request.projector_path.is_none());
         assert!(!request.native_mtp_enabled);
+        assert_eq!(request.runtime_settings, context.runtime_settings);
 
         let stage0 = stage0_config(
             &context,
@@ -331,5 +345,8 @@ mod tests {
             Some("/models/mmproj.gguf")
         );
         assert!(!stage0.native_mtp_enabled);
+        assert_eq!(stage0.kv_offload, context.runtime_settings.kv_offload);
+        assert_eq!(stage0.kv_unified, context.runtime_settings.kv_unified);
+        assert_eq!(stage0.swa_full, context.runtime_settings.swa_full);
     }
 }

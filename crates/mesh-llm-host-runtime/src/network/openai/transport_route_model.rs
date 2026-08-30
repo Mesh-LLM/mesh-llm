@@ -396,15 +396,23 @@ fn handle_retryable_route_model_unavailable(
     RouteModelDisposition::Continue
 }
 
-fn finalize_route_model_result(
-    _node: &mesh::Node,
-    _model: &str,
+pub(crate) fn finalize_route_model_result(
+    node: &mesh::Node,
+    model: &str,
     _request: &BufferedHttpRequest,
     _route_started: Instant,
     _attempts: usize,
     result: RouteDispatchOutcome,
-    _target: &election::InferenceTarget,
+    target: &election::InferenceTarget,
 ) -> RouteDispatchOutcome {
+    if let RouteDispatchOutcome::RespondedWithUsage { status_code, usage } = result {
+        node.record_prompt_shape(
+            Some(model),
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            request_outcome_for_status(status_code, request_service_for_target(target)),
+        );
+    }
     result
 }
 

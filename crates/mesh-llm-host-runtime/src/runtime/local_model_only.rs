@@ -156,9 +156,17 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
 
     let model_name = model.declared_ref.clone();
+    let survey_telemetry = survey::SurveyTelemetry::start(
+        &config,
+        hardware::survey(),
+        survey::SurveyTelemetrySource {
+            node_id: "local-model-only".into(),
+            node_role: "worker".into(),
+        },
+    );
     let launch = LocalOpenAiModelStartSpec {
         mesh_config: &config,
-        config_model_id: Some(&model.declared_ref),
+        config_model_id: model.config_model_id.as_deref(),
         model_path: &model.resolved_path,
         model_bytes,
         mmproj_override: model.mmproj_path.as_deref(),
@@ -176,7 +184,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
             super::status::mesh_guardrail_mode_to_openai(options.mesh_guardrails),
         ),
         skippy_telemetry: skippy_telemetry_options(&options),
-        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        survey_telemetry,
         hook_policy: None,
         serving_hooks_factory,
         http_bind_addr: bind_addr,

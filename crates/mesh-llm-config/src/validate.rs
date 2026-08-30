@@ -134,7 +134,7 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
 
     collect_legacy_draft_model_path_warnings(config, &mut diagnostics);
 
-    validate_duplicate_model_entries(&config.models, &mut diagnostics);
+    validate_duplicate_model_entries(&config.models, config.defaults.as_ref(), &mut diagnostics);
 
     let existing_paths: std::collections::BTreeSet<String> = diagnostics
         .iter()
@@ -401,12 +401,6 @@ fn validate_telemetry_config(config: &TelemetryConfig) -> DiagnosticResult {
         return Err(validation_diagnostic(
             "telemetry.queue_size",
             "telemetry.queue_size must be at least 1",
-        ));
-    }
-    if config.prompt_shape_metrics {
-        return Err(validation_diagnostic(
-            "telemetry.prompt_shape_metrics",
-            "telemetry.prompt_shape_metrics is not supported yet and must remain false",
         ));
     }
     Ok(())

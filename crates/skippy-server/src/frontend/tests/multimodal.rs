@@ -360,6 +360,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
+            continuous_batching: true,
             openai: None,
         });
     let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);

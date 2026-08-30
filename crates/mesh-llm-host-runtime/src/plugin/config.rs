@@ -347,7 +347,10 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         ],
         url: None,
         env: BTreeMap::new(),
-        startup: PluginStartupOptions::default(),
+        startup: PluginStartupOptions {
+            optional: true,
+            ..PluginStartupOptions::default()
+        },
         web_ui_enabled: None,
         installed_metadata: None,
     })
@@ -882,7 +885,7 @@ advertise_addr = "127.0.0.1:0"
     }
 
     #[test]
-    fn telemetry_config_rejects_prompt_shape_metrics_until_reviewed() {
+    fn telemetry_config_accepts_prompt_shape_metrics_after_review() {
         let config: MeshConfig = toml::from_str(
             r#"
 [telemetry]
@@ -891,12 +894,7 @@ prompt_shape_metrics = true
         )
         .unwrap();
 
-        let err = validate_config(&config).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("telemetry.prompt_shape_metrics is not supported yet"),
-            "unexpected error: {err}"
-        );
+        validate_config(&config).expect("prompt shape metrics should validate");
     }
 
     #[test]
@@ -1364,7 +1362,7 @@ ctx_size = 4096
 kv_cache_policy = "balanced"
 
 [defaults.hardware]
-model_runtime = "cuda"
+gpu_layers = 10
 
 [defaults.throughput]
 parallel = 2
@@ -1391,8 +1389,8 @@ model = "Qwen3-8B-Q4_K_M"
         let defaults = config.defaults.expect("defaults should parse");
         assert_eq!(defaults.model_fit.and_then(|v| v.ctx_size), Some(4096));
         assert_eq!(
-            defaults.hardware.and_then(|v| v.model_runtime),
-            Some(ModelRuntimeKind::Cuda)
+            defaults.hardware.and_then(|v| v.gpu_layers),
+            Some(IntegerOrString::Integer(10))
         );
         assert_eq!(defaults.throughput.and_then(|v| v.parallel), Some(2));
         assert_eq!(
@@ -1425,15 +1423,10 @@ prompt_cache = "auto"
 context_shift = "auto"
 
 [defaults.hardware]
-model_runtime = "auto"
 gpu_layers = "auto"
-split_mode = "auto"
-main_gpu = 0
 safety_margin_gb = 2.0
 mmap = "auto"
 mlock = false
-direct_io = false
-warmup = "auto"
 
 [defaults.throughput]
 parallel = 1
@@ -1496,6 +1489,37 @@ device = "cuda:0"
         ));
         assert_eq!(config.models[0].ctx_size, Some(16384));
         assert_eq!(config.models[0].gpu_id.as_deref(), Some("cuda:0"));
+    }
+
+    #[test]
+    fn partial_hardware_controls_remain_rejected_at_validation_boundary() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.hardware]
+split_mode = "row"
+main_gpu = 0
+direct_io = true
+"#,
+        )
+        .expect("partial hardware controls must parse before validation");
+
+        let diagnostics = mesh_llm_config::validate_config_diagnostics(&config);
+        let rejected = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == ConfigDiagnosticCode::UnsupportedField
+                    && diagnostic.severity == ConfigDiagnosticSeverity::Error
+            })
+            .filter_map(|diagnostic| diagnostic.path.as_ref().map(|path| path.render()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            rejected,
+            BTreeSet::from([
+                "defaults.hardware.direct_io".to_string(),
+                "defaults.hardware.main_gpu".to_string(),
+                "defaults.hardware.split_mode".to_string(),
+            ])
+        );
     }
 
     #[test]
@@ -1621,7 +1645,7 @@ split_mode = "diagonal"
         let err = validate_config(&config).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "models[0].hardware.split_mode must be one of: auto, none, layer, row"
+            "models[0].hardware.split_mode must be one of: auto, none, layer, row, tensor"
         );
     }
 

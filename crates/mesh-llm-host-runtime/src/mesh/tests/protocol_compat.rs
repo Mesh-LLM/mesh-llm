@@ -10,6 +10,7 @@ fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
 
 fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
     assert_eq!(proto.source_model_bytes, Some(123_456_789));
+    assert_eq!(proto.continuous_batching, Some(false));
     assert_eq!(proto.mmap, Some(false));
     assert_eq!(proto.mlock, Some(true));
     assert_eq!(proto.projector_use_gpu, Some(false));
@@ -23,6 +24,7 @@ fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
 
 fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadRequest) {
     assert_eq!(decoded.source_model_bytes, Some(123_456_789));
+    assert!(!decoded.continuous_batching);
     assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
     assert_eq!(decoded.mmap, Some(false));
     assert!(decoded.mlock);
@@ -33,6 +35,13 @@ fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadReques
     assert_eq!(decoded.batch_max_tokens, Some(512));
     assert_eq!(decoded.glm_dsa_policy, skippy_protocol::GlmDsaPolicy::V1);
     assert_eq!(decoded.generation_signal_window, Some(24));
+}
+
+#[test]
+fn stage_load_proto_missing_continuous_batching_keeps_legacy_enabled_default() {
+    let decoded = stage_load_from_proto(skippy_stage_proto::LoadStage::default()).unwrap();
+
+    assert!(decoded.continuous_batching);
 }
 
 #[test]

@@ -102,6 +102,22 @@ message LoadStage {
   optional uint32 batch_max_tokens = 40;
   StageGlmDsaPolicy glm_dsa_policy = 41;
   optional uint32 generation_signal_window = 42;
+  optional StageLoadRuntimeSettings runtime_settings = 43;
+  optional bool continuous_batching = 44;
+}
+
+message StageLoadRuntimeSettings {
+  optional bool repack = 1;
+  optional bool op_offload = 2;
+  optional bool no_host_buffer = 3;
+  optional bool check_tensors = 4;
+  optional bool direct_io = 5;
+  optional uint32 main_gpu = 6;
+  optional int32 split_mode = 7;
+  optional bool kv_offload = 8;
+  optional bool kv_unified = 9;
+  optional bool swa_full = 10;
+  optional uint32 cache_idle_slots = 11;
 }
 
 message StopStage {

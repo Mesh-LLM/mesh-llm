@@ -120,7 +120,7 @@ fn validate_schema_contract_fixture_reports_stable_canonical_signatures() {
                 "models[3].model_fit.keep_tokens",
                 "models.<model-ref>.model_fit.keep_tokens",
                 "error",
-                "invalid_value",
+                "unsupported_field",
             ),
             DiagnosticSignature::new(
                 "models[4].model_fit.cache_idle_slots",

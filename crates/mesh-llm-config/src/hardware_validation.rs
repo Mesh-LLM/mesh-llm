@@ -140,7 +140,7 @@ pub(crate) fn validate_hardware(
     }
     validate_optional_enum(
         config.split_mode.as_deref(),
-        &["auto", "none", "layer", "row"],
+        &["auto", "none", "layer", "row", "tensor"],
         &format!("{base_path}.split_mode"),
     )?;
     if let Some(value) = &config.cpu_moe {
@@ -250,4 +250,38 @@ mod tests {
 
     include!("validate_gpu_tune_tests.rs");
     include!("validate_tensor_split_tests.rs");
+
+    #[test]
+    fn tensor_split_mode_preserves_partial_multi_node_diagnostic() {
+        let config: MeshConfig = toml::from_str(
+            "[[models]]\nmodel = \"demo\"\n[models.hardware]\nsplit_mode = \"tensor\"\n",
+        )
+        .expect("tensor split mode must parse");
+
+        let diagnostics = crate::validate_config_diagnostics(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path.as_ref().map(crate::ConfigPath::render)
+                == Some("models[0].hardware.split_mode".to_string())
+                && diagnostic.severity == crate::ConfigDiagnosticSeverity::Error
+        }));
+    }
+
+    #[test]
+    fn mmap_native_controls_are_rejected_at_validation_boundary() {
+        let config: MeshConfig = toml::from_str(
+            "[defaults.hardware]\nuse_mmap_prefetch = true\nuse_mmap_buffer = true\n",
+        )
+        .expect("documented mmap controls must parse");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.severity == crate::ConfigDiagnosticSeverity::Error
+                })
+                .count(),
+            2
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
@@ -23,10 +23,24 @@ use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
 
+#[cfg(test)]
 pub(crate) fn resolve_skippy_config(
     request: SkippyConfigResolveRequest<'_>,
 ) -> Result<ResolvedSkippyConfig> {
-    let context = ResolverContext::new(request);
+    let config_model_id = request.model_id.to_string();
+    resolve_skippy_config_for_selector(request, Some(&config_model_id))
+}
+
+pub(crate) fn resolve_skippy_config_for_selector(
+    request: SkippyConfigResolveRequest<'_>,
+    config_model_id: Option<&str>,
+) -> Result<ResolvedSkippyConfig> {
+    resolve_skippy_config_with_context(ResolverContext::new_for_selector(request, config_model_id))
+}
+
+fn resolve_skippy_config_with_context(
+    context: ResolverContext<'_>,
+) -> Result<ResolvedSkippyConfig> {
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
@@ -138,13 +152,25 @@ struct ResolverContext<'a> {
 }
 
 impl<'a> ResolverContext<'a> {
-    fn new(request: SkippyConfigResolveRequest<'a>) -> Self {
+    fn new_for_selector(
+        request: SkippyConfigResolveRequest<'a>,
+        config_model_id: Option<&str>,
+    ) -> Self {
+        let model_entry = config_model_id.and_then(|selector| {
+            request
+                .mesh_config
+                .models
+                .iter()
+                .find(|entry| entry.model == selector)
+        });
+        Self::with_model_entry(request, model_entry)
+    }
+
+    fn with_model_entry(
+        request: SkippyConfigResolveRequest<'a>,
+        model_entry: Option<&'a ModelConfigEntry>,
+    ) -> Self {
         let mesh_config = request.mesh_config;
-        let model_entry = mesh_config
-            .models
-            .iter()
-            .find(|entry| entry.model == request.model_id)
-            .or_else(|| find_model_entry_by_resolved_path(mesh_config, request.model_path));
         let defaults = mesh_config.defaults.as_ref();
         let model_fit = model_entry.and_then(|entry| entry.model_fit.as_ref());
         let global_model_fit = defaults.and_then(|value| value.model_fit.as_ref());
@@ -159,32 +185,6 @@ impl<'a> ResolverContext<'a> {
             global_model_fit,
             model_throughput,
             global_throughput,
-        }
-    }
-}
-
-fn find_model_entry_by_resolved_path<'a>(
-    mesh_config: &'a crate::plugin::MeshConfig,
-    model_path: &Path,
-) -> Option<&'a ModelConfigEntry> {
-    let requested_path = comparable_path(model_path);
-    mesh_config.models.iter().find(|entry| {
-        entry
-            .hardware
-            .as_ref()
-            .and_then(|hardware| hardware.model_path.as_deref())
-            .is_some_and(|configured| comparable_path(Path::new(configured)) == requested_path)
-    })
-}
-
-fn comparable_path(path: &Path) -> PathBuf {
-    match path.canonicalize() {
-        Ok(canonical) => canonical,
-        Err(e) => {
-            tracing::warn!(
-                "failed to canonicalize path {path:?}: {e}; using raw path for config entry lookup, which may miss entries"
-            );
-            path.to_path_buf()
         }
     }
 }
@@ -570,8 +570,11 @@ fn resolve_split_mode(
         Some(value) if value.eq_ignore_ascii_case("none") => Ok(skippy_protocol::SplitMode::None),
         Some(value) if value.eq_ignore_ascii_case("layer") => Ok(skippy_protocol::SplitMode::Layer),
         Some(value) if value.eq_ignore_ascii_case("row") => Ok(skippy_protocol::SplitMode::Row),
+        Some(value) if value.eq_ignore_ascii_case("tensor") => {
+            Ok(skippy_protocol::SplitMode::Tensor)
+        }
         Some(other) => bail!(
-            "hardware.split_mode must be \"auto\", \"none\", \"layer\", or \"row\", got {other:?}"
+            "hardware.split_mode must be \"auto\", \"none\", \"layer\", \"row\", or \"tensor\", got {other:?}"
         ),
     }
 }

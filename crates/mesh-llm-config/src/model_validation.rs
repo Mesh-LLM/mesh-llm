@@ -5,10 +5,9 @@ use crate::hardware_validation::{
 use crate::model::{
     AdvancedConfig, BoolOrAuto, ConfigPath, ConfigPathSegment, GpuAssignment, HardwareConfig,
     IntegerOrString, MeshConfig, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig,
-    ModelTopologyConfig, ModelTopologyNodeSelector, MultimodalConfig, PrefixCacheConfig,
-    ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, SkippyConfig, SpeculativeConfig,
-    StringOrStringList, merge_hardware, merge_model_fit, merge_model_topology, merge_multimodal,
-    merge_throughput,
+    MultimodalConfig, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig,
+    SkippyConfig, SpeculativeConfig, StringOrStringList, merge_hardware, merge_model_fit,
+    merge_multimodal, merge_throughput,
 };
 use skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 
@@ -21,18 +20,22 @@ use crate::validation_support::{
     validation_diagnostic,
 };
 
+mod topology;
+pub(crate) use topology::model_topology_diagnostics;
+
 pub(crate) fn validate_duplicate_model_entries(
     models: &[ModelConfigEntry],
+    defaults: Option<&ModelConfigDefaults>,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
     for i in 0..models.len() {
         for j in (i + 1)..models.len() {
             let public_identity_i = models[i].model.trim();
             let public_identity_j = models[j].model.trim();
-            if models[i].model == models[j].model
-                && models[i].derived_profile() == models[j].derived_profile()
-            {
-                let profile_i = models[i].derived_profile();
+            let first_profile = effective_model_profile(&models[i], defaults);
+            let second_profile = effective_model_profile(&models[j], defaults);
+            if models[i].model == models[j].model && first_profile == second_profile {
+                let profile_i = first_profile.clone();
                 let profile_clause = if profile_i.is_empty() {
                     " and default profile".to_string()
                 } else {
@@ -53,8 +56,53 @@ pub(crate) fn validate_duplicate_model_entries(
                     ),
                 ));
             }
+
+            let first_name = effective_served_model_name(&models[i], defaults);
+            let second_name = effective_served_model_name(&models[j], defaults);
+            if first_name == second_name
+                && !(models[i].model == models[j].model && first_profile == second_profile)
+            {
+                diagnostics.push(validation_diagnostic(
+                    "models",
+                    format!(
+                        "duplicate served model identity: models[{i}] and models[{j}] both resolve to {first_name:?}"
+                    ),
+                ));
+            }
         }
     }
+}
+
+fn effective_served_model_name(
+    model: &ModelConfigEntry,
+    defaults: Option<&ModelConfigDefaults>,
+) -> String {
+    let base_name = model
+        .advanced
+        .as_ref()
+        .and_then(|advanced| advanced.server.as_ref())
+        .and_then(|server| server.alias.as_deref())
+        .or_else(|| {
+            defaults
+                .and_then(|value| value.advanced.as_ref())
+                .and_then(|advanced| advanced.server.as_ref())
+                .and_then(|server| server.alias.as_deref())
+        })
+        .unwrap_or(&model.model)
+        .trim();
+    let profile = effective_model_profile(model, defaults);
+    if profile.is_empty() {
+        base_name.to_string()
+    } else {
+        format!("{base_name}#{profile}")
+    }
+}
+
+fn effective_model_profile(
+    model: &ModelConfigEntry,
+    defaults: Option<&ModelConfigDefaults>,
+) -> String {
+    model.with_profile_defaults(defaults).derived_profile()
 }
 
 pub(crate) fn collect_legacy_draft_model_path_warnings(
@@ -237,205 +285,6 @@ pub(crate) fn validate_model_entry(
         true,
     )?;
     Ok(())
-}
-
-pub(crate) fn model_topology_diagnostics(
-    defaults: Option<&ModelConfigDefaults>,
-    model: &ModelConfigEntry,
-    base_path: &str,
-    inherited_diagnostic_keys: &mut std::collections::BTreeSet<(String, String)>,
-) -> Vec<ConfigDiagnostic> {
-    let Some(effective) = EffectiveTopology::from_sources(
-        defaults.and_then(|defaults| defaults.topology.as_ref()),
-        model.topology.as_ref(),
-    ) else {
-        return Vec::new();
-    };
-    let diagnostics = validate_effective_topology(&effective, base_path);
-    let mut diagnostics = diagnostics
-        .into_iter()
-        .filter(|diagnostic| {
-            let Some(path) = diagnostic.path.as_ref().map(|path| path.render()) else {
-                return true;
-            };
-            if !path.starts_with("defaults.topology") {
-                return true;
-            }
-            inherited_diagnostic_keys.insert((path, diagnostic.message.clone()))
-        })
-        .collect::<Vec<_>>();
-    if !has_immutable_model_revision(&model.model) {
-        diagnostics.push(validation_diagnostic(
-            &format!("{base_path}.model"),
-            format!(
-                "{base_path}.model requires an explicit immutable revision when topology is configured"
-            ),
-        ));
-    }
-    diagnostics
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TopologyFieldSource {
-    Defaults,
-    Model,
-}
-
-impl TopologyFieldSource {
-    fn path(self, model_base_path: &str) -> String {
-        match self {
-            Self::Defaults => "defaults.topology".to_string(),
-            Self::Model => format!("{model_base_path}.topology"),
-        }
-    }
-}
-
-struct EffectiveTopology {
-    config: ModelTopologyConfig,
-    mode_source: TopologyFieldSource,
-    manifest_sha256_source: TopologyFieldSource,
-    stages_source: TopologyFieldSource,
-}
-
-impl EffectiveTopology {
-    fn from_sources(
-        defaults: Option<&ModelTopologyConfig>,
-        model: Option<&ModelTopologyConfig>,
-    ) -> Option<Self> {
-        let config = merge_model_topology(defaults, model)?;
-        let source_for = |model_value_is_set: bool| {
-            if model_value_is_set || defaults.is_none() {
-                TopologyFieldSource::Model
-            } else {
-                TopologyFieldSource::Defaults
-            }
-        };
-
-        Some(Self {
-            config,
-            mode_source: source_for(model.and_then(|topology| topology.mode.as_ref()).is_some()),
-            manifest_sha256_source: source_for(
-                model
-                    .and_then(|topology| topology.manifest_sha256.as_ref())
-                    .is_some(),
-            ),
-            stages_source: source_for(
-                model
-                    .and_then(|topology| topology.stages.as_ref())
-                    .is_some(),
-            ),
-        })
-    }
-}
-
-fn has_immutable_model_revision(model_ref: &str) -> bool {
-    let Some((_, revision_and_selector)) = model_ref.rsplit_once('@') else {
-        return false;
-    };
-    let revision = revision_and_selector
-        .split([':', '/'])
-        .next()
-        .unwrap_or_default()
-        .trim();
-    !revision.is_empty()
-        && !matches!(
-            revision.to_ascii_lowercase().as_str(),
-            "main" | "master" | "latest" | "dev" | "develop" | "development"
-        )
-}
-
-fn validate_effective_topology(
-    effective: &EffectiveTopology,
-    model_base_path: &str,
-) -> Vec<ConfigDiagnostic> {
-    let mode_path = effective.mode_source.path(model_base_path);
-    let manifest_path = effective.manifest_sha256_source.path(model_base_path);
-    let stages_path = effective.stages_source.path(model_base_path);
-    let mut diagnostics = Vec::new();
-    if effective.config.mode.is_none() {
-        diagnostics.push(validation_diagnostic(
-            &format!("{mode_path}.mode"),
-            format!("{mode_path}.mode is required when topology is configured"),
-        ));
-    }
-    match effective.config.manifest_sha256.as_deref() {
-        Some(manifest) if is_sha256_hex(manifest) => {}
-        Some(_) => diagnostics.push(validation_diagnostic(
-            &format!("{manifest_path}.manifest_sha256"),
-            format!("{manifest_path}.manifest_sha256 must be 64 lowercase hexadecimal characters"),
-        )),
-        None => diagnostics.push(validation_diagnostic(
-            &format!("{manifest_path}.manifest_sha256"),
-            format!("{manifest_path}.manifest_sha256 is required when topology is configured"),
-        )),
-    }
-    match effective.config.stages.as_deref() {
-        Some(stages) => validate_topology_stages(stages, &stages_path, &mut diagnostics),
-        None => diagnostics.push(validation_diagnostic(
-            &format!("{stages_path}.stages"),
-            format!("{stages_path}.stages is required when topology is configured"),
-        )),
-    }
-    diagnostics
-}
-
-fn validate_topology_stages(
-    stages: &[crate::model::ModelTopologyStageConfig],
-    topology_path: &str,
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-) {
-    if stages.len() < 2 {
-        diagnostics.push(validation_diagnostic(
-            &format!("{topology_path}.stages"),
-            format!("{topology_path}.stages requires at least two stages"),
-        ));
-    }
-    let mut expected_start = 0;
-    for (index, stage) in stages.iter().enumerate() {
-        let stage_path = format!("{topology_path}.stages[{index}]");
-        validate_topology_node_selector(&stage.node, &stage_path, diagnostics);
-        if stage.layer_start != expected_start {
-            diagnostics.push(validation_diagnostic(
-                &format!("{stage_path}.layer_start"),
-                format!("{stage_path}.layer_start must equal contiguous boundary {expected_start}"),
-            ));
-        }
-        if stage.layer_end <= stage.layer_start {
-            diagnostics.push(validation_diagnostic(
-                &format!("{stage_path}.layer_end"),
-                format!("{stage_path}.layer_end must be greater than layer_start"),
-            ));
-        }
-        expected_start = stage.layer_end;
-    }
-}
-
-fn validate_topology_node_selector(
-    selector: &ModelTopologyNodeSelector,
-    stage_path: &str,
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-) {
-    let endpoint = selector
-        .endpoint_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty());
-    let hostname = selector
-        .hostname
-        .as_deref()
-        .filter(|value| !value.trim().is_empty());
-    if endpoint.is_some() == hostname.is_some() {
-        diagnostics.push(validation_diagnostic(
-            &format!("{stage_path}.node"),
-            format!("{stage_path}.node requires exactly one of endpoint_id or hostname"),
-        ));
-    }
-}
-
-fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> DiagnosticResult {
@@ -1469,6 +1318,144 @@ ctx_size = 8192
             text.contains(public_identity),
             "missing colliding public identity: {text}"
         );
+    }
+
+    #[test]
+    fn load_behavior_changes_produce_distinct_effective_profiles() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.hardware]
+repack = true
+
+[[models]]
+model = "same-model"
+
+[[models]]
+model = "same-model"
+[models.hardware]
+repack = false
+"#,
+        )
+        .expect("config parses");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+
+        assert!(
+            !text.contains("duplicate model entry"),
+            "different effective load behavior must create distinct profiles: {text}"
+        );
+    }
+
+    #[test]
+    fn duplicate_explicit_served_aliases_are_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "canonical/first"
+[models.advanced.server]
+alias = "public-model"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+        assert!(text.contains("public-model"), "{text}");
+    }
+
+    #[test]
+    fn duplicate_inherited_served_aliases_are_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.advanced.server]
+alias = "default-public-model"
+
+[[models]]
+model = "canonical/first"
+
+[[models]]
+model = "canonical/second"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+        assert!(text.contains("default-public-model"), "{text}");
+    }
+
+    #[test]
+    fn served_alias_collisions_compare_trimmed_names() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "canonical/first"
+[models.advanced.server]
+alias = " public-model "
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+    }
+
+    #[test]
+    fn served_alias_collisions_include_defaults_merged_profiles() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.model_fit]
+ctx_size = 8192
+
+[[models]]
+model = "canonical/first"
+[models.model_fit]
+ctx_size = 8192
+[models.advanced.server]
+alias = "public-model"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+    }
+
+    #[test]
+    fn model_alias_override_avoids_inherited_alias_collision() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.advanced.server]
+alias = "default-public-model"
+
+[[models]]
+model = "canonical/first"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "second-public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        validate_config(&config).expect("effective served identities are distinct");
     }
 
     #[test]

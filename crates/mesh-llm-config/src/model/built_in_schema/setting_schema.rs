@@ -1,5 +1,6 @@
 fn top_level_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
     setting.visibility = if path == "version" {
         ConfigVisibility::Internal
     } else {
@@ -22,6 +23,7 @@ fn owner_control_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigS
 fn telemetry_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
     setting
 }
 
@@ -46,6 +48,7 @@ fn runtime_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSetting
     let mut setting = basic_setting(path, value_schema);
     setting.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::Api];
     setting.apply_mode = ConfigApplyMode::DynamicValidationOnly;
+    setting.restart_scope = ConfigRestartScope::ProcessRestart;
     setting
 }
 
@@ -202,18 +205,6 @@ fn basic_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSc
     }
 }
 
-fn unsupported_setting(
-    path: &str,
-    value_schema: ConfigValueSchema,
-    description: &str,
-) -> ConfigSettingSchema {
-    let mut setting = basic_setting(path, value_schema);
-    setting.support = ConfigSupportState::Unsupported;
-    setting.restart_scope = ConfigRestartScope::None;
-    setting.description = Some(description.to_string());
-    setting
-}
-
 fn rejected_setting(
     path: &str,
     value_schema: ConfigValueSchema,
@@ -226,6 +217,25 @@ fn rejected_setting(
     setting
 }
 
+fn unwired_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.support = ConfigSupportState::Unwired;
+    setting
+}
+
+fn experimental_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.support = ConfigSupportState::Experimental;
+    setting
+}
+
+fn unsupported_setting(path: &str, value_schema: ConfigValueSchema) -> ConfigSettingSchema {
+    let mut setting = basic_setting(path, value_schema);
+    setting.support = ConfigSupportState::Unsupported;
+    setting.restart_scope = ConfigRestartScope::None;
+    setting
+}
+
 fn hidden_setting(
     path: &str,
     value_schema: ConfigValueSchema,
@@ -234,6 +244,17 @@ fn hidden_setting(
     let mut setting = basic_setting(path, value_schema);
     setting.visibility = ConfigVisibility::Hidden;
     setting.description = Some(description.to_string());
+    setting
+}
+
+fn hidden_unsupported_setting(
+    path: &str,
+    value_schema: ConfigValueSchema,
+    description: &str,
+) -> ConfigSettingSchema {
+    let mut setting = hidden_setting(path, value_schema, description);
+    setting.support = ConfigSupportState::Unsupported;
+    setting.restart_scope = ConfigRestartScope::None;
     setting
 }
 

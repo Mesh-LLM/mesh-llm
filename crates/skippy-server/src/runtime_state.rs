@@ -342,6 +342,7 @@ fn runtime_config_from_stage_config(
             SplitMode::None => RuntimeSplitMode::None,
             SplitMode::Layer => RuntimeSplitMode::Layer,
             SplitMode::Row => RuntimeSplitMode::Row,
+            SplitMode::Tensor => RuntimeSplitMode::Tensor,
         },
         selected_backend_device: config
             .selected_device

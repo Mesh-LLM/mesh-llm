@@ -51,6 +51,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) mesh_config: &'a plugin::MeshConfig,
     pub(super) model_ref: &'a str,
+    pub(super) config_model_id: Option<&'a str>,
     pub(super) model_path: &'a Path,
     pub(super) package: &'a skippy::SkippyPackageIdentity,
     pub(super) generation: &'a SplitTopologyGeneration,
@@ -89,9 +90,9 @@ pub(super) struct StageLifecycleIntervals {
 
 pub(super) fn configured_stage_lifecycle_intervals(
     mesh_config: &plugin::MeshConfig,
-    model_ref: &str,
+    config_model_id: Option<&str>,
 ) -> StageLifecycleIntervals {
-    let model = model_skippy_config(mesh_config, model_ref);
+    let model = config_model_id.and_then(|selector| model_skippy_config(mesh_config, selector));
     let defaults = mesh_config
         .defaults
         .as_ref()
@@ -502,6 +503,7 @@ pub(super) fn split_runtime_stage_load_request(
         activation_width: settings.activation_width,
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
+        continuous_batching: settings.embedded_openai.continuous_batching,
         n_batch: resolved_config.n_batch,
         n_ubatch: resolved_config.n_ubatch,
         n_gpu_layers: resolved_config.n_gpu_layers,
@@ -510,6 +512,19 @@ pub(super) fn split_runtime_stage_load_request(
         cache_type_k: resolved_config.cache_type_k.clone(),
         cache_type_v: resolved_config.cache_type_v.clone(),
         flash_attn_type: resolved_config.flash_attn_type,
+        runtime_settings: skippy::StageLoadRuntimeSettings {
+            repack: resolved_config.repack,
+            op_offload: resolved_config.op_offload,
+            no_host_buffer: resolved_config.no_host_buffer,
+            check_tensors: resolved_config.check_tensors,
+            direct_io: resolved_config.direct_io,
+            main_gpu: resolved_config.main_gpu,
+            split_mode: resolved_config.split_mode,
+            kv_offload: resolved_config.kv_offload,
+            kv_unified: resolved_config.kv_unified,
+            swa_full: resolved_config.swa_full,
+            cache_idle_slots: resolved_config.cache_idle_slots,
+        },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
         shutdown_generation: spec.generation.generation,
         coordinator_term: spec.generation.coordinator_term,
@@ -545,19 +560,22 @@ pub(super) async fn split_generation_load_settings<'a>(
     let load_mode = split_generation_load_mode(spec.package);
     let activation_width =
         skippy_stage_activation_width(spec.package.activation_width, spec.model_ref)?;
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.model_ref,
-        model_path: spec.model_path,
-        model_bytes: spec.package.source_model_bytes,
-        allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
-        request_defaults: None,
-        package_generation: spec.package.generation.as_ref(),
-        // Split stage load uses the compact metadata scanned during planning
-        // so the resolver guards both the size-tiered default and the family
-        // K/V default exactly like the split planner does.
-        compact_meta: Some(spec.compact_meta),
-    })?;
+    let mut resolved = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: spec.mesh_config,
+            model_id: spec.model_ref,
+            model_path: spec.model_path,
+            model_bytes: spec.package.source_model_bytes,
+            allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
+            request_defaults: None,
+            package_generation: spec.package.generation.as_ref(),
+            // Split stage load uses the compact metadata scanned during planning
+            // so the resolver guards both the size-tiered default and the family
+            // K/V default exactly like the split planner does.
+            compact_meta: Some(spec.compact_meta),
+        },
+        spec.config_model_id,
+    )?;
     resolved.materialize_projector_url().await?;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
@@ -583,7 +601,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
     let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
-    let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.model_ref);
+    let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(spec.package.clone()),

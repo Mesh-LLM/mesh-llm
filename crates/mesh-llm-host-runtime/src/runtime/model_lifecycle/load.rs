@@ -69,10 +69,25 @@ async fn plan_runtime_model_bytes(model_path: &Path, requested_model: &str) -> u
         })
 }
 
+fn find_profile_model_overrides<'a>(
+    config: &'a plugin::MeshConfig,
+    model_ref: &str,
+    profile: &str,
+) -> Option<&'a plugin::ModelConfigEntry> {
+    config.models.iter().find(|model| {
+        model.model == model_ref
+            && model
+                .with_profile_defaults(config.defaults.as_ref())
+                .derived_profile()
+                == profile
+    })
+}
+
 /// Run auto-load for a runtime model.
 pub(crate) async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     spec: String,
+    config_model_id: Option<String>,
     profile: String,
 ) -> Result<api::RuntimeLoadResponse> {
     let load_started = Instant::now();
@@ -92,11 +107,8 @@ pub(crate) async fn run_auto_load_runtime_model(
         .unwrap_or_else(|| models::model_ref_for_path(&model_path));
     let requested_model = spec.clone();
     let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
-    let model_overrides = ctx
-        .config
-        .models
-        .iter()
-        .find(|m| m.model == spec && m.derived_profile() == *profile);
+    let config_selector = config_model_id.as_deref().unwrap_or(&spec);
+    let model_overrides = find_profile_model_overrides(ctx.config, config_selector, &profile);
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
         model_overrides.and_then(|m| m.parallel),
@@ -121,7 +133,7 @@ pub(crate) async fn run_auto_load_runtime_model(
         LocalRuntimeModelStartSpec {
             node: ctx.node,
             mesh_config: ctx.config,
-            config_model_id: Some(&spec),
+            config_model_id: model_overrides.map(|model| model.model.as_str()),
             model_path: &model_path,
             model_bytes,
             mmproj_override: None,
@@ -153,6 +165,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             ctx.survey_telemetry.record_launch_failure(
                 survey::SurveyModelSpec {
                     model: &requested_model,
+                    configured_model_selector: config_model_id.as_deref(),
                     model_path: Some(&model_path),
                     launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
                     pinned_gpu: None,
@@ -174,6 +187,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     };
     let survey_loaded_model = ctx.survey_telemetry.model(survey::SurveyModelSpec {
         model: &loaded_name,
+        configured_model_selector: config_model_id.as_deref(),
         model_path: Some(&model_path),
         launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
         pinned_gpu: None,

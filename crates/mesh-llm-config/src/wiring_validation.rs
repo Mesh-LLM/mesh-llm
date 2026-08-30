@@ -11,8 +11,8 @@
 //! - [`WiringBehavior::BailsDownstream`] -> `InvalidValue`, error (the field
 //!   passes static validation today but fails at model load or request
 //!   resolution; this moves that surprise earlier, to `config validate`).
-//! - [`WiringBehavior::SilentNoOp`] -> `UnsupportedField`, warning (the
-//!   field is accepted and resolved, but no runtime consumer reads it).
+//! - [`WiringBehavior::SilentNoOp`] -> `UnsupportedField`, error (the field
+//!   has no runtime consumer and must not be accepted as effective config).
 
 use crate::diagnostic::{ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSeverity};
 use crate::model::{ConfigPath, MeshConfig, ModelConfigEntry, PluginConfigEntry};
@@ -105,17 +105,15 @@ fn diagnostic_for_behavior(
             )),
         ),
         WiringBehavior::SilentNoOp => Some(
-            ConfigDiagnostic::warning(
+            ConfigDiagnostic::error(
                 ConfigDiagnosticCode::UnsupportedField,
                 crate::diagnostic::ConfigDiagnosticSource::Schema,
-                format!(
-                    "{manifest_path} is set, but it is a no-op today: {reason}"
-                ),
+                format!("{manifest_path} is not supported: {reason}"),
             )
             .at_path(path)
             .with_canonical_path(canonical_path)
             .with_help(format!(
-                "{manifest_path} does not change runtime behavior yet; {owner} wires it")),
+                "remove {manifest_path} from config.toml until {owner} wires a runtime consumer")),
         ),
     }
 }
@@ -152,7 +150,7 @@ fn severity_of(behavior: WiringBehavior) -> Option<ConfigDiagnosticSeverity> {
         WiringBehavior::Rejected | WiringBehavior::BailsDownstream => {
             Some(ConfigDiagnosticSeverity::Error)
         }
-        WiringBehavior::SilentNoOp => Some(ConfigDiagnosticSeverity::Warning),
+        WiringBehavior::SilentNoOp => Some(ConfigDiagnosticSeverity::Error),
     }
 }
 

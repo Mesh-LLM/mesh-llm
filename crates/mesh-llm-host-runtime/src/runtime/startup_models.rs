@@ -29,6 +29,7 @@ pub(super) struct StartupMeshCreationState {
 pub(super) struct StartupModelSpec {
     pub(super) model_ref: PathBuf,
     pub(super) declared_ref: Option<String>,
+    pub(super) config_model_id: Option<String>,
     pub(super) mmproj_ref: Option<PathBuf>,
     pub(super) ctx_size: Option<u32>,
     pub(super) gpu_id: Option<String>,
@@ -496,6 +497,7 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
             "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
             "--gguf" => options.gguf.push(next_test_arg(&mut iter, arg).into()),
+            "--mmproj" => options.mmproj = Some(next_test_arg(&mut iter, arg).into()),
             "--ctx-size" => {
                 options.ctx_size = Some(
                     next_test_arg(&mut iter, arg)
@@ -612,6 +614,79 @@ fn is_plain_model_alias(candidate: &str) -> bool {
         && !candidate.contains('@')
 }
 
+fn effective_startup_model_config(
+    model_ref: &str,
+    model: Option<&plugin::ModelConfigEntry>,
+    defaults: Option<&plugin::ModelConfigDefaults>,
+) -> plugin::ModelConfigEntry {
+    let profile_entry = model
+        .cloned()
+        .unwrap_or_else(|| plugin::ModelConfigEntry {
+            model: model_ref.to_string(),
+            ..plugin::ModelConfigEntry::default()
+        })
+        .with_profile_defaults(defaults);
+    let default_fit = defaults.and_then(|value| value.model_fit.as_ref());
+    let default_hardware = defaults.and_then(|value| value.hardware.as_ref());
+    let default_throughput = defaults.and_then(|value| value.throughput.as_ref());
+    let default_multimodal = defaults.and_then(|value| value.multimodal.as_ref());
+    plugin::ModelConfigEntry {
+        model: model_ref.to_string(),
+        mmproj: model
+            .and_then(|value| value.mmproj.clone())
+            .or_else(|| default_multimodal.and_then(|value| value.mmproj.clone()))
+            .or_else(|| default_hardware.and_then(|value| value.mmproj.clone())),
+        ctx_size: model
+            .and_then(|value| value.ctx_size)
+            .or_else(|| default_fit.and_then(|value| value.ctx_size)),
+        gpu_id: model
+            .and_then(|value| value.gpu_id.clone())
+            .or_else(|| default_hardware.and_then(|value| value.device.clone())),
+        parallel: model
+            .and_then(|value| value.parallel)
+            .or_else(|| default_throughput.and_then(|value| value.parallel)),
+        cache_type_k: model
+            .and_then(|value| value.cache_type_k.clone())
+            .or_else(|| default_fit.and_then(|value| value.cache_type_k.clone())),
+        cache_type_v: model
+            .and_then(|value| value.cache_type_v.clone())
+            .or_else(|| default_fit.and_then(|value| value.cache_type_v.clone())),
+        batch: model
+            .and_then(|value| value.batch)
+            .or_else(|| default_fit.and_then(|value| value.batch)),
+        ubatch: model
+            .and_then(|value| value.ubatch)
+            .or_else(|| default_fit.and_then(|value| value.ubatch)),
+        flash_attention: model
+            .and_then(|value| value.flash_attention)
+            .or_else(|| default_fit.and_then(|value| value.flash_attention)),
+        model_fit: profile_entry.model_fit,
+        hardware: profile_entry.hardware,
+        throughput: profile_entry.throughput,
+        ..plugin::ModelConfigEntry::default()
+    }
+}
+
+fn configured_server_alias(
+    model: &plugin::ModelConfigEntry,
+    defaults: Option<&plugin::ModelConfigDefaults>,
+) -> Option<String> {
+    model
+        .advanced
+        .as_ref()
+        .and_then(|advanced| advanced.server.as_ref())
+        .and_then(|server| server.alias.as_deref())
+        .or_else(|| {
+            defaults
+                .and_then(|value| value.advanced.as_ref())
+                .and_then(|advanced| advanced.server.as_ref())
+                .and_then(|server| server.alias.as_deref())
+        })
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(str::to_string)
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -622,6 +697,7 @@ pub(super) fn build_startup_model_specs(
 
     let mut specs = Vec::new();
     if cli_has_explicit_models(options) {
+        let defaults = config.defaults.as_ref();
         // `--gguf <path> --model <alias>` names the local file rather than
         // requesting a second model: bind the alias to the GGUF so we never
         // try to resolve it against the Hugging Face hub or the catalog.
@@ -630,20 +706,27 @@ pub(super) fn build_startup_model_specs(
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
+            let effective = effective_startup_model_config(&alias, None, defaults);
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: Some(alias),
-                mmproj_ref: options.mmproj.clone(),
-                ctx_size: options.ctx_size,
-                gpu_id: None,
+                config_model_id: None,
+                mmproj_ref: options
+                    .mmproj
+                    .clone()
+                    .or_else(|| effective.mmproj.as_ref().map(PathBuf::from)),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective.gpu_id.clone(),
                 config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                profile: effective.derived_profile(),
             });
             return Ok(specs);
         }
@@ -652,37 +735,47 @@ pub(super) fn build_startup_model_specs(
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
+            let effective =
+                effective_startup_model_config(&path.display().to_string(), None, defaults);
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: None,
-                mmproj_ref: None,
-                ctx_size: options.ctx_size,
-                gpu_id: None,
+                config_model_id: None,
+                mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective.gpu_id.clone(),
                 config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                profile: effective.derived_profile(),
             });
         }
         for model in &options.model {
+            let effective =
+                effective_startup_model_config(&model.display().to_string(), None, defaults);
             specs.push(StartupModelSpec {
                 model_ref: model.clone(),
                 declared_ref: None,
-                mmproj_ref: None,
-                ctx_size: options.ctx_size,
-                gpu_id: None,
+                config_model_id: None,
+                mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective.gpu_id.clone(),
                 config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                profile: effective.derived_profile(),
             });
         }
         if let Some(mmproj) = &options.mmproj
@@ -705,52 +798,59 @@ pub(super) fn build_startup_model_specs(
     }
 
     for model in &config.models {
+        let effective =
+            effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let configured_model_path = model
             .hardware
             .as_ref()
             .and_then(|hardware| hardware.model_path.as_ref())
             .or(default_model_path);
-        let (model_ref, declared_ref) = if let Some(configured_path) = configured_model_path {
-            let path = PathBuf::from(configured_path);
-            if !path.is_absolute() {
-                anyhow::bail!(
-                    "configured hardware.model_path for {} must be absolute: {}",
-                    model.model,
-                    path.display()
-                );
-            }
-            let metadata = std::fs::symlink_metadata(&path).with_context(|| {
-                format!(
-                    "configured hardware.model_path for {} is unavailable: {}",
-                    model.model,
-                    path.display()
-                )
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                anyhow::bail!(
-                    "configured hardware.model_path for {} must be a non-symlink file: {}",
-                    model.model,
-                    path.display()
-                );
-            }
-            (path, Some(model.model.clone()))
-        } else {
-            (PathBuf::from(model.model.clone()), None)
-        };
+        let alias = configured_server_alias(model, config.defaults.as_ref());
+        let (model_ref, fallback_declared_ref) =
+            if let Some(configured_path) = configured_model_path {
+                let path = PathBuf::from(configured_path);
+                if !path.is_absolute() {
+                    anyhow::bail!(
+                        "configured hardware.model_path for {} must be absolute: {}",
+                        model.model,
+                        path.display()
+                    );
+                }
+                let metadata = std::fs::symlink_metadata(&path).with_context(|| {
+                    format!(
+                        "configured hardware.model_path for {} is unavailable: {}",
+                        model.model,
+                        path.display()
+                    )
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    anyhow::bail!(
+                        "configured hardware.model_path for {} must be a non-symlink file: {}",
+                        model.model,
+                        path.display()
+                    );
+                }
+                (path, Some(model.model.clone()))
+            } else {
+                (PathBuf::from(model.model.clone()), None)
+            };
         specs.push(StartupModelSpec {
             model_ref,
-            declared_ref,
-            mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
-            ctx_size: options.ctx_size.or(model.ctx_size),
-            gpu_id: model.gpu_id.clone(),
+            declared_ref: alias.or(fallback_declared_ref),
+            config_model_id: Some(model.model.clone()),
+            mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+            ctx_size: options.ctx_size.or(effective.ctx_size),
+            gpu_id: effective.gpu_id.clone(),
             config_owned: true,
-            parallel: model.parallel,
-            cache_type_k: model.cache_type_k.clone(),
-            cache_type_v: model.cache_type_v.clone(),
-            n_batch: model.batch,
-            n_ubatch: model.ubatch,
-            flash_attention: model.flash_attention.unwrap_or(FlashAttentionType::Auto),
-            profile: model.derived_profile(),
+            parallel: effective.parallel,
+            cache_type_k: effective.cache_type_k.clone(),
+            cache_type_v: effective.cache_type_v.clone(),
+            n_batch: effective.batch,
+            n_ubatch: effective.ubatch,
+            flash_attention: effective
+                .flash_attention
+                .unwrap_or(FlashAttentionType::Auto),
+            profile: effective.derived_profile(),
         });
     }
     Ok(specs)
@@ -785,11 +885,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
         plans.push(StartupModelPlan {
             declared_ref,
-            config_model_id: spec.config_owned.then(|| {
-                spec.declared_ref
-                    .clone()
-                    .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned())
-            }),
+            config_model_id: spec.config_model_id.clone(),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
@@ -830,8 +926,9 @@ async fn resolve_startup_models_with_package_discovery(
     let mut plans = Vec::with_capacity(specs.len());
     for spec in specs {
         let requested_ref = spec
-            .declared_ref
+            .config_model_id
             .clone()
+            .or_else(|| spec.declared_ref.clone())
             .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned());
 
         // Check the remote catalog for a pre-split layer package before
@@ -878,7 +975,7 @@ async fn resolve_startup_models_with_package_discovery(
         };
         plans.push(StartupModelPlan {
             declared_ref,
-            config_model_id: spec.config_owned.then_some(requested_ref),
+            config_model_id: spec.config_model_id.clone(),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,

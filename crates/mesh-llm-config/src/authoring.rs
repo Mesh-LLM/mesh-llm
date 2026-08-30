@@ -401,6 +401,11 @@ impl ConfigEditor {
         &mut self,
         node: LocalServingNodeConfig,
     ) -> Result<&mut Self> {
+        if node.runtime.is_some() {
+            bail!(
+                "local serving node runtime is unsupported; configure a supported hardware selector instead"
+            );
+        }
         self.set_version(Some(1));
         if let Some(assignment) = node.gpu_assignment {
             self.set_gpu_assignment(assignment);
@@ -412,9 +417,6 @@ impl ConfigEditor {
             self.set_owner_control_advertise_addr(node.owner_control_advertise_addr);
         }
         let mut model = self.upsert_model(node.model, String::new())?;
-        if let Some(runtime) = node.runtime {
-            model.runtime(runtime);
-        }
         if let Some(device) = node.device {
             model.device(device);
         }

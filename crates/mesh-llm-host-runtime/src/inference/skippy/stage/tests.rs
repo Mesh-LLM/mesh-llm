@@ -94,6 +94,7 @@ fn load_request() -> StageLoadRequest {
         activation_width: 4096,
         ctx_size: 8192,
         lane_count: 3,
+        continuous_batching: true,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -102,6 +103,19 @@ fn load_request() -> StageLoadRequest {
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: FlashAttentionType::Enabled,
+        runtime_settings: StageLoadRuntimeSettings {
+            repack: true,
+            op_offload: Some(false),
+            no_host_buffer: true,
+            check_tensors: true,
+            direct_io: true,
+            main_gpu: Some(2),
+            split_mode: skippy_protocol::SplitMode::Row,
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        },
         native_mtp_enabled: true,
         shutdown_generation: 7,
         coordinator_term: 0,
@@ -248,6 +262,23 @@ fn stage_config_preserves_backend_neutral_load_fields() {
     let config = stage_config(&request, None, None).unwrap();
 
     assert_stage_config_core_fields(&config);
+    assert_eq!(config.repack, request.runtime_settings.repack);
+    assert_eq!(config.op_offload, request.runtime_settings.op_offload);
+    assert_eq!(
+        config.no_host_buffer,
+        request.runtime_settings.no_host_buffer
+    );
+    assert_eq!(config.check_tensors, request.runtime_settings.check_tensors);
+    assert_eq!(config.direct_io, request.runtime_settings.direct_io);
+    assert_eq!(config.main_gpu, request.runtime_settings.main_gpu);
+    assert_eq!(config.split_mode, request.runtime_settings.split_mode);
+    assert_eq!(config.kv_offload, request.runtime_settings.kv_offload);
+    assert_eq!(config.kv_unified, request.runtime_settings.kv_unified);
+    assert_eq!(config.swa_full, request.runtime_settings.swa_full);
+    assert_eq!(
+        config.cache_idle_slots,
+        request.runtime_settings.cache_idle_slots
+    );
 }
 
 fn assert_stage_config_core_fields(config: &StageConfig) {

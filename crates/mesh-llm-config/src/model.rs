@@ -1,5 +1,6 @@
 mod built_in_schema;
 mod multimodal;
+mod profile;
 mod runtime;
 mod schema_types;
 
@@ -284,118 +285,6 @@ impl Serialize for ModelConfigEntry {
     }
 }
 
-impl ModelConfigEntry {
-    /// Compute a derived profile hash from the runtime-shaping fields of this entry.
-    ///
-    /// The profile is derived from the fields that materially affect runtime
-    /// behavior: ModelFitConfig (ctx_size, batch, ubatch, cache_type_k,
-    /// cache_type_v, flash_attention), HardwareConfig (model_runtime, device,
-    /// gpu_layers, tensor_split, split_mode, main_gpu, cpu_moe, n_cpu_moe,
-    /// fit_target_mib, mmap, mlock), and ThroughputConfig (parallel,
-    /// continuous_batching, threads, threads_batch).
-    ///
-    /// Returns an 8-hex-character string (e.g. "a3f2b9c1"), or empty string
-    /// if all profile-input fields are at their defaults.
-    /// Derive a stable profile string from the runtime-shaping config fields.
-    ///
-    /// Returns an 8-hex-char hash when any profile-input field is set,
-    /// or an empty string (profile = default) when all inputs are at defaults.
-    pub fn derived_profile(&self) -> String {
-        let mut buf = Vec::new();
-        Self::write_effective_fit_profile(&mut buf, self);
-        Self::write_effective_hw_profile(&mut buf, self);
-        Self::write_effective_tp_profile(&mut buf, self);
-
-        if buf.is_empty() {
-            return String::new();
-        }
-
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        buf.hash(&mut hasher);
-        let hash = hasher.finish();
-        format!("{:08x}", hash & 0xFFFFFFFF)
-    }
-
-    fn write_effective_fit_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        // Effective fit fields: sub-config (set by ConfigEditor) preferred,
-        // top-level (set by direct Rust construction) as fallback.
-        let fit = entry.model_fit.as_ref();
-        wo!("ctx_size", fit.and_then(|f| f.ctx_size).or(entry.ctx_size));
-        wo!("batch", fit.and_then(|f| f.batch).or(entry.batch));
-        wo!("ubatch", fit.and_then(|f| f.ubatch).or(entry.ubatch));
-        wo!(
-            "cache_type_k",
-            fit.and_then(|f| f.cache_type_k.as_ref())
-                .or(entry.cache_type_k.as_ref())
-        );
-        wo!(
-            "cache_type_v",
-            fit.and_then(|f| f.cache_type_v.as_ref())
-                .or(entry.cache_type_v.as_ref())
-        );
-        wo!(
-            "flash_attention",
-            fit.and_then(|f| f.flash_attention)
-                .or(entry.flash_attention)
-        );
-    }
-
-    fn write_effective_hw_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        let hw = entry.hardware.as_ref();
-        wo!(
-            "gpu_id",
-            hw.and_then(|h| h.device.as_ref()).or(entry.gpu_id.as_ref())
-        );
-        if let Some(hw) = hw {
-            wo!("model_runtime", hw.model_runtime);
-            wo!("gpu_layers", hw.gpu_layers);
-            wo!("tensor_split", hw.tensor_split);
-            wo!("split_mode", hw.split_mode);
-            wo!("main_gpu", hw.main_gpu);
-            wo!("cpu_moe", hw.cpu_moe);
-            wo!("n_cpu_moe", hw.n_cpu_moe);
-            wo!("fit_target_mib", hw.fit_target_mib);
-            wo!("mmap", hw.mmap);
-            wo!("mlock", hw.mlock);
-        }
-    }
-
-    fn write_effective_tp_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        let tp = entry.throughput.as_ref();
-        wo!("parallel", tp.and_then(|t| t.parallel).or(entry.parallel));
-        if let Some(tp) = tp {
-            wo!("continuous_batching", tp.continuous_batching);
-            wo!("threads", tp.threads);
-            wo!("threads_batch", tp.threads_batch);
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ModelFitConfig {
@@ -511,6 +400,10 @@ pub struct HardwareConfig {
     pub check_tensors: Option<bool>,
     #[serde(default)]
     pub mmap: Option<BoolOrAuto>,
+    #[serde(default)]
+    pub use_mmap_prefetch: Option<bool>,
+    #[serde(default)]
+    pub use_mmap_buffer: Option<bool>,
     #[serde(default)]
     pub mlock: Option<bool>,
     #[serde(default)]
