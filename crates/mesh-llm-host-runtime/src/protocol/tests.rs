@@ -70,7 +70,6 @@ kv_unified = "auto"
 
 [defaults.hardware]
 gpu_layers = "auto"
-tensor_split = []
 
 [defaults.throughput]
 parallel = 3
@@ -100,9 +99,6 @@ gpu_layers = 99
 
 [models.throughput]
 parallel = 4
-
-[models.skippy]
-binary_stage_transport = "auto"
 
 [models.speculative]
 draft_selection_policy = "auto"

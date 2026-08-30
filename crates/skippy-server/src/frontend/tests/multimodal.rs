@@ -164,9 +164,20 @@ fn multimodal_stage_config(
         n_gpu_layers: fixture.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
         selected_device: None,
         kv_cache: None,
@@ -175,6 +186,7 @@ fn multimodal_stage_config(
         bind_addr: bind_addr.to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     }
 }
 
@@ -188,7 +200,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         crate::telemetry::TelemetryLevel::Off,
     );
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     Ok(StageOpenAiBackend {
         runtime,
         telemetry,
@@ -348,6 +360,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
+            continuous_batching: true,
             openai: None,
         });
     let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);
@@ -371,7 +384,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &stage0_config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime,
         telemetry,

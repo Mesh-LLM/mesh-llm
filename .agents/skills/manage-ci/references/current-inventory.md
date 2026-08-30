@@ -438,7 +438,7 @@ fail-open policy.
 - `select-ci-runners`: provider labels, cache permissions, and the
   provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
   outputs. Depot selections disable both cache paths by default. During the
-  bounded approved exception, the exact PR revision and eligible trusted-main
+  bounded approved exception, eligible same-repository PR and trusted-main
   Depot jobs enable the GitHub Actions cache API while direct Depot remote
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
@@ -468,7 +468,7 @@ under `ci/` or this inventory.
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Fork lanes cannot publish shared
 trusted-main caches. Same-repository PRs normally use GitHub's ref-scoped cache;
-an exact approved revision may temporarily use Depot's shared cross-branch
+eligible PR jobs may temporarily use Depot's shared cross-branch
 namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
 untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test, host, and runtime jobs restore one bounded trusted sccache seed
@@ -499,9 +499,8 @@ permission.
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners`; no
 workflow accepts a raw provider label. Trusted main Linux requires
-`DEPOT_RUNNERS_ENABLED=true`. An exact same-repository PR revision may use the
-time-bounded exception only when `DEPOT_PR_RUNNERS_ENABLED=true` and both
-`DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` match; it expires on
+`DEPOT_RUNNERS_ENABLED=true`. Eligible same-repository PR jobs may use the
+time-bounded exception when `DEPOT_PR_RUNNERS_ENABLED=true`; it expires on
 2026-09-14 UTC. Forks remain hosted. The intended permanent gate
 may cover eligible build/test rows across Linux, Depot macOS 15 and Windows
 2022 when equivalent images/architectures exist; planning/required summaries,
@@ -536,7 +535,7 @@ the enclosing PR run was later cancelled during cleanup. Trusted-main verify
 restored and exactly validated that poison, then failed its intended expected-
 miss gate. This proves unsafe repository-scoped cross-trust authority, so it is
 not a successful isolation result. The bounded exception knowingly accepts
-that risk for exact ref/SHA-approved same-repository revisions to gain CI
+that risk for eligible same-repository PRs to gain CI
 iteration speed; it is not permanent-isolation evidence. The exact-SHA
 five-lane candidate, provider comparison, and identical-SHA hosted rollback
 are recorded in `.omo/specs/depot-pr-rollout-evidence.md`; Quality and Linux
@@ -578,8 +577,6 @@ on malformed or missing backend data.
 
 Relevant repository variable names include `DEPOT_RUNNERS_ENABLED`,
 `DEPOT_PR_RUNNERS_ENABLED` (global temporary exception gate),
-`DEPOT_PR_APPROVED_REF` (one exact merge ref), `DEPOT_PR_APPROVED_SHA` (the
-exact lowercase PR head SHA; refresh after every push),
 `DEPOT_PR_CANARY_REF` (absent by default; one exact
 `refs/pull/<number>/merge` ref only), `DEPOT_PR_SENTINEL_REF` (absent by
 default; one exact same-repository merge ref used only by the protected
@@ -590,8 +587,8 @@ not cache-isolation proofs or replacements for the global PR gate. The normal
 Quality runner policy continues to use `DEPOT_PR_CANARY_REF`; the sentinel
 uses a separate selector output and cannot move the normal build jobs.
 The eligible five-lane Depot graph disables every native GitHub cache consumer
-when `allow_native_github_cache=false`. During the bounded exception the exact
-approved PR and eligible trusted-main Depot jobs set that output true for
+when `allow_native_github_cache=false`. During the bounded exception eligible
+same-repository PR and trusted-main Depot jobs set that output true for
 cross-branch Depot Actions-cache reuse; direct Depot remote cache remains
 false. This checked-in mode does not
 prove the absence of ambient Depot/WebDAV authority, so the runtime sentinel

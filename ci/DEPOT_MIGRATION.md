@@ -1,7 +1,7 @@
 # Depot runner transition
 
 Status: trusted-main support exists. A time-bounded, explicitly accepted
-cache-risk exception permits individually approved same-repository PR revisions
+cache-risk exception permits eligible same-repository PR jobs
 through 2026-09-14 UTC; forks remain hosted. Automatic Depot Cache and Registry Actions connectivity are
 admin-verified off. Those switches remove Depot's direct `DEPOT_CACHE_TOKEN`,
 build-tool cache preconfiguration and Registry Actions authentication from
@@ -13,7 +13,7 @@ unsafe repository-scoped cross-trust authority. Maintainers have knowingly
 accepted that risk temporarily to improve CI iteration speed; it remains a
 blocker to permanent activation.
 
-During the bounded exception, the exact approved PR and eligible trusted-main
+During the bounded exception, eligible same-repository PR and trusted-main
 Depot jobs may use the GitHub Actions cache API and therefore Depot's shared,
 cross-branch namespace. Direct Depot build-tool remote cache remains disabled.
 The complete findings, risks, approval controls, expiry, and rollback procedure
@@ -33,12 +33,9 @@ Depot is a placement provider, not a different CI graph.
 - `.github/actions/select-ci-runners` owns current Linux provider selection.
 - `DEPOT_RUNNERS_ENABLED == 'true'` permits eligible trusted `main` Linux jobs
   to select Depot. Every eligible role retains a GitHub-hosted fallback.
-- `DEPOT_PR_RUNNERS_ENABLED == 'true'` opens only the bounded exception window.
-  It selects no PR by itself. `DEPOT_PR_APPROVED_REF` must exactly match the
-  current `refs/pull/<number>/merge` ref and `DEPOT_PR_APPROVED_SHA` must exactly
-  match its lowercase 40-character head SHA. A new push invalidates approval.
-  The checked-in selector expires this path on 2026-09-14 UTC; a missing,
-  malformed, stale, or expired value fails hosted.
+- `DEPOT_PR_RUNNERS_ENABLED == 'true'` activates the bounded exception for
+  eligible same-repository PR jobs. The checked-in selector expires this path
+  on 2026-09-14 UTC; a missing, false, or expired value fails hosted.
 - `DEPOT_PR_CANARY_REF` is an optional, exact
   `refs/pull/<number>/merge` selector for one protected same-repository canary
   ref. It does not enable the global PR gate, does not grant remote cache
@@ -57,8 +54,8 @@ Depot is a placement provider, not a different CI graph.
   decision. During the exception it permits the selected Depot Actions-cache
   proxy but still rejects direct Depot cache tokens, WebDAV/sccache authority,
   registry credentials, Docker auth, and URL userinfo before checkout.
-- The selector emits `allow_native_github_cache=true` only for an exactly
-  approved PR revision and eligible trusted-main Depot work while the global
+- The selector emits `allow_native_github_cache=true` only for eligible
+  same-repository PR and trusted-main Depot work while the global
   exception and checked-in deadline are active. Depot transparently maps that
   API to its shared repository namespace. `allow_depot_remote_cache` remains
   false. This is accepted risk, not proof of authority isolation.
@@ -197,8 +194,8 @@ same-repository PR path could read the trusted marker and publish a marker that
 trusted main later restored. The intended failures are evidence that the gates
 fired after the probes, not successful isolation. It does not justify a claim
 of isolation. The temporary decision in `ci/DEPOT_PR_RISK_EXCEPTION.md`
-explicitly accepts this risk for exact maintainer-approved same-repository PR
-revisions; a provider-isolation redesign and a new successful sentinel remain
+explicitly accepts this risk for eligible same-repository PRs; a
+provider-isolation redesign and a new successful sentinel remain
 required before the exception can become permanent. `DEPOT_PR_CANARY_REF`,
 `DEPOT_PR_SENTINEL_REF` and `DEPOT_PR_SENTINEL_ID`
 remain absent. No Depot settings or runner groups were changed; the bounded
@@ -308,8 +305,8 @@ runtime questions are:
 The selector emits provider-derived `allow_native_github_cache` and
 `allow_depot_remote_cache` outputs. Depot remote build-tool cache remains
 disabled. Outside the bounded exception, Depot selections keep native Actions
-cache consumers disabled. During the exception, an exact approved PR revision
-and eligible trusted-main Depot jobs emit `allow_native_github_cache=true`,
+cache consumers disabled. During the exception, eligible same-repository PR
+and trusted-main Depot jobs emit `allow_native_github_cache=true`,
 deliberately exercising Depot's repository-wide Actions-cache proxy for
 cross-branch reuse. This improves iteration speed but does not establish an
 authority boundary. The canary must still target the actual
@@ -339,13 +336,13 @@ protected workflows must:
 - be exact selected workflows allowed by the runner group.
 
 Permanent activation still requires every acceptance canary. The temporary
-exception additionally requires `DEPOT_PR_RUNNERS_ENABLED=true`, exact
-`DEPOT_PR_APPROVED_REF` and exact `DEPOT_PR_APPROVED_SHA`, and expires in checked-in
-policy on 2026-09-14 UTC. Roll back immediately by removing any approval value
-or setting the global PR gate to `false`, then rerun the identical PR plan; this
-changes provider placement only and must leave commands, matrices, artifacts,
-and required checks unchanged. `DEPOT_RUNNERS_ENABLED` remains the separate
-trusted-main placement gate.
+exception requires `DEPOT_PR_RUNNERS_ENABLED=true` and expires in checked-in
+policy on 2026-09-14 UTC. Roll back immediately by deleting
+`DEPOT_PR_CANARY_REF` and deleting or setting
+`DEPOT_PR_RUNNERS_ENABLED=false`, then rerun the identical PR plan on hosted
+placement; this changes provider placement only and must leave commands,
+matrices, artifacts, and required checks unchanged. `DEPOT_RUNNERS_ENABLED`
+remains the separate trusted-main placement gate.
 
 CI workflow, action, planner, ownership, runner and cache-policy changes must
 remain on the local GitHub-hosted path. A PR may not modify the workflow that
@@ -460,9 +457,9 @@ operator-run experiment. It is not the global PR activation gate, does not
 grant cache or registry authority, and does not authorize setting
 `DEPOT_PR_RUNNERS_ENABLED`.
 
-## Activation gate
+## Permanent activation gate
 
-Do not enable Depot for PR content until:
+Do not remove the bounded expiry or make Depot PR execution permanent until:
 
 - the isolation canary passes for same-repository and fork PRs;
 - live runner-group restrictions are admin-verified;
@@ -477,9 +474,9 @@ Start any later rollout with remote cache disabled. Canary one non-secret Linux
 slice, then a Rust test slice, then the selected Linux product graph. Keep
 credential-bearing, macOS, Windows and hardware work on their existing runners.
 
-Depot PR activation must be a separate change after the composable CI graph is
-complete. It must not be combined with routing, required-check, artifact or
-branch-protection migration.
+Permanent Depot PR activation must be a separate change after the composable CI
+graph is complete. It must not be combined with routing, required-check,
+artifact or branch-protection migration.
 
 ## Measurement and rollback evidence
 

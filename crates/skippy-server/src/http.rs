@@ -799,9 +799,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_owned(),
             cache_type_v: "f16".to_owned(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -810,6 +821,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_owned(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

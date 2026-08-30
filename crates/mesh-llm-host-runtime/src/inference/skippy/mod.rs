@@ -64,16 +64,16 @@ pub use package::{
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
-    resolve_skippy_config,
+    resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use stage::{
     LayerRange, SourceModelKind, StageCancelPrepareRequest, StageControlCommand,
     StageControlHandle, StageControlRequest, StageControlResponse, StageCoordinatorClaim,
     StageCoordinatorClaimAck, StageInventoryRequest, StageLayerInventory, StageLoadRequest,
-    StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
-    StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse, StageRuntimeState,
-    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
+    StageLoadRuntimeSettings, StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState,
+    StagePreparationStatus, StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse,
+    StageRuntimeState, StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
     spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
@@ -173,6 +173,13 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) n_gpu_layers: i32,
     pub(crate) mmap: Option<bool>,
     pub(crate) mlock: bool,
+    pub(crate) repack: bool,
+    pub(crate) op_offload: Option<bool>,
+    pub(crate) no_host_buffer: bool,
+    pub(crate) check_tensors: bool,
+    pub(crate) direct_io: bool,
+    pub(crate) main_gpu: Option<u32>,
+    pub(crate) split_mode: skippy_protocol::SplitMode,
     pub(crate) cache_type_k: String,
     pub(crate) cache_type_v: String,
     pub(crate) n_batch: Option<u32>,
@@ -180,6 +187,10 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) n_threads: Option<usize>,
     pub(crate) n_threads_batch: Option<usize>,
     pub(crate) flash_attn_type: FlashAttentionType,
+    pub(crate) kv_offload: Option<bool>,
+    pub(crate) kv_unified: Option<bool>,
+    pub(crate) swa_full: Option<bool>,
+    pub(crate) cache_idle_slots: Option<u32>,
     pub(crate) generation_concurrency: usize,
     pub(crate) default_max_tokens: u32,
     pub(crate) kv_cache: Option<StageKvCacheConfig>,
@@ -189,6 +200,13 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) selected_device: Option<SkippyDeviceDescriptor>,
     pub(crate) package_identity: Option<SkippyPackageIdentity>,
     pub(crate) projector_path: Option<PathBuf>,
+    pub(crate) projector_use_gpu: Option<bool>,
+    pub(crate) media_marker: Option<String>,
+    pub(crate) image_min_tokens: Option<u32>,
+    pub(crate) image_max_tokens: Option<u32>,
+    pub(crate) batch_max_tokens: Option<u32>,
+    pub(crate) glm_dsa_policy: skippy_protocol::GlmDsaPolicy,
+    pub(crate) generation_signal_window: Option<u32>,
     pub(crate) telemetry: SkippyTelemetryOptions,
     pub(crate) openai_guardrails: Option<OpenAiGuardrailsConfig>,
     pub(crate) native_mtp_enabled: bool,
@@ -274,6 +292,13 @@ impl SkippyModelLoadOptions {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             n_batch: None,
@@ -281,6 +306,10 @@ impl SkippyModelLoadOptions {
             n_threads: None,
             n_threads_batch: None,
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             generation_concurrency: 1,
             default_max_tokens: DEFAULT_EMBEDDED_MAX_TOKENS,
             kv_cache: None,
@@ -290,6 +319,13 @@ impl SkippyModelLoadOptions {
             selected_device: None,
             package_identity: None,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             telemetry: SkippyTelemetryOptions::off(),
             openai_guardrails: Some(OpenAiGuardrailsConfig::disabled_for_skippy()),
             native_mtp_enabled: true,
@@ -331,6 +367,23 @@ impl SkippyModelLoadOptions {
 
     pub(crate) fn with_flash_attn_type(mut self, flash_attn_type: FlashAttentionType) -> Self {
         self.flash_attn_type = flash_attn_type;
+        self
+    }
+
+    pub(crate) fn with_kv_session_controls(
+        mut self,
+        kv_offload: Option<bool>,
+        kv_unified: Option<bool>,
+        swa_full: Option<bool>,
+    ) -> Self {
+        self.kv_offload = kv_offload;
+        self.kv_unified = kv_unified;
+        self.swa_full = swa_full;
+        self
+    }
+
+    pub(crate) fn with_cache_idle_slots(mut self, cache_idle_slots: Option<u32>) -> Self {
+        self.cache_idle_slots = cache_idle_slots;
         self
     }
 
@@ -470,6 +523,7 @@ fn embedded_openai_args_from(
         default_max_tokens: embedded_args.default_max_tokens,
         request_defaults: embedded_args.request_defaults,
         generation_concurrency: embedded_args.generation_concurrency,
+        continuous_batching: embedded_args.continuous_batching,
         prefill_chunk_size: embedded_args.prefill_chunk_size,
         prefill_chunk_policy: embedded_args.prefill_chunk_policy,
         prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
@@ -1181,6 +1235,13 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
             .projector_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
+        projector_use_gpu: options.projector_use_gpu,
+        media_marker: options.media_marker.clone(),
+        image_min_tokens: options.image_min_tokens,
+        image_max_tokens: options.image_max_tokens,
+        batch_max_tokens: options.batch_max_tokens,
+        glm_dsa_policy: options.glm_dsa_policy,
+        generation_signal_window: options.generation_signal_window,
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         layer_start,
@@ -1192,9 +1253,20 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         n_gpu_layers: options.n_gpu_layers,
         mmap: options.mmap,
         mlock: options.mlock,
+        repack: options.repack,
+        op_offload: options.op_offload,
+        no_host_buffer: options.no_host_buffer,
+        check_tensors: options.check_tensors,
+        direct_io: options.direct_io,
+        main_gpu: options.main_gpu,
+        split_mode: options.split_mode,
         cache_type_k: options.cache_type_k.clone(),
         cache_type_v: options.cache_type_v.clone(),
         flash_attn_type: options.flash_attn_type,
+        kv_offload: options.kv_offload,
+        kv_unified: options.kv_unified,
+        swa_full: options.swa_full,
+        cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,

@@ -7,6 +7,10 @@ mod plugin_validation;
 mod store;
 mod validate;
 mod validation_support;
+#[cfg(test)]
+mod website_docs_parity;
+mod wiring_status;
+mod wiring_validation;
 
 #[cfg(test)]
 mod validate_schema_contract;
@@ -36,13 +40,17 @@ pub use validate::{
     validate_config_diagnostics, validate_config_diagnostics_with_plugin_schemas,
     validate_config_with_plugin_schemas,
 };
+pub use wiring_status::{
+    WIRING_MANIFEST, WiringBehavior, WiringEntry, WiringStatus, wiring_entry_for_path,
+};
+pub use wiring_validation::wiring_manifest_diagnostics;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig, ModelRuntimeKind,
-        SpeculativeConfig, built_in_config_schema, canonicalize_built_in_config_identifier,
-        parse_config_toml, validate_config,
+        ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig, SpeculativeConfig,
+        built_in_config_schema, canonicalize_built_in_config_identifier, parse_config_toml,
+        validate_config,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -245,7 +253,6 @@ ctx_size = 4096
             .update(|config| {
                 config.configure_local_serving_node(LocalServingNodeConfig {
                     model: "Qwen/Qwen3-8B-GGUF:Q4_K_M".into(),
-                    runtime: Some(ModelRuntimeKind::Metal),
                     device: Some("metal:0".into()),
                     context_size: Some(8192),
                     parallel: Some(2),
@@ -271,17 +278,31 @@ ctx_size = 4096
             .unwrap();
 
         assert_eq!(config.models.len(), 1);
-        assert_eq!(
-            config.models[0]
-                .hardware
-                .as_ref()
-                .and_then(|hardware| hardware.model_runtime),
-            Some(ModelRuntimeKind::Metal)
-        );
         let raw = fs::read_to_string(path).unwrap();
-        assert!(raw.contains("model_runtime = \"metal\""));
+        assert!(!raw.contains("model_runtime"));
         assert!(raw.contains("ctx_size = 8192"));
         assert!(raw.contains("temperature = 0.2"));
+    }
+
+    #[test]
+    fn config_store_update_rejects_local_serving_runtime_without_writing_it() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("config.toml");
+        let store = ConfigStore::open(&path);
+
+        let error = store
+            .update(|config| {
+                config.configure_local_serving_node(LocalServingNodeConfig {
+                    model: "Qwen/Qwen3-8B-GGUF:Q4_K_M".into(),
+                    runtime: Some(mesh_llm_types::runtime::ModelRuntimeKind::Metal),
+                    ..LocalServingNodeConfig::default()
+                })?;
+                Ok(())
+            })
+            .expect_err("unsupported runtime must be rejected at the authoring boundary");
+
+        assert!(error.to_string().contains("runtime is unsupported"));
+        assert!(!path.exists(), "rejected updates must not write a config");
     }
 
     #[test]
@@ -333,8 +354,8 @@ model_runtime = "bogus"
     }
 
     #[test]
-    fn parse_config_toml_accepts_mixed_case_runtime_kind() {
-        let config = parse_config_toml(
+    fn parse_config_toml_rejects_mixed_case_unsupported_runtime_kind() {
+        let error = parse_config_toml(
             r#"
 version = 1
 
@@ -345,14 +366,12 @@ model = "Qwen3-8B-Q4_K_M"
 model_runtime = "Metal"
 "#,
         )
-        .unwrap();
+        .expect_err("model_runtime has no runtime consumer");
 
-        assert_eq!(
-            config.models[0]
-                .hardware
-                .as_ref()
-                .and_then(|hardware| hardware.model_runtime),
-            Some(ModelRuntimeKind::Metal)
+        assert!(
+            error
+                .to_string()
+                .contains("hardware.model_runtime is not supported")
         );
     }
 
@@ -547,7 +566,6 @@ gpu_id = "pci:0000:65:00.0"
                     "gpu.assignment",
                     "owner_control.bind",
                     "owner_control.advertise_addr",
-                    "models.<model-ref>.hardware.model_runtime",
                     "models.<model-ref>.hardware.device",
                     "models.<model-ref>.model_fit.ctx_size",
                     "models.<model-ref>.throughput.parallel",
@@ -708,8 +726,9 @@ gpu_id = "pci:0000:65:00.0"
 
     fn canonical_public_field_count() -> usize {
         let source_model = include_str!("model.rs");
+        let source_multimodal = include_str!("model/multimodal.rs");
         let source_runtime = include_str!("model/runtime.rs");
-        let sources = [source_model, source_runtime];
+        let sources = [source_model, source_multimodal, source_runtime];
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
@@ -722,6 +741,7 @@ gpu_id = "pci:0000:65:00.0"
             ("PrefixCacheConfig", 2),
             ("HardwareConfig", 2),
             ("ThroughputConfig", 2),
+            ("ModelTopologyConfig", 2),
             ("SkippyConfig", 2),
             ("SpeculativeConfig", 2),
             ("RequestDefaultsConfig", 2),
@@ -752,6 +772,7 @@ gpu_id = "pci:0000:65:00.0"
             "PrefixCacheConfig",
             "HardwareConfig",
             "ThroughputConfig",
+            "ModelTopologyConfig",
             "SkippyConfig",
             "SpeculativeConfig",
             "RequestDefaultsConfig",

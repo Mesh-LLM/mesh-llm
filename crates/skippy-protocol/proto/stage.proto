@@ -95,6 +95,29 @@ message LoadStage {
   optional bool native_mtp_enabled = 33;
   optional bool mmap = 34;
   optional bool mlock = 35;
+  optional bool projector_use_gpu = 36;
+  optional string media_marker = 37;
+  optional uint32 image_min_tokens = 38;
+  optional uint32 image_max_tokens = 39;
+  optional uint32 batch_max_tokens = 40;
+  StageGlmDsaPolicy glm_dsa_policy = 41;
+  optional uint32 generation_signal_window = 42;
+  optional StageLoadRuntimeSettings runtime_settings = 43;
+  optional bool continuous_batching = 44;
+}
+
+message StageLoadRuntimeSettings {
+  optional bool repack = 1;
+  optional bool op_offload = 2;
+  optional bool no_host_buffer = 3;
+  optional bool check_tensors = 4;
+  optional bool direct_io = 5;
+  optional uint32 main_gpu = 6;
+  optional int32 split_mode = 7;
+  optional bool kv_offload = 8;
+  optional bool kv_unified = 9;
+  optional bool swa_full = 10;
+  optional uint32 cache_idle_slots = 11;
 }
 
 message StopStage {
@@ -261,6 +284,11 @@ enum StageFlashAttnType {
   STAGE_FLASH_ATTN_TYPE_AUTO = 1;
   STAGE_FLASH_ATTN_TYPE_DISABLED = 2;
   STAGE_FLASH_ATTN_TYPE_ENABLED = 3;
+}
+
+enum StageGlmDsaPolicy {
+  STAGE_GLM_DSA_POLICY_AUTO = 0;
+  STAGE_GLM_DSA_POLICY_V1 = 1;
 }
 
 message StagePeer {

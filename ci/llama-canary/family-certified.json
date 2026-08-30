@@ -233,18 +233,20 @@
       "profile": "full",
       "cadences": ["llama-bump", "manual-full"],
       "artifact": {"repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF", "revision": "2160e265f926e84e84dbb1c73e623b5324b23707", "files": ["Qwen2-VL-2B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Qwen2-VL-2B-Instruct-Q4_K_M.gguf": {"size_bytes": 986047232, "blob_id": "4ef095263343fc1237e8ca879790bb262bcf209f082e0a9bfce219b7ece55e8b"}}, "selector": "Q4_K_M"},
+      "mmproj_artifact": {"repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF", "revision": "2160e265f926e84e84dbb1c73e623b5324b23707", "files": ["mmproj-Qwen2-VL-2B-Instruct-f16.gguf"], "file_integrity": {"mmproj-Qwen2-VL-2B-Instruct-f16.gguf": {"size_bytes": 1331656192, "blob_id": "05cc3ae461a7b6aa4023312ccab549ecab77cf8677efee04f049fcbab55b8bc3"}}, "selector": "f16"},
       "execution": {"trunk_layers": 28, "mtp_layers": 0, "activation_width": 1536, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 980097536},
-      "notes": "multimodal sideband path"
+      "notes": "multimodal sideband path; mmproj smoke lane"
     },
     {
       "family": "qwen3-vl",
       "profile": "full",
       "cadences": ["llama-bump", "manual-full"],
       "artifact": {"repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF", "revision": "b93a7ee713758252c555be4210c00540df954dc2", "files": ["Qwen3-VL-8B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Qwen3-VL-8B-Instruct-Q4_K_M.gguf": {"size_bytes": 5027785568, "blob_id": "108e7ff92b78eefd3db4741885104acba514255c11b617d3c7b197a5f46efe89"}}, "selector": "Q4_K_M"},
+      "mmproj_artifact": {"repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF", "revision": "b93a7ee713758252c555be4210c00540df954dc2", "files": ["mmproj-F16.gguf"], "file_integrity": {"mmproj-F16.gguf": {"size_bytes": 1159030336, "blob_id": "d406d03ebabefdef86a2c86bf0c1b65f9e046f7a81c218f25de4931b46a07fc4"}}, "selector": "F16"},
       "execution": {"trunk_layers": 36, "mtp_layers": 0, "activation_width": 4096, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 5021827072, "startup_timeout_secs": 600},
-      "notes": "multimodal path; ggml-org repository is gated"
+      "notes": "multimodal path; ggml-org repository is gated; mmproj smoke lane"
     },
     {
       "family": "gemma2",

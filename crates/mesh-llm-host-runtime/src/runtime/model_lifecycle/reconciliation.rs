@@ -130,6 +130,7 @@ pub(crate) async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsConte
         tokio::spawn(async move {
             let result = run_model_target_reconciliation_action(
                 control_tx,
+                model_ref.clone(),
                 load_spec,
                 replace_model_ref,
                 profile,
@@ -147,6 +148,7 @@ pub(crate) async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsConte
 
 pub(crate) async fn run_model_target_reconciliation_action(
     control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    config_model_id: String,
     load_spec: String,
     replace_model_ref: Option<String>,
     profile: String,
@@ -154,7 +156,7 @@ pub(crate) async fn run_model_target_reconciliation_action(
     if let Some(replace_model_ref) = replace_model_ref {
         run_model_target_reconciliation_unload(control_tx.clone(), replace_model_ref).await?;
     }
-    run_model_target_reconciliation_load(control_tx, load_spec, profile).await
+    run_model_target_reconciliation_load(control_tx, config_model_id, load_spec, profile).await
 }
 
 pub(crate) async fn run_model_target_reconciliation_unload(
@@ -177,6 +179,7 @@ pub(crate) async fn run_model_target_reconciliation_unload(
 
 pub(crate) async fn run_model_target_reconciliation_load(
     control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    config_model_id: String,
     load_spec: String,
     profile: String,
 ) -> std::result::Result<api::RuntimeLoadResponse, String> {
@@ -184,6 +187,7 @@ pub(crate) async fn run_model_target_reconciliation_load(
     control_tx
         .send(api::RuntimeControlRequest::Load {
             spec: load_spec.clone(),
+            config_model_id: Some(config_model_id),
             profile: profile.clone(),
             resp,
         })

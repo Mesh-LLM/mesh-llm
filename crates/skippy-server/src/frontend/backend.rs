@@ -498,7 +498,7 @@ impl OpenAiBackend for StageOpenAiBackend {
         let request_timer = PhaseTimer::start();
         self.apply_before_chat_hooks(&mut request).await?;
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(&mut request, &self.request_defaults);
+        apply_chat_request_defaults(&mut request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
         let sampling = chat_sampling_config(&request)?;
         let template_options = chat_template_options(&request, &self.request_defaults)?;
@@ -601,7 +601,7 @@ impl OpenAiBackend for StageOpenAiBackend {
         );
         self.apply_before_chat_hooks(&mut request).await?;
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(&mut request, &self.request_defaults);
+        apply_chat_request_defaults(&mut request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
         let sampling = chat_sampling_config(&request)?;
         let include_usage = request.include_usage();

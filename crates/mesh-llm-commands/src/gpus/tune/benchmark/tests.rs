@@ -174,8 +174,8 @@ fn trial_config_renders_draft_speculative_candidate() {
             draft_model: "/tmp/model-draft.gguf".to_string(),
             draft_max_tokens: 8,
             draft_min_tokens: Some(2),
-            draft_acceptance_threshold: None,
-            draft_split_probability: None,
+            draft_acceptance_threshold: Some(0.75),
+            draft_split_probability: Some(0.25),
         },
         flash_attention: None,
     };
@@ -202,6 +202,8 @@ fn trial_config_renders_draft_speculative_candidate() {
     assert_eq!(speculative.pairing_fault.as_deref(), Some("fail_closed"));
     assert_eq!(speculative.draft_max_tokens, Some(8));
     assert_eq!(speculative.draft_min_tokens, Some(2));
+    assert_eq!(speculative.draft_acceptance_threshold, Some(0.75));
+    assert_eq!(speculative.draft_split_probability, Some(0.25));
 }
 
 #[test]

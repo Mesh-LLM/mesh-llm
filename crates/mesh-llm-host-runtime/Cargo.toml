@@ -122,6 +122,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 serial_test = "3"
+opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["metrics", "testing"] }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc8"  }
 # Used by the gated-relay regression test to spawn an in-process iroh-relay
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our

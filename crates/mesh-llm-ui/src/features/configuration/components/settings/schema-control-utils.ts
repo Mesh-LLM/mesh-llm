@@ -60,7 +60,7 @@ function controlConditionValueString(
   }
 }
 
-function enumValues(schema: ConfigurationSettingValueSchema | undefined): string[] {
+function enumValues(schema: ConfigurationSettingValueSchema | undefined): readonly string[] {
   if (!schema) return []
   if (schema.kind === 'enum') return schema.values
   if (schema.kind === 'one_of') return schema.variants.flatMap((variant) => enumValues(variant))

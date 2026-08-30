@@ -49,10 +49,12 @@ async fn local_runtime_model_routes_remain_the_lifecycle_api() {
         match control_rx.recv().await {
             Some(RuntimeControlRequest::Load {
                 spec,
+                config_model_id,
                 profile,
                 resp,
             }) => {
                 assert_eq!(spec, "org/model:Q4_K_M");
+                assert_eq!(config_model_id, None);
                 assert_eq!(profile, "low-ctx");
                 let _ = resp.send(Ok(RuntimeLoadResponse {
                     model_ref: spec.clone(),

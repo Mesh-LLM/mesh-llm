@@ -41,6 +41,8 @@ fn plugin_mesh_stream_error(message: impl Into<String>) -> super::proto::ErrorRe
 }
 
 pub(crate) enum LocalStream {
+    #[cfg(test)]
+    Tcp(tokio::net::TcpStream),
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
@@ -253,6 +255,8 @@ impl LocalListener {
 impl LocalStream {
     pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.write_all(bytes).await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
@@ -265,6 +269,8 @@ impl LocalStream {
 
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.shutdown().await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.shutdown().await?,
             #[cfg(windows)]
@@ -277,6 +283,8 @@ impl LocalStream {
 
     pub(crate) async fn read(&mut self, bytes: &mut [u8]) -> Result<usize> {
         let read = match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => stream.read(bytes).await?,
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.read(bytes).await?,
             #[cfg(windows)]
@@ -289,6 +297,10 @@ impl LocalStream {
 
     async fn read_exact(&mut self, bytes: &mut [u8]) -> Result<()> {
         match self {
+            #[cfg(test)]
+            LocalStream::Tcp(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
             #[cfg(unix)]
             LocalStream::Unix(stream) => {
                 let _ = stream.read_exact(bytes).await?;
@@ -316,6 +328,12 @@ impl LocalStream {
             .map_err(|_| anyhow!("timeout reading plugin frame {label} after {timeout:?}"))??;
         Ok(())
     }
+}
+
+pub(crate) fn reject_remote_control(_url: &str) -> Result<()> {
+    bail!(
+        "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
+    )
 }
 
 pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result<LocalListener> {
@@ -649,6 +667,60 @@ fn forward_plugin_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_control_rejects_loopback_ipv4_without_connecting() {
+        let error = reject_remote_control("tcp://127.0.0.1:19091")
+            .expect_err("unauthenticated loopback control must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_rejects_non_loopback_before_connecting() {
+        let url = "tcp://192.0.2.1:19091";
+        let error = match reject_remote_control(url) {
+            Ok(_) => panic!("plaintext non-loopback endpoint must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_rejects_hostnames_without_dns_resolution() {
+        let error = match reject_remote_control("tcp://localhost:19091") {
+            Ok(_) => panic!("plaintext hostname must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated capability handshake")
+        );
+    }
+
+    #[test]
+    fn remote_control_diagnostics_do_not_echo_endpoint_secrets() {
+        let raw_url = "tcp://user:secret@127.0.0.1:19091/control?token=private";
+
+        let error = match reject_remote_control(raw_url) {
+            Ok(_) => panic!("credentialed control URL must be rejected"),
+            Err(error) => error,
+        };
+        let diagnostic = error.to_string();
+
+        assert!(!diagnostic.contains("user"));
+        assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains("private"));
+        assert!(!diagnostic.contains(raw_url));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

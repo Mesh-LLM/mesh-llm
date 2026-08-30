@@ -460,6 +460,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
     vec![
         StartupModelPlan {
             declared_ref: "unsloth/Model-A-GGUF:Q4_K_M".to_string(),
+            config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-A-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
@@ -475,6 +476,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
         },
         StartupModelPlan {
             declared_ref: "Model-B".to_string(),
+            config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-B.gguf"),
             mmproj_path: None,
             ctx_size: Some(4096),
@@ -553,6 +555,7 @@ pub(super) fn assert_loaded_model_plan_row(
 pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model() {
     let startup_models = vec![StartupModelPlan {
         declared_ref: "Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m".to_string(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
         mmproj_path: None,
         ctx_size: Some(4096),
@@ -1144,6 +1147,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             target_tx: ctx.target_tx.clone(),
             model_path: extra_model.resolved_path.clone(),
             model_ref: extra_model.declared_ref.clone(),
+            config_model_id: extra_model.config_model_id.clone(),
             readiness_index,
             profile: extra_model.profile.clone(),
             model_name: extra_name.clone(),

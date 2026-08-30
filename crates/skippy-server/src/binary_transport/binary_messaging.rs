@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     io::{self, Write},
     net::TcpListener,
@@ -96,19 +97,22 @@ impl ConnectionWorkers {
         self.0.push(worker);
     }
 
-    fn reap_finished(&mut self) -> Result<()> {
+    fn reap_finished(&mut self) -> usize {
+        let mut panicked = 0;
         let mut index = 0;
         while index < self.0.len() {
             if self.0[index].task.is_finished() {
                 let worker = self.0.swap_remove(index);
                 if worker.task.join().is_err() {
-                    bail!("binary stage connection worker panicked");
+                    // A panicked worker only fails its own connection; the
+                    // accept loop must keep serving other clients.
+                    panicked += 1;
                 }
             } else {
                 index += 1;
             }
         }
-        Ok(())
+        panicked
     }
 
     fn shutdown(mut self) -> Result<()> {
@@ -181,6 +185,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        continuous_batching,
         openai,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
@@ -233,6 +238,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         runtime.clone(),
         &config,
         max_inflight.max(1),
+        continuous_batching,
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
@@ -262,6 +268,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         default_max_tokens: openai_options.default_max_tokens,
                         request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
                         generation_concurrency: openai_options.generation_concurrency,
+                        continuous_batching,
                         prefill_chunk_size: openai_options.prefill_chunk_size,
                         prefill_chunk_policy: openai_options.prefill_chunk_policy,
                         prefill_chunk_schedule: openai_options.prefill_chunk_schedule,
@@ -312,7 +319,19 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
 
     let accept_result = (|| -> Result<()> {
         while !shutdown.load(Ordering::SeqCst) {
-            connection_workers.reap_finished()?;
+            let panicked_workers = connection_workers.reap_finished();
+            if panicked_workers > 0 {
+                telemetry.emit(
+                    "stage.connection_worker_panic",
+                    BTreeMap::from([
+                        ("llama_stage.failure_contained".to_string(), json!(true)),
+                        (
+                            "llama_stage.panicked_workers".to_string(),
+                            json!(panicked_workers),
+                        ),
+                    ]),
+                );
+            }
             let (mut upstream, _) = match listener.accept() {
                 Ok(conn) => conn,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -435,7 +454,7 @@ mod shutdown_tests {
             mpsc,
         },
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     #[test]
@@ -497,5 +516,48 @@ mod shutdown_tests {
         let error = result.expect_err("accept failure must be returned after worker cleanup");
         assert!(format!("{error:#}").contains("accept failed"));
         drop(client);
+    }
+
+    #[test]
+    fn reap_finished_contains_a_panicked_worker_and_keeps_reaping() {
+        let control = Arc::new(ConnectionWorkerControl::default());
+        let task = thread::spawn(|| panic!("connection worker exploded"));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !task.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "panicking worker thread must finish within one second"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        assert_eq!(
+            workers.reap_finished(),
+            1,
+            "the panicked worker must be counted, not turned into an error"
+        );
+        assert!(
+            workers.0.is_empty(),
+            "the panicked worker must still be reaped"
+        );
+        assert_eq!(workers.reap_finished(), 0);
+    }
+
+    #[test]
+    fn reap_finished_leaves_running_workers_alone() {
+        let (stop_tx, stop_rx) = mpsc::sync_channel::<()>(1);
+        let control = Arc::new(ConnectionWorkerControl::default());
+        let task = thread::spawn(move || {
+            let _ = stop_rx.recv();
+        });
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        assert_eq!(workers.reap_finished(), 0);
+        assert_eq!(workers.0.len(), 1, "a running worker must not be reaped");
+        stop_tx.send(()).unwrap();
+        workers.shutdown().unwrap();
     }
 }

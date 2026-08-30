@@ -1,7 +1,7 @@
-From 4f187b7033dbb0e170f26cba088df983e78094c5 Mon Sep 17 00:00:00 2001
+From dcc8fa3fb4376cbdea08d2e2ea4a69dd724f301f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 15:20:36 +1000
-Subject: [PATCH 25/26] skippy: allow standalone NextN-only nemotron MTP draft
+Subject: [PATCH 25/32] skippy: allow standalone NextN-only nemotron MTP draft
  models
 
 A NextN-only draft GGUF (converted with convert_hf_to_gguf.py --mtp)

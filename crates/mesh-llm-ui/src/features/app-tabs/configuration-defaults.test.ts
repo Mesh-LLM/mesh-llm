@@ -90,6 +90,13 @@ describe('CONFIGURATION_DEFAULTS', () => {
         tomlSection: 'defaults.multimodal'
       },
       {
+        id: 'topology',
+        label: 'Topology',
+        summary: 'Locked staged topology defaults.',
+        help: 'Ordered layer ranges and node selectors for locked staged serving',
+        tomlSection: 'defaults.topology'
+      },
+      {
         id: 'advanced-server',
         label: 'Advanced Server',
         summary: 'Server identity and operator overrides.',

@@ -1,7 +1,7 @@
-From 7870b112f77408a825dcf256536f688f751d0ba3 Mon Sep 17 00:00:00 2001
+From 68c74bd51c52ddee295bb3ea10fa6f9f5b351692 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 07:15:54 +1000
-Subject: [PATCH 19/26] ggml: cache compiled Metal pipelines on disk via
+Subject: [PATCH 19/32] ggml: cache compiled Metal pipelines on disk via
  MTLBinaryArchive
 
 Set GGML_METAL_PIPELINE_CACHE_DIR to a directory to persist compiled

@@ -5,6 +5,8 @@ impl RuntimeState {
         &mut self,
         target_idle_sessions: usize,
     ) -> Result<RuntimeSessionStats> {
+        let target_idle_sessions =
+            capped_target_idle_sessions(target_idle_sessions, self.max_idle_sessions);
         while self.idle_sessions.len() < target_idle_sessions {
             if self.sessions.len() + self.idle_sessions.len() >= self.lane_count as usize {
                 break;
@@ -68,7 +70,18 @@ impl RuntimeState {
             // just stop double-claiming cells on the lane side.
             self.session_resident_prefixes.remove(session_id);
             reset_session = true;
+            let idle_pool_full = self
+                .max_idle_sessions
+                .is_some_and(|max| self.idle_sessions.len() >= max);
             match lane_session.session.reset() {
+                Ok(()) if idle_pool_full => {
+                    // The idle pool is already at model_fit.cache_idle_slots
+                    // capacity: drop this lane (releasing its native KV
+                    // cells via StageSession::drop) instead of growing the
+                    // pool past the configured bound.
+                    drop(lane_session);
+                    self.free_lane_indices.push(lane_index);
+                }
                 Ok(()) => {
                     lane_session.resident_prefix = None;
                     self.idle_sessions.push(lane_session);
@@ -466,6 +479,19 @@ impl RuntimeState {
     }
 }
 
+/// Clamps a requested idle-pool prewarm target to `model_fit.cache_idle_slots`
+/// (`max_idle_sessions`). `None` preserves today's behavior: the target is
+/// bounded only by `lane_count` in [`RuntimeState::prewarm_idle_sessions`].
+pub(super) fn capped_target_idle_sessions(
+    target_idle_sessions: usize,
+    max_idle_sessions: Option<usize>,
+) -> usize {
+    match max_idle_sessions {
+        Some(max) => target_idle_sessions.min(max),
+        None => target_idle_sessions,
+    }
+}
+
 fn record_restored_session_token_count(
     session_token_counts: &mut BTreeMap<String, u64>,
     session_id: &str,
@@ -646,5 +672,16 @@ mod tests {
         assert_eq!(idx, 0);
         assert_eq!(next_lane_index, 1);
         assert!(free_lane_indices.is_empty());
+    }
+
+    #[test]
+    fn capped_target_idle_sessions_clamps_to_the_configured_bound() {
+        assert_eq!(capped_target_idle_sessions(10, Some(2)), 2);
+        assert_eq!(capped_target_idle_sessions(1, Some(2)), 1);
+    }
+
+    #[test]
+    fn capped_target_idle_sessions_is_unbounded_when_unset() {
+        assert_eq!(capped_target_idle_sessions(10, None), 10);
     }
 }

@@ -1,7 +1,7 @@
-From 2642dd494d150cf7610e8aa44dba132d8f1d741b Mon Sep 17 00:00:00 2001
+From 4ba8e7f58f92a96fcd9db898802692ce2bb3b0ff Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 11 Aug 2026 16:14:30 -0400
-Subject: [PATCH 11/26] skippy: retain and execute final-stage MTP tensors
+Subject: [PATCH 11/32] skippy: retain and execute final-stage MTP tensors
 
 ---
  include/skippy/common.h      |  2 +-
