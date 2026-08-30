@@ -18,12 +18,34 @@ use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(super) const MIN_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STAGE_SOURCE_PREPARE_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
 const STAGE_SOURCE_MIN_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
+const DEFAULT_STAGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_STAGE_READINESS_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const DEFAULT_STAGE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+pub(super) async fn await_stage_startup<F, T>(
+    timeout: Duration,
+    future: F,
+) -> std::result::Result<T, tokio::time::error::Elapsed>
+where
+    F: Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future).await
+}
+
+pub(super) async fn wait_for_stage_readiness_poll(interval: Duration) {
+    tokio::time::sleep(interval).await;
+}
+
+pub(super) fn stage_health_ticks(interval: Duration) -> tokio::time::Interval {
+    tokio::time::interval(interval)
+}
 
 pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) node: &'a mesh::Node,
@@ -54,6 +76,57 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
     pub(super) activation_width: i32,
+    pub(super) startup_timeout: Duration,
+    pub(super) readiness_interval: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StageLifecycleIntervals {
+    pub(super) startup_timeout: Duration,
+    pub(super) readiness_interval: Duration,
+    pub(super) health_interval: Duration,
+}
+
+pub(super) fn configured_stage_lifecycle_intervals(
+    mesh_config: &plugin::MeshConfig,
+    model_ref: &str,
+) -> StageLifecycleIntervals {
+    let model = model_skippy_config(mesh_config, model_ref);
+    let defaults = mesh_config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    StageLifecycleIntervals {
+        startup_timeout: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_startup_timeout_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_startup_timeout_ms))
+                .unwrap_or(DEFAULT_STAGE_STARTUP_TIMEOUT.as_millis() as u64),
+        ),
+        readiness_interval: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_readiness_interval_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_readiness_interval_ms))
+                .unwrap_or(DEFAULT_STAGE_READINESS_INTERVAL.as_millis() as u64),
+        ),
+        health_interval: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_health_interval_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_health_interval_ms))
+                .unwrap_or(DEFAULT_STAGE_HEALTH_INTERVAL.as_millis() as u64),
+        ),
+    }
+}
+
+fn model_skippy_config<'a>(
+    mesh_config: &'a plugin::MeshConfig,
+    model_ref: &str,
+) -> Option<&'a plugin::SkippyConfig> {
+    mesh_config
+        .models
+        .iter()
+        .find(|model| model.model == model_ref)
+        .and_then(|model| model.skippy.as_ref())
 }
 
 pub(super) async fn load_split_runtime_generation(
@@ -289,6 +362,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
                 stage,
                 downstream.is_none(),
             )?,
+            settings.readiness_interval,
         )
         .await
         .with_context(|| {
@@ -298,15 +372,19 @@ pub(super) async fn load_downstream_split_runtime_stages(
                 stage.node_id.fmt_short()
             )
         })?;
-        let response = if stage.node_id == spec.node.id() {
-            spec.node
-                .send_local_stage_control(skippy::StageControlRequest::Load(load))
-                .await
-        } else {
-            spec.node
-                .send_stage_control(stage.node_id, skippy::StageControlRequest::Load(load))
-                .await
-        }
+        let response = await_stage_startup(settings.startup_timeout, async {
+            if stage.node_id == spec.node.id() {
+                spec.node
+                    .send_local_stage_control(skippy::StageControlRequest::Load(load))
+                    .await
+            } else {
+                spec.node
+                    .send_stage_control(stage.node_id, skippy::StageControlRequest::Load(load))
+                    .await
+            }
+        })
+        .await
+        .context("split stage startup timed out")?
         .with_context(|| {
             format!(
                 "load split stage {} on {}",
@@ -497,6 +575,7 @@ pub(super) fn split_generation_load_settings<'a>(
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
     let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
+    let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.model_ref);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(spec.package.clone()),
@@ -514,6 +593,8 @@ pub(super) fn split_generation_load_settings<'a>(
         embedded_openai,
         load_mode,
         activation_width,
+        startup_timeout: lifecycle.startup_timeout,
+        readiness_interval: lifecycle.readiness_interval,
     })
 }
 
@@ -800,6 +881,7 @@ pub(super) async fn wait_for_split_stage_source(
     stage_node_id: iroh::EndpointId,
     load: &skippy::StageLoadRequest,
     timeout: Duration,
+    readiness_interval: Duration,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -834,7 +916,7 @@ pub(super) async fn wait_for_split_stage_source(
                 stage_source_prepare_timeout_message(&load.stage_id, timeout)
             );
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        wait_for_stage_readiness_poll(readiness_interval).await;
     }
 }
 

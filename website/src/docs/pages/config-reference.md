@@ -194,33 +194,39 @@ of these has a schema key yet.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `throughput.parallel` | integer | `1` | both | model reload | wired | `--parallel` |
-| `throughput.continuous_batching` | bool-or-`auto` | `auto` | both | model reload | unwired (resolved, then dropped before reaching the runtime) | none |
+| `throughput.continuous_batching` | bool-or-`auto` | `auto` | both | model reload | wired (disabled mode limits scheduler iterations to one active request; enabled/auto uses all configured lanes) | none |
 | `throughput.threads` | integer | `0` = auto from host CPU count | both | model reload | wired | `--threads` |
 | `throughput.threads_batch` | integer | `0` = defaults to `threads` | both | model reload | wired | none |
-| `throughput.priority` | integer-or-string | OS scheduler default | both | model reload | unwired | none |
-| `throughput.poll` | bool-or-enum | `auto`, `busy`, `sleep` | both | model reload | unwired | none |
-| `throughput.cpu_affinity` | string or list | unset | both | model reload | unwired | none |
-| `throughput.numa` | string | unset | both | model reload | unwired | none |
-| `throughput.slot_prompt_similarity` | float | runtime default | both | model reload | unwired | none |
-| `throughput.tuning_profile` | enum | `throughput`, `balanced` (default), `saver` | both | model reload | partial (expands batch/ubatch/parallel; the continuous-batching part of the expansion is dropped) | none |
+| `throughput.priority` | integer-or-string | unsupported | both | model reload | rejected (no model-scoped scheduling or OS-priority consumer) | none |
+| `throughput.poll` | bool-or-enum | unsupported | both | model reload | rejected (the embedded runtime exposes no polling policy) | none |
+| `throughput.cpu_affinity` | string or list | unsupported | both | model reload | rejected (no inference-thread affinity consumer) | none |
+| `throughput.numa` | string | unsupported | both | model reload | rejected (the embedded runtime exposes no NUMA policy) | none |
+| `throughput.slot_prompt_similarity` | float | unsupported | both | model reload | rejected (Skippy prefix reuse has no similarity threshold) | none |
+| `throughput.tuning_profile` | enum | `throughput`, `balanced` (default), `saver` | both | model reload | wired (expands batch, ubatch, parallel, and continuous batching) | none |
 
 ## Group 6: Skippy staged serving, transport, topology, and lifecycle
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
-| `skippy.stage_model_path` | path | derived from the deployment planner unless overridden | both | model reload | unwired | none |
-| `skippy.stage_role` | string | planner-generated | both | model reload | unwired (the planner always computes the role itself) | none |
-| `skippy.stage_topology` | string | planner-generated | both | model reload | unwired | none |
-| `skippy.binary_stage_transport` | string | binary transport default | both | model reload | unwired (transport is effectively unconditional today) | none |
-| `skippy.lifecycle_startup_timeout_ms` | integer | lifecycle default | both | model reload | unwired (the real timeout is hardcoded) | none |
-| `skippy.lifecycle_readiness_interval_ms`<br>`skippy.lifecycle_health_interval_ms` | integer | lifecycle defaults | both | model reload | unwired (poll intervals are hardcoded) | none |
+| `skippy.stage_model_path` | path | unsupported | both | model reload | rejected (stage artifacts come from the verified model package) | none |
+| `skippy.stage_role` | string | unsupported | both | model reload | rejected (the typed planner derives stage roles) | none |
+| `skippy.stage_topology` | string | unsupported | both | model reload | rejected (issue #1052 owns typed per-model topology; untyped strings are not accepted) | none |
+| `skippy.binary_stage_transport` | string | unsupported | both | model reload | rejected (binary transport is the only staged transport and is selected automatically) | none |
+| `skippy.lifecycle_startup_timeout_ms` | integer | `900000` ms | both | model reload | wired (bounds downstream stage load) | none |
+| `skippy.lifecycle_readiness_interval_ms`<br>`skippy.lifecycle_health_interval_ms` | integer | `2000` ms / `30000` ms | both | model reload | wired (controls source-readiness polling / coordinator health checks) | none |
+| `topology.mode` | enum | unset; `locked` when configured | both | model reload | wired (selects fail-closed locked planning) | none |
+| `topology.manifest_sha256` | string | unset | both | model reload | wired (must match the resolved package manifest) | none |
+| `topology.stages` | array of typed stage objects | unset | both | model reload | wired (unique endpoint ID or hostname selectors and contiguous half-open ranges) | none |
 | `skippy.prefill_chunking` | enum | `auto` (normalizes to `fixed`), `fixed`, `schedule`, `adaptive-ramp` | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_size` | integer | runtime default | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_schedule` | string | unset | both | model reload | wired (staged mode only; monotonic comma-separated positive integers) | none |
 
-Staged-only controls stay staged-only: prefill
-controls and manual stage layer ranges only take effect when the model
-actually runs in staged mode.
+Staged-only controls stay staged-only: lifecycle intervals, prefill controls,
+and manual stage layer ranges only take effect
+when the model actually runs in staged mode. The hidden
+`--split-topology-lock` remains a maintainer compatibility flag. New operator
+configuration should use typed per-model `topology`; explicit `--model` and
+`--gguf` continue to bypass configured `[[models]]` entries and their topology.
 
 ## Group 7: speculative decoding
 

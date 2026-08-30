@@ -161,6 +161,7 @@ pub(crate) struct ResolvedEmbeddedOpenAiArgs {
     pub(crate) default_max_tokens: u32,
     pub(crate) request_defaults: EmbeddedOpenAiRequestDefaults,
     pub(crate) generation_concurrency: usize,
+    pub(crate) continuous_batching: bool,
     pub(crate) prefill_chunk_size: usize,
     pub(crate) prefill_chunk_policy: String,
     pub(crate) prefill_chunk_schedule: Option<String>,

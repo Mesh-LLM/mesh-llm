@@ -60,6 +60,7 @@ impl StartupPinnedGpuTarget {
 #[derive(Clone, Debug)]
 pub(super) struct StartupModelPlan {
     pub(super) declared_ref: String,
+    pub(super) config_model_id: Option<String>,
     pub(super) resolved_path: PathBuf,
     pub(super) mmproj_path: Option<PathBuf>,
     pub(super) ctx_size: Option<u32>,
@@ -784,6 +785,11 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
         plans.push(StartupModelPlan {
             declared_ref,
+            config_model_id: spec.config_owned.then(|| {
+                spec.declared_ref
+                    .clone()
+                    .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned())
+            }),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
@@ -872,6 +878,7 @@ async fn resolve_startup_models_with_package_discovery(
         };
         plans.push(StartupModelPlan {
             declared_ref,
+            config_model_id: spec.config_owned.then_some(requested_ref),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,

@@ -177,6 +177,8 @@ pub struct ModelConfigDefaults {
     #[serde(default)]
     pub throughput: Option<ThroughputConfig>,
     #[serde(default)]
+    pub topology: Option<ModelTopologyConfig>,
+    #[serde(default)]
     pub skippy: Option<SkippyConfig>,
     #[serde(default)]
     pub speculative: Option<SpeculativeConfig>,
@@ -203,6 +205,7 @@ pub struct ModelConfigEntry {
     pub model_fit: Option<ModelFitConfig>,
     pub hardware: Option<HardwareConfig>,
     pub throughput: Option<ThroughputConfig>,
+    pub topology: Option<ModelTopologyConfig>,
     pub skippy: Option<SkippyConfig>,
     pub speculative: Option<SpeculativeConfig>,
     pub request_defaults: Option<RequestDefaultsConfig>,
@@ -216,7 +219,7 @@ impl Serialize for ModelConfigEntry {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("ModelConfigEntry", 18)?;
+        let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
@@ -255,6 +258,9 @@ impl Serialize for ModelConfigEntry {
         }
         if let Some(value) = &self.throughput {
             state.serialize_field("throughput", value)?;
+        }
+        if let Some(value) = &self.topology {
+            state.serialize_field("topology", value)?;
         }
         if let Some(value) = &self.skippy {
             state.serialize_field("skippy", value)?;
@@ -543,6 +549,57 @@ pub struct ThroughputConfig {
     pub sleep_idle_seconds: Option<u64>,
     #[serde(default)]
     pub tuning_profile: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTopologyMode {
+    Locked,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ModelTopologyMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<Vec<ModelTopologyStageConfig>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyStageConfig {
+    pub node: ModelTopologyNodeSelector,
+    pub layer_start: u32,
+    pub layer_end: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyNodeSelector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+}
+
+pub fn merge_model_topology(
+    defaults: Option<&ModelTopologyConfig>,
+    model: Option<&ModelTopologyConfig>,
+) -> Option<ModelTopologyConfig> {
+    let mut merged = defaults.cloned().unwrap_or_default();
+    if let Some(model) = model {
+        merged.mode = model.mode.or(merged.mode);
+        merged.manifest_sha256 = model.manifest_sha256.clone().or(merged.manifest_sha256);
+        merged.stages = model.stages.clone().or(merged.stages);
+    }
+    if merged.mode.is_none() && merged.manifest_sha256.is_none() && merged.stages.is_none() {
+        None
+    } else {
+        Some(merged)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -1060,6 +1117,8 @@ struct RawModelConfigDefaults {
     #[serde(default)]
     throughput: Option<ThroughputConfig>,
     #[serde(default)]
+    topology: Option<ModelTopologyConfig>,
+    #[serde(default)]
     skippy: Option<SkippyConfig>,
     #[serde(default)]
     speculative: Option<SpeculativeConfig>,
@@ -1116,6 +1175,8 @@ struct RawModelConfigEntry {
     hardware: Option<HardwareConfig>,
     #[serde(default)]
     throughput: Option<ThroughputConfig>,
+    #[serde(default)]
+    topology: Option<ModelTopologyConfig>,
     #[serde(default)]
     skippy: Option<SkippyConfig>,
     #[serde(default)]
@@ -1188,6 +1249,7 @@ impl ModelConfigDefaults {
             model_fit,
             hardware,
             throughput,
+            topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
             request_defaults: raw.request_defaults,
@@ -1248,6 +1310,7 @@ impl ModelConfigEntry {
             model_fit,
             hardware,
             throughput,
+            topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
             request_defaults: raw.request_defaults,

@@ -121,6 +121,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         runtime.clone(),
         &config,
         args.generation_concurrency,
+        true,
         telemetry.clone(),
     )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
@@ -172,6 +173,7 @@ pub struct EmbeddedOpenAiArgs {
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
+    pub continuous_batching: bool,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -415,6 +417,7 @@ fn embedded_openai_backend_with_scheduler(
             args.runtime.clone(),
             &args.config,
             args.generation_concurrency,
+            args.continuous_batching,
             args.telemetry.clone(),
         )?,
     };

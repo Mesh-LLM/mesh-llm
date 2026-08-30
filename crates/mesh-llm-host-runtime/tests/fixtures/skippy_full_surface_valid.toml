@@ -44,7 +44,9 @@ threads_batch = 4
 tuning_profile = "balanced"
 
 [defaults.skippy]
-binary_stage_transport = "auto"
+lifecycle_startup_timeout_ms = 900000
+lifecycle_readiness_interval_ms = 2000
+lifecycle_health_interval_ms = 30000
 
 [defaults.speculative]
 mode = "auto"

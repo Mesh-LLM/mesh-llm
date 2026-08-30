@@ -43,3 +43,68 @@ keep_tokens = 128
          `mesh-llm config validate` reported no error for it: {diagnostics:#?}"
     );
 }
+
+#[test]
+fn pr4_supported_fields_do_not_emit_unsupported_diagnostics() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[defaults.throughput]
+continuous_batching = false
+tuning_profile = "saver"
+
+[defaults.skippy]
+lifecycle_startup_timeout_ms = 120000
+lifecycle_readiness_interval_ms = 125
+lifecycle_health_interval_ms = 5000
+"#,
+    )
+    .expect("config should parse");
+
+    let diagnostics = validate_config_diagnostics(&config);
+
+    assert!(
+        diagnostics.is_empty(),
+        "wired PR4 fields must pass static validation without unsupported warnings: {diagnostics:#?}"
+    );
+}
+
+#[test]
+fn pr4_fields_without_runtime_consumers_are_rejected() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[defaults.throughput]
+priority = "normal"
+poll = "busy"
+cpu_affinity = "0-3"
+numa = "distribute"
+slot_prompt_similarity = 0.75
+
+[defaults.skippy]
+stage_model_path = "/models/stage.gguf"
+stage_role = "middle"
+stage_topology = "legacy-lock"
+binary_stage_transport = "binary"
+"#,
+    )
+    .expect("config should parse");
+
+    let diagnostics = validate_config_diagnostics(&config);
+    let rejected = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == ConfigDiagnosticSeverity::Error)
+        .filter_map(|diagnostic| diagnostic.path.as_ref().map(|path| path.render()))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let expected = std::collections::BTreeSet::from([
+        "defaults.skippy.binary_stage_transport".to_string(),
+        "defaults.skippy.stage_model_path".to_string(),
+        "defaults.skippy.stage_role".to_string(),
+        "defaults.skippy.stage_topology".to_string(),
+        "defaults.throughput.cpu_affinity".to_string(),
+        "defaults.throughput.numa".to_string(),
+        "defaults.throughput.poll".to_string(),
+        "defaults.throughput.priority".to_string(),
+        "defaults.throughput.slot_prompt_similarity".to_string(),
+    ]);
+    assert_eq!(rejected, expected);
+}

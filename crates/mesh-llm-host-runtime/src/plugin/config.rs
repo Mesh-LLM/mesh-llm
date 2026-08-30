@@ -418,6 +418,7 @@ mod tests {
             model_fit: None,
             hardware: None,
             throughput: None,
+            topology: None,
             skippy: None,
             speculative: None,
             request_defaults: None,
@@ -1440,13 +1441,10 @@ continuous_batching = "auto"
 threads = 0
 threads_batch = 0
 tuning_profile = "balanced"
-numa = "auto"
-cpu_affinity = []
 
 [defaults.skippy]
 prefill_chunking = "auto"
 prefill_chunk_size = 0
-binary_stage_transport = "auto"
 
 [defaults.speculative]
 mode = "auto"

@@ -986,6 +986,27 @@
       "source": {
         "kind": "built_in"
       }
+    },
+    {
+      "canonical_path": "defaults.topology.manifest_sha256",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.topology.mode",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.topology.stages",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
     }
   ]
 }

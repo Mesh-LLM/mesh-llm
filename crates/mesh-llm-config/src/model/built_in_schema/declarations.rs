@@ -37,7 +37,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
-        telemetry_setting("telemetry.headers", ConfigValueSchema::Object),
+        telemetry_setting("telemetry.headers", ConfigValueSchema::object()),
         telemetry_setting("telemetry.export_interval_secs", ConfigValueSchema::Integer),
         telemetry_setting("telemetry.queue_size", ConfigValueSchema::Integer),
         unsupported_setting(
@@ -159,6 +159,7 @@ fn model_defaults_settings() -> Vec<ConfigSettingSchema> {
         "defaults.throughput",
         &[flat_alias("defaults.parallel")],
     ));
+    settings.extend(topology_settings("defaults.topology"));
     settings.extend(skippy_settings("defaults.skippy"));
     settings.extend(speculative_settings("defaults.speculative"));
     settings.extend(request_defaults_settings("defaults.request_defaults"));
@@ -195,6 +196,7 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.throughput"),
         &[flat_alias(&format!("{model_prefix}.parallel"))],
     ));
+    settings.extend(topology_settings(&format!("{model_prefix}.topology")));
     settings.extend(skippy_settings(&format!("{model_prefix}.skippy")));
     settings.extend(speculative_settings(&format!("{model_prefix}.speculative")));
     settings.extend(request_defaults_settings(&format!(
@@ -206,6 +208,60 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
     ));
     settings.extend(advanced_settings(&format!("{model_prefix}.advanced")));
     settings
+}
+
+fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
+    let node_selector = ConfigValueSchema::Object {
+        properties: vec![
+            ConfigObjectPropertySchema {
+                name: "endpoint_id".to_string(),
+                label: "Endpoint ID".to_string(),
+                required: false,
+                value_schema: ConfigValueSchema::String,
+            },
+            ConfigObjectPropertySchema {
+                name: "hostname".to_string(),
+                label: "Hostname".to_string(),
+                required: false,
+                value_schema: ConfigValueSchema::String,
+            },
+        ],
+    };
+    let stage = ConfigValueSchema::Object {
+        properties: vec![
+            ConfigObjectPropertySchema {
+                name: "node".to_string(),
+                label: "Node".to_string(),
+                required: true,
+                value_schema: node_selector,
+            },
+            ConfigObjectPropertySchema {
+                name: "layer_start".to_string(),
+                label: "Layer start".to_string(),
+                required: true,
+                value_schema: ConfigValueSchema::Integer,
+            },
+            ConfigObjectPropertySchema {
+                name: "layer_end".to_string(),
+                label: "Layer end".to_string(),
+                required: true,
+                value_schema: ConfigValueSchema::Integer,
+            },
+        ],
+    };
+    vec![
+        basic_setting(&format!("{prefix}.mode"), string_enum(["locked"])),
+        basic_setting(
+            &format!("{prefix}.manifest_sha256"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{prefix}.stages"),
+            ConfigValueSchema::Array {
+                items: Box::new(stage),
+            },
+        ),
+    ]
 }
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
@@ -398,7 +454,7 @@ fn hardware_settings(
         basic_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
         rejected_setting(
             &format!("{prefix}.rpc_backend"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "The legacy rpc_backend escape hatch is explicitly unsupported by the embedded runtime.",
         ),
         basic_setting(
@@ -524,7 +580,7 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         rejected_setting(
             &format!("{prefix}.openai_frontend_mode"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "OpenAI frontend override wiring is intentionally rejected on the built-in schema surface.",
         ),
         basic_setting(
@@ -695,17 +751,17 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         unwired_setting(
             &format!("{prefix}.dry"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
         ),
         unwired_setting(
             &format!("{prefix}.xtc"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
         ),
         unwired_setting(
             &format!("{prefix}.adaptive"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
         ),
         basic_setting(
@@ -731,11 +787,14 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::String,
         ),
         basic_setting(&format!("{prefix}.seed"), ConfigValueSchema::Integer),
-        basic_setting(&format!("{prefix}.logit_bias"), ConfigValueSchema::Object),
+        basic_setting(
+            &format!("{prefix}.logit_bias"),
+            ConfigValueSchema::object(),
+        ),
         basic_setting(&format!("{prefix}.ignore_eos"), ConfigValueSchema::Boolean),
         rejected_setting(
             &format!("{prefix}.backend_sampling"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Backend-owned sampler blocks are explicitly rejected from the built-in control surface.",
         ),
         basic_setting(
@@ -761,7 +820,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(&format!("{prefix}.jinja"), ConfigValueSchema::Boolean),
         basic_setting(
             &format!("{prefix}.chat_template_kwargs"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
         ),
         basic_setting(
             &format!("{prefix}.skip_chat_parsing"),
@@ -769,7 +828,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.prefill_assistant"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
         ),
         basic_setting(
             &format!("{prefix}.system_prompt"),
@@ -777,17 +836,17 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         rejected_setting(
             &format!("{prefix}.grammar"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Grammar injection is explicitly rejected on the built-in config surface.",
         ),
         rejected_setting(
             &format!("{prefix}.json_schema"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "JSON schema response shaping is intentionally rejected until a stable runtime contract exists.",
         ),
         rejected_setting(
             &format!("{prefix}.logprobs"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Logprobs request defaults are explicitly rejected from persisted config.",
         ),
     ]
@@ -811,22 +870,22 @@ fn multimodal_settings(
         ),
         rejected_setting(
             &format!("{prefix}.embeddings"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in multimodal embeddings controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.reranking"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in reranking controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.pooling"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in pooling controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.vocoder"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in vocoder controls are explicitly rejected from persisted config.",
         ),
     ];

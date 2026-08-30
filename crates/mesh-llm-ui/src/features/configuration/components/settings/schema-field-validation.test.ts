@@ -261,6 +261,50 @@ describe('validateConfigurationSettingValue', () => {
       const setting = makeSetting({ label: 'Config', valueSchema: { kind: 'object' } })
       expect(validateConfigurationSettingValue(setting, '{"key":"value"}')).toEqual({ valid: true })
     })
+
+    it('rejects invalid nested values in schema-defined object arrays', () => {
+      const setting = makeSetting({
+        label: 'Topology stages',
+        valueSchema: {
+          kind: 'array',
+          items: {
+            kind: 'object',
+            properties: [
+              {
+                name: 'node',
+                label: 'Node',
+                required: true,
+                value_schema: {
+                  kind: 'object',
+                  properties: [
+                    {
+                      name: 'hostname',
+                      label: 'Hostname',
+                      required: false,
+                      value_schema: { kind: 'string' }
+                    }
+                  ]
+                }
+              },
+              {
+                name: 'layer_start',
+                label: 'Layer start',
+                required: true,
+                value_schema: { kind: 'integer' }
+              }
+            ]
+          }
+        }
+      })
+
+      const result = validateConfigurationSettingValue(
+        setting,
+        '[{"node":{"hostname":"worker-a"},"layer_start":"first"}]'
+      )
+
+      expect(result.valid).toBe(false)
+      if (!result.valid) expect(result.message).toContain('Layer start must be a whole number')
+    })
   })
 
   describe('numeric constraints skip for empty values', () => {

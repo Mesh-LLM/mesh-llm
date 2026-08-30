@@ -199,6 +199,7 @@ impl IterationScheduler {
         runtime: Arc<Mutex<RuntimeState>>,
         config: &StageConfig,
         queue_capacity: usize,
+        continuous_batching: bool,
         telemetry: Telemetry,
     ) -> OpenAiResult<Self> {
         let (lane_count, kv_pool_tokens) = {
@@ -211,7 +212,8 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
-        let scheduler_lane_count = if safe_mode { 1 } else { lane_count };
+        let scheduler_lane_count =
+            effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
         let scheduler_config = build_scheduler_config(
             scheduler_lane_count,
             kv_pool_tokens,
@@ -1266,6 +1268,18 @@ fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
     })
 }
 
+const fn effective_scheduler_lane_count(
+    lane_count: usize,
+    safe_mode: bool,
+    continuous_batching: bool,
+) -> usize {
+    if safe_mode || !continuous_batching {
+        1
+    } else {
+        lane_count
+    }
+}
+
 fn take_direct_iteration_batch(
     queue: &mut VecDeque<DirectIteration>,
     max_batch_size: usize,
@@ -1427,6 +1441,33 @@ mod tests {
             enqueued_at: Instant::now(),
             reply,
         }
+    }
+
+    #[test]
+    fn continuous_batching_controls_multi_request_direct_iterations() {
+        let mut enabled = VecDeque::from([
+            direct_iteration("session-a", 1),
+            direct_iteration("session-b", 1),
+        ]);
+        let mut disabled = VecDeque::from([
+            direct_iteration("session-a", 1),
+            direct_iteration("session-b", 1),
+        ]);
+
+        let enabled_batch = take_direct_iteration_batch(
+            &mut enabled,
+            effective_scheduler_lane_count(2, false, true),
+            2,
+        );
+        let disabled_batch = take_direct_iteration_batch(
+            &mut disabled,
+            effective_scheduler_lane_count(2, false, false),
+            2,
+        );
+
+        assert_eq!(enabled_batch.len(), 2);
+        assert_eq!(disabled_batch.len(), 1);
+        assert_eq!(disabled.len(), 1);
     }
 
     #[test]

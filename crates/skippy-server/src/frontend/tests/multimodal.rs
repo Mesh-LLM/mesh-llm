@@ -199,7 +199,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         crate::telemetry::TelemetryLevel::Off,
     );
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     Ok(StageOpenAiBackend {
         runtime,
         telemetry,
@@ -382,7 +382,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &stage0_config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime,
         telemetry,

@@ -50,6 +50,7 @@ const CATEGORY_ICON_BY_ID: Record<string, ConfigurationDefaultsSetting['icon']> 
   'request-defaults': 'filter',
   'skippy-transport': 'binary',
   multimodal: 'image',
+  topology: 'layers',
   'advanced-server': 'server',
   'logs-general': 'layers',
   'logs-retention': 'gauge',
@@ -205,6 +206,14 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
     tomlSection: 'defaults.multimodal',
     order: 60
   },
+  topology: {
+    id: 'topology',
+    label: 'Topology',
+    summary: 'Locked staged topology defaults.',
+    help: 'Ordered layer ranges and node selectors for locked staged serving',
+    tomlSection: 'defaults.topology',
+    order: 70
+  },
   'advanced-server': {
     id: 'advanced-server',
     label: 'Advanced Server',
@@ -275,6 +284,7 @@ function categoryForDefaultsPath(canonicalPath: string) {
   if (canonicalPath.startsWith('defaults.request_defaults.')) return 'request-defaults'
   if (canonicalPath.startsWith('defaults.skippy.')) return 'skippy-transport'
   if (canonicalPath.startsWith('defaults.multimodal.')) return 'multimodal'
+  if (canonicalPath.startsWith('defaults.topology.')) return 'topology'
   if (canonicalPath.startsWith('defaults.advanced.server.')) return 'advanced-server'
   return 'advanced'
 }
@@ -556,6 +566,7 @@ export function createConfigurationModelSettingsFromSchema(
       entry.canonical_path.startsWith('gpu.') ||
       entry.canonical_path.startsWith('defaults.model_fit.') ||
       entry.canonical_path.startsWith('defaults.hardware.') ||
+      entry.canonical_path.startsWith('defaults.topology.') ||
       entry.canonical_path.startsWith('defaults.speculative.') ||
       entry.canonical_path.startsWith('defaults.request_defaults.') ||
       entry.canonical_path.startsWith('defaults.multimodal.'),

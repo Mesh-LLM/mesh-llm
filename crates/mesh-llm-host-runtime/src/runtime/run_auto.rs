@@ -1135,6 +1135,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_model_ref = primary_startup_model
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
+    let primary_config_model_id =
+        primary_startup_model.and_then(|model| model.config_model_id.clone());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
     let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
     let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -1149,6 +1151,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        config_model_id: primary_config_model_id,
         readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())

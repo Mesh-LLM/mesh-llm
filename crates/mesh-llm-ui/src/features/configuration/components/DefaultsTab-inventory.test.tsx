@@ -117,11 +117,12 @@ describe('DefaultsTab visual inventory and metadata', () => {
     })
 
     const rail = defaultsRail()
-    expect(rail.getAllByRole('button')).toHaveLength(6)
+    expect(rail.getAllByRole('button')).toHaveLength(7)
     expect(rail.getByRole('button', { name: /runtime/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /request defaults/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /skippy transport/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /multimodal/i })).toBeInTheDocument()
+    expect(rail.getByRole('button', { name: /topology/i })).toBeInTheDocument()
     expect(rail.queryByRole('button', { name: /advanced server/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
     expect(screen.queryByText('Memory lock')).not.toBeInTheDocument()
@@ -386,14 +387,14 @@ describe('DefaultsTab visual inventory and metadata', () => {
     renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
 
     const rail = defaultsRail()
-    expect(rail.getAllByRole('button')).toHaveLength(6)
+    expect(rail.getAllByRole('button')).toHaveLength(7)
     expect(screen.queryByText('Mirostat mode')).not.toBeInTheDocument()
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /show advanced/i }))
 
     await waitFor(() => {
-      expect(rail.getAllByRole('button')).toHaveLength(7)
+      expect(rail.getAllByRole('button')).toHaveLength(8)
       expect(rail.getByRole('button', { name: /advanced server/i })).toBeInTheDocument()
       expect(screen.getByText('Mirostat mode')).toBeInTheDocument()
       expect(screen.getByText('Server alias')).toBeInTheDocument()
@@ -405,7 +406,7 @@ describe('DefaultsTab visual inventory and metadata', () => {
     await user.click(screen.getByRole('button', { name: /hide advanced/i }))
 
     await waitFor(() => {
-      expect(rail.getAllByRole('button')).toHaveLength(6)
+      expect(rail.getAllByRole('button')).toHaveLength(7)
       expect(rail.queryByRole('button', { name: /advanced server/i })).not.toBeInTheDocument()
       expect(screen.queryByText('Mirostat mode')).not.toBeInTheDocument()
       expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
