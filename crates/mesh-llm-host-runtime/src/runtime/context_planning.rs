@@ -69,9 +69,10 @@ pub(super) enum RuntimeResourcePlanningProfile {
     /// `--join`).
     ///
     /// Both profiles currently plan the same context (`min(native, 128k)` held
-    /// at single-lane depth, lanes filling the residual budget). The distinction
-    /// is retained for the bandwidth-aware planner follow-up, where a shared
-    /// mesh host and a dedicated local host will want different tok/s floors.
+    /// at single-lane depth, followed by the capped lane count over the shared
+    /// pool). The distinction is retained for the bandwidth-aware planner
+    /// follow-up, where a shared mesh host and a dedicated local host will want
+    /// different tok/s floors.
     SharedMesh,
 }
 
@@ -383,8 +384,8 @@ mod tests {
     fn both_profiles_produce_identical_auto_plans() {
         // The old behavior traded context for concurrency on the shared-mesh
         // profile (shallower context, more lanes). The default is now uniform:
-        // hold context at `min(native, 128k)` and let lanes fill the residual
-        // budget, so both profiles plan the same context and lane count. The
+        // hold context at `min(native, 128k)` and run the capped lane count,
+        // so both profiles plan the same context and lane count. The
         // profile axis is retained for the bandwidth-aware follow-up.
         let metadata = gqa_metadata(131_072);
         let input = |profile| RuntimeResourcePlanInput {
