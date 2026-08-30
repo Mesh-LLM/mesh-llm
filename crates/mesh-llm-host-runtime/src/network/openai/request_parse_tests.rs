@@ -889,7 +889,11 @@ async fn ingress_mints_exactly_one_stable_nonce_when_absent() {
     .await;
 
     let nonces = client_nonce_header_values(&request.raw);
-    assert_eq!(nonces.len(), 1, "exactly one nonce header must be forwarded");
+    assert_eq!(
+        nonces.len(),
+        1,
+        "exactly one nonce header must be forwarded"
+    );
     assert_eq!(
         uuid::Uuid::parse_str(&nonces[0]).unwrap().get_version_num(),
         4

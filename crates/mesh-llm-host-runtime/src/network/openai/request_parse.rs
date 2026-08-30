@@ -220,7 +220,6 @@ impl BufferedHttpRequest {
         self.raw
             .splice(header_end + 2..header_end + 2, marker.into_bytes());
     }
-
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -583,8 +582,9 @@ fn finalize_forwarded_request(
         // nonce through the raw proxy; both are re-stamped from the resolved,
         // validated value below.
         if name.eq_ignore_ascii_case(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
-            || name
-                .eq_ignore_ascii_case(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str())
+            || name.eq_ignore_ascii_case(
+                openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+            )
         {
             continue;
         }
@@ -837,7 +837,10 @@ fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>
         .map_or(raw.len(), |pos| pos);
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
-    if req.parse(&raw[..header_end.saturating_add(4).min(raw.len())]).is_err() {
+    if req
+        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
+        .is_err()
+    {
         return (None, None);
     }
     let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();

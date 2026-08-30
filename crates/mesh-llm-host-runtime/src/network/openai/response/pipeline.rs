@@ -78,8 +78,14 @@ pub async fn pipeline_proxy_local(
     let _inflight = node.begin_inflight_request();
     let is_streaming = pipeline_streaming_requested(&body);
     if is_streaming {
-        pipeline_proxy_streaming(client_stream, &http_client, &strong_url, &body, capsule_nonce)
-            .await
+        pipeline_proxy_streaming(
+            client_stream,
+            &http_client,
+            &strong_url,
+            &body,
+            capsule_nonce,
+        )
+        .await
     } else {
         pipeline_proxy_non_streaming(
             client_stream,
@@ -160,7 +166,8 @@ async fn pipeline_proxy_streaming(
     body: &serde_json::Value,
     capsule_nonce: &PipelineCapsuleNonce,
 ) -> PipelineProxyResult {
-    let request = attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
+    let request =
+        attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
     match request.send().await {
         Ok(resp) => relay_pipeline_streaming_response(client_stream, resp).await,
         Err(err) => {
@@ -285,7 +292,8 @@ async fn pipeline_proxy_non_streaming(
     body: &serde_json::Value,
     capsule_nonce: &PipelineCapsuleNonce,
 ) -> PipelineProxyResult {
-    let request = attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
+    let request =
+        attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
     match request.send().await {
         Ok(resp) => relay_pipeline_non_streaming_response(client_stream, resp).await,
         Err(err) => {

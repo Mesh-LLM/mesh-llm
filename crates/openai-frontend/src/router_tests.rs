@@ -31,7 +31,12 @@ fn client_nonce_middleware_mints_and_marks_when_absent() {
         .headers()
         .get(&CLIENT_NONCE_HEADER)
         .expect("a nonce is minted when the request carried none");
-    assert_eq!(Uuid::parse_str(nonce.to_str().unwrap()).unwrap().get_version_num(), 4);
+    assert_eq!(
+        Uuid::parse_str(nonce.to_str().unwrap())
+            .unwrap()
+            .get_version_num(),
+        4
+    );
     assert_eq!(
         request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
         Some(&HeaderValue::from_static("frontend"))
@@ -75,7 +80,12 @@ fn client_nonce_middleware_replaces_non_uuid_value() {
         .get(&CLIENT_NONCE_HEADER)
         .expect("a non-UUID value is replaced with a minted UUIDv4");
     assert_ne!(nonce, HeaderValue::from_static("harness-supplied-nonce"));
-    assert_eq!(Uuid::parse_str(nonce.to_str().unwrap()).unwrap().get_version_num(), 4);
+    assert_eq!(
+        Uuid::parse_str(nonce.to_str().unwrap())
+            .unwrap()
+            .get_version_num(),
+        4
+    );
     assert_eq!(
         request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
         Some(&HeaderValue::from_static("frontend")),
@@ -97,8 +107,13 @@ fn client_nonce_middleware_rejects_duplicate_headers() {
 
     // HeaderMap::insert collapses to a single value; a duplicate is never trusted.
     let mut values = request.headers().get_all(&CLIENT_NONCE_HEADER).iter();
-    let nonce = values.next().expect("a single minted nonce replaces duplicates");
-    assert!(values.next().is_none(), "duplicate nonce headers must collapse to one");
+    let nonce = values
+        .next()
+        .expect("a single minted nonce replaces duplicates");
+    assert!(
+        values.next().is_none(),
+        "duplicate nonce headers must collapse to one"
+    );
     assert_ne!(nonce, HeaderValue::from_static(CLIENT_NONCE));
     assert_eq!(
         request.headers().get(&CLIENT_NONCE_ORIGIN_HEADER),
