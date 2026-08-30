@@ -337,11 +337,12 @@ protected workflows must:
 
 Permanent activation still requires every acceptance canary. The temporary
 exception requires `DEPOT_PR_RUNNERS_ENABLED=true` and expires in checked-in
-policy on 2026-09-14 UTC. Roll back immediately by deleting the gate or setting
-it to `false`, then rerun the identical PR plan; this
-changes provider placement only and must leave commands, matrices, artifacts,
-and required checks unchanged. `DEPOT_RUNNERS_ENABLED` remains the separate
-trusted-main placement gate.
+policy on 2026-09-14 UTC. Roll back immediately by deleting
+`DEPOT_PR_CANARY_REF` and deleting or setting
+`DEPOT_PR_RUNNERS_ENABLED=false`, then rerun the identical PR plan on hosted
+placement; this changes provider placement only and must leave commands,
+matrices, artifacts, and required checks unchanged. `DEPOT_RUNNERS_ENABLED`
+remains the separate trusted-main placement gate.
 
 CI workflow, action, planner, ownership, runner and cache-policy changes must
 remain on the local GitHub-hosted path. A PR may not modify the workflow that

@@ -115,11 +115,12 @@ To activate the bounded exception, a maintainer with repository-variable
 authority sets `DEPOT_PR_RUNNERS_ENABLED=true`. This selects every eligible
 same-repository PR until rollback or expiry.
 
-Immediate rollback is deleting `DEPOT_PR_RUNNERS_ENABLED` or setting it to
-`false`.
+Immediate rollback deletes `DEPOT_PR_CANARY_REF` and deletes or sets
+`DEPOT_PR_RUNNERS_ENABLED=false`.
 
-The same workflow graph then selects GitHub-hosted runners. No source, matrix,
-artifact, command, or required-summary change is needed.
+With both selectors disabled, the same workflow graph selects GitHub-hosted
+runners. No source, matrix, artifact, command, or required-summary change is
+needed.
 
 The selector fails hosted at the start of 2026-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a

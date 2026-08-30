@@ -273,7 +273,8 @@ under all of these controls:
 - CI-control, workflow, runner-policy and cache-policy changes force hosted;
 - the protected default-branch runner-owning workflows remain the executor;
 - PR jobs receive no repository secrets or registry credentials; and
-- rollback is deletion or `false` of the PR gate.
+- rollback deletes `DEPOT_PR_CANARY_REF` and deletes or sets
+  `DEPOT_PR_RUNNERS_ENABLED=false`, so PR jobs return to hosted placement.
 
 This is an explicit speed-versus-isolation decision, not evidence that Depot
 cache is isolated. While active, GitHub Actions cache API consumers on eligible
