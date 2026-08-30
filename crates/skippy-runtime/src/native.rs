@@ -24,6 +24,7 @@ pub struct StageModel {
 
 struct StageModelInner {
     raw: *mut RawModel,
+    include_output: bool,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -47,6 +48,7 @@ impl StageModel {
         Self {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
+                include_output: true,
             }),
             media: None,
         }
@@ -66,7 +68,10 @@ impl StageModel {
             .map(|projector_path| MediaProjector::open(projector_path, raw, config))
             .transpose()?;
         Ok(Self {
-            inner: Arc::new(StageModelInner { raw }),
+            inner: Arc::new(StageModelInner {
+                raw,
+                include_output: config.include_output,
+            }),
             media,
         })
     }
@@ -319,6 +324,7 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: 0,
+            include_output: self.inner.include_output,
         })
     }
 
@@ -348,12 +354,12 @@ impl StageModel {
         Ok(StageSession {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
+            include_output: self.inner.include_output,
         })
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
-        self.tokenize_bounded(text, add_special, usize::MAX)?
-            .ok_or_else(|| anyhow!("tokenizer output exceeds the requested limit"))
+        tokenize(self.inner.raw, text, add_special)
     }
 
     /// Tokenize without allocating a token buffer larger than `max_tokens`.
@@ -367,56 +373,7 @@ impl StageModel {
         add_special: bool,
         max_tokens: usize,
     ) -> Result<Option<Vec<i32>>> {
-        let initial_capacity = optimistic_token_capacity(text.len(), max_tokens);
-        let text = CString::new(text).context("text contains an interior NUL byte")?;
-        let mut tokens = vec![0_i32; initial_capacity];
-        let mut count = 0usize;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_tokenize(
-                self.inner.raw,
-                text.as_ptr(),
-                add_special,
-                tokens.as_mut_ptr(),
-                tokens.len(),
-                &mut count,
-                &mut error,
-            )
-        };
-        if status == Status::Ok {
-            ensure_ok(status, error)?;
-            tokens.truncate(count);
-            return Ok(Some(tokens));
-        }
-        if status != Status::BufferTooSmall {
-            ensure_ok(status, error)?;
-        }
-        free_error(error);
-
-        if count > max_tokens {
-            return Ok(None);
-        }
-
-        tokens.resize(count, 0);
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_tokenize(
-                self.inner.raw,
-                text.as_ptr(),
-                add_special,
-                tokens.as_mut_ptr(),
-                tokens.len(),
-                &mut count,
-                &mut error,
-            )
-        };
-        if status == Status::BufferTooSmall {
-            free_error(error);
-            return Ok(None);
-        }
-        ensure_ok(status, error)?;
-        tokens.truncate(count);
-        Ok(Some(tokens))
+        tokenize_bounded(self.inner.raw, text, add_special, max_tokens)
     }
 
     pub fn detokenize(&self, tokens: &[i32]) -> Result<String> {
@@ -492,123 +449,7 @@ impl StageModel {
         messages_json: &str,
         options: ChatTemplateJsonOptions,
     ) -> Result<ChatTemplateJsonResult> {
-        let prompt_capacity = optimistic_chat_prompt_capacity(
-            messages_json.len(),
-            options.tools_json.as_deref().map_or(0, str::len),
-            options.chat_template_kwargs.as_deref().map_or(0, str::len),
-        );
-        let metadata_capacity = optimistic_chat_metadata_capacity(
-            options.tools_json.as_deref().map_or(0, str::len),
-            options.chat_template_kwargs.as_deref().map_or(0, str::len),
-        );
-        let messages_json =
-            CString::new(messages_json).context("messages JSON contains an interior NUL byte")?;
-        let tools_json = options
-            .tools_json
-            .as_deref()
-            .map(CString::new)
-            .transpose()
-            .context("tools JSON contains an interior NUL byte")?;
-        let tool_choice_json = options
-            .tool_choice_json
-            .as_deref()
-            .map(CString::new)
-            .transpose()
-            .context("tool choice JSON contains an interior NUL byte")?;
-        let tools_ptr = tools_json
-            .as_ref()
-            .map(|value| value.as_ptr())
-            .unwrap_or(ptr::null());
-        let tool_choice_ptr = tool_choice_json
-            .as_ref()
-            .map(|value| value.as_ptr())
-            .unwrap_or(ptr::null());
-        let reasoning_format = options
-            .reasoning_format
-            .map(ChatReasoningFormat::parser_name)
-            .map(CString::new)
-            .transpose()
-            .context("reasoning format contains an interior NUL byte")?;
-        let reasoning_format_ptr = reasoning_format
-            .as_ref()
-            .map(|value| value.as_ptr())
-            .unwrap_or(ptr::null());
-        let chat_template_kwargs = options
-            .chat_template_kwargs
-            .as_deref()
-            .map(CString::new)
-            .transpose()
-            .context("chat template kwargs contain an interior NUL byte")?;
-        let chat_template_kwargs_ptr = chat_template_kwargs
-            .as_ref()
-            .map(|value| value.as_ptr())
-            .unwrap_or(ptr::null());
-
-        let mut prompt = vec![0_u8; prompt_capacity];
-        let mut metadata = vec![0_u8; metadata_capacity];
-        let mut prompt_bytes = prompt.len();
-        let mut metadata_bytes = metadata.len();
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template_json(
-                self.inner.raw,
-                messages_json.as_ptr(),
-                tools_ptr,
-                tool_choice_ptr,
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                options.parallel_tool_calls,
-                reasoning_format_ptr,
-                chat_template_kwargs_ptr,
-                prompt.as_mut_ptr().cast(),
-                prompt.len(),
-                &mut prompt_bytes,
-                metadata.as_mut_ptr().cast(),
-                metadata.len(),
-                &mut metadata_bytes,
-                &mut error,
-            )
-        };
-        if status == Status::Ok {
-            ensure_ok(status, error)?;
-            prompt.truncate(prompt_bytes);
-            metadata.truncate(metadata_bytes);
-            return chat_template_json_result(prompt, metadata);
-        }
-        if status != Status::BufferTooSmall {
-            ensure_ok(status, error)?;
-        }
-        free_error(error);
-
-        prompt.resize(prompt_bytes.max(1), 0);
-        metadata.resize(metadata_bytes.max(1), 0);
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_apply_chat_template_json(
-                self.inner.raw,
-                messages_json.as_ptr(),
-                tools_ptr,
-                tool_choice_ptr,
-                options.add_assistant,
-                options.enable_thinking.is_some(),
-                options.enable_thinking.unwrap_or(true),
-                options.parallel_tool_calls,
-                reasoning_format_ptr,
-                chat_template_kwargs_ptr,
-                prompt.as_mut_ptr().cast(),
-                prompt.len(),
-                &mut prompt_bytes,
-                metadata.as_mut_ptr().cast(),
-                metadata.len(),
-                &mut metadata_bytes,
-                &mut error,
-            )
-        };
-        ensure_ok(status, error)?;
-        prompt.truncate(prompt_bytes);
-        metadata.truncate(metadata_bytes);
-        chat_template_json_result(prompt, metadata)
+        apply_chat_template_json(self.inner.raw, messages_json, options)
     }
 
     pub fn parse_chat_response_json(
@@ -714,6 +555,29 @@ fn chat_template_json_result(prompt: Vec<u8>, metadata: Vec<u8>) -> Result<ChatT
 }
 
 impl StageModelReader {
+    pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
+        tokenize(self.inner.raw, text, add_special)
+    }
+
+    /// Tokenize without allocating a token buffer larger than `max_tokens`;
+    /// see [`StageModel::tokenize_bounded`].
+    pub fn tokenize_bounded(
+        &self,
+        text: &str,
+        add_special: bool,
+        max_tokens: usize,
+    ) -> Result<Option<Vec<i32>>> {
+        tokenize_bounded(self.inner.raw, text, add_special, max_tokens)
+    }
+
+    pub fn apply_chat_template_json(
+        &self,
+        messages_json: &str,
+        options: ChatTemplateJsonOptions,
+    ) -> Result<ChatTemplateJsonResult> {
+        apply_chat_template_json(self.inner.raw, messages_json, options)
+    }
+
     pub fn parse_chat_response_json(
         &self,
         generated_text: &str,
