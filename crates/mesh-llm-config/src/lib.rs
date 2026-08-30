@@ -7,6 +7,8 @@ mod plugin_validation;
 mod store;
 mod validate;
 mod validation_support;
+#[cfg(test)]
+mod website_docs_parity;
 
 #[cfg(test)]
 mod validate_schema_contract;
