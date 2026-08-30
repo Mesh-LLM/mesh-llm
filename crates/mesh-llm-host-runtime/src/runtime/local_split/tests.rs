@@ -1071,6 +1071,8 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
     write_fake_gguf_model(&model_path);
+    let compact_meta =
+        crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
     let local_id = node.id();
     let generation = SplitTopologyGeneration::new(
         "candidate-topology".into(),
@@ -1094,7 +1096,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         generation: &generation,
         projector_path: None,
         ctx_size: 4096,
-        compact_meta: None,
+        compact_meta: &compact_meta,
         pinned_gpu: None,
         slots: 1,
         cache_type_k_override: None,

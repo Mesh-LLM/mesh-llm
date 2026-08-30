@@ -382,6 +382,8 @@ stop = ["END"]
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
     write_fake_gguf_model(&model_path);
+    let compact_meta =
+        crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
     let local_id = node.id();
     let generation = SplitTopologyGeneration::new(
         "resolver-topology".into(),
@@ -403,7 +405,7 @@ stop = ["END"]
         generation: &generation,
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
-        compact_meta: None,
+        compact_meta: &compact_meta,
         pinned_gpu: None,
         slots: 4,
         cache_type_k_override: None,
@@ -475,8 +477,9 @@ stop = ["END"]
 /// The package is deliberately small (10 GB) so the size-tiered policy alone
 /// would pick q8_0: the observed q4_0-vs-f16 swing can only come from the
 /// (guarded) Inkling family default, pinning the plumbing rather than the
-/// size tier. Dropping the `compact_meta` plumbing back to `None` would
-/// regress this test to q4_0.
+/// size tier. Split load specifications require this metadata, so both the
+/// initial-load and coordinator-replan constructors must carry it; dropping
+/// the final resolver handoff would regress this test to q4_0.
 #[tokio::test]
 async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9338 })
@@ -526,7 +529,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         generation: &generation,
         projector_path: None,
         ctx_size: 4096,
-        compact_meta: Some(&incompatible_meta),
+        compact_meta: &incompatible_meta,
         pinned_gpu: None,
         slots: 1,
         cache_type_k_override: None,
@@ -552,17 +555,22 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
     // Without metadata the (unguarded) Inkling family default wins over the
     // q8_0 size tier — proving the family path, not the size tier, is under
     // test.
-    let unguarded_spec = SplitGenerationLoadSpec {
+    let unguarded = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+        model_path: &model_path,
+        model_bytes: identity.source_model_bytes,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
         compact_meta: None,
-        ..guarded_spec
-    };
-    let unguarded = split_generation_load_settings(&unguarded_spec)
-        .expect("unguarded split settings should resolve");
+    })
+    .expect("unguarded resolver settings should resolve");
     assert_eq!(
-        unguarded.runtime_options.config.cache_type_k, "q4_0",
+        unguarded.model_fit.cache_type_k, "q4_0",
         "no-metadata stage load keeps the family default"
     );
-    assert_eq!(unguarded.runtime_options.config.cache_type_v, "q4_0");
+    assert_eq!(unguarded.model_fit.cache_type_v, "q4_0");
 }
 
 #[tokio::test]

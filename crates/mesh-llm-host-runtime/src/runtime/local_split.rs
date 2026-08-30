@@ -229,7 +229,7 @@ pub(super) async fn start_runtime_split_model(
         generation: &active,
         projector_path: projector_path.clone(),
         ctx_size,
-        compact_meta: Some(&compact_meta),
+        compact_meta: &compact_meta,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
         n_batch_override: spec.n_batch_override,

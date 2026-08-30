@@ -630,7 +630,7 @@ impl SplitTopologyCoordinator {
             generation: &candidate,
             projector_path: self.projector_path.clone(),
             ctx_size: self.ctx_size,
-            compact_meta: Some(&self.compact_meta),
+            compact_meta: &self.compact_meta,
             cache_type_k_override: self.cache_type_k_override.as_deref(),
             cache_type_v_override: self.cache_type_v_override.as_deref(),
             n_batch_override: self.n_batch_override,
