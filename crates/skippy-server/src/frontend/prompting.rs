@@ -177,12 +177,16 @@ impl StageOpenAiBackend {
         } else {
             None
         };
-        let runtime = self
+        // Short-lock reader pattern: clone the immutable reader and run the
+        // template FFI on it, so template rendering never waits behind
+        // decode's hold of the runtime mutex (and vice versa).
+        let reader = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let result = runtime
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
             .model
+            .reader();
+        let result = reader
             .apply_chat_template_json(
                 &messages_json,
                 ChatTemplateJsonOptions {
@@ -275,12 +279,17 @@ impl StageOpenAiBackend {
         text: &str,
         add_special: bool,
     ) -> OpenAiResult<Vec<i32>> {
-        let runtime = self
+        // Hold the inference mutex only long enough to clone the immutable
+        // reader; the tokenizer FFI runs on the reader, so decode can hold
+        // the runtime lock concurrently without serializing tokenization
+        // behind it (see render_chat_prompt for the same pattern).
+        let reader = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        runtime
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
             .model
+            .reader();
+        reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
     }
