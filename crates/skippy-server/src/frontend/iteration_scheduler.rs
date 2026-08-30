@@ -1,13 +1,15 @@
 mod cache_runtime;
 
 use self::cache_runtime::{
-    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry, should_fill_cache_runtime_wave,
-    should_serve_cache_runtime, should_suppress_cache_runtime,
+    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
+    should_coalesce_direct_iterations, should_fill_cache_runtime_wave, should_serve_cache_runtime,
+    should_suppress_cache_runtime,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
+use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
 use openai_frontend::{OpenAiError, OpenAiResult};
@@ -167,7 +169,13 @@ enum SchedulerCommand {
     Submit(ScheduledRequest),
     ExecuteIteration(DirectIteration),
     ExecuteRuntime(RuntimeOperation),
-    ExecuteCacheAwareRuntime(RuntimeOperation, Arc<[i32]>, u64, CacheAffinityRefresh),
+    ExecuteCacheAwareRuntime(
+        RuntimeOperation,
+        Arc<[i32]>,
+        u64,
+        StagePrefixCachePayload,
+        CacheAffinityRefresh,
+    ),
     Cancel(String),
     Shutdown,
 }
@@ -578,6 +586,7 @@ impl IterationScheduler {
         label: &'static str,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
+        payload: StagePrefixCachePayload,
         refresh_affinity: CacheAffinityRefresh,
         operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
@@ -589,6 +598,7 @@ impl IterationScheduler {
             runtime_operation,
             prompt_tokens,
             priority,
+            payload,
             refresh_affinity,
         ))?;
         result.recv().map_err(|error| {
@@ -689,11 +699,15 @@ impl SchedulerWorker {
             }
             let cache_fill_wave_pending = should_fill_cache_runtime_wave(
                 !self.direct_iterations.is_empty(),
-                !self.cache_runtime_queue.is_empty(),
+                self.cache_runtime_queue.has_wave_aware_operations(),
                 self.active_runtime_sessions,
                 self.max_direct_batch_size,
             );
-            if !cache_fill_wave_pending && !self.coalesce_direct_iterations() {
+            let coalesce_direct = should_coalesce_direct_iterations(
+                !self.cache_runtime_queue.is_empty(),
+                self.cache_runtime_queue.has_wave_aware_operations(),
+            );
+            if !cache_fill_wave_pending && coalesce_direct && !self.coalesce_direct_iterations() {
                 return;
             }
             self.run_work_turn();
@@ -724,12 +738,14 @@ impl SchedulerWorker {
                 operation,
                 prompt_tokens,
                 priority,
+                payload,
                 refresh_affinity,
             ) => {
                 self.cache_runtime_queue.enqueue_lazy(
                     operation,
                     prompt_tokens,
                     priority,
+                    payload,
                     refresh_affinity,
                 );
             }
@@ -739,7 +755,8 @@ impl SchedulerWorker {
     }
 
     fn should_defer_cache_runtime(&self) -> bool {
-        self.direct_wave_full
+        self.cache_runtime_queue.has_wave_aware_operations()
+            && self.direct_wave_full
             && self.active_runtime_sessions >= self.max_direct_batch_size
             && self.direct_iterations.is_empty()
             && self.requests.is_empty()
@@ -763,21 +780,25 @@ impl SchedulerWorker {
 
     fn run_work_turn(&mut self) {
         let has_cache_runtime = !self.cache_runtime_queue.is_empty();
+        let has_wave_aware_cache_runtime = self.cache_runtime_queue.has_wave_aware_operations();
         let has_direct = !self.direct_iterations.is_empty();
         let has_planned = !self.requests.is_empty();
         let has_iteration = has_planned || has_direct;
-        if has_direct && self.active_runtime_sessions >= self.max_direct_batch_size {
+        if has_wave_aware_cache_runtime
+            && has_direct
+            && self.active_runtime_sessions >= self.max_direct_batch_size
+        {
             self.direct_wave_full = true;
         }
         let suppress_cache_runtime = should_suppress_cache_runtime(
-            has_cache_runtime,
+            has_wave_aware_cache_runtime,
             self.direct_wave_full,
             self.active_runtime_sessions,
             self.max_direct_batch_size,
         );
         let fill_cache_wave = should_fill_cache_runtime_wave(
             has_direct,
-            has_cache_runtime,
+            has_wave_aware_cache_runtime,
             self.active_runtime_sessions,
             self.max_direct_batch_size,
         );
@@ -812,13 +833,12 @@ impl SchedulerWorker {
     ) {
         let started = Instant::now();
         let label = operation.label;
-        let cache_operation = cache.is_some();
         (operation.run)(&self.runtime);
         if let Ok(runtime) = self.runtime.lock() {
             self.active_runtime_sessions = runtime.active_session_count();
             if self.active_runtime_sessions < self.max_direct_batch_size {
                 self.direct_wave_full = false;
-            } else if cache_operation {
+            } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
                 // A cache restore may complete before its caller can enqueue
                 // the first direct iteration. Remember the saturated wave so
                 // another cache restore cannot slip in during that gap.
@@ -1529,7 +1549,7 @@ impl SchedulerWorker {
                     let _ = request.reply.send(Err(error.clone()));
                 }
                 SchedulerCommand::ExecuteRuntime(_)
-                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _)
+                | SchedulerCommand::ExecuteCacheAwareRuntime(_, _, _, _, _)
                 | SchedulerCommand::Cancel(_)
                 | SchedulerCommand::Shutdown => {}
             }
@@ -2108,9 +2128,52 @@ mod tests {
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
-        worker.cache_runtime_queue.enqueue(
+        worker.cache_runtime_queue.enqueue_with_payload(
             RuntimeOperation {
                 label: "full-wave-cache",
+                run: Box::new(move |_| {
+                    selected.send(()).unwrap();
+                }),
+            },
+            skippy_scheduler::CacheAffinity::default(),
+            Arc::from([1]),
+            0,
+            StagePrefixCachePayload::KvRecurrent,
+            None,
+        );
+
+        worker.run_work_turn();
+
+        assert!(selected_rx.try_recv().is_err());
+        assert!(!worker.cache_runtime_queue.is_empty());
+    }
+
+    #[test]
+    fn resident_kv_does_not_engage_direct_wave_gate() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let (selected, selected_rx) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 1,
+            direct_wave_full: true,
+            telemetry: None,
+            last_served_direct: true,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        worker.cache_runtime_queue.enqueue(
+            RuntimeOperation {
+                label: "resident-cache",
                 run: Box::new(move |_| {
                     selected.send(()).unwrap();
                 }),
@@ -2123,8 +2186,8 @@ mod tests {
 
         worker.run_work_turn();
 
-        assert!(selected_rx.try_recv().is_err());
-        assert!(!worker.cache_runtime_queue.is_empty());
+        assert!(selected_rx.try_recv().is_ok());
+        assert!(worker.cache_runtime_queue.is_empty());
     }
 
     #[test]

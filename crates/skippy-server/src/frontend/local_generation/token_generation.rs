@@ -729,6 +729,10 @@ impl StageOpenAiBackend {
             ),
         };
         let kv_identity_ms = identity_timer.elapsed_ms();
+        let cache_payload = self
+            .kv
+            .as_ref()
+            .map_or(StagePrefixCachePayload::Disabled, |kv| kv.payload);
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
         let scheduler_ids = request.ids.clone();
@@ -740,6 +744,7 @@ impl StageOpenAiBackend {
             "feature-kv-restore-prefill-record",
             Arc::clone(&prefill_tokens),
             0,
+            cache_payload,
             refresh_cache_affinity,
             move |runtime| {
                 let outcome = scheduler_backend.restore_or_record_kv_on_runtime(
