@@ -70,7 +70,6 @@ kv_unified = "auto"
 
 [defaults.hardware]
 gpu_layers = "auto"
-tensor_split = []
 
 [defaults.throughput]
 parallel = 3

@@ -20,8 +20,8 @@ mod validation;
 
 pub use config::{
     ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, LoadMode,
-    PeerConfig, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig, StageKvCacheMode,
-    StageKvCachePayload, StageTopology, StageTopologyEntry,
+    PeerConfig, SplitMode, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig,
+    StageKvCacheMode, StageKvCachePayload, StageTopology, StageTopologyEntry,
 };
 pub use messages::{
     AckMessage, DecodeTokenMessage, ErrorMessage, FinalPrefillChunkMessage, MessageBase,

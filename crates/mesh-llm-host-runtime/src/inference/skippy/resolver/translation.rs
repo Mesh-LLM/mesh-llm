@@ -97,6 +97,13 @@ impl ResolvedSkippyConfig {
         options.n_gpu_layers = self.hardware.gpu_layers;
         options.mmap = self.hardware.mmap;
         options.mlock = self.hardware.mlock;
+        options.repack = self.hardware.repack;
+        options.op_offload = self.hardware.op_offload;
+        options.no_host_buffer = self.hardware.no_host_buffer;
+        options.check_tensors = self.hardware.check_tensors;
+        options.direct_io = self.hardware.direct_io;
+        options.main_gpu = self.hardware.main_gpu;
+        options.split_mode = self.hardware.split_mode;
         if let Some(projector_path) = self.hardware.projector_path.clone() {
             options = options.with_projector_path(projector_path);
         }

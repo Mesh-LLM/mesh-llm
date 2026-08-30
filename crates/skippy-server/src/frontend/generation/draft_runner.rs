@@ -15,6 +15,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+fn map_split_mode(mode: skippy_protocol::SplitMode) -> skippy_runtime::SplitMode {
+    match mode {
+        skippy_protocol::SplitMode::Auto => skippy_runtime::SplitMode::Auto,
+        skippy_protocol::SplitMode::None => skippy_runtime::SplitMode::None,
+        skippy_protocol::SplitMode::Layer => skippy_runtime::SplitMode::Layer,
+        skippy_protocol::SplitMode::Row => skippy_runtime::SplitMode::Row,
+    }
+}
+
 pub(in crate::frontend) struct DraftRunner {
     pub(in crate::frontend) path: PathBuf,
     pub(in crate::frontend) window: usize,
@@ -48,6 +57,13 @@ impl DraftRunner {
                 n_gpu_layers: n_gpu_layers.unwrap_or(config.n_gpu_layers),
                 mmap: config.mmap,
                 mlock: config.mlock,
+                repack: config.repack,
+                op_offload: config.op_offload,
+                no_host_buffer: config.no_host_buffer,
+                check_tensors: config.check_tensors,
+                direct_io: config.direct_io,
+                main_gpu: config.main_gpu,
+                split_mode: map_split_mode(config.split_mode),
                 selected_backend_device: config
                     .selected_device
                     .as_ref()
@@ -153,6 +169,13 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
                 n_gpu_layers: n_gpu_layers.unwrap_or(config.n_gpu_layers),
                 mmap: config.mmap,
                 mlock: config.mlock,
+                repack: config.repack,
+                op_offload: config.op_offload,
+                no_host_buffer: config.no_host_buffer,
+                check_tensors: config.check_tensors,
+                direct_io: config.direct_io,
+                main_gpu: config.main_gpu,
+                split_mode: map_split_mode(config.split_mode),
                 selected_backend_device: config
                     .selected_device
                     .as_ref()

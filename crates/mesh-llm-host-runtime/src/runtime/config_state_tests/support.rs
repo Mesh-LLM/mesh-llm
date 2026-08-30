@@ -239,7 +239,6 @@ kv_unified = "auto"
 
 [defaults.hardware]
 gpu_layers = "auto"
-tensor_split = []
 
 [defaults.throughput]
 parallel = 3
@@ -269,7 +268,6 @@ cache_type_k = "q8_0"
 
 [models.hardware]
 gpu_layers = 99
-tensor_split = []
 
 [models.throughput]
 parallel = 4

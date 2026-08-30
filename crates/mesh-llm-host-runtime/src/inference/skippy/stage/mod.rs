@@ -824,6 +824,18 @@ fn stage_config(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock,
+        // Split/multi-node stage loads do not yet carry hardware.repack,
+        // hardware.op_offload, hardware.no_host_buffer,
+        // hardware.check_tensors, hardware.direct_io, hardware.main_gpu, or
+        // hardware.split_mode over the wire; disabled/auto preserves today's
+        // defaults.
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,

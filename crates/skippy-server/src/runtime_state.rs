@@ -5,13 +5,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
+use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
     IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
-    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel,
-    StageSession, TokenSignal, parse_cache_type,
+    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
+    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -330,6 +330,18 @@ fn runtime_config_from_stage_config(
         n_gpu_layers: config.n_gpu_layers,
         mmap: config.mmap,
         mlock: config.mlock,
+        repack: config.repack,
+        op_offload: config.op_offload,
+        no_host_buffer: config.no_host_buffer,
+        check_tensors: config.check_tensors,
+        direct_io: config.direct_io,
+        main_gpu: config.main_gpu,
+        split_mode: match config.split_mode {
+            SplitMode::Auto => RuntimeSplitMode::Auto,
+            SplitMode::None => RuntimeSplitMode::None,
+            SplitMode::Layer => RuntimeSplitMode::Layer,
+            SplitMode::Row => RuntimeSplitMode::Row,
+        },
         selected_backend_device: config
             .selected_device
             .as_ref()
@@ -395,7 +407,9 @@ fn open_stage_model_from_parts_with_events(
 
 #[cfg(test)]
 mod tests {
-    use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
+    use skippy_protocol::{
+        FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
+    };
     use skippy_runtime::{
         ActivationDesc, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
         MtpSource, RuntimeActivationDType, RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
@@ -444,6 +458,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: Some(false),
             mlock: true,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Enabled,
@@ -517,6 +538,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -577,6 +605,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -649,6 +684,13 @@ mod tests {
             n_gpu_layers: 0,
             mmap: Some(true),
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
@@ -864,6 +906,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -916,6 +965,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "auto".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -968,6 +1024,13 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

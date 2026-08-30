@@ -6,7 +6,7 @@ mod tests {
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
         GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        SplitMode, StageModel, StageSession, Status, TensorRole, format_skippy_error,
     };
     use std::{
         env,
@@ -74,6 +74,7 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
@@ -87,6 +88,12 @@ mod tests {
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
         };
         StageModel::open(model_path, &config)
     }

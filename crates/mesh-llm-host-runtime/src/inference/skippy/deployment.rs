@@ -109,6 +109,17 @@ pub(crate) fn stage0_config(
         n_gpu_layers: -1,
         mmap: context.mmap,
         mlock: context.mlock,
+        // Split/multi-node deployment does not yet resolve a per-stage value
+        // for hardware.repack, hardware.op_offload, hardware.no_host_buffer,
+        // hardware.check_tensors, hardware.direct_io, hardware.main_gpu, or
+        // hardware.split_mode; disabled/auto preserves today's defaults.
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,

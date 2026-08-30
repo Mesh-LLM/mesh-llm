@@ -20,7 +20,7 @@ pub use mesh_llm_config::{
     parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
 };
 #[cfg(test)]
-use mesh_llm_config::{ConfigDiagnosticSeverity, FlashAttentionType, TensorSplitConfig};
+use mesh_llm_config::{ConfigDiagnosticSeverity, FlashAttentionType};
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1426,7 +1426,6 @@ context_shift = "auto"
 [defaults.hardware]
 model_runtime = "auto"
 gpu_layers = "auto"
-tensor_split = []
 split_mode = "auto"
 main_gpu = 0
 safety_margin_gb = 2.0
@@ -1492,10 +1491,6 @@ device = "cuda:0"
         assert!(matches!(
             defaults.hardware.as_ref().and_then(|v| v.gpu_layers.as_ref()),
             Some(IntegerOrString::String(value)) if value == "auto"
-        ));
-        assert!(matches!(
-            defaults.hardware.as_ref().and_then(|v| v.tensor_split.as_ref()),
-            Some(TensorSplitConfig::Ratios(values)) if values.is_empty()
         ));
         assert!(matches!(
             defaults.request_defaults.as_ref().and_then(|v| v.reasoning_budget.as_ref()),

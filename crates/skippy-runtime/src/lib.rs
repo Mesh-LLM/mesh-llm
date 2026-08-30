@@ -23,7 +23,7 @@ pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatc
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
     LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,
-    SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, parse_cache_type,
+    SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub(crate) use error::ensure_ok;
