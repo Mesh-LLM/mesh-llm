@@ -31,8 +31,10 @@ Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested
 reusable workflow. GitHub therefore exposes five focused PR-associated runs
 with direct job and step drill-down. Each has a stable `PR / <lane>` result.
-The entries receive no repository secrets, cannot select Depot or publish
-trusted-main caches, and independently cancel superseded synchronizations.
+The entries receive no repository secrets and independently cancel superseded
+synchronizations. Eligible same-repository executor jobs may select Depot
+through protected runner policy while the bounded repository gate is active;
+forks and control-plane jobs remain hosted.
 The protected planner action extracts only `ci/ownership.yml` and
 `ci/slices.yml` from the validated immutable PR source SHA into a unique
 runner-temp directory. The source ownership and slice catalogs must match the
@@ -366,16 +368,16 @@ from being duplicated into every composed product artifact.
 ## Provider and cache policy
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
-Fork pull requests use GitHub-hosted runners. Same-repository PRs normally do
-too, but an exact maintainer-approved merge ref and head SHA may use Depot under
-the time-bounded cache-risk exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`. The
+Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
+use Depot while the repository-wide gate and time-bounded cache-risk exception
+in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
 other exception is uncredentialed CUDA smoke on the approved ephemeral
 `gpu-nvidia` scale set described above. PRs use the same protected reusable
 lanes and receive no repository secrets. On routine trusted-`main` pushes,
 Linux roles may use Depot only when `DEPOT_RUNNERS_ENABLED` is exactly `true`;
 macOS, Windows, credential-bearing smokes and other hardware-qualified work
-retain explicit approved placement. The separate exact same-repository PR
-exception may also select eligible build/test rows on Depot macOS 15 and
+retain explicit approved placement. The same-repository PR exception may also
+select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
 
@@ -392,8 +394,8 @@ ordinary executor rows, not that every check or job is hosted by Depot.
 
 The central selector normally makes the Depot cache namespace inert by emitting
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. During
-the bounded exception, the exact approved PR revision and eligible trusted-main
-Depot jobs emit `allow_native_github_cache=true`, enabling intentional
+the bounded exception, eligible same-repository PR and trusted-main Depot jobs
+emit `allow_native_github_cache=true`, enabling intentional
 cross-branch reuse through Depot's repository-wide Actions-cache proxy. Direct
 Depot build-tool remote cache remains disabled. This is a conscious iteration-
 speed tradeoff and the shared cache is treated as attacker-controlled input,
@@ -420,13 +422,11 @@ replace the global PR gate. Maintainers must not set it until the external
 isolation protocol proves the actual Depot/WebDAV and Actions-cache authority
 boundary.
 
-The ordinary PR selector also requires the independent global gate plus exact
-`DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` values. The SHA binding
-invalidates approval after every push, forks and CI-policy changes remain
-hosted, and the source-enforced exception expires on 2026-09-14 UTC. GitHub's
-`all_external_contributors` approval policy covers external contributors, not
-same-repository collaborator branches; the exact ref/SHA values are therefore
-the protected same-repository maintainer approval control.
+The ordinary PR selector requires the independent global gate. Forks and
+CI-policy changes remain hosted, and the source-enforced exception expires on
+2026-09-14 UTC. GitHub's `all_external_contributors` approval policy covers
+external contributors, not same-repository collaborator branches; the global
+gate and checked-in expiry are therefore the maintainer approval control.
 
 The Quality slice also contains a separate, additive authority-sentinel
 selector. It reads `DEPOT_PR_SENTINEL_REF` (not `DEPOT_PR_CANARY_REF`) and
@@ -512,11 +512,11 @@ main/release/manual paths retain the existing cache behavior. This is a
 checked-in consumer policy, not proof that a Depot runner has no ambient
 Depot/WebDAV authority.
 
-For an exactly approved exception run, `allow_native_github_cache=true` enables
-those guarded cache consumers on both the selected PR and eligible trusted-main
-Depot jobs. Depot's lack of branch isolation means the cache can cross the PR,
-main, and other-PR trust boundaries. That accepted risk, including the exact
-sentinel evidence and rollback procedure, is documented in
+For an eligible exception run, `allow_native_github_cache=true` enables those
+guarded cache consumers on both selected PR and eligible trusted-main Depot
+jobs. Depot's lack of branch isolation means the cache can cross the PR, main,
+and other-PR trust boundaries. That accepted risk, including the exact sentinel
+evidence and rollback procedure, is documented in
 `ci/DEPOT_PR_RISK_EXCEPTION.md`; the exact-SHA canary, metrics, and hosted
 rollback evidence are recorded in `.omo/specs/depot-pr-rollout-evidence.md`.
 
@@ -535,7 +535,7 @@ an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
 
 Permanent Depot PR execution is not yet approved. The bounded exception permits
-only an exact same-repository ref/SHA through 2026-09-14 UTC. A protected
+eligible same-repository PR jobs through 2026-09-14 UTC. A protected
 runner-group check, no-secret/no-direct-token execution, provider-isolation
 redesign, and a new successful non-secret sentinel remain prerequisites for
 removing that deadline. Do not change Depot settings or runner groups in a

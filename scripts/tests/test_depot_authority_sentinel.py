@@ -252,7 +252,7 @@ class DepotAuthoritySentinelTests(unittest.TestCase):
             sentinel_ref="", pr_enabled="true"
         )
         self.assertEqual(global_gate.returncode, 0, global_gate.stderr)
-        self.assertEqual(global_outputs["depot_enabled"], "false")
+        self.assertEqual(global_outputs["depot_enabled"], "true")
         self.assertIn("github.ref == vars.DEPOT_PR_SENTINEL_REF", self.sentinel)
 
     def test_normal_quality_jobs_keep_the_existing_provider_output(self) -> None:

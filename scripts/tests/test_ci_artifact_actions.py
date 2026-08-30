@@ -2157,8 +2157,8 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("depot-macos-15", action)
         self.assertIn("depot-windows-2022", action)
         self.assertIn('depot_pr_exception_expires="2026-09-14"', action)
-        self.assertIn("INPUT_PR_APPROVED_REF", action)
-        self.assertIn("INPUT_PR_APPROVED_SHA", action)
+        self.assertNotIn("INPUT_PR_APPROVED_REF", action)
+        self.assertNotIn("INPUT_PR_APPROVED_SHA", action)
 
         selector_calls = 0
         approved_policy_calls = 0
@@ -2493,15 +2493,19 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertEqual(canary_pr["allow_native_github_cache"], "false")
         self.assertEqual(canary_pr["allow_trusted_sccache_seed"], "false")
 
-        unapproved_pr = self.run_runner_selector(
+        globally_enabled_pr = self.run_runner_selector(
             event_name="pull_request",
             ref="refs/pull/12/merge",
             main_enabled="false",
             manual_enabled="false",
             pr_enabled="true",
         )
-        self.assertEqual(unapproved_pr["depot_enabled"], "false")
-        self.assertEqual(unapproved_pr["runner"], "ubuntu-24.04")
+        self.assertEqual(globally_enabled_pr["depot_enabled"], "true")
+        self.assertEqual(globally_enabled_pr["runner"], "depot-ubuntu-24.04")
+        self.assertEqual(
+            globally_enabled_pr["allow_native_github_cache"],
+            "true",
+        )
 
         stale_approval = self.run_runner_selector(
             event_name="pull_request",
@@ -2512,7 +2516,7 @@ class CiArtifactActionTests(unittest.TestCase):
             pr_approved_ref="refs/pull/12/merge",
             pr_approved_sha="fedcba9876543210fedcba9876543210fedcba98",
         )
-        self.assertEqual(stale_approval["depot_enabled"], "false")
+        self.assertEqual(stale_approval["depot_enabled"], "true")
 
         stale_ref_approval = self.run_runner_selector(
             event_name="pull_request",
@@ -2523,8 +2527,8 @@ class CiArtifactActionTests(unittest.TestCase):
             pr_approved_ref="refs/pull/13/merge",
             pr_approved_sha="0123456789abcdef0123456789abcdef01234567",
         )
-        self.assertEqual(stale_ref_approval["depot_enabled"], "false")
-        self.assertEqual(stale_ref_approval["runner"], "ubuntu-24.04")
+        self.assertEqual(stale_ref_approval["depot_enabled"], "true")
+        self.assertEqual(stale_ref_approval["runner"], "depot-ubuntu-24.04")
         self.assertEqual(
             stale_ref_approval["allow_native_github_cache"],
             "true",
