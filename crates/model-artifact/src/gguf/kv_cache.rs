@@ -224,13 +224,32 @@ impl GgufCompactMeta {
         self.architecture == "grok"
     }
 
+    /// Per-head `(key, value)` widths llama.cpp's block-alignment check can
+    /// observe for this model. `n_embd_head_k/v(il)` returns the SWA width for
+    /// sliding-window layers and the full width otherwise
+    /// (`llama-hparams.cpp:115/:123`), and the quantised-KV check iterates
+    /// every layer (`llama-context.cpp:3638/:3652`), so a quantised cache
+    /// loads only when **every** distinct width the model uses is
+    /// block-aligned. The SWA entry is `(0, 0)` when the GGUF carries no
+    /// separate SWA widths; llama.cpp then reuses the full widths for SWA
+    /// layers, which the first entry already covers.
+    fn cached_head_widths(&self) -> [(u32, u32); 2] {
+        [
+            (self.key_length, self.kv_cache_value_length()),
+            (self.key_length_swa, self.value_length_swa),
+        ]
+    }
+
     /// Returns `Ok(())` if this model can load `desired` per llama.cpp's
     /// flash-attention and block-alignment constraints, or the first reason it
     /// cannot. f16 K/V is always supported.
     ///
     /// Uses the *cached* per-head widths (`kv_cache_value_length` collapses the
     /// absorbed-MLA latent for glm-dsa), so the check reasons about what is
-    /// actually stored, not the expanded attention width.
+    /// actually stored, not the expanded attention width. Both the full and
+    /// the SWA widths are validated whenever the GGUF carries distinct ones
+    /// (21 model loaders create SWA layers whose widths can differ from the
+    /// full-attention widths).
     pub fn kv_cache_quant_support(
         &self,
         desired: GgufKvCacheQuant,
@@ -238,20 +257,24 @@ impl GgufCompactMeta {
         if desired.v.is_quantized() && self.flash_attention_forced_off() {
             return Err(KvQuantUnsupported::FlashAttentionUnavailable);
         }
-        if desired.k.is_quantized() {
-            let block = desired.k.block_elements();
-            if !self.key_length.is_multiple_of(block) {
+        for (head_k_width, head_v_width) in self.cached_head_widths() {
+            if desired.k.is_quantized()
+                && head_k_width > 0
+                && !head_k_width.is_multiple_of(desired.k.block_elements())
+            {
                 return Err(KvQuantUnsupported::KeyWidthNotBlockAligned {
-                    head_width: self.key_length,
-                    block,
+                    head_width: head_k_width,
+                    block: desired.k.block_elements(),
                 });
             }
-        }
-        if desired.v.is_quantized() {
-            let block = desired.v.block_elements();
-            let head_width = self.kv_cache_value_length();
-            if !head_width.is_multiple_of(block) {
-                return Err(KvQuantUnsupported::ValueWidthNotBlockAligned { head_width, block });
+            if desired.v.is_quantized()
+                && head_v_width > 0
+                && !head_v_width.is_multiple_of(desired.v.block_elements())
+            {
+                return Err(KvQuantUnsupported::ValueWidthNotBlockAligned {
+                    head_width: head_v_width,
+                    block: desired.v.block_elements(),
+                });
             }
         }
         Ok(())
@@ -436,6 +459,91 @@ mod tests {
         );
         // f16 remains supported everywhere.
         assert_eq!(meta.kv_cache_quant_support(GgufKvCacheQuant::F16), Ok(()));
+    }
+
+    /// SWA layers can carry their own per-head widths. When both the full and
+    /// the SWA widths are block-aligned the quantised default must be kept —
+    /// this is the common shape (e.g. Gemma-3 with a 256 SWA head width).
+    #[test]
+    fn aligned_swa_widths_keep_quantized_kv() {
+        let meta = GgufCompactMeta {
+            architecture: "gemma3".to_string(),
+            head_count: 32,
+            kv_head_count: 8,
+            layer_count: 24,
+            key_length: 128,
+            value_length: 128,
+            key_length_swa: 256,
+            value_length_swa: 256,
+            ..Default::default()
+        };
+
+        assert_eq!(meta.kv_cache_quant_support(GgufKvCacheQuant::Q8_0), Ok(()));
+        assert_eq!(
+            meta.compatible_default_kv_cache_quant(GgufKvCacheQuant::Q4_0),
+            GgufKvCacheQuant::Q4_0
+        );
+    }
+
+    /// The exact hole from the review: full-attention widths aligned, SWA
+    /// widths not. llama.cpp's per-layer check sees the SWA width for SWA
+    /// layers, so the quantised cache cannot load and the default must fall
+    /// back to f16 — previously the guard returned `Ok(())` and the context
+    /// build crashed.
+    #[test]
+    fn unaligned_swa_widths_fall_back_to_f16() {
+        let meta = GgufCompactMeta {
+            architecture: "gemma3".to_string(),
+            head_count: 32,
+            kv_head_count: 8,
+            layer_count: 24,
+            key_length: 128,
+            value_length: 128,
+            key_length_swa: 100,
+            value_length_swa: 100,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            meta.kv_cache_quant_support(GgufKvCacheQuant::Q8_0),
+            Err(KvQuantUnsupported::KeyWidthNotBlockAligned {
+                head_width: 100,
+                block: 32,
+            })
+        );
+        assert_eq!(
+            meta.compatible_default_kv_cache_quant(GgufKvCacheQuant::Q8_0),
+            GgufKvCacheQuant::F16
+        );
+    }
+
+    /// An unaligned SWA *value* width must independently degrade the V side,
+    /// even when every key width is aligned.
+    #[test]
+    fn unaligned_swa_value_width_alone_degrades_to_f16() {
+        let meta = GgufCompactMeta {
+            architecture: "olmo2".to_string(),
+            head_count: 32,
+            kv_head_count: 8,
+            layer_count: 24,
+            key_length: 128,
+            value_length: 128,
+            key_length_swa: 128,
+            value_length_swa: 100,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            meta.kv_cache_quant_support(GgufKvCacheQuant::Q4_0),
+            Err(KvQuantUnsupported::ValueWidthNotBlockAligned {
+                head_width: 100,
+                block: 32,
+            })
+        );
+        assert_eq!(
+            meta.compatible_default_kv_cache_quant(GgufKvCacheQuant::Q4_0),
+            GgufKvCacheQuant::F16
+        );
     }
 
     /// glm-dsa caches the absorbed-MLA latent (kv_lora_rank = 512), which is
