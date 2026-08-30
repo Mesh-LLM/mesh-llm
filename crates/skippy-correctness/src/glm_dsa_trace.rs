@@ -623,8 +623,10 @@ fn causal_visible_width(pos_start: i32, token_index: usize) -> usize {
 
 fn decode_i32_values(raw_bytes: &[u8]) -> Vec<i32> {
     raw_bytes
-        .chunks_exact(std::mem::size_of::<i32>())
-        .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("exact i32 chunk")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| i32::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -1316,11 +1318,13 @@ fn compare_activation_payloads(
     let mut sq_sum = 0.0f64;
     let mut ref_sq_sum = 0.0f64;
     for (fused_chunk, direct_chunk) in fused
-        .chunks_exact(std::mem::size_of::<f32>())
-        .zip(direct.chunks_exact(std::mem::size_of::<f32>()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(direct.as_chunks::<4>().0.iter())
     {
-        let fused_value = f32::from_le_bytes(fused_chunk.try_into().ok()?);
-        let direct_value = f32::from_le_bytes(direct_chunk.try_into().ok()?);
+        let fused_value = f32::from_le_bytes(*fused_chunk);
+        let direct_value = f32::from_le_bytes(*direct_chunk);
         count += 1;
         if !fused_value.is_finite() || !direct_value.is_finite() {
             non_finite_pair_count += 1;
@@ -1373,8 +1377,8 @@ fn activation_f32_stats(bytes: &[u8]) -> Option<GlmDsaActivationStatsReport> {
     let mut non_finite_count = 0usize;
     let mut sum = 0.0f64;
     let mut max_abs = 0.0f32;
-    for chunk in bytes.chunks_exact(std::mem::size_of::<f32>()) {
-        let value = f32::from_le_bytes(chunk.try_into().ok()?);
+    for chunk in bytes.as_chunks::<4>().0 {
+        let value = f32::from_le_bytes(*chunk);
         count += 1;
         if value.is_finite() {
             sum += f64::from(value);

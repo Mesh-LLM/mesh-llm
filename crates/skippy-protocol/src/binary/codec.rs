@@ -630,13 +630,16 @@ fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<V
 }
 
 const REPLY_STATS_FIELD_COUNT: usize = 23;
-const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
+const I64_WIRE_BYTES: usize = std::mem::size_of::<i64>();
+const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * I64_WIRE_BYTES;
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     let fields = reply_stats_fields(stats);
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     for (chunk, value) in bytes
-        .chunks_exact_mut(std::mem::size_of::<i64>())
+        .as_chunks_mut::<I64_WIRE_BYTES>()
+        .0
+        .iter_mut()
         .zip(fields)
     {
         chunk.copy_from_slice(&value.to_le_bytes());
@@ -648,11 +651,8 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     reader.read_exact(&mut bytes)?;
     let mut fields = [0_i64; REPLY_STATS_FIELD_COUNT];
-    for (field, chunk) in fields
-        .iter_mut()
-        .zip(bytes.chunks_exact(std::mem::size_of::<i64>()))
-    {
-        *field = i64::from_le_bytes(chunk.try_into().expect("i64 chunk size"));
+    for (field, chunk) in fields.iter_mut().zip(bytes.as_chunks::<I64_WIRE_BYTES>().0) {
+        *field = i64::from_le_bytes(*chunk);
     }
     Ok(reply_stats_from_fields(fields))
 }
