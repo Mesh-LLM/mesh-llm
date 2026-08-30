@@ -132,6 +132,44 @@
   const zoom = d3.zoom()
     .scaleExtent([0.28, 2])
     .on("zoom", event => layer.attr("transform", event.transform));
+  const activeAnimations = new WeakMap();
+
+  function animeApi() {
+    return window.anime && typeof window.anime.animate === "function" ? window.anime : null;
+  }
+
+  function stopAnimation(target) {
+    const animation = activeAnimations.get(target);
+    if (!animation) return;
+    if (typeof animation.cancel === "function") animation.cancel();
+    else if (typeof animation.pause === "function") animation.pause();
+    activeAnimations.delete(target);
+  }
+
+  function animateState(target, values, properties, duration, onUpdate, onComplete) {
+    stopAnimation(target);
+    const anime = animeApi();
+    if (!anime || !duration) {
+      Object.assign(values, properties);
+      onUpdate?.();
+      onComplete?.();
+      return null;
+    }
+    let animation;
+    animation = anime.animate(values, {
+      ...properties,
+      duration,
+      ease: "outCubic",
+      onUpdate: () => onUpdate?.(),
+      onComplete: () => {
+        if (activeAnimations.get(target) !== animation) return;
+        activeAnimations.delete(target);
+        onComplete?.();
+      }
+    });
+    activeAnimations.set(target, animation);
+    return animation;
+  }
 
   svg.call(zoom).on("dblclick.zoom", null).on("wheel.zoom", null);
   // The wrapper is the complete interaction boundary: the SVG, legend,
@@ -593,11 +631,29 @@
       .attr("data-gradient-id", link => linkGradientId(link))
       .attr("stroke", link => `url(#${linkGradientId(link)})`)
       .style("stroke", link => `url(#${linkGradientId(link)})`);
-    if (duration) {
-      linkExit.transition().duration(duration).attr("opacity", 0).remove();
-      linkMerged.transition().duration(duration)
-        .attr("opacity", 1)
-        .attr("d", link => linkPath(link, verticalOrientation, busX));
+    const animateLink = (element, link, removeAfter) => {
+      const fromPath = element.getAttribute("d") || linkPath(link, verticalOrientation, busX);
+      const targetPath = linkPath(link, verticalOrientation, busX);
+      const pathAt = d3.interpolateString(fromPath, targetPath);
+      const values = {
+        progress: 0,
+        opacity: Number.parseFloat(element.getAttribute("opacity") || (removeAfter ? "1" : "0"))
+      };
+      animateState(
+        element,
+        values,
+        { progress: 1, opacity: removeAfter ? 0 : 1 },
+        duration,
+        () => {
+          element.setAttribute("d", pathAt(values.progress));
+          element.setAttribute("opacity", String(values.opacity));
+        },
+        removeAfter ? () => element.remove() : null
+      );
+    };
+    if (duration && animeApi()) {
+      linkExit.each(function(link) { animateLink(this, link, true); });
+      linkMerged.each(function(link) { animateLink(this, link, false); });
     } else {
       linkExit.remove();
       linkMerged.attr("opacity", 1).attr("d", link => linkPath(link, verticalOrientation, busX));
@@ -696,11 +752,29 @@
     merged.select(".cli-explorer-node-disclosure")
       .attr("d", node => disclosurePath(node.data, verticalOrientation));
 
-    if (duration) {
-      merged.transition().duration(duration)
-        .attr("opacity", 1)
-        .attr("transform", nodeTransform);
-      nodes.exit().transition().duration(duration).attr("opacity", 0).remove();
+    const animateNode = (element, node, removeAfter) => {
+      const fromTransform = element.getAttribute("transform") || nodeTransform(node);
+      const targetTransform = nodeTransform(node);
+      const transformAt = d3.interpolateString(fromTransform, targetTransform);
+      const values = {
+        progress: 0,
+        opacity: Number.parseFloat(element.getAttribute("opacity") || (removeAfter ? "1" : "0"))
+      };
+      animateState(
+        element,
+        values,
+        { progress: 1, opacity: removeAfter ? 0 : 1 },
+        duration,
+        () => {
+          element.setAttribute("transform", transformAt(values.progress));
+          element.setAttribute("opacity", String(values.opacity));
+        },
+        removeAfter ? () => element.remove() : null
+      );
+    };
+    if (duration && animeApi()) {
+      merged.each(function(node) { animateNode(this, node, false); });
+      nodes.exit().each(function(node) { animateNode(this, node, true); });
     } else {
       merged.attr("opacity", 1).attr("transform", nodeTransform);
       nodes.exit().remove();
@@ -903,8 +977,21 @@
       ? legendSafeTop - bounds.y * scale
       : Math.max(legendSafeTop - bounds.y * scale, centeredY);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const target = animate && !reduced ? svg.transition().duration(260) : svg;
-    target.call(zoom.transform, d3.zoomIdentity.translate(x, y).scale(scale));
+    const targetTransform = d3.zoomIdentity.translate(x, y).scale(scale);
+    if (!animate || reduced || !animeApi()) {
+      stopAnimation(svgNode);
+      svg.call(zoom.transform, targetTransform);
+      return;
+    }
+    const currentTransform = d3.zoomTransform(svgNode);
+    const values = { x: currentTransform.x, y: currentTransform.y, k: currentTransform.k };
+    animateState(
+      svgNode,
+      values,
+      { x: targetTransform.x, y: targetTransform.y, k: targetTransform.k },
+      260,
+      () => svg.call(zoom.transform, d3.zoomIdentity.translate(values.x, values.y).scale(values.k))
+    );
   }
 
   function collapseAll() {

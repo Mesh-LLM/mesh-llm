@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,8 @@ const repoRoot = path.resolve(websiteDir, "..");
 const docsRoot = path.resolve(repoRoot, "docs");
 const explorerPath = "/docs/pages/cli-explorer/";
 const screenshotDirectory = path.resolve(websiteDir, "test-results/cli-explorer");
+const explorerTemplatePath = path.resolve(websiteDir, "src/docs/pages/cli-explorer.njk");
+const explorerScriptPath = path.resolve(websiteDir, "src/assets/cli-explorer.js");
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -20,6 +22,23 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
 };
+
+function assertAnimationIntegrationContract() {
+  const template = readFileSync(explorerTemplatePath, "utf8");
+  const script = readFileSync(explorerScriptPath, "utf8");
+  const animeTag = '<script src="/assets/anime.min.js" defer></script>';
+  const d3Tag = '<script src="/assets/d3.min.js" defer></script>';
+  const explorerTag = '<script src="/assets/cli-explorer.js" defer></script>';
+  const animeIndex = template.indexOf(animeTag);
+  const d3Index = template.indexOf(d3Tag);
+  const explorerIndex = template.indexOf(explorerTag);
+  assert.ok(animeIndex >= 0 && animeIndex < d3Index && d3Index < explorerIndex, "CLI explorer must load Anime before D3 and its own script");
+  assert.equal(script.includes(".transition("), false, "CLI explorer must not use D3 transitions");
+  assert.match(script, /window\.anime.*animate/, "CLI explorer must route animation through Anime.js");
+  assert.match(script, /const duration = immediate \|\| reduced \? 0 : 190/, "CLI explorer must preserve the 190ms reduced-motion gate");
+  assert.match(script, /duration,\s*\n\s*ease: "outCubic"/, "CLI explorer node/link animation duration must remain configurable");
+  assert.match(script, /\},\s*\n\s*260,/, "CLI explorer fit animation must retain its 260ms duration");
+}
 
 function serveDocs() {
   if (!existsSync(docsRoot)) {
@@ -895,6 +914,64 @@ async function assertSearchClearFocus(page, viewportName, search) {
   assert.notEqual(await activeTreePath(page), homePath, `${viewportName}: ArrowDown did not move focus after clearing search`);
 }
 
+async function runAnimationAssertions(page, baseURL) {
+  const pageErrors = [];
+  const onPageError = (error) => pageErrors.push(error.message);
+  page.on("pageerror", onPageError);
+  try {
+    await page.goto(`${baseURL}${explorerPath}`, { waitUntil: "networkidle" });
+    assert.equal(await page.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches), false, "animation probe must run without reduced motion");
+    assert.equal(await page.evaluate(() => typeof window.anime?.animate), "function", "Anime.js did not load before the explorer");
+    const command = page.locator('g.cli-explorer-node.command[role="treeitem"][data-path="mesh-llm serve"][aria-expanded]').first();
+    const fallbackCommand = page.locator('g.cli-explorer-node.command[role="treeitem"][aria-expanded]').first();
+    const target = await command.count() ? command : fallbackCommand;
+    await target.waitFor({ state: "visible" });
+    const baseline = await visibleNodeCount(page);
+
+    await target.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(24);
+    const earlyState = await page.evaluate(() => {
+      const nodes = [...document.querySelectorAll('g.cli-explorer-node[role="treeitem"]')];
+      const links = [...document.querySelectorAll(".cli-explorer-link")];
+      const partial = (items) => items.some((item) => {
+        const opacity = Number.parseFloat(getComputedStyle(item).opacity);
+        return opacity > 0.05 && opacity < 0.99;
+      });
+      return { partialNode: partial(nodes), partialLink: partial(links) };
+    });
+    assert.ok(earlyState.partialNode || earlyState.partialLink, "non-reduced expansion did not expose an Anime.js in-flight state");
+    await page.waitForTimeout(240);
+    const settledAfterExpand = await page.evaluate(() => [...document.querySelectorAll('g.cli-explorer-node[role="treeitem"], .cli-explorer-link')]
+      .every((node) => {
+        const style = getComputedStyle(node);
+        return style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.opacity) >= 0.99;
+      }));
+    assert.equal(settledAfterExpand, true, "non-reduced expansion did not settle all visible nodes and links");
+
+    await target.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(240);
+    assert.equal(await visibleNodeCount(page), baseline, "non-reduced collapse did not remove exited nodes after the 190ms animation");
+    const staleExited = await page.evaluate(() => [...document.querySelectorAll('g.cli-explorer-node[role="treeitem"], .cli-explorer-link')]
+      .some((node) => Number.parseFloat(getComputedStyle(node).opacity) <= 0.05));
+    assert.equal(staleExited, false, "non-reduced collapse left an exited node or link in the DOM");
+
+    // Interrupt an in-flight expansion with a collapse, then verify the
+    // replacement animation owns the element and still settles cleanly.
+    await target.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(20);
+    await target.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(260);
+    assert.equal(await visibleNodeCount(page), baseline, "rapid animation interruption left stale tree nodes");
+    assert.deepEqual(pageErrors, [], `animation probe page errors: ${pageErrors.join("; ")}`);
+  } finally {
+    page.removeListener("pageerror", onPageError);
+  }
+}
+
 async function runExplorerAssertions(page, baseURL, viewportName) {
   const consoleErrors = [];
   const pageErrors = [];
@@ -1012,6 +1089,12 @@ async function runExplorerAssertions(page, baseURL, viewportName) {
       await page.waitForTimeout(60);
       const afterEnter = await command.getAttribute("aria-expanded");
       assert.notEqual(afterEnter, before, `${viewportName}: Enter did not expand/collapse a command`);
+      const reducedMotionPending = await page.evaluate(() => [...document.querySelectorAll('g.cli-explorer-node[role="treeitem"], .cli-explorer-link')]
+        .some((node) => {
+          const opacity = Number.parseFloat(getComputedStyle(node).opacity);
+          return opacity > 0.05 && opacity < 0.99;
+        }));
+      assert.equal(reducedMotionPending, false, `${viewportName}: reduced-motion update left a node or link mid-animation`);
       if (afterEnter === "true") await assertLinksClearSourceNodes(page, viewportName);
       await page.keyboard.press(" ");
       await page.waitForTimeout(60);
@@ -1070,6 +1153,7 @@ async function runExplorerAssertions(page, baseURL, viewportName) {
   }
 }
 
+assertAnimationIntegrationContract();
 const { server, url } = await serveDocs();
 const browser = await chromium.launch({ headless: true });
 try {
@@ -1090,6 +1174,19 @@ try {
     } finally {
       await context.close();
     }
+  }
+  const animationContext = await browser.newContext({
+    baseURL: url,
+    permissions: ["clipboard-read", "clipboard-write"],
+    reducedMotion: "no-preference",
+    viewport: { width: 1440, height: 1000 },
+  });
+  const animationPage = await animationContext.newPage();
+  try {
+    await animationPage.emulateMedia({ reducedMotion: "no-preference" });
+    await runAnimationAssertions(animationPage, url);
+  } finally {
+    await animationContext.close();
   }
 } finally {
   await browser.close();
