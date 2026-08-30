@@ -555,6 +555,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
         pinned_gpu: None,
+        device_override: None,
         slots: 1,
         cache_type_k_override: None,
         cache_type_v_override: None,

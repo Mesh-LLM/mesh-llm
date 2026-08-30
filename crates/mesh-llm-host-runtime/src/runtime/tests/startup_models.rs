@@ -1473,6 +1473,7 @@ fn pinned_gpu_startup_preflight_cli_models_resolve_matching_config_gpu_id() {
 
     let mut plans = vec![StartupModelPlan {
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         mmproj_path: None,
         ctx_size: None,
@@ -1572,6 +1573,7 @@ fn pinned_gpu_startup_preflight_cli_device_overrides_stale_config_gpu_id() {
 
     let mut plans = vec![StartupModelPlan {
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         mmproj_path: None,
         ctx_size: None,
@@ -1622,6 +1624,7 @@ fn pinned_gpu_startup_preflight_cli_device_resolves_under_auto_assignment() {
 
     let mut plans = vec![StartupModelPlan {
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         mmproj_path: None,
         ctx_size: None,
@@ -1679,6 +1682,7 @@ fn pinned_gpu_startup_preflight_unresolvable_device_names_available_devices() {
     let specs = vec![StartupModelSpec {
         model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
         declared_ref: None,
+        config_model_id: None,
         mmproj_ref: None,
         ctx_size: None,
         gpu_id: Some("CUDA9".into()),
@@ -1693,6 +1697,7 @@ fn pinned_gpu_startup_preflight_unresolvable_device_names_available_devices() {
     }];
     let mut plans = vec![StartupModelPlan {
         declared_ref: "Qwen3-8B-Q4_K_M".into(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
         mmproj_path: None,
         ctx_size: None,
