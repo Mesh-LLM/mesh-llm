@@ -1028,7 +1028,7 @@ mod schema_tests {
             .unwrap()
             .context_size(4096);
         editor
-            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", String::new())
+            .upsert_model("Qwen/Qwen3-14B-GGUF:Q4_K_M", String::new())
             .unwrap()
             .context_size(16384);
 

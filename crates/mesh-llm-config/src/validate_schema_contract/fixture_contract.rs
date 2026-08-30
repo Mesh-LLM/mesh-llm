@@ -141,6 +141,12 @@ fn validate_schema_contract_fixture_reports_stable_canonical_signatures() {
                 "invalid_value",
             ),
             DiagnosticSignature::new(
+                "models[6].speculative.draft_hf_repo",
+                "models.<model-ref>.speculative.draft_hf_repo",
+                "error",
+                "invalid_value",
+            ),
+            DiagnosticSignature::new(
                 "models[7].speculative.draft_min_tokens",
                 "models.<model-ref>.speculative.draft_min_tokens",
                 "error",

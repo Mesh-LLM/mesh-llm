@@ -26,6 +26,8 @@ pub(crate) fn validate_duplicate_model_entries(
 ) {
     for i in 0..models.len() {
         for j in (i + 1)..models.len() {
+            let public_identity_i = models[i].model.trim();
+            let public_identity_j = models[j].model.trim();
             if models[i].model == models[j].model
                 && models[i].derived_profile() == models[j].derived_profile()
             {
@@ -40,6 +42,13 @@ pub(crate) fn validate_duplicate_model_entries(
                     format!(
                         "duplicate model entry: models[{i}] and models[{j}] both have model=\"{}\"{profile_clause}",
                         models[i].model,
+                    ),
+                ));
+            } else if !public_identity_i.is_empty() && public_identity_i == public_identity_j {
+                diagnostics.push(validation_diagnostic(
+                    "models",
+                    format!(
+                        "duplicate public served identity: models[{i}] and models[{j}] both publish \"{public_identity_i}\""
                     ),
                 ));
             }
@@ -1047,6 +1056,41 @@ model = "my-model"
     }
 
     #[test]
+    fn duplicate_public_served_identity_is_rejected() {
+        let public_identity = "Qwen/Qwen3-8B-GGUF:Q4_K_M";
+        let config: MeshConfig = toml::from_str(&format!(
+            r#"
+[[models]]
+model = "{public_identity}"
+ctx_size = 4096
+
+[[models]]
+model = "{public_identity}"
+ctx_size = 8192
+"#,
+        ))
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+
+        assert!(
+            !text.contains("duplicate model entry"),
+            "fixture must not trigger the existing model/profile duplicate check: {text}"
+        );
+        assert!(
+            text.contains("duplicate public served identity"),
+            "expected public identity collision, got: {text}"
+        );
+        assert!(text.contains("models[0]"), "missing first row: {text}");
+        assert!(text.contains("models[1]"), "missing second row: {text}");
+        assert!(
+            text.contains(public_identity),
+            "missing colliding public identity: {text}"
+        );
+    }
+
+    #[test]
     fn draft_model_rejects_bare_path_without_colon() {
         let config = MeshConfig {
             defaults: Some(ModelConfigDefaults {
@@ -1244,7 +1288,7 @@ draft_model_path = "C:/models/draft.gguf"
     }
 
     #[test]
-    fn same_model_with_different_profiles_is_allowed() {
+    fn different_models_with_different_profiles_are_allowed() {
         let config: MeshConfig = toml::from_str(
             r#"
 defaults.runtime = "metal"
@@ -1254,7 +1298,7 @@ model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
 ctx_size = 4096
 
 [[models]]
-model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+model = "Qwen/Qwen3-14B-GGUF:Q4_K_M"
 ctx_size = 8192
 "#,
         )
@@ -1264,7 +1308,11 @@ ctx_size = 8192
         let text = legacy_validation_error_text(&diagnostics);
         assert!(
             !text.contains("duplicate model entry"),
-            "expected no duplicate error for different derived profiles, got: {text}"
+            "expected distinct model/profile rows to avoid model duplicate errors, got: {text}"
+        );
+        assert!(
+            !text.contains("duplicate public served identity"),
+            "expected distinct model/profile rows to avoid identity collisions, got: {text}"
         );
     }
 

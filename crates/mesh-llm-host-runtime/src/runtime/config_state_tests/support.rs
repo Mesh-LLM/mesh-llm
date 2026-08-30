@@ -269,7 +269,7 @@ cache_type_k = "q8_0"
 
 [models.hardware]
 gpu_layers = 99
-tensor_split = [0.7, 0.3]
+tensor_split = []
 
 [models.throughput]
 parallel = 4

@@ -1429,7 +1429,6 @@ gpu_layers = "auto"
 tensor_split = []
 split_mode = "auto"
 main_gpu = 0
-placement = "auto"
 safety_margin_gb = 2.0
 mmap = "auto"
 mlock = false
@@ -1812,7 +1811,9 @@ mmproj = "multimodal.gguf"
         let batch_error = validate_config(&invalid).unwrap_err().to_string();
         assert_eq!(
             batch_error,
-            "models[0].model_fit.batch must be between 1 and 10000000, got 0"
+            "models[0].model_fit.batch must be between 1 and 10000000, got 0\n\
+             request_defaults.chat_template is set, but this value fails downstream today: \
+             Config resolution rejects it; template renderer never receives it"
         );
 
         let repaired_batch = FULL_SURFACE_INVALID_FIXTURE.replace("batch = 0", "batch = 64");
@@ -1822,7 +1823,9 @@ mmproj = "multimodal.gguf"
         let pinned_error = validate_config(&repaired).unwrap_err().to_string();
         assert_eq!(
             pinned_error,
-            "models[0].hardware.device must be set to a non-empty value when gpu.assignment = \"pinned\""
+            "models[0].hardware.device must be set to a non-empty value when gpu.assignment = \"pinned\"\n\
+             request_defaults.chat_template is set, but this value fails downstream today: \
+             Config resolution rejects it; template renderer never receives it"
         );
     }
 }
