@@ -841,7 +841,7 @@ def resolve_optional_comparisons(
 ) -> dict[str, dict[str, Any]]:
     requested = tuple(dict.fromkeys(args.comparison_backend))
     status: dict[str, dict[str, Any]] = {}
-    linux_cuda = args.platform == "cuda" and platform_module.system() == "Linux"
+    linux_cuda = args.platform in ("cuda", "rocm") and platform_module.system() == "Linux"
     for arm in requested:
         entry: dict[str, Any] = {
             "requested": True,
@@ -2325,7 +2325,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan = subparsers.add_parser("plan", help="print the immutable benchmark matrix")
-    plan.add_argument("--platform", action="append", choices=("cuda", "metal"), default=[])
+    plan.add_argument("--platform", action="append", choices=("cuda", "metal", "rocm"), default=[])
     add_filters(plan)
 
     fetch = subparsers.add_parser("prefetch", help="fetch and verify pinned inputs")
@@ -2335,7 +2335,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     fetch.add_argument("--model", action="append", default=[])
 
     run = subparsers.add_parser("run", help="run or resume one hardware platform")
-    run.add_argument("--platform", choices=("cuda", "metal"), required=True)
+    run.add_argument("--platform", choices=("cuda", "metal", "rocm"), required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--model-root", type=Path, required=True)
     run.add_argument("--tokenizer-root", type=Path, required=True)
