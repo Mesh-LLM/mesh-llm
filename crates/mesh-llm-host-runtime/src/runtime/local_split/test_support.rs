@@ -680,6 +680,54 @@ max_tokens = 222
     assert_eq!(resolved.request_defaults.max_tokens, 222);
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
+    // An explicit CLI artifact may use the same served name as a configured
+    // model, but must not inherit that entry's path or runtime tuning.
+    let cli_model_path = temp_dir.path().join("cli-selected.gguf");
+    write_fake_gguf_model(&cli_model_path);
+    let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
+    let cli_spec = LocalOpenAiModelStartSpec {
+        mesh_config: &mesh_config,
+        config_model_id: None,
+        model_path: &cli_model_path,
+        model_bytes: cli_model_bytes,
+        mmproj_override: None,
+        ctx_size_override: None,
+        pinned_gpu: None,
+        device_override: None,
+        capacity_budget_bytes: node.vram_bytes(),
+        cache_type_k_override: None,
+        cache_type_v_override: None,
+        n_batch_override: None,
+        n_ubatch_override: None,
+        flash_attention_override: FlashAttentionType::Auto,
+        parallel_override: None,
+        planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            openai_frontend::GuardrailMode::Disabled,
+        ),
+        skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        hook_policy: None,
+        serving_hooks_factory: None,
+        http_bind_addr: "127.0.0.1:0".parse().expect("valid loopback address"),
+    };
+    let cli_resolved = resolve_local_openai_skippy_config(
+        &cli_spec,
+        "configured/model-ref",
+        cli_model_bytes,
+        4096,
+        3,
+        None,
+        None,
+    )
+    .expect("explicit CLI runtime config should not consult model entries");
+    assert_eq!(cli_resolved.hardware.resolved_model_path, cli_model_path);
+    assert_eq!(cli_resolved.throughput.threads, None);
+    assert_eq!(cli_resolved.throughput.threads_batch, None);
+    assert_eq!(
+        cli_resolved.request_defaults.max_tokens,
+        skippy_server::CONTEXT_BUDGET_MAX_TOKENS
+    );
 }
 
 #[test]
