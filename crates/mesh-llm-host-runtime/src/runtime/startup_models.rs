@@ -108,7 +108,7 @@ pub(super) fn resolve_owner_passphrase(path: &Path) -> Result<Option<Zeroizing<S
 
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
         let prompt = format!("Enter owner keystore passphrase for {}: ", path.display());
-        let passphrase = rpassword::prompt_password_stderr(&prompt)?;
+        let passphrase = rpassword::prompt_password(&prompt)?;
         return Ok(Some(Zeroizing::new(passphrase)));
     }
 
