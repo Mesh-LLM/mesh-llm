@@ -71,6 +71,9 @@ mesh-llm serve
   model selection and tuning, except that an exact, unique `--model` ref may
   inherit its configured pinned GPU selector
 - Explicit `--ctx-size` should override configured `ctx_size`
+- Explicit `--device` should override persisted device selectors under pinned
+  or automatic assignment. Backend names resolve to a detected device, `CPU`
+  bypasses GPU-only preflight, and `auto` retains the inherited selector.
 - `mesh-llm benchmark tune` is the measured local model-serving tuning companion for these startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and runs isolated throughput trials. For speculative decoding changes, run a small sweep that includes the disabled baseline plus `mtp`, `mtp-ngram`, or draft candidates as applicable, then inspect trial logs/telemetry for native MTP or draft acceptance statistics in addition to decode tok/s.
 
 ### 0b. Pinned startup smoke
@@ -111,6 +114,8 @@ mesh-llm serve
   `defaults.hardware.device`; duplicate configured refs are rejected as
   ambiguous because the CLI has no profile selector.
 - Do not use GPU indexes, `index:*`, or backend-device names like `CUDA0` / `HIP0` / `MTL0` as `gpu_id`
+- Backend-device names are accepted only through the explicit CLI `--device`
+  override. Persisted `gpu_id` values remain stable IDs.
 
 ### 0c. Requirement-aware mesh smoke
 

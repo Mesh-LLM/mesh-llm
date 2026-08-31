@@ -427,6 +427,7 @@ stop = ["END"]
         ctx_size: 8192,
         compact_meta: &compact_meta,
         pinned_gpu: None,
+        device_override: None,
         slots: 4,
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -554,6 +555,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
         pinned_gpu: None,
+        device_override: None,
         slots: 1,
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -601,7 +603,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
 }
 
 #[tokio::test]
-async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
+async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
@@ -615,6 +617,7 @@ model = "other/model-ref"
 
 [models.hardware]
 model_path = "{model_path}"
+device = "CUDA1"
 
 [models.throughput]
 threads = 17
@@ -645,6 +648,7 @@ max_tokens = 222
         mmproj_override: None,
         ctx_size_override: None,
         pinned_gpu: None,
+        device_override: Some("CPU".to_string()),
         capacity_budget_bytes: node.vram_bytes(),
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -680,6 +684,7 @@ max_tokens = 222
     assert_eq!(resolved.request_defaults.max_tokens, 222);
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
+    assert_eq!(resolved.hardware.device.as_deref(), Some("CPU"));
     // An explicit CLI artifact may use the same served name as a configured
     // model, but must not inherit that entry's path or runtime tuning.
     let cli_model_path = temp_dir.path().join("cli-selected.gguf");

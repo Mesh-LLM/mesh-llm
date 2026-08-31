@@ -189,6 +189,9 @@ CLI precedence is by concern:
   selection and tuning; an exact, unique `--model` ref may still inherit its
   configured pinned GPU selector
 - explicit `--ctx-size` overrides configured `ctx_size`
+- explicit `--device` wins over configured device selectors; stable IDs and
+  backend names resolve before startup, `CPU` bypasses GPU preflight, and
+  `auto` keeps the inherited selector
 - plugin config continues to load from the same file
 
 Pinned GPU startup is also local-node only:
@@ -201,6 +204,7 @@ Pinned GPU startup is also local-node only:
   pinned GPU selector. Unmatched refs and `--gguf` paths carry no configured
   model identity but may inherit only `defaults.hardware.device`; duplicate
   configured refs are rejected because the CLI has no profile selector
+- an explicit `--device` is resolved even when `[gpu].assignment = "auto"`
 
 Bare `mesh-llm serve` is the config-owned path. If `[[models]]` is empty, it warns,
 prints help, and exits cleanly. Background services use that path directly.

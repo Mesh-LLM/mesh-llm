@@ -846,6 +846,10 @@ Config precedence:
   `defaults.hardware.device`.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
+- Explicit `--device` overrides the inherited device selector. Stable GPU IDs
+  and backend names such as `CUDA0` resolve before native startup, including
+  under automatic assignment. `--device CPU` selects CPU without requiring a
+  GPU inventory, while `--device auto` keeps the inherited selector.
 - Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the
   server-side mesh guardrail mode for hosted Skippy startup models and later
   runtime-loaded models.

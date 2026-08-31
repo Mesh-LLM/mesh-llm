@@ -1125,13 +1125,7 @@ pub(super) fn preflight_pinned_startup_models(
         .or(binary_flavor);
     let mut survey = hardware::query(pinned_startup_preflight_metrics());
     apply_backend_devices_for_flavor(&mut survey.gpus, binary_flavor);
-    preflight_pinned_startup_models_with_gpus(
-        config,
-        specs,
-        plans,
-        &survey.gpus,
-        backend_probe,
-    )
+    preflight_pinned_startup_models_with_gpus(config, specs, plans, &survey.gpus, backend_probe)
 }
 
 pub(super) fn apply_backend_devices_for_flavor(
@@ -1176,8 +1170,8 @@ pub(super) fn preflight_pinned_startup_models_with_gpus(
     );
 
     for (spec, plan) in specs.iter().zip(plans.iter_mut()) {
-        let must_resolve_device = spec.resolve_pinned_gpu
-            && config.gpu.assignment == plugin::GpuAssignment::Pinned;
+        let must_resolve_device =
+            spec.resolve_pinned_gpu && config.gpu.assignment == plugin::GpuAssignment::Pinned;
         if !must_resolve_device && plan.gpu_id.is_none() {
             continue;
         }

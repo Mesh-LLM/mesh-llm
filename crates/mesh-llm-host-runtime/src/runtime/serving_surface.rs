@@ -465,7 +465,6 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             mmproj_path: None,
             ctx_size: Some(8192),
             gpu_id: Some("GPU0".to_string()),
-            config_model_id: None,
             pinned_gpu: None,
             parallel: Some(2),
             cache_type_k: None,
@@ -482,7 +481,6 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             mmproj_path: None,
             ctx_size: Some(4096),
             gpu_id: None,
-            config_model_id: None,
             pinned_gpu: Some(StartupPinnedGpuTarget {
                 index: 1,
                 stable_id: "gpu-b".to_string(),
@@ -562,7 +560,6 @@ pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model(
         mmproj_path: None,
         ctx_size: Some(4096),
         gpu_id: None,
-        config_model_id: None,
         pinned_gpu: None,
         parallel: Some(4),
         cache_type_k: None,
