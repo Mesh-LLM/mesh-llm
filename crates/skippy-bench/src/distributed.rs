@@ -23,6 +23,7 @@ use skippy_runtime::{
 
 use crate::{
     cli::{DEFAULT_RUN_MAX_NEW_TOKENS, FocusedRuntimeArgs, RunArgs},
+    direct_return_listener::{DriverReturnListener, DriverReturnReceiver},
     model_identity::model_identity_for_path,
     support::{ChildGuard, ensure_release_skippy_server_bin, retry},
 };
@@ -366,6 +367,21 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
         .stages
         .first()
         .context("deployment plan has no stages")?;
+    // The topology hands the final stage the driver return endpoint as its
+    // downstream, so the driver must listen there to close the prediction ring.
+    let return_port = plan
+        .driver_return_endpoint
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .with_context(|| {
+            format!(
+                "parse driver return endpoint port from {}",
+                plan.driver_return_endpoint
+            )
+        })?;
+    let return_listener =
+        DriverReturnListener::start(std::net::SocketAddr::from(([0, 0, 0, 0], return_port)))
+            .context("start driver prediction return listener")?;
     let prompt_cases = prompt_cases(args)?;
     if prompt_cases.is_empty() {
         bail!("prompt corpus is empty");
@@ -389,7 +405,8 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
                 .expect("tokenizer is present without explicit prompt tokens")
                 .tokenize(&prompt_case.prompt)?
         };
-        let mut result = run_remote_prompt_case(args, first, prompt_case, token_ids, index)?;
+        let mut result =
+            run_remote_prompt_case(args, first, prompt_case, token_ids, index, &return_listener)?;
         result.elapsed_ms = started.elapsed().as_millis();
         results.push(result);
     }
@@ -491,12 +508,55 @@ fn ensure_reply_kind(
     Ok(())
 }
 
+/// The final stage prefers delivering predictions over the direct return
+/// connection; if it could not connect there it falls back to the upstream
+/// reply chain. Decide once per prompt which path is live: wait on the direct
+/// channel first, and only fall back to a blocking upstream read when the
+/// direct path stayed silent through the first decode step.
+const DIRECT_RETURN_REPLY_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn receive_decode_reply(
+    stream: &mut TcpStream,
+    direct_return: &DriverReturnReceiver,
+    direct_mode: &mut Option<bool>,
+    decode_step: usize,
+    prompt_index: usize,
+) -> Result<skippy_protocol::binary::StageReply> {
+    let upstream = |stream: &mut TcpStream| {
+        recv_reply(stream).with_context(|| {
+            format!("receive decode step {decode_step} reply for prompt {prompt_index}")
+        })
+    };
+    match *direct_mode {
+        Some(true) => direct_return
+            .recv_timeout(DIRECT_RETURN_REPLY_TIMEOUT)?
+            .with_context(|| {
+                format!(
+                    "timed out waiting for direct prediction return reply at decode step \
+                     {decode_step} for prompt {prompt_index}"
+                )
+            }),
+        Some(false) => upstream(stream),
+        None => match direct_return.recv_timeout(DIRECT_RETURN_REPLY_TIMEOUT)? {
+            Some(reply) => {
+                *direct_mode = Some(true);
+                Ok(reply)
+            }
+            None => {
+                *direct_mode = Some(false);
+                upstream(stream)
+            }
+        },
+    }
+}
+
 fn run_remote_prompt_case(
     args: &RunArgs,
     first: &StageAssignment,
     prompt_case: &PromptCase,
     token_ids: Vec<i32>,
     prompt_index: usize,
+    return_listener: &DriverReturnListener,
 ) -> Result<PromptDriverResult> {
     if token_ids.is_empty() {
         bail!("prompt produced no tokens");
@@ -513,6 +573,9 @@ fn run_remote_prompt_case(
     let wire_started = Instant::now();
     let request_id = 10_000_u64 + prompt_index as u64;
     let session_id = 20_000_u64 + prompt_index as u64;
+    let direct_return = return_listener
+        .register(request_id, session_id)
+        .with_context(|| format!("register direct prediction return for prompt {prompt_index}"))?;
     send_generation_config(&mut stream, request_id, session_id, token_ids.len())
         .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
     let prefill_token_count = token_ids.len().saturating_sub(1);
@@ -546,6 +609,7 @@ fn run_remote_prompt_case(
     let max_new_tokens = effective_run_max_new_tokens(args);
     let mut predicted_tokens = Vec::with_capacity(max_new_tokens);
     let mut current = *token_ids.last().expect("checked non-empty tokens");
+    let mut direct_mode: Option<bool> = None;
     let decode_started = Instant::now();
     let mut ttft_ms = 0;
     for decode_step in 0..max_new_tokens {
@@ -575,9 +639,13 @@ fn run_remote_prompt_case(
         write_stage_message(&mut stream, &message).with_context(|| {
             format!("send remote decode step {decode_step} for prompt {prompt_index}")
         })?;
-        let reply = recv_reply(&mut stream).with_context(|| {
-            format!("receive decode step {decode_step} reply for prompt {prompt_index}")
-        })?;
+        let reply = receive_decode_reply(
+            &mut stream,
+            &direct_return,
+            &mut direct_mode,
+            decode_step,
+            prompt_index,
+        )?;
         ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
         if decode_step == 0 {
             ttft_ms = wire_started.elapsed().as_millis();
