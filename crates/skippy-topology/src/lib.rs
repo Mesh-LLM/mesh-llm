@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 mod artifact_diagnostics;
 mod edge_order;
 mod family_capability;
+pub mod phase_placement;
 mod planning;
 mod validation;
 
@@ -18,6 +19,7 @@ pub use family_capability::{
     qwen35_series_capability, recurrent_family_capability, reviewed_capability_for_identity,
     reviewed_capability_records, rwkv6_capability, rwkv7_capability,
 };
+pub use phase_placement::{HandoffCostModel, PhaseAssignment, PhaseCandidate, assign_phase_roles};
 pub use planning::{
     classify_layers, plan_contiguous_with_splits, plan_even_contiguous,
     plan_package_aware_contiguous, plan_package_aware_contiguous_with_signals,

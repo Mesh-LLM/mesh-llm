@@ -7412,6 +7412,8 @@ version = "0.76.0-rc8"
 dependencies = [
  "anyhow",
  "blake3",
+ "serde",
+ "serde_json",
  "skippy-protocol",
 ]
 
@@ -7427,6 +7429,7 @@ name = "skippy-correctness"
 version = "0.76.0-rc8"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "model-artifact",
  "model-hf",
@@ -7435,6 +7438,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "skippy-cache",
  "skippy-protocol",
  "skippy-runtime",
 ]

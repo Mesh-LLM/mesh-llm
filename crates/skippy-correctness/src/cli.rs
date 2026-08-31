@@ -16,6 +16,7 @@ pub enum CommandKind {
     Chain(ChainArgs),
     SplitScan(SplitScanArgs),
     StateHandoff(StateHandoffArgs),
+    RemoteHandoff(RemoteHandoffArgs),
     SplitPrefixHit(SplitPrefixHitArgs),
     NativeMtpOpenAiAb(Box<NativeMtpOpenAiAbArgs>),
     GlmDsaStage0Trace(Box<GlmDsaStage0TraceArgs>),
@@ -188,6 +189,97 @@ pub struct StateHandoffArgs {
     pub synthetic_input_activation: bool,
     #[arg(long)]
     pub binary_control: bool,
+    #[arg(long)]
+    pub allow_mismatch: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum RemoteHandoffRole {
+    Send,
+    Recv,
+    Restore,
+    Serve,
+    Fetch,
+}
+
+#[derive(Args)]
+pub struct RemoteHandoffArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long, value_enum, help = "send = prefill node, recv = decode node")]
+    pub role: RemoteHandoffRole,
+    #[arg(
+        long,
+        default_value = "0.0.0.0:19081",
+        help = "Address the receiver listens on"
+    )]
+    pub listen: SocketAddr,
+    #[arg(long, help = "Receiver address the sender connects to")]
+    pub peer: Option<SocketAddr>,
+    #[arg(long, value_enum, default_value = "full-state")]
+    pub state_payload_kind: StatePayloadKind,
+    #[arg(
+        long,
+        help = "Expand or truncate the prompt to this many prefix tokens"
+    )]
+    pub prefix_token_count: Option<usize>,
+    #[arg(
+        long,
+        default_value_t = 32,
+        help = "Greedy continuation length compared token-for-token across nodes"
+    )]
+    pub decode_tokens: usize,
+    #[arg(long, default_value_t = 8 * 1024 * 1024)]
+    pub segment_bytes: usize,
+    #[arg(
+        long,
+        help = "Also measure prefill-in-place on the receiver for a TTFT baseline"
+    )]
+    pub baseline: bool,
+    #[arg(long)]
+    pub runtime_lane_count: Option<u32>,
+    #[arg(
+        long,
+        default_value_t = 600,
+        help = "Per-read socket timeout for the whole connection (not just the handshake): a peer that stalls mid-stream errors out after this long"
+    )]
+    pub handshake_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "Receiver only: handoffs to serve before exiting (0 = until killed); reports get a -N suffix when not 1"
+    )]
+    pub accept_count: usize,
+    #[arg(
+        long,
+        help = "L3 segment store directory: sender spills exported state, receiver write-behinds incoming segments and imports from the store, restore reattaches from it"
+    )]
+    pub store_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Segment footprint cap for the store; oldest manifests evict first (0 = unlimited)"
+    )]
+    pub store_budget_bytes: u64,
+    #[arg(
+        long,
+        help = "Restore only: manifest key (payload digest) to reattach; defaults to the newest manifest"
+    )]
+    pub manifest: Option<String>,
+    #[arg(
+        long,
+        help = "Stream KV pages per prefill chunk, overlapping transfer with the remaining prefill; the receiver stages pages but cannot generate until the commit record validates (pass on both sides)"
+    )]
+    pub streaming: bool,
+    #[arg(
+        long,
+        default_value_t = 512,
+        help = "Prefill chunk size in tokens for --streaming"
+    )]
+    pub stream_chunk_tokens: usize,
     #[arg(long)]
     pub allow_mismatch: bool,
 }

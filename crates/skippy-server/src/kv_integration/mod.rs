@@ -150,6 +150,13 @@ pub struct KvStageIntegration {
     pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
     pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
+    /// Durable L3 floor under the radix cache (`SKIPPY_L3_DIR`): exact-state
+    /// records write through to it and radix misses fill back from it.
+    pub(crate) l3: Option<Arc<skippy_cache::L3Tier>>,
+    /// Prefix keys with an L3 fill in flight. Concurrent misses on the same
+    /// prefix must not duplicate disk reads: the loser skips L3 and prefill
+    /// proceeds normally while the winner re-warms the radix for everyone.
+    pub(crate) inflight_fills: Arc<Mutex<BTreeSet<String>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +176,11 @@ pub(crate) struct PendingExactStateRecord {
     pub(crate) extra: ExactStateExtra,
     pub(crate) namespace: String,
     pub(crate) token_ids: Vec<i32>,
+    /// When this record re-warms the radix after an L3 fill, the fill's
+    /// claim key. The worker releases it only after the radix insert lands,
+    /// so requests arriving during the (asynchronous) re-warm window prefill
+    /// normally instead of duplicating the disk load.
+    pub(crate) l3_fill_claim: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -641,6 +653,7 @@ mod exact_state_record_queue_tests {
             extra: ExactStateExtra::default(),
             namespace: "test".to_string(),
             token_ids: vec![1],
+            l3_fill_claim: None,
         }
     }
 
