@@ -246,9 +246,11 @@ pub(super) async fn load_split_runtime_generation_inner(
     runtime_options.config.ctx_size = spec.ctx_size;
     runtime_options.config.lane_count = spec.slots as u32;
     runtime_options.config.filter_tensors_on_load = true;
-    if let Some(gpu) = spec.pinned_gpu {
-        runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
-    }
+    apply_split_generation_pinned_device(
+        &mut runtime_options.config,
+        spec.pinned_gpu,
+        spec.device_override,
+    );
     runtime_options.config.load_mode = settings.load_mode.clone();
     runtime_options.config.bind_addr = stage0_return_endpoint;
     runtime_options.config.upstream = None;
@@ -626,6 +628,18 @@ pub(super) async fn split_generation_load_settings<'a>(
         startup_timeout: lifecycle.startup_timeout,
         readiness_interval: lifecycle.readiness_interval,
     })
+}
+
+pub(super) fn apply_split_generation_pinned_device(
+    config: &mut skippy_protocol::StageConfig,
+    pinned_gpu: Option<&crate::runtime::StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+) {
+    if device_override.is_none()
+        && let Some(gpu) = pinned_gpu
+    {
+        config.selected_device = Some(pinned_stage_device(gpu));
+    }
 }
 
 pub(super) fn split_generation_load_mode(package: &skippy::SkippyPackageIdentity) -> LoadMode {

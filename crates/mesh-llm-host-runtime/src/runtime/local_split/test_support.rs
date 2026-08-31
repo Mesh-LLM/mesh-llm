@@ -88,6 +88,36 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
     }
 }
 
+#[test]
+fn split_generation_cli_device_override_survives_pinned_stage_selection() {
+    let mut config = skippy_protocol::StageConfig {
+        selected_device: Some(skippy_protocol::StageDevice {
+            backend_device: "CPU".to_string(),
+            stable_id: None,
+            index: None,
+            vram_bytes: None,
+        }),
+        ..Default::default()
+    };
+    let pinned_gpu = crate::runtime::StartupPinnedGpuTarget {
+        index: 0,
+        stable_id: "pci:0000:65:00.0".to_string(),
+        backend_device: "CUDA0".to_string(),
+        vram_bytes: 24_000_000_000,
+        reserved_bytes: None,
+    };
+
+    apply_split_generation_pinned_device(&mut config, Some(&pinned_gpu), Some("CPU"));
+
+    assert_eq!(
+        config
+            .selected_device
+            .as_ref()
+            .map(|device| device.backend_device.as_str()),
+        Some("CPU")
+    );
+}
+
 pub(super) fn split_test_peer(
     seed: u8,
     model_name: &str,
