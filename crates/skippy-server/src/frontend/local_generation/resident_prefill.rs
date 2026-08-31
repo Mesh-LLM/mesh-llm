@@ -1,6 +1,7 @@
 use crate::frontend::generation::StageOpenAiBackend;
 use openai_frontend::{OpenAiError, OpenAiResult};
 use skippy_runtime::{IterationBatchPhase, SamplingConfig};
+use std::time::Instant;
 
 const MAX_NATIVE_ITERATION_TOKENS: usize = 2_048;
 
@@ -34,6 +35,8 @@ impl StageOpenAiBackend {
         suffix: &[i32],
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
+        deadline: Instant,
+        cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SuffixPrefillOutcome> {
         if suffix.is_empty() {
             return Err(OpenAiError::backend(
@@ -51,6 +54,7 @@ impl StageOpenAiBackend {
         let mut runtime_lock_wait_ms = 0.0;
         let mut runtime_lock_hold_ms = 0.0;
         for (chunk, should_sample) in suffix.chunks(chunk_tokens).zip(sample_flags) {
+            ensure_suffix_prefill_active(deadline, cancellation)?;
             let outcome = self.iteration_scheduler.execute_iteration_on(
                 &channel,
                 session_id,
@@ -76,6 +80,23 @@ impl StageOpenAiBackend {
             runtime_lock_hold_ms,
         })
     }
+}
+
+fn ensure_suffix_prefill_active(
+    deadline: Instant,
+    cancellation: Option<&openai_frontend::CancellationToken>,
+) -> OpenAiResult<()> {
+    if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+        return Err(OpenAiError::cancelled(
+            "request cancelled during deferred suffix prefill",
+        ));
+    }
+    if Instant::now() >= deadline {
+        return Err(OpenAiError::backend(
+            "cache operation deadline exceeded during deferred suffix prefill",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
