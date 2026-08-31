@@ -702,7 +702,8 @@ pub(crate) struct ModelTargetCapacityAdvicePayload {
     pub(crate) eligible_node_count: usize,
     pub(crate) missing_capacity_node_count: usize,
     pub(crate) excluded_client_node_count: usize,
-    pub(crate) split_capable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) split_capable: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

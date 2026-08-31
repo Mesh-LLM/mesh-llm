@@ -1156,7 +1156,7 @@ async fn all_model_policy_guards_large_models_too() {
 }
 
 #[tokio::test]
-async fn mesh_guardrails_false_bypasses_request() {
+async fn mesh_guardrails_false_cannot_bypass_enforced_request() {
     let backend = Arc::new(RecordingBackend::default());
     let telemetry = Arc::new(RecordingTelemetrySink::default());
     let guarded = GuardedOpenAiBackend::new(
@@ -1175,13 +1175,13 @@ async fn mesh_guardrails_false_bypasses_request() {
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
     .unwrap();
-    let original = request.clone();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
-    assert_eq!(backend.seen_chat.lock().unwrap().clone(), Some(original));
+    let seen = backend.seen_chat.lock().unwrap().clone().unwrap();
+    assert_eq!(seen.tools.unwrap().as_array().unwrap().len(), 2);
     let decisions = telemetry.decisions.lock().unwrap().clone();
-    assert!(decisions.iter().any(|record| {
+    assert!(!decisions.iter().any(|record| {
         record.decision == GuardrailTelemetryDecision::Bypassed.as_str()
             && record.bypass_reason == Some(GuardrailTelemetryBypassReason::Disabled.as_str())
     }));

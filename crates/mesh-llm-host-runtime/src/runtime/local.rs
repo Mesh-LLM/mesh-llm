@@ -228,6 +228,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) mmproj_override: Option<&'a Path>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<String>,
     pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -250,6 +251,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) mmproj_override: Option<&'a Path>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<String>,
     pub(super) capacity_budget_bytes: u64,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -349,6 +351,9 @@ pub(super) fn resolve_local_openai_skippy_config(
     }
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
+    }
+    if let Some(device) = &spec.device_override {
+        resolved.hardware.device = Some(device.clone());
     }
     Ok(resolved)
 }
@@ -564,6 +569,7 @@ pub(super) async fn start_runtime_local_model(
             mmproj_override: spec.mmproj_override,
             ctx_size_override: spec.ctx_size_override,
             pinned_gpu: spec.pinned_gpu,
+            device_override: spec.device_override,
             capacity_budget_bytes: local_capacity_bytes,
             cache_type_k_override: spec.cache_type_k_override,
             cache_type_v_override: spec.cache_type_v_override,
@@ -738,7 +744,9 @@ async fn start_local_skippy_model(
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ));
-    if let Some(gpu) = spec.pinned_gpu {
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
         options = options.with_selected_device(pinned_skippy_device(gpu));
     }
     let _ = emit_event(OutputEvent::ModelLoading {
@@ -852,7 +860,9 @@ async fn start_local_layer_package_model(
     runtime_options.config.ctx_size = context_length;
     runtime_options.config.lane_count = plan.slots as u32;
     runtime_options.config.filter_tensors_on_load = true;
-    if let Some(gpu) = spec.pinned_gpu {
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
         runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
     }
     runtime_options.config.load_mode = LoadMode::LayerPackage;

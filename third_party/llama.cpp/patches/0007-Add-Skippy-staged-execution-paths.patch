@@ -1,7 +1,7 @@
-From 8d0347202757bd65abc10ef6e0b87706105e4659 Mon Sep 17 00:00:00 2001
+From 64719890da4484c5c827ec468f21ffa954d0dd34 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:20 +1000
-Subject: [PATCH 07/32] Add Skippy staged execution paths
+Subject: [PATCH 07/34] Add Skippy staged execution paths
 
 ---
  include/skippy/execution.h      | 193 ++++++++++

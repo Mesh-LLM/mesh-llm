@@ -19,6 +19,10 @@ on:
         description: Product binary path used by SDK smoke tests.
         required: true
         type: string
+      ui_artifact_name:
+        description: Immutable console UI producer artifact.
+        required: true
+        type: string
       swift_mode:
         description: Swift artifact coverage selected by the semantic CI profile.
         required: true
@@ -41,6 +45,7 @@ jobs:
       sdk_kind: swift
       artifact_name: ci-product-macos-${{ inputs.architecture }}-metal
       artifact_path: ci-artifacts/macos
+      ui_artifact_name: ${{ inputs.ui_artifact_name }}
       staged_binary_path: ${{ inputs.binary_target }}
       swift_artifact_name: ci-sdk-swift
       swift_artifact_mode: ${{ inputs.swift_mode }}

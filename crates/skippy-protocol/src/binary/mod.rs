@@ -38,7 +38,9 @@ pub(crate) fn invalid_input(message: &'static str) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::cell::Cell;
+    use std::io::{Cursor, Read, Write};
+    use std::rc::Rc;
 
     fn push_i32(bytes: &mut Vec<u8>, value: i32) {
         bytes.extend_from_slice(&value.to_le_bytes());
@@ -87,6 +89,35 @@ mod tests {
         let error = result.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(error.to_string(), expected);
+    }
+
+    struct CountingReader {
+        inner: Cursor<Vec<u8>>,
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            self.inner.read(output)
+        }
+    }
+
+    struct CountingWriter {
+        bytes: Vec<u8>,
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl Write for CountingWriter {
+        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            self.bytes.extend_from_slice(input);
+            Ok(input.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -538,6 +569,74 @@ mod tests {
         assert_eq!(decoded.session_id, 17);
         assert_eq!(decoded.state.flags & state_flags::SAMPLING, 0);
         assert!(decoded.sampling.is_none());
+    }
+
+    #[test]
+    fn stage_message_bulk_reads_sidebands() {
+        let value_count = 4_096;
+        let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+        state.source_stage_index = -1;
+        let mut bytes = stage_frame_prefix(
+            WireMessageKind::PrefillEmbd,
+            value_count,
+            value_count,
+            value_count,
+            state,
+        );
+        for value in 0..value_count {
+            push_i32(&mut bytes, value);
+        }
+        for value in 0..value_count {
+            push_i32(&mut bytes, value + 10_000);
+        }
+        let calls = Rc::new(Cell::new(0));
+        let reader = CountingReader {
+            inner: Cursor::new(bytes),
+            calls: calls.clone(),
+        };
+
+        let decoded = read_stage_message(reader, 2_048).unwrap();
+
+        assert_eq!(decoded.tokens.len(), value_count as usize);
+        assert_eq!(decoded.positions.len(), value_count as usize);
+        assert!(
+            calls.get() < 128,
+            "sideband decoding used {} reads",
+            calls.get()
+        );
+    }
+
+    #[test]
+    fn stage_message_bulk_writes_sidebands() {
+        let value_count = 4_096;
+        let kind = WireMessageKind::TrimSession;
+        let message = StageWireMessage {
+            kind,
+            pos_start: 0,
+            token_count: 0,
+            state: StageStateHeader::new(kind),
+            request_id: 23,
+            session_id: 29,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: (0..value_count).collect(),
+            positions: (10_000..10_000 + value_count).collect(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        let calls = Rc::new(Cell::new(0));
+        let writer = CountingWriter {
+            bytes: Vec::new(),
+            calls: calls.clone(),
+        };
+
+        write_stage_message(writer, &message).unwrap();
+
+        assert!(
+            calls.get() < 128,
+            "sideband encoding used {} writes",
+            calls.get()
+        );
     }
 
     #[test]

@@ -165,6 +165,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       sdk_matrix: ${{ toJson(fromJson(inputs.lane_plan_json).matrices.sdk) }}
       binary_target: target/release/mesh-llm
+      ui_artifact_name: ci-ui-dist-linux-${{ github.run_id }}
       profile: release
     secrets:
       HF_TOKEN: ${{ inputs.original_event_name == 'push' && secrets.HF_TOKEN || '' }}

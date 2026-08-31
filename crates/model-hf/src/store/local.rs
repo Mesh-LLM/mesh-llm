@@ -116,6 +116,7 @@ pub fn huggingface_snapshot_path(
 }
 
 pub fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
+    let _ = crate::configure_hf_tls_provider();
     let cache_root = cache_root.to_path_buf();
     let scan = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()

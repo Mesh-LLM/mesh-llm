@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>" >&2
+SKIP_BUILD=0
+if [[ "$#" -eq 4 ]]; then
+    if [[ "$4" != "--skip-build" ]]; then
+        echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> [--skip-build]" >&2
+        exit 1
+    fi
+    SKIP_BUILD=1
+elif [[ "$#" -ne 3 ]]; then
+    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> [--skip-build]" >&2
     exit 1
 fi
 
@@ -10,7 +17,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
-scripts/package-sdk-console-assets.sh --sdk node
+if [[ "$SKIP_BUILD" == "1" ]]; then
+    scripts/package-sdk-console-assets.sh --sdk node --skip-build
+else
+    scripts/package-sdk-console-assets.sh --sdk node
+fi
 scripts/verify-sdk-console-assets.sh --sdk node
 
 native_runtime_dir="$(

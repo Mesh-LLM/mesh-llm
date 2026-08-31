@@ -305,12 +305,8 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
         writer.write_all(&message.raw_bytes)?;
         return Ok(());
     }
-    for token in &message.tokens {
-        write_i32(&mut writer, *token)?;
-    }
-    for position in &message.positions {
-        write_i32(&mut writer, *position)?;
-    }
+    write_i32_slice(&mut writer, &message.tokens)?;
+    write_i32_slice(&mut writer, &message.positions)?;
     writer.write_all(&message.activation)?;
     Ok(())
 }
@@ -404,14 +400,8 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
         });
     }
 
-    let mut tokens = Vec::with_capacity(token_sideband_count);
-    for _ in 0..token_sideband_count {
-        tokens.push(read_i32(&mut reader)?);
-    }
-    let mut positions = Vec::with_capacity(position_sideband_count);
-    for _ in 0..position_sideband_count {
-        positions.push(read_i32(&mut reader)?);
-    }
+    let tokens = read_i32_values(&mut reader, token_sideband_count)?;
+    let positions = read_i32_values(&mut reader, position_sideband_count)?;
     let activation_bytes =
         if state.source_stage_index < 0 || kind.is_activationless_prefix_cache_control() {
             0
@@ -630,13 +620,16 @@ fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<V
 }
 
 const REPLY_STATS_FIELD_COUNT: usize = 23;
-const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
+const I64_WIRE_BYTES: usize = std::mem::size_of::<i64>();
+const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * I64_WIRE_BYTES;
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     let fields = reply_stats_fields(stats);
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     for (chunk, value) in bytes
-        .chunks_exact_mut(std::mem::size_of::<i64>())
+        .as_chunks_mut::<I64_WIRE_BYTES>()
+        .0
+        .iter_mut()
         .zip(fields)
     {
         chunk.copy_from_slice(&value.to_le_bytes());
@@ -648,11 +641,8 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     reader.read_exact(&mut bytes)?;
     let mut fields = [0_i64; REPLY_STATS_FIELD_COUNT];
-    for (field, chunk) in fields
-        .iter_mut()
-        .zip(bytes.chunks_exact(std::mem::size_of::<i64>()))
-    {
-        *field = i64::from_le_bytes(chunk.try_into().expect("i64 chunk size"));
+    for (field, chunk) in fields.iter_mut().zip(bytes.as_chunks::<I64_WIRE_BYTES>().0) {
+        *field = i64::from_le_bytes(*chunk);
     }
     Ok(reply_stats_from_fields(fields))
 }
@@ -721,6 +711,47 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
     }
+}
+
+const I32_WIRE_BYTES: usize = std::mem::size_of::<i32>();
+
+fn read_i32_values(mut reader: impl Read, count: usize) -> io::Result<Vec<i32>> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut values = Vec::with_capacity(count);
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
+    let mut remaining = count;
+    while remaining > 0 {
+        let chunk_values = remaining.min(VALUES_PER_CHUNK);
+        let chunk_bytes = chunk_values * I32_WIRE_BYTES;
+        reader.read_exact(&mut bytes[..chunk_bytes])?;
+        values.extend(
+            bytes[..chunk_bytes]
+                .as_chunks::<I32_WIRE_BYTES>()
+                .0
+                .iter()
+                .map(|chunk| i32::from_le_bytes(*chunk)),
+        );
+        remaining -= chunk_values;
+    }
+    Ok(values)
+}
+
+fn write_i32_slice(mut writer: impl Write, values: &[i32]) -> io::Result<()> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
+    for values in values.chunks(VALUES_PER_CHUNK) {
+        let chunk_bytes = std::mem::size_of_val(values);
+        for (bytes, value) in bytes[..chunk_bytes]
+            .as_chunks_mut::<I32_WIRE_BYTES>()
+            .0
+            .iter_mut()
+            .zip(values)
+        {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+        writer.write_all(&bytes[..chunk_bytes])?;
+    }
+    Ok(())
 }
 
 fn read_i32(mut reader: impl Read) -> io::Result<i32> {

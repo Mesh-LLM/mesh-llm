@@ -301,6 +301,10 @@ impl KvStageIntegration {
         )
     }
 
+    pub(crate) fn meets_shared_prefix_min_tokens(&self, matched_tokens: usize) -> bool {
+        u64::try_from(matched_tokens).unwrap_or(u64::MAX) >= self.checkpoint_policy.min_tokens
+    }
+
     pub fn try_begin_record(&self, page_id: &str) -> bool {
         self.inflight_records
             .lock()

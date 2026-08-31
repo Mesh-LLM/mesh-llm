@@ -1,7 +1,7 @@
-From fbd18ddd294ae993872acf4af149a0500783fec3 Mon Sep 17 00:00:00 2001
+From 3a19da571e3c524d9b6b367ef3214cfbaed5092e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 02/32] Add Inkling model and multimodal support
+Subject: [PATCH 02/34] Add Inkling model and multimodal support
 
 ---
  conversion/__init__.py         |   2 +

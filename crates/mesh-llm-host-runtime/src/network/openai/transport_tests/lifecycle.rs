@@ -786,7 +786,7 @@ fn remote_transports_record_target_failover_and_retry_under_one_parent() {
             "completed",
         ]
     );
-    for pair in attempt_events.chunks_exact(2) {
+    for pair in attempt_events.as_chunks::<2>().0 {
         assert_eq!(pair[0].1, pair[1].1);
     }
     for record in service.bus_ref().replay_window().records {

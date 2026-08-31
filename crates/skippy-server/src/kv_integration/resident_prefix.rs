@@ -183,6 +183,9 @@ impl KvStageIntegration {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let radix_hit = radix.peek_resident(&identity.namespace, &identity.token_ids)?;
+        if !self.meets_shared_prefix_min_tokens(radix_hit.matched_tokens) {
+            return None;
+        }
         let entries = radix.stats().resident_entries;
         Some(ResidentPrefixRestore {
             page_id: radix_hit.value.page_id,
@@ -203,11 +206,20 @@ impl KvStageIntegration {
             return Ok(None);
         }
         for identity in identities {
-            let radix_hit = self
-                .radix
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .acquire_resident(&identity.namespace, &identity.token_ids);
+            let radix_hit = {
+                let mut radix = self
+                    .radix
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let eligible = radix
+                    .peek_resident(&identity.namespace, &identity.token_ids)
+                    .is_some_and(|hit| self.meets_shared_prefix_min_tokens(hit.matched_tokens));
+                if eligible {
+                    radix.acquire_resident(&identity.namespace, &identity.token_ids)
+                } else {
+                    None
+                }
+            };
             let Some(radix_hit) = radix_hit else {
                 continue;
             };
