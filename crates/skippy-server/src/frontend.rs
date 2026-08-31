@@ -17,6 +17,7 @@ mod prefill;
 mod prefix_cache;
 mod prompting;
 mod request;
+mod sampling_cache_key;
 mod speculative;
 mod tool_emulation;
 mod util;
