@@ -304,15 +304,22 @@ if no model is available).
 
 ### Buzz terminal-reply rescue
 
-For Buzz agent requests, the gateway recognizes the trusted `[Context]` frame,
-its validated channel/reply IDs, and the declared Buzz shell tool. Successful
-terminal prose is converted into one deterministic `buzz messages send` tool
-call so small models cannot silently finish without publishing their answer.
-Intermediate tool calls remain untouched, and the rescue imposes no generic
-tool-count limit; the existing repeated-identical-call detector handles actual
-loops. Error responses are never converted into channel posts. This behavior is
-restricted to the virtual `model=mesh`; pinned concrete-model requests pass
-through unchanged.
+For Buzz agent requests, the gateway recognizes a small delivery grammar in
+the latest user turn rather than depending on a `[Context]` or `<context>`
+wrapper. The grammar requires exactly one column-zero `Channel:` field with one
+UUID and exactly one column-zero `IMPORTANT:` instruction containing both the
+ordered `buzz messages send` command tokens and one `--reply-to` 64-hex event
+ID; the channel field must precede the send instruction. Duplicate or
+conflicting productions fail closed. The declared Buzz shell tool must also be
+unique.
+
+Successful terminal prose is converted into one deterministic
+`buzz messages send` tool call so small models cannot silently finish without
+publishing their answer. Intermediate tool calls remain untouched, and the
+rescue imposes no generic tool-count limit; the existing
+repeated-identical-call detector handles actual loops. Error responses are
+never converted into channel posts. This behavior is restricted to the virtual
+`model=mesh`; pinned concrete-model requests pass through unchanged.
 
 ---
 
