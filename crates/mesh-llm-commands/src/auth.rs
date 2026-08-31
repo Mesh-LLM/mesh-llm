@@ -180,14 +180,14 @@ fn prompt_new_passphrase(no_passphrase: bool) -> Result<Option<Zeroizing<String>
         return Ok(None);
     }
 
-    let passphrase = Zeroizing::new(rpassword::prompt_password_stderr(
+    let passphrase = Zeroizing::new(rpassword::prompt_password(
         "Enter passphrase (empty for none): ",
     )?);
     if passphrase.is_empty() {
         return Ok(None);
     }
 
-    let confirm = Zeroizing::new(rpassword::prompt_password_stderr("Confirm passphrase: ")?);
+    let confirm = Zeroizing::new(rpassword::prompt_password("Confirm passphrase: ")?);
     if passphrase.as_str() != confirm.as_str() {
         bail!("Passphrases do not match.");
     }
@@ -207,7 +207,7 @@ fn resolve_keystore_passphrase(path: &Path) -> Result<Option<Zeroizing<String>>>
 
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
         let prompt = format!("Enter owner keystore passphrase for {}: ", path.display());
-        let passphrase = rpassword::prompt_password_stderr(&prompt)?;
+        let passphrase = rpassword::prompt_password(&prompt)?;
         return Ok(Some(Zeroizing::new(passphrase)));
     }
 

@@ -72,9 +72,9 @@ base64 = "0.22"
 dirs = "6.0.0"
 hex = "0.4.3"
 nostr-sdk = { version = "0.45.1", default-features = false }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["metrics"] }
-opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
 reqwest = { version = "0.12", features = ["stream", "json"] }
 flate2 = "1"
@@ -88,7 +88,7 @@ chacha20poly1305 = "0.10"
 argon2 = "0.5"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
-rpassword = "5"
+rpassword = "7.5"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 chrono = { version = "0.4", features = ["serde"] }
 httparse = "1"
@@ -122,7 +122,7 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 serial_test = "3"
-opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["metrics", "testing"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc8"  }
 # Used by the gated-relay regression test to spawn an in-process iroh-relay
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our
