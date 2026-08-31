@@ -310,17 +310,47 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
         return false;
     }
 
-    let gpus = match skippy_devices::gpu_facts() {
+    apply_gpu_probe_outcome_to_survey(
+        survey,
+        metrics,
+        skippy_devices::gpu_facts(),
+        cpu_only_budget_system_ram(),
+    )
+}
+
+#[cfg(any(feature = "skippy-devices", test))]
+fn cpu_only_budget_system_ram() -> u64 {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        read_system_ram_bytes()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        0
+    }
+}
+
+/// Applies a GPU probe outcome to the survey. The real probe (skippy device
+/// enumeration, /proc/meminfo, the Windows CIM query) stays in the callers so
+/// this decision can be exercised with injected values on every platform.
+#[cfg(any(feature = "skippy-devices", test))]
+fn apply_gpu_probe_outcome_to_survey<E>(
+    survey: &mut HardwareSurvey,
+    metrics: &[Metric],
+    probe: Result<Vec<GpuFacts>, E>,
+    cpu_only_system_ram: u64,
+) -> bool {
+    let gpus = match probe {
         Ok(gpus) => gpus,
         Err(_) => {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
-            apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
+            apply_cpu_only_runtime_budget(survey, metrics, cpu_only_system_ram);
             return true;
         }
     };
     if gpus.is_empty() {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
+        apply_cpu_only_runtime_budget(survey, metrics, cpu_only_system_ram);
         return true;
     }
 
