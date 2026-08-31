@@ -119,14 +119,16 @@ function expectUnique(values: readonly string[]) {
 }
 
 describe('logs harness fixtures', () => {
-  it('anchors default fixture timestamps to a deterministic reference instant', () => {
+  it('anchors default fixture timestamps to a rolling reference instant inside the ledger time presets', () => {
     const referenceTimeMs = Date.parse(HARNESS_REFERENCE_TIME)
     const newestRequestTimeMs = Math.max(...HARNESS_LOG_FIXTURES.map((request) => Date.parse(request.createdAt)))
     const oldestRequestTimeMs = Math.min(...HARNESS_LOG_FIXTURES.map((request) => Date.parse(request.createdAt)))
 
-    expect(HARNESS_REFERENCE_TIME).toBe('2026-08-10T23:50:04.659Z')
+    expect(Number.isFinite(referenceTimeMs)).toBe(true)
+    expect(Date.now() - referenceTimeMs).toBeLessThan(60 * 60_000)
     expect(referenceTimeMs - newestRequestTimeMs).toBe(60_000)
     expect(referenceTimeMs - oldestRequestTimeMs).toBeLessThan(12 * 60 * 60_000)
+    expect(Date.now() - oldestRequestTimeMs).toBeLessThan(24 * 60 * 60_000)
   })
 
   it('covers every ledger outcome, source, optional metadata state, and populated-table volume', () => {
@@ -135,7 +137,17 @@ describe('logs harness fixtures', () => {
     expect(new Set(HARNESS_LOG_FIXTURES.map((request) => request.source))).toEqual(new Set(['active', 'durable']))
     expectUnique(HARNESS_LOG_FIXTURES.map((request) => request.requestId.toString()))
 
-    for (const key of ['terminalAt', 'route', 'model', 'provider', 'engine', 'statusCode'] as const) {
+    for (const key of [
+      'terminalAt',
+      'route',
+      'model',
+      'provider',
+      'engine',
+      'statusCode',
+      'callerEndpointId',
+      'callerAddr',
+      'callerPathType'
+    ] as const) {
       expect(HARNESS_LOG_FIXTURES.some((request) => request[key] === undefined)).toBe(true)
       expect(HARNESS_LOG_FIXTURES.some((request) => request[key] !== undefined)).toBe(true)
     }
@@ -143,6 +155,10 @@ describe('logs harness fixtures', () => {
     for (const request of HARNESS_LOG_FIXTURES) {
       expect(parseLogRequest(requestWire(request))).toEqual(request)
     }
+
+    const relayRequest = HARNESS_LOG_FIXTURES.find((request) => request.callerPathType === 'relay')
+    expect(relayRequest?.callerEndpointId).toBeDefined()
+    expect(relayRequest?.callerAddr).toBeUndefined()
   })
 
   it('uses normalized OpenAI and management operations plus raw mesh defaults', () => {

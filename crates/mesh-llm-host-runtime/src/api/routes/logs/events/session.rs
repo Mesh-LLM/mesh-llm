@@ -118,11 +118,11 @@ impl ReplaySession {
 
     pub(super) fn durable_audit_frames(
         &mut self,
-        records: Vec<mesh_llm_log_store::AuditEntryRow>,
+        records: Vec<mesh_llm_log_store::AuditEntryDetail>,
     ) -> Vec<String> {
         let mut frames = Vec::with_capacity(records.len());
         for record in records {
-            let Ok(sequence) = u64::try_from(record.sequence) else {
+            let Ok(sequence) = u64::try_from(record.entry.sequence) else {
                 continue;
             };
             if sequence <= self.audit_cursor.sequence() {
@@ -512,6 +512,10 @@ impl ConnectionQueue {
 }
 
 impl ConnectionReceiver {
+    pub(super) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
     pub(super) async fn recv(&mut self) -> Option<String> {
         if self.cancelled.load(Ordering::Acquire) {
             return None;

@@ -932,7 +932,7 @@ impl StageOpenAiBackend {
     ) -> OpenAiResult<ChatCompletionResponse> {
         let request = &mut request;
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(request, &self.request_defaults);
+        apply_chat_request_defaults(request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(request)?;
         let sampling = chat_sampling_config(request)?;
         let template_options = chat_template_options(request, &self.request_defaults)?;
@@ -1026,7 +1026,7 @@ impl StageOpenAiBackend {
     ) -> OpenAiResult<ChatCompletionStream> {
         let request = &mut request;
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(request, &self.request_defaults);
+        apply_chat_request_defaults(request, &self.request_defaults)?;
         ensure_chat_runtime_features_supported(request)?;
         let sampling = chat_sampling_config(request)?;
         let include_usage = request.include_usage();

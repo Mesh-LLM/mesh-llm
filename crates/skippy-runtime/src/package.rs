@@ -686,20 +686,39 @@ fn infer_activation_width_from_layers(
         Ok(count) => count,
         Err(_) => return Ok(None),
     };
+    let mut names = Vec::with_capacity(count);
     for i in 0..count {
         let Ok(tensor) = info.tensor_at(i) else {
             continue;
         };
-        if tensor.name.contains("attn_norm.weight") {
-            let width = activation_width_from_tensor_count(
-                &tensor.name,
-                &layer_path,
-                tensor.element_count,
-            )?;
-            return Ok(Some(width));
+        names.push((tensor.name, tensor.element_count));
+    }
+
+    match select_activation_width_tensor(&names) {
+        Some((name, element_count)) => Ok(Some(activation_width_from_tensor_count(
+            name,
+            &layer_path,
+            element_count,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Pick the per-layer norm whose element count equals the stage boundary width.
+///
+/// Order matters. A hyper-connected architecture (qwen4exp) has no plain
+/// `attn_norm`; its per-layer norm is `hc_attn_norm`, whose element count is
+/// already the wide `hc * n_embd` boundary width. Match that name explicitly
+/// instead of relying on a substring test happening to also match it, and
+/// require an exact suffix for the plain case so a future `*_attn_norm.weight`
+/// tensor cannot silently take over this inference.
+fn select_activation_width_tensor(names: &[(String, u64)]) -> Option<(&str, u64)> {
+    for suffix in [".hc_attn_norm.weight", ".attn_norm.weight"] {
+        if let Some((name, element_count)) = names.iter().find(|(name, _)| name.ends_with(suffix)) {
+            return Some((name.as_str(), *element_count));
         }
     }
-    Ok(None)
+    None
 }
 
 fn activation_width_from_tensor_count(
@@ -1739,5 +1758,60 @@ mod tests {
         .to_string();
 
         assert!(error.contains("exceeds u32::MAX"));
+    }
+
+    #[test]
+    fn activation_width_inference_prefers_the_hyper_connected_norm() {
+        // qwen4exp exchanges hc parallel residual streams across a boundary, so
+        // its width is hc*n_embd, carried by blk.N.hc_attn_norm.weight. There is
+        // no plain attn_norm in this architecture.
+        let names = vec![
+            ("blk.0.hc_attn_norm.weight".to_string(), 8192),
+            ("blk.0.hc_ffn_norm.weight".to_string(), 8192),
+            ("blk.0.ssm_norm.weight".to_string(), 128),
+        ];
+
+        assert_eq!(
+            select_activation_width_tensor(&names),
+            Some(("blk.0.hc_attn_norm.weight", 8192))
+        );
+    }
+
+    #[test]
+    fn activation_width_inference_prefers_hc_norm_over_a_plain_norm() {
+        // Guards the ordering: if an artifact ever carried both, the wide
+        // hyper-connected boundary is the one a stage actually exchanges.
+        let names = vec![
+            ("blk.0.attn_norm.weight".to_string(), 2048),
+            ("blk.0.hc_attn_norm.weight".to_string(), 8192),
+        ];
+
+        assert_eq!(
+            select_activation_width_tensor(&names),
+            Some(("blk.0.hc_attn_norm.weight", 8192))
+        );
+    }
+
+    #[test]
+    fn activation_width_inference_matches_the_plain_norm_by_exact_suffix() {
+        let names = vec![
+            ("blk.0.ffn_norm.weight".to_string(), 4096),
+            ("blk.0.attn_norm.weight".to_string(), 4096),
+        ];
+
+        assert_eq!(
+            select_activation_width_tensor(&names),
+            Some(("blk.0.attn_norm.weight", 4096))
+        );
+    }
+
+    #[test]
+    fn activation_width_inference_ignores_an_unrelated_norm() {
+        // "attn_norm.weight" as a substring is not enough; a differently owned
+        // tensor must not be mistaken for the layer boundary norm. The previous
+        // `contains` predicate accepted this name and returned 999 as the width.
+        let names = vec![("blk.0.cross_attn_norm.weight".to_string(), 999)];
+
+        assert_eq!(select_activation_width_tensor(&names), None);
     }
 }

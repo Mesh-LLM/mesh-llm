@@ -1,5 +1,7 @@
 use super::*;
 
+mod audit_sanitization;
+
 #[tokio::test]
 async fn log_routes_reject_methods_and_invalid_paths_with_bounded_json_errors() {
     let requests = [
@@ -217,6 +219,45 @@ async fn logs_events_rejects_invalid_raw_requests_before_sse_headers() {
         assert!(response.len() < 1024);
         assert!(json_body(&response)["error"].is_object());
     }
+}
+
+#[tokio::test]
+#[serial]
+async fn logs_events_audit_reconcile_failure_writes_one_terminal_frame_then_eof() {
+    let _temporary_directory = install_sse_logging().await;
+    let state = build_test_mesh_api().await;
+    let (address, server) = spawn_management_test_server(state).await;
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(
+            b"GET /api/logs/events?audit=true&cursor=a1:18446744073709551615 HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let mut response = read_until_contains(
+        &mut stream,
+        b"\"code\":\"audit_reconcile_failed\"",
+        Duration::from_secs(2),
+    )
+    .await;
+    let mut remainder = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut remainder))
+        .await
+        .expect("audit reconcile failure stream must reach EOF")
+        .unwrap();
+    response.extend_from_slice(&remainder);
+    let response = String::from_utf8(response).unwrap();
+    assert_eq!(response.matches("event: stream_error").count(), 1);
+    assert_eq!(
+        response
+            .matches("\"code\":\"audit_reconcile_failed\"")
+            .count(),
+        1
+    );
+
+    server.await.unwrap().unwrap();
+    disable_sse_logging().await;
 }
 
 #[tokio::test]

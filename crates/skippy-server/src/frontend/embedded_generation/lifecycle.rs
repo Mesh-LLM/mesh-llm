@@ -14,7 +14,7 @@ use crate::frontend::{
         PersistentStageLanePool, PhaseTimer, StageOpenAiBackend, TokenControl,
     },
     speculative::{OpenAiSpeculativeStats, SpeculativeDecodeConfig},
-    util::openai_io_error,
+    util::{openai_backend_error, openai_io_error},
 };
 
 /// Keeps the configured speculative plan unless a distributed prefix restore
@@ -89,28 +89,33 @@ pub(super) fn compose_target_predictions(
     traversal_predictions: &[i32],
 ) -> OpenAiResult<Vec<i32>> {
     let required = proposal_count.saturating_add(1);
+    // Stateful chat sampling stops verifying at the first mismatched row and
+    // returns only the rows it sampled, so a shorter prediction array is a
+    // legitimate early rejection — pass through what arrived and let window
+    // classification reject at the divergence. An empty reply is still a
+    // protocol error.
     if starts_epoch {
-        if traversal_predictions.len() < required {
-            return Err(OpenAiError::backend(format!(
-                "epoch-start verify window returned {} predictions; expected {required}",
-                traversal_predictions.len()
-            )));
+        if traversal_predictions.is_empty() {
+            return Err(OpenAiError::backend(
+                "epoch-start verify window returned no predictions",
+            ));
         }
-        return Ok(traversal_predictions[..required].to_vec());
+        let available = required.min(traversal_predictions.len());
+        return Ok(traversal_predictions[..available].to_vec());
     }
 
     let boundary = prior_boundary_prediction.ok_or_else(|| {
         OpenAiError::backend("continuation verify window has no prior boundary prediction")
     })?;
-    if traversal_predictions.len() < proposal_count {
-        return Err(OpenAiError::backend(format!(
-            "continuation verify window returned {} predictions; expected {proposal_count}",
-            traversal_predictions.len()
-        )));
+    if traversal_predictions.is_empty() {
+        return Err(OpenAiError::backend(
+            "continuation verify window returned no predictions",
+        ));
     }
-    let mut predictions = Vec::with_capacity(required);
+    let available = proposal_count.min(traversal_predictions.len());
+    let mut predictions = Vec::with_capacity(available.saturating_add(1));
     predictions.push(boundary);
-    predictions.extend_from_slice(&traversal_predictions[..proposal_count]);
+    predictions.extend_from_slice(&traversal_predictions[..available]);
     Ok(predictions)
 }
 
@@ -145,7 +150,6 @@ pub(super) fn open_upstream_prediction_return(request: &EmbeddedStageZeroGenerat
         request.config,
         request.ids.request_id,
         request.ids.session_id,
-        request.wire_dtype,
     ) {
         Ok(stream) => {
             prediction_return.attach_opened_stream(stream);
@@ -220,6 +224,19 @@ mod prediction_tests {
         let predictions = compose_target_predictions(false, 2, Some(11), &[12, 13]).unwrap();
 
         assert_eq!(predictions, [11, 12, 13]);
+    }
+
+    #[test]
+    fn early_stopped_replies_pass_through_short_prediction_arrays() {
+        let predictions = compose_target_predictions(false, 3, Some(11), &[12]).unwrap();
+
+        assert_eq!(predictions, [11, 12]);
+    }
+
+    #[test]
+    fn empty_replies_are_protocol_errors_on_both_paths() {
+        assert!(compose_target_predictions(true, 2, None, &[]).is_err());
+        assert!(compose_target_predictions(false, 2, Some(11), &[]).is_err());
     }
 
     #[test]
@@ -411,12 +428,7 @@ impl StageOpenAiBackend {
 
         let stop_result = write_stage_message(
             &mut lane.stream,
-            &StageWireMessage::stop_with_identity(
-                request.wire_dtype,
-                request.ids.request_id,
-                request.ids.session_id,
-            ),
-            request.wire_dtype,
+            &StageWireMessage::stop_with_identity(request.ids.request_id, request.ids.session_id),
         )
         .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
         .and_then(|kind| {
@@ -449,18 +461,22 @@ impl StageOpenAiBackend {
         request: &EmbeddedStageZeroGeneration<'_>,
         session_key: &str,
     ) {
-        let lock_timer = PhaseTimer::start();
-        let Ok(mut runtime) = self.runtime.lock() else {
+        let scheduler_session_key = session_key.to_string();
+        let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
+            "embedded-session-drop",
+            move |runtime| {
+                runtime
+                    .drop_session_timed(&scheduler_session_key)
+                    .map_err(openai_backend_error)
+            },
+        ) else {
             return;
         };
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let Ok(drop_stats) = runtime.drop_session_timed(session_key) else {
-            return;
-        };
+        let drop_stats = outcome.value;
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
+            json!(outcome.runtime_lock_wait_ms),
         );
         attrs.insert(
             "llama_stage.session_reset_ms".to_string(),

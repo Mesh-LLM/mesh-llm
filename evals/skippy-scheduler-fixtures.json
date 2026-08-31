@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "datasets": {
+    "agentic-coding-trajectories": {
+      "repo_id": "thoughtworks/agentic-coding-trajectories",
+      "repo_type": "dataset",
+      "revision": "cef72d1f4d0caabf85937adf8337a14b7522c782",
+      "files": [
+        ".gitattributes",
+        "README.md",
+        "manifest.json",
+        "sessions.parquet"
+      ],
+      "parquet_file": "sessions.parquet",
+      "license": "derivative-multi-source",
+      "provenance": {
+        "selected_source": "swe-smith-claude-3-7-sonnet",
+        "upstream": "SWE-bench/SWE-smith-trajectories",
+        "upstream_license": "MIT"
+      }
+    }
+  },
+  "profiles": {
+    "warm-affinity": {
+      "description": "Two already-warm prompt families; materialized affinity supplies the same grouped order with or without waiting-prefix DFS.",
+      "model": {
+        "id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+        "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+        "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+        "filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+        "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+      },
+      "corpus": {
+        "kind": "synthetic",
+        "generator": "stable-prefix-v1"
+      },
+      "workload": {
+        "rounds": 4,
+        "families": 2,
+        "requests_per_family": 3,
+        "prefix_blocks": 120,
+        "output_tokens": 64,
+        "ctx_size": 65536,
+        "lanes": 6,
+        "admission_concurrency": 6,
+        "cache_entries": 1,
+        "stagger_ms": 5.0
+      },
+      "ci_trace": {
+        "family_order": [0, 0, 0, 1, 1, 1],
+        "prompt_tokens": 128,
+        "expected_fcfs_switches": 1,
+        "expected_dfs_switches": 1
+      },
+      "hardware_acceptance": {
+        "successful_requests_per_binary": 24,
+        "suffix_prefill_delta_percent": {
+          "min": 0.0,
+          "max": 0.0
+        },
+        "family_switch_delta_percent": {
+          "min": 0.0,
+          "max": 0.0
+        },
+        "absolute_user_metric_delta_percent_max": 5.0
+      }
+    },
+    "agentic-eviction-pressure": {
+      "description": "Eight interleaved 4K-6K coding-agent families competing for two resident prefix-cache entries.",
+      "model": {
+        "id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+        "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+        "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+        "filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+        "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+      },
+      "corpus": {
+        "kind": "hf",
+        "dataset": "agentic-coding-trajectories",
+        "selection": {
+          "sources": [
+            "swe-smith-claude-3-7-sonnet"
+          ],
+          "families": 8,
+          "min_isl": 4096,
+          "max_isl_exclusive": 6144,
+          "min_turns": 10,
+          "order": "md5(session_id)"
+        },
+        "rows": [
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::un33k__python-slugify.872b3750.lm_rewrite__kidne8vn.3qdud4nz",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 11,
+            "max_isl": 4534,
+            "total_tokens": 4545
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::Project-MONAI__MONAI.a09c1f08.pr_4583.kv86f030",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 12,
+            "max_isl": 4780,
+            "total_tokens": 4815
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::sqlfluff__sqlfluff.50a1c4b6.func_pm_ctrl_shuffle__urk3we51.91hmylr4",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 15,
+            "max_isl": 5643,
+            "total_tokens": 5649
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::cookiecutter__cookiecutter.b4451231.func_pm_remove_assign__u2kljodk.3qdud4nz",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 14,
+            "max_isl": 5220,
+            "total_tokens": 5226
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::jawah__charset_normalizer.1fdd6463.func_pm_remove_cond__67254dru.3qdud4nz",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 18,
+            "max_isl": 5480,
+            "total_tokens": 5486
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::Project-MONAI__MONAI.a09c1f08.pr_6895.oosvj10h",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 11,
+            "max_isl": 5816,
+            "total_tokens": 5970
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::pytest-dev__iniconfig.16793ead.combine_module__sxsvwi72.3qdud4nz",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 13,
+            "max_isl": 6071,
+            "total_tokens": 6077
+          },
+          {
+            "session_id": "swe-smith-claude-3-7-sonnet::dask__dask.5f61e423.pr_6749.oosvj10h",
+            "source_dataset": "swe-smith-claude-3-7-sonnet",
+            "n_turns": 10,
+            "max_isl": 4669,
+            "total_tokens": 4691
+          }
+        ],
+        "prompt_manifest_sha256": "f1ddbe3d5974f3f4bd06f5d70fa45d0e10305bbafa4eb7399a0f972458d1beef"
+      },
+      "workload": {
+        "rounds": 4,
+        "families": 8,
+        "requests_per_family": 2,
+        "prefix_blocks": 192,
+        "output_tokens": 32,
+        "ctx_size": 131072,
+        "lanes": 16,
+        "admission_concurrency": 16,
+        "cache_entries": 2,
+        "stagger_ms": 2.0
+      },
+      "ci_trace": {
+        "family_order": [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7],
+        "prompt_tokens": 128,
+        "expected_fcfs_switches": 15,
+        "expected_dfs_switches": 7
+      },
+      "hardware_acceptance": {
+        "successful_requests_per_binary": 64,
+        "suffix_prefill_before_min": 50000,
+        "family_switch_before_min": 8,
+        "suffix_prefill_delta_percent_max": -10.0,
+        "family_switch_delta_percent_max": -10.0,
+        "ttft_p95_delta_percent_max": -10.0,
+        "makespan_delta_percent_max": -10.0,
+        "output_throughput_delta_percent_min": 10.0
+      }
+    }
+  }
+}

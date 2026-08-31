@@ -16,6 +16,8 @@ import re
 from typing import Final
 import unittest
 
+from scripts.tests.justfile_source import read_justfile_source
+
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 JUSTFILE: Final = ROOT / "Justfile"
@@ -52,7 +54,7 @@ def default_shell_recipes() -> dict[str, str]:
     recipes — just executes those with the interpreter they name, so bash
     syntax in them is correct by construction and they are excluded here.
     """
-    lines = JUSTFILE.read_text(encoding="utf-8").splitlines()
+    lines = read_justfile_source(JUSTFILE).splitlines()
     header = re.compile(r"^([a-zA-Z_][\w-]*)(?:\s+[^:]*)?:(?!=)")
     recipes: dict[str, str] = {}
     index = 0

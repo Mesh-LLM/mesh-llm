@@ -199,6 +199,9 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("upload-package-artifact.py"));
         assert!(EMBEDDED_SCRIPT.contains("SKIPPY_PACKAGE_ARTIFACT_PATH"));
         assert!(EMBEDDED_SCRIPT.contains("SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"));
+        assert!(EMBEDDED_SCRIPT.contains("ARTIFACT_UPLOAD_ATTEMPTS"));
+        assert!(EMBEDDED_SCRIPT.contains("for attempt in range(1, max_attempts + 1)"));
+        assert!(EMBEDDED_SCRIPT.contains("Retrying in {delay}s"));
         assert!(EMBEDDED_SCRIPT.contains(r#"--after-artifact-command "$ARTIFACT_UPLOAD_HOOK""#));
         assert!(EMBEDDED_SCRIPT.contains("Uploaded and removed"));
         assert!(!EMBEDDED_SCRIPT.contains("api.upload_folder"));

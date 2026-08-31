@@ -96,7 +96,10 @@ mesh-llm serve --model Qwen3-8B-Q4_K_M
 ```
 
 This starts a private mesh, loads the requested model, opens the local API and
-console, and prints an invite token. Only nodes with the token can join.
+console, and prints an invite token. Only nodes with the token can join. Traffic
+between Mesh nodes—including prompts, responses, and split-model activations—is
+end-to-end encrypted by QUIC. If iroh falls back to a relay, the relay forwards
+encrypted packets and cannot read the inference payload.
 
 Join from another GPU node:
 

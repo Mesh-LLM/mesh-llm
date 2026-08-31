@@ -253,6 +253,16 @@ export function updateLogsTimeRange(search: LogsLedgerSearch, timeRange: Relativ
   return { ...search, from: undefined, to: undefined, timeRange, cursor: undefined, trail: undefined }
 }
 
+/** Narrows the ledger to an exact window, such as a chart bucket the operator clicked. */
+export function updateLogsTimeWindow(search: LogsLedgerSearch, from: string, to: string): LogsLedgerSearch {
+  return { ...search, timeRange: undefined, from, to, cursor: undefined, trail: undefined }
+}
+
+/** Drops an exact window while leaving every other filter in place. */
+export function clearLogsTimeWindow(search: LogsLedgerSearch): LogsLedgerSearch {
+  return { ...search, from: undefined, to: undefined, cursor: undefined, trail: undefined }
+}
+
 export function updateLogCategories(
   search: LogsLedgerSearch,
   categories: readonly LogEventCategory[] | undefined

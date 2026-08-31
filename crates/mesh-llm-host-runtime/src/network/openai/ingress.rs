@@ -1,9 +1,10 @@
 use crate::inference::{election, pipeline};
-use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
+use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use crate::plugin::openai_exchange::{
@@ -76,11 +77,11 @@ fn response_outcome(status_code: u16, result: std::io::Result<()>) -> proxy::Rou
 
 /// Check activity policy admission and reject with 503 if paused.
 async fn check_activity_admission(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     guard: &crate::runtime::ActivityPolicyGuard,
     ingress_type: crate::runtime::IngressType,
     route_observer: OpenAiRouteObserver<'_>,
-) -> Result<tokio::net::TcpStream, proxy::RouteDispatchOutcome> {
+) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
     match guard.check_admission(ingress_type) {
         crate::runtime::AdmissionResult::Allowed => Ok(tcp_stream),
         crate::runtime::AdmissionResult::Paused { reason, .. } => {
@@ -143,7 +144,7 @@ async fn bind_api_proxy_listener(
 }
 
 async fn handle_models_list_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     node: &mesh::Node,
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
@@ -403,7 +404,7 @@ fn maybe_enable_auto_route_hooks(
 
 async fn try_pipeline_proxy(
     node: &mesh::Node,
-    tcp_stream: &mut tokio::net::TcpStream,
+    tcp_stream: &mut ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     strong_name: &str,
@@ -477,7 +478,7 @@ fn warn_pipeline_fallback(strong_name: &str) {
 }
 
 async fn route_missing_local_model(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
@@ -565,7 +566,7 @@ async fn remote_mesh_targets(
 
 async fn try_route_plugin_model(
     ctx: &IngressRouteContext<'_>,
-    mut tcp_stream: tokio::net::TcpStream,
+    mut tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     model_name: &str,
     route_observer: OpenAiRouteObserver<'_>,
@@ -704,13 +705,14 @@ async fn try_route_plugin_model(
 }
 
 async fn route_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     effective_model: Option<&str>,
     required_tokens: Option<u32>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    prepare_cache_routing_body(request, effective_model);
     if let Some(model_name) = effective_model {
         // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
@@ -726,9 +728,6 @@ async fn route_request(
         }
 
         // Local candidates available — route normally.
-        if !request.is_tokenize_request() && ctx.targets.candidates(model_name).len() > 1 {
-            request.ensure_body_json();
-        }
         proxy::route_model_request(
             ctx.node.clone(),
             tcp_stream,
@@ -758,6 +757,19 @@ async fn route_request(
             },
         )
         .await
+    }
+}
+
+fn prepare_cache_routing_body(
+    request: &mut proxy::BufferedHttpRequest,
+    effective_model: Option<&str>,
+) {
+    // Cache routing and provider-confirmed local receipts need the same
+    // prefix key even when this node currently has only one eligible target.
+    // The body is already bounded and buffered at ingress; parsing here does
+    // not change the forwarded bytes.
+    if effective_model.is_some() && !request.is_tokenize_request() {
+        request.ensure_body_json();
     }
 }
 
@@ -797,7 +809,7 @@ async fn prepare_auto_route_decision(
 }
 
 async fn send_media_unsupported(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
     response_outcome(
@@ -827,11 +839,11 @@ fn callable_models_with_local_served(
 }
 
 async fn maybe_handle_control_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
     route_observer: OpenAiRouteObserver<'_>,
-) -> Result<proxy::RouteDispatchOutcome, tokio::net::TcpStream> {
+) -> Result<proxy::RouteDispatchOutcome, ClientStream> {
     if proxy::is_legacy_lifecycle_path(&request.path) {
         return Ok(proxy::reject_legacy_lifecycle_request(tcp_stream, route_observer).await);
     }
@@ -865,7 +877,7 @@ fn pipeline_route_model<'a>(
 }
 
 async fn try_pipeline_route(
-    tcp_stream: &mut tokio::net::TcpStream,
+    tcp_stream: &mut ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     decision: &AutoRouteDecision,
@@ -881,13 +893,13 @@ enum MoaInterceptResult {
     Handled(proxy::RouteDispatchOutcome),
     /// Not an MoA request — caller should continue with normal routing,
     /// reusing the returned stream.
-    NotMoa(tokio::net::TcpStream),
+    NotMoa(ClientStream),
     /// MoA could not form a committee but degraded `model=mesh` to a real
     /// single model (already rewritten on the request). Caller routes it
     /// normally, but must use this model rather than the stale
     /// `decision.effective_model` (still "mesh").
     Degraded {
-        stream: tokio::net::TcpStream,
+        stream: ClientStream,
         model: Option<String>,
     },
 }
@@ -895,7 +907,7 @@ enum MoaInterceptResult {
 /// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
 /// effective model so the call site is unconditional.
 async fn try_handle_moa_intercept(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
     decision: &AutoRouteDecision,
@@ -970,16 +982,30 @@ async fn try_handle_moa_intercept(
 }
 
 async fn handle_buffered_api_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     mut request: proxy::BufferedHttpRequest,
     ctx: ProxyConnectionContext<'_>,
+    source_addr: Option<std::net::SocketAddr>,
+    ingress_type: crate::runtime::IngressType,
 ) {
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
+    let caller_addr = source_addr.map(|addr| addr.to_string());
     let request_metadata =
         crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
-            .with_source(Some("direct_http"))
-            .with_method(Some(&request.method));
+            .with_source(Some(
+                if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+                    "remote_quic_http"
+                } else {
+                    "direct_http"
+                },
+            ))
+            .with_method(Some(&request.method))
+            .with_caller_identity(
+                None,
+                caller_addr.as_deref(),
+                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+            );
     let mut lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, request_metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
@@ -1010,7 +1036,7 @@ async fn handle_buffered_api_request(
     let tcp_stream = match check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
-        crate::runtime::IngressType::LocalOpenAi,
+        ingress_type,
         lifecycle.route_observer(),
     )
     .await
@@ -1100,10 +1126,12 @@ async fn handle_buffered_api_request(
 
 async fn handle_api_proxy_connection(
     node: mesh::Node,
-    mut tcp_stream: tokio::net::TcpStream,
+    mut tcp_stream: ClientStream,
     targets: election::ModelTargets,
     affinity: affinity::AffinityRouter,
+    ingress_type: crate::runtime::IngressType,
 ) {
+    let source_addr = tcp_stream.peer_addr().ok();
     let plugin_manager = node.plugin_manager().await;
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
@@ -1118,13 +1146,35 @@ async fn handle_api_proxy_connection(
                 affinity: &affinity,
                 plugin_manager: plugin_manager.as_ref(),
             };
-            handle_buffered_api_request(tcp_stream, request, ProxyConnectionContext { route })
-                .await;
+            handle_buffered_api_request(
+                tcp_stream,
+                request,
+                ProxyConnectionContext { route },
+                source_addr,
+                ingress_type,
+            )
+            .await;
         }
         Err(error) => {
             let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
         }
     }
+}
+
+pub(crate) async fn handle_remote_http_stream(
+    node: mesh::Node,
+    stream: ClientStream,
+    targets: election::ModelTargets,
+    affinity: affinity::AffinityRouter,
+) {
+    handle_api_proxy_connection(
+        node,
+        stream,
+        targets,
+        affinity,
+        crate::runtime::IngressType::RemoteQuicHttp,
+    )
+    .await;
 }
 
 /// Model-aware API proxy. Parses the "model" field from POST request bodies
@@ -1153,7 +1203,14 @@ pub(crate) async fn api_proxy(
         let node = node.clone();
         let affinity = affinity.clone();
         tokio::spawn(async move {
-            handle_api_proxy_connection(node, tcp_stream, targets, affinity).await;
+            handle_api_proxy_connection(
+                node,
+                tcp_stream.into(),
+                targets,
+                affinity,
+                crate::runtime::IngressType::LocalOpenAi,
+            )
+            .await;
         });
     }
 }
@@ -1194,7 +1251,7 @@ pub(crate) async fn bootstrap_proxy(
                 let _ = tcp_stream.set_nodelay(true);
                 let node = node.clone();
                 let affinity = affinity.clone();
-                tokio::spawn(Box::pin(proxy::handle_mesh_request(node, tcp_stream, true, affinity)));
+                tokio::spawn(Box::pin(proxy::handle_mesh_request(node, tcp_stream.into(), true, affinity)));
             }
             resp_tx = stop_rx.recv() => {
                 if let Some(tx) = resp_tx {

@@ -1,24 +1,27 @@
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { TabPanel, type TabPanelItem } from '@/components/ui/TabPanel'
 import { Button } from '@/components/ui/button'
 import { CopyInstructionRow } from '@/components/ui/CopyInstructionRow'
+import { TabPanel, type TabPanelItem } from '@/components/ui/TabPanel'
+import type { LogRequestId } from '@/features/logs/api/ids'
+import type { LogRequest } from '@/features/logs/api/schemas'
 import {
   useLogRequestArtifactsQuery,
   useLogRequestAttemptsQuery,
   useLogRequestEventsQuery,
   useLogRequestSummaryQuery
 } from '@/features/logs/api/use-log-request-details-query'
-import type { LogRequestId } from '@/features/logs/api/ids'
 import { LogRequestDiagnostics } from '@/features/logs/components/LogRequestDiagnostics'
 import { LogRequestInspectorFooter } from '@/features/logs/components/LogRequestInspectorFooter'
 import { LogRequestOverview } from '@/features/logs/components/LogRequestOverview'
 import { LogRequestPayloads } from '@/features/logs/components/LogRequestPayloads'
+import { LogRequestTabBody } from '@/features/logs/components/LogRequestTabBody'
 import { LogRequestTimeline } from '@/features/logs/components/LogRequestTimeline'
 import type { LogRequestDetailTab } from '@/features/logs/lib/log-request-details'
 
 type LogRequestDetailsProps = {
   readonly requestId: LogRequestId
+  readonly knownRequest?: LogRequest
   readonly tab: LogRequestDetailTab
   readonly onBack: () => void
   readonly onTabChange: (tab: LogRequestDetailTab) => void
@@ -27,12 +30,6 @@ type LogRequestDetailsProps = {
 }
 
 const TAB_PANEL_CONTENT_CLASS = 'mt-0 flex min-h-0 flex-1 flex-col overflow-hidden p-0'
-const TAB_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto p-4 sm:p-5'
-const INACTIVE_TAB_BODY_CLASS = 'min-h-0 flex-1 overflow-hidden p-4 sm:p-5'
-
-function tabBodyClass(tab: LogRequestDetailTab, content: LogRequestDetailTab): string {
-  return tab === content ? TAB_SCROLL_BODY_CLASS : INACTIVE_TAB_BODY_CLASS
-}
 
 function RequestSummaryState({ loading, error }: { readonly loading: boolean; readonly error: boolean }) {
   if (loading) return <p className="type-body text-fg-dim">Loading request summary.</p>
@@ -64,6 +61,7 @@ function DetailLimitNotice({ visible }: { readonly visible: boolean }) {
 
 export function LogRequestDetails({
   requestId,
+  knownRequest,
   tab,
   onBack,
   onTabChange,
@@ -71,7 +69,7 @@ export function LogRequestDetails({
   embedded = false
 }: LogRequestDetailsProps) {
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const summaryQuery = useLogRequestSummaryQuery(requestId)
+  const summaryQuery = useLogRequestSummaryQuery(requestId, knownRequest)
   const artifactsQuery = useLogRequestArtifactsQuery(
     requestId,
     tab === 'overview' || tab === 'payloads' || tab === 'diagnostics'
@@ -89,11 +87,7 @@ export function LogRequestDetails({
       value: 'overview',
       label: 'Overview',
       content: (
-        <div
-          className={tabBodyClass(tab, 'overview')}
-          data-request-inspector-scroll={tab === 'overview' ? 'body' : undefined}
-          tabIndex={tab === 'overview' ? 0 : undefined}
-        >
+        <LogRequestTabBody active={tab === 'overview'}>
           <DetailLimitNotice
             visible={Boolean(
               artifactsQuery.data?.nextCursor || eventsQuery.data?.nextCursor || attemptsQuery.data?.nextCursor
@@ -126,36 +120,28 @@ export function LogRequestDetails({
           ) : (
             <RequestSummaryState error={summaryQuery.isError} loading={summaryQuery.isLoading} />
           )}
-        </div>
+        </LogRequestTabBody>
       )
     },
     {
       value: 'payloads',
       label: 'Payloads',
       content: (
-        <div
-          className={tabBodyClass(tab, 'payloads')}
-          data-request-inspector-scroll={tab === 'payloads' ? 'body' : undefined}
-          tabIndex={tab === 'payloads' ? 0 : undefined}
-        >
+        <LogRequestTabBody active={tab === 'payloads'}>
           <DetailLimitNotice visible={Boolean(artifactsQuery.data?.nextCursor)} />
           <LogRequestPayloads
             artifacts={artifactsQuery.data?.items}
             error={artifactsQuery.isError}
             loading={artifactsQuery.isLoading}
           />
-        </div>
+        </LogRequestTabBody>
       )
     },
     {
       value: 'timeline',
       label: 'Timeline',
       content: (
-        <div
-          className={tabBodyClass(tab, 'timeline')}
-          data-request-inspector-scroll={tab === 'timeline' ? 'body' : undefined}
-          tabIndex={tab === 'timeline' ? 0 : undefined}
-        >
+        <LogRequestTabBody active={tab === 'timeline'}>
           <DetailLimitNotice visible={Boolean(eventsQuery.data?.nextCursor || attemptsQuery.data?.nextCursor)} />
           <LogRequestTimeline
             attempts={attemptsQuery.data?.items}
@@ -165,18 +151,14 @@ export function LogRequestDetails({
             eventsError={eventsQuery.isError}
             eventsLoading={eventsQuery.isLoading}
           />
-        </div>
+        </LogRequestTabBody>
       )
     },
     {
       value: 'diagnostics',
       label: 'Diagnostics',
       content: (
-        <div
-          className={tabBodyClass(tab, 'diagnostics')}
-          data-request-inspector-scroll={tab === 'diagnostics' ? 'body' : undefined}
-          tabIndex={tab === 'diagnostics' ? 0 : undefined}
-        >
+        <LogRequestTabBody active={tab === 'diagnostics'}>
           <DetailLimitNotice
             visible={Boolean(
               artifactsQuery.data?.nextCursor || eventsQuery.data?.nextCursor || attemptsQuery.data?.nextCursor
@@ -196,7 +178,7 @@ export function LogRequestDetails({
             requestError={summaryQuery.isError}
             requestLoading={summaryQuery.isLoading}
           />
-        </div>
+        </LogRequestTabBody>
       )
     }
   ] satisfies readonly TabPanelItem<LogRequestDetailTab>[]

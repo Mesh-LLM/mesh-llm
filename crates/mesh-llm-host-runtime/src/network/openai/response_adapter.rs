@@ -1,5 +1,5 @@
+use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 pub(crate) use openai_frontend::{
     responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
@@ -28,7 +28,7 @@ pub(crate) fn sse_frame(event: Option<&str>, data: &str) -> Vec<u8> {
     frame
 }
 
-async fn write_chunked_bytes(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
+async fn write_chunked_bytes(stream: &mut ClientStream, bytes: &[u8]) -> std::io::Result<()> {
     let header = format!("{:x}\r\n", bytes.len());
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(bytes).await?;
@@ -36,7 +36,7 @@ async fn write_chunked_bytes(stream: &mut TcpStream, bytes: &[u8]) -> std::io::R
 }
 
 pub(crate) async fn write_chunked_sse_event(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     event: Option<&str>,
     data: &str,
 ) -> std::io::Result<()> {

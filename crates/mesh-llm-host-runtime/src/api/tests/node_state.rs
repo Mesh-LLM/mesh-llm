@@ -119,6 +119,7 @@ fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
         owner_summary: crate::crypto::OwnershipSummary::default(),
         first_joined_mesh_ts: None,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,

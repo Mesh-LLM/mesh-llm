@@ -24,7 +24,9 @@ use super::split_planning::{
     plan_runtime_slice_topology_with_resources_and_stage0, split_participant_exclusion_labels,
     split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
 };
-use super::split_topology_lock::load_locked_split_assignments;
+use super::split_topology_lock::{
+    load_configured_split_assignments, load_locked_split_assignments,
+};
 use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
@@ -224,11 +226,13 @@ pub(super) async fn start_runtime_split_model(
         node: spec.node,
         mesh_config: spec.mesh_config,
         model_ref,
+        config_model_id: spec.config_model_id,
         model_path: spec.model_path,
         package: &package,
         generation: &active,
         projector_path: projector_path.clone(),
         ctx_size,
+        compact_meta: &compact_meta,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
         n_batch_override: spec.n_batch_override,
@@ -236,6 +240,7 @@ pub(super) async fn start_runtime_split_model(
         flash_attention_override: spec.flash_attention_override,
         openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu,
+        device_override: spec.device_override.as_deref(),
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
@@ -250,13 +255,17 @@ pub(super) async fn start_runtime_split_model(
         model_name: model_ref.to_string(),
         model_path: spec.model_path.to_path_buf(),
         model_ref: model_ref.to_string(),
+        config_model_id: spec.config_model_id.map(str::to_string),
         package: package.clone(),
+        compact_meta: compact_meta.clone(),
         active,
         projector_path,
         ctx_size,
         topology_resources: SplitTopologyResourceInputs {
             native_context_length: compact_meta.context_length,
             kv_bytes_per_token,
+            recurrent_bytes_per_sequence_by_layer: compact_meta
+                .recurrent_bytes_per_configured_lane_by_layer(),
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
         },
@@ -267,12 +276,18 @@ pub(super) async fn start_runtime_split_model(
         flash_attention_override: spec.flash_attention_override,
         openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu.cloned(),
+        device_override: spec.device_override.clone(),
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         topology_locked,
+        health_interval: loading::configured_stage_lifecycle_intervals(
+            spec.mesh_config,
+            spec.config_model_id,
+        )
+        .health_interval,
     }));
 
     Ok(SplitRuntimeStart::Started(Box::new(loaded)))
@@ -317,10 +332,38 @@ async fn prepare_split_runtime_start(
     let resources = SplitTopologyResourceInputs {
         native_context_length: compact_meta.context_length,
         kv_bytes_per_token,
+        recurrent_bytes_per_sequence_by_layer: compact_meta
+            .recurrent_bytes_per_configured_lane_by_layer(),
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
     };
-    let planned_topology = if let Some(path) = spec.split_topology_lock {
+    let configured_locked_stages = load_configured_split_assignments(
+        spec.mesh_config,
+        spec.config_model_id,
+        spec.node,
+        &package,
+        &participant_snapshot.participants,
+    )
+    .await?;
+    let topology_locked = configured_locked_stages.is_some() || spec.split_topology_lock.is_some();
+    let planned_topology = if let Some(locked_stages) = configured_locked_stages {
+        anyhow::ensure!(
+            locked_stages
+                .first()
+                .is_some_and(|stage| stage.node_id == canonical_coordinator),
+            "configured topology stage 0 must be canonical coordinator {}",
+            canonical_coordinator.fmt_short()
+        );
+        plan_locked_runtime_slice_topology_with_resources(
+            topology_id,
+            model_ref,
+            &package,
+            &participant_snapshot.participants,
+            &participant_snapshot.excluded,
+            resources,
+            &locked_stages,
+        )?
+    } else if let Some(path) = spec.split_topology_lock {
         let locked_stages = load_locked_split_assignments(
             path,
             spec.node,
@@ -362,7 +405,7 @@ async fn prepare_split_runtime_start(
         compact_meta,
         kv_bytes_per_token,
         planned_topology,
-        topology_locked: spec.split_topology_lock.is_some(),
+        topology_locked,
     })
 }
 

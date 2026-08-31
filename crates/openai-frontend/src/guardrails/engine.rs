@@ -48,10 +48,12 @@ impl GuardrailEngine {
             GuardrailRequestOutcome::PassThrough {
                 reason: GuardrailTelemetryBypassReason::Streaming,
             }
-        } else if matches!(
-            state.mesh_guardrails_override,
-            MeshGuardrailsOverride::Disabled
-        ) {
+        } else if !matches!(state.mode, super::policy::GuardrailMode::Enforce)
+            && matches!(
+                state.mesh_guardrails_override,
+                MeshGuardrailsOverride::Disabled
+            )
+        {
             GuardrailRequestOutcome::PassThrough {
                 reason: GuardrailTelemetryBypassReason::Disabled,
             }

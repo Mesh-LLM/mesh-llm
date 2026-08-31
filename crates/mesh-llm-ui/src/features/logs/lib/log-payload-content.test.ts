@@ -5,6 +5,7 @@ import { LogArtifactId, LogRequestId } from '@/features/logs/api/ids'
 import type { LogArtifact } from '@/features/logs/api/schemas'
 import {
   classifyLogArtifacts,
+  decodeEventStream,
   decodeLogArtifactContent,
   LOG_PAYLOAD_RENDER_LIMIT_BYTES
 } from '@/features/logs/lib/log-payload-content'
@@ -140,6 +141,76 @@ describe('decodeLogArtifactContent', () => {
     })
   })
 
+  it('decodes normalized event streams into ordered independently typed frames', () => {
+    // Given
+    const streamText =
+      ': heartbeat\r\n\r\n' +
+      'event: token\r\nid: frame:1\r\ndata: {"delta":\r\ndata: {"content":"hello:world"}}\r\n\r\n' +
+      'id: frame-2\rdata: plain: text\rdata:  leading space\r\r' +
+      'data: {"broken":\n\n' +
+      'event: done\r\ndata: [DONE]\r\n\r\n'
+
+    // When
+    const result = decodeLogArtifactContent(
+      availableArtifact({
+        contentBase64: btoa(streamText),
+        mediaKind: 'Text/Event-Stream; charset=UTF-8'
+      })
+    )
+
+    // Then
+    expect(result).toEqual({
+      state: 'event-stream',
+      frames: [
+        {
+          event: 'token',
+          id: 'frame:1',
+          data: {
+            state: 'json',
+            text: '{"delta":\n{"content":"hello:world"}}',
+            prettyText: '{\n  "delta": {\n    "content": "hello:world"\n  }\n}'
+          }
+        },
+        {
+          id: 'frame-2',
+          data: { state: 'text', text: 'plain: text\n leading space' }
+        },
+        {
+          data: { state: 'text', text: '{"broken":' }
+        },
+        {
+          event: 'done',
+          data: { state: 'text', text: '[DONE]' }
+        }
+      ]
+    })
+  })
+
+  it('caps event-stream frame previews and exposes truncation', () => {
+    const stream = Array.from({ length: 300 }, (_, index) => `id: ${index}\ndata: frame-${index}`).join('\n\n')
+
+    const frames = decodeEventStream(stream)
+
+    expect(frames).toHaveLength(256)
+    expect(frames.at(-1)).toMatchObject({
+      event: 'preview-truncated',
+      truncated: true,
+      data: { state: 'text', text: expect.stringContaining('safe preview limit') }
+    })
+  })
+
+  it('caps aggregate event-stream preview allocation and exposes truncation', () => {
+    const frames = decodeEventStream(`data: ${'x'.repeat(1_048_577)}`)
+
+    expect(frames).toEqual([
+      {
+        event: 'preview-truncated',
+        truncated: true,
+        data: { state: 'text', text: expect.stringContaining('safe preview limit') }
+      }
+    ])
+  })
+
   it('rejects invalid base64', () => {
     expect(decodeLogArtifactContent(availableArtifact({ contentBase64: 'not base64!' }))).toEqual({
       state: 'decode-error',
@@ -202,6 +273,19 @@ describe('decodeLogArtifactContent', () => {
         availableArtifact({
           contentBase64: invalidUtf8,
           mediaKind: 'text/plain'
+        })
+      )
+    ).toEqual({ state: 'decode-error', reason: 'utf8' })
+  })
+
+  it('rejects invalid UTF-8 before classifying a declared event stream', () => {
+    const invalidUtf8 = btoa(String.fromCharCode(0xc3, 0x28))
+
+    expect(
+      decodeLogArtifactContent(
+        availableArtifact({
+          contentBase64: invalidUtf8,
+          mediaKind: 'text/event-stream'
         })
       )
     ).toEqual({ state: 'decode-error', reason: 'utf8' })

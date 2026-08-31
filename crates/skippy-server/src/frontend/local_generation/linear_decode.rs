@@ -301,10 +301,9 @@ mod tests {
     use tokio::sync::Semaphore;
 
     use super::*;
-    use crate::binary_transport::DecodeFrameBatcher;
     use crate::frontend::admission::GenerationTokenBudget;
-    use crate::frontend::decode_batcher::DecodeBatcher;
     use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
+    use crate::frontend::iteration_scheduler::IterationScheduler;
     use crate::frontend::linear_proposal::{
         LinearProposal, LinearProposalDiscardReason, LinearProposalIngress,
         LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
@@ -384,9 +383,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: Some(true),
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -395,13 +405,18 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let speculative = SpeculativeDecodeConfig::default();
+        let telemetry = Telemetry::new(None, 1, stage_config.clone(), TelemetryLevel::Off);
+        let iteration_scheduler =
+            IterationScheduler::new(runtime.clone(), &stage_config, 1, true, telemetry.clone())
+                .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
             config: stage_config.clone(),
-            telemetry: Telemetry::new(None, 1, stage_config, TelemetryLevel::Off),
+            telemetry,
             model_id: "linear-proposal-test".to_string(),
             default_max_tokens: 4,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
@@ -421,8 +436,7 @@ mod tests {
             generation_receipt: None,
             linear_proposal_ingress: Some(config),
             kv: None,
-            decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-            decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+            iteration_scheduler,
         };
         let sampling = SamplingConfig::default();
         let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);

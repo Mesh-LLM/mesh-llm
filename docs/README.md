@@ -6,6 +6,8 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 
 | Need | Doc |
 |---|---|
+| Field-by-field `config.toml` reference | [Canonical configuration reference](https://meshllm.cloud/docs/pages/config-reference/) |
+| PR8 host-integration source/sink evidence | [CONFIGURATION_PR8_CLOSEOUT_AUDIT.md](CONFIGURATION_PR8_CLOSEOUT_AUDIT.md) |
 | Install, run, service mode, model storage | [USAGE.md](USAGE.md) |
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
@@ -22,7 +24,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 
 | Doc | What it covers |
 |---|---|
-| [skippy/FAMILY_STATUS.md](skippy/FAMILY_STATUS.md) | Certified family/split/wire-dtype status |
+| [skippy/FAMILY_STATUS.md](skippy/FAMILY_STATUS.md) | Certified family and split status |
 | [skippy/NEW_MODEL_ONBOARDING.md](skippy/NEW_MODEL_ONBOARDING.md) | New-model split/certification intake checklist |
 | [skippy/FAMILY_CERTIFY.md](skippy/FAMILY_CERTIFY.md) | Certification workflow for new families |
 | [skippy/TOPOLOGY_PLANNER.md](skippy/TOPOLOGY_PLANNER.md) | Stage topology planning behavior |

@@ -31,6 +31,12 @@ or cache identity.
   use protected detached lane dispatch.
 - ci/ownership.yml and ci/slices.yml define the checked ownership, dependency,
   row, runner-role, cache-mode and worker-budget catalog.
+- Protected PR planning extracts only those two manifests from the validated
+  immutable source SHA and passes their unique runner-temp root to the
+  default-branch planner. The source manifests are data only. Planner code,
+  Cargo workspace discovery, and affected-crate operations remain rooted in
+  the protected checkout. The source ownership and slice catalogs must match
+  the protected catalogs, and missing manifests fail closed.
 - scripts/plan-ci.py emits the versioned plan described by
   ci/ci-plan.schema.json, including direct domains, affected crates, signals,
   reasons, dependencies, matrices and budgets.
@@ -46,10 +52,11 @@ or cache identity.
   lanes; PR-controlled jobs never receive Actions-write permission.
 - Existing static ABI, native SDK, Swift, smoke and HF workflows remain
   lower-level reusable producers/consumers.
-- Current PR routing is GitHub-hosted except for the documented uncredentialed
-  CUDA smoke and an exact maintainer-approved same-repository merge ref/head SHA
-  selected under the checked-in Depot cache-risk deadline; trusted-main Depot
-  selection remains behind the existing exact-string policy gate.
+- Current PR routing may use Depot for eligible same-repository executor jobs
+  under the checked-in cache-risk deadline and repository gate. Forks,
+  control-plane jobs, credential-bearing smokes, and the documented CUDA smoke
+  keep their approved placements; trusted-main Depot selection remains behind
+  the existing exact-string policy gate.
 - `ci-quality-slice.yml` contains an additive protected authority-sentinel
   diagnostic selected by separate `DEPOT_PR_SENTINEL_REF` and
   `DEPOT_PR_SENTINEL_ID` variables. It does not add a PR entrypoint, planner
@@ -94,12 +101,14 @@ Routine main validation has the same acceptance invariant and exposes
 Each PR entry calls one protected default-branch workflow as a nested reusable
 job, and each main entry calls its same-commit workflow. Both preserve native
 run/log visibility without a monolithic graph. The manual-only controller
-dispatches the same list with bounded JSON inputs. All paths pass the
-immutable source SHA only to product checkouts; each lane contains a
-platform-local static superset of typed reusable calls. Workflow YAML is never
-generated, and lanes do not download a planner artifact or allocate a planner.
-Fork heads are fetched through the base repository while workflow
-definitions remain protected on the default branch.
+dispatches the same list with bounded JSON inputs. PR planning also uses the
+immutable source SHA to read only `ci/ownership.yml` and `ci/slices.yml` as
+inert routing data. Product workflows use it for source checkout. Each lane
+contains a platform-local static superset of typed reusable calls. Workflow
+YAML is never generated, and lanes do not download a planner artifact or
+allocate a planner. Fork heads are fetched through the base repository while
+planner, action, and workflow definitions remain protected on the default
+branch.
 
 ## Planner contract
 
@@ -107,7 +116,16 @@ scripts/plan-ci.py is the only eligibility implementation. It reads the
 JSON-compatible manifests and validates their schema and dependency graph.
 Unknown paths and malformed inputs fail closed. CI-control and
 runner-infrastructure changes fail open to control rows and all supported
-product rows.
+product rows. Paths that map only to documentation plus `ci-control` are the
+exception. They keep the profile base and add only `runner-contract`, without
+forcing product rows.
+
+The planner accepts a separate manifest root for the two catalog files. It
+defaults to the workspace root. Protected PR callers provide a unique
+runner-temp directory populated from the immutable source SHA; push and manual
+callers keep the protected workspace default. The manifest root never changes
+workspace package discovery or affected-crate command paths. Missing source
+manifests fail closed.
 
 Each plan contains:
 
@@ -123,14 +141,16 @@ Profiles are closed and event-derived:
 
 | Profile | Selection |
 | --- | --- |
-| pr-draft | Quality, affected Rust signal, directly owned web/product rows, core smoke only |
+| pr-draft | No build slices; stable planner/gate results only, except CI-control or runner-infrastructure fail-open |
 | pr-ready | Complete targeted rows for direct domains and affected Rust dependents |
 | main | Every workspace crate and every supported product/platform/backend/SDK row |
 | manual-full | Main-equivalent non-publishing dispatch |
 
-The selected PR row is semantically identical to main. Only plan membership,
-trust-derived cache mode, short-lived artifact namespace, provider label and
-optional trusted credentials may differ.
+The selected ready-PR row is semantically identical to main. Draft PRs select
+no build row. Only plan membership, bounded parallelism, worker budgets
+(`total_max_workers` is 10 for `pr-ready` and 18 for `main`), trust-derived
+cache mode, short-lived artifact namespace, provider label and optional trusted
+credentials may differ.
 
 ## Slice catalog
 
@@ -240,16 +260,16 @@ implementation.
 
 ## GitHub and Depot
 
-select-ci-runners resolves semantic runner roles. Pull requests, feature refs,
-tags, macOS, Windows, credential-bearing smokes and hardware-qualified work
-stay on their approved placement. Trusted main Linux work may use Depot only
-when DEPOT_RUNNERS_ENABLED is exactly true, with a GitHub-hosted fallback.
-Callers never provide raw labels or independent remote-cache permission.
+select-ci-runners resolves semantic runner roles. Eligible same-repository PR
+executor jobs may use Depot during the bounded exception. Forks, feature refs,
+tags, credential-bearing smokes and hardware-qualified work stay on their
+approved placement. Trusted main Linux work may use Depot only when
+DEPOT_RUNNERS_ENABLED is exactly true, with a GitHub-hosted fallback. Callers
+never provide raw labels or independent remote-cache permission.
 
 Permanent Depot PR execution is not enabled. The selector has a bounded
 `DEPOT_PR_CANARY_REF` hook for one exact same-repository merge ref. The separate
-temporary exception requires `DEPOT_PR_RUNNERS_ENABLED`, exact
-`DEPOT_PR_APPROVED_REF`, exact `DEPOT_PR_APPROVED_SHA`, and the checked-in
+temporary exception requires `DEPOT_PR_RUNNERS_ENABLED` and the checked-in
 2026-09-14 UTC deadline. The Quality slice
 also has a separate `DEPOT_PR_SENTINEL_REF` selector and
 `DEPOT_PR_SENTINEL_ID` validation for one no-checkout authority diagnostic;
@@ -265,7 +285,7 @@ expose repository-wide cache authority to PR code. Cache-key prefixes are not
 isolation. The central selector emits
 `allow_depot_remote_cache=false` for every Depot selection. Outside the bounded
 exception, native Actions-cache consumers are disabled. During the exception,
-an exact approved PR revision and eligible trusted-main Depot jobs emit
+eligible same-repository PR and trusted-main Depot jobs emit
 `allow_native_github_cache=true`, deliberately sharing Depot's repository-wide,
 cross-branch Actions-cache namespace for iteration speed. Hosted release and
 cache-warmer paths retain their existing GitHub cache behavior. This is
@@ -326,8 +346,7 @@ the enclosing PR run was later cancelled during cleanup. Trusted-main verify
 restored and exactly validated that poison, then failed its intended expected-
 miss gate. This is unsafe repository-scoped cross-trust authority, not a
 successful isolation result. The temporary exception knowingly accepts it only
-when `DEPOT_PR_RUNNERS_ENABLED=true`, `DEPOT_PR_APPROVED_REF` and
-`DEPOT_PR_APPROVED_SHA` match exactly, and the 2026-09-14 UTC deadline is still
+when `DEPOT_PR_RUNNERS_ENABLED=true` and the 2026-09-14 UTC deadline is still
 active. A provider-isolation redesign and a new successful sentinel are
 required before that exception can become permanent. The exact-SHA five-lane
 candidate, provider-separated comparison, and identical-SHA hosted rollback

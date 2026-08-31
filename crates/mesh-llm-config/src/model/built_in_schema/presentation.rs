@@ -263,7 +263,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.76.0-rc6")
+        .placeholder("0.76.0-rc8")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",
@@ -577,13 +577,6 @@ fn generation_defaults_presentation(rendered: &str) -> Option<SettingPresentatio
 
 fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation> {
     match rendered {
-        "defaults.skippy.activation_wire_dtype" => Some(sp(
-            "Activation wire dtype",
-            "Choose the dtype used when activation frames travel between skippy stages.",
-            SKIPPY_CATEGORY,
-            10,
-        )
-        .hint("segmented")),
         "defaults.skippy.stage_model_path" => Some(sp(
             "Stage model path",
             "Set the model or package path used for this skippy stage.",
@@ -1070,7 +1063,8 @@ fn control_hint_for_schema(schema: &ConfigValueSchema) -> Option<&'static str> {
             Some("segmented")
         }
         ConfigValueSchema::Array { .. } => Some("text"),
-        ConfigValueSchema::Object => Some("textarea"),
+        ConfigValueSchema::Object { properties } if properties.is_empty() => Some("textarea"),
+        ConfigValueSchema::Object { .. } => None,
         _ => None,
     }
 }

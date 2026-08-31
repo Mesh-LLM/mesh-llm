@@ -2,6 +2,7 @@ use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpVerifier;
+use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::LocalGeneration;
 use crate::frontend::generation::OpenAiGenerationIds;
@@ -11,6 +12,7 @@ use crate::frontend::generation::TokenControl;
 use crate::frontend::generation_receipt::{
     GenerationCommit, GenerationStart, complete_generation_before_cleanup,
 };
+use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
 use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
@@ -18,17 +20,40 @@ use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
 use crate::kv_integration::{KvStageIntegration, StagePrefixCachePayload};
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
+use axum::http::StatusCode;
 use openai_frontend::ChatCompletionRequest;
 use openai_frontend::OpenAiError;
+use openai_frontend::OpenAiErrorKind;
 use openai_frontend::OpenAiResult;
 use serde_json::json;
+use skippy_metrics::attr as attr_key;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
+
+pub(in crate::frontend) fn resident_capacity_admission_error(
+    capacity: &crate::kv_integration::ResidentCapacityDecision,
+) -> OpenAiError {
+    OpenAiError::from_kind(
+        StatusCode::TOO_MANY_REQUESTS,
+        OpenAiErrorKind::RateLimit,
+        format!(
+            "resident KV capacity admission rejected request: {} token deficit (capacity={}, active={}, pinned={}, request={}, minimum_free={})",
+            capacity.admission_deficit_tokens,
+            capacity.capacity_tokens,
+            capacity.active_tokens,
+            capacity.pinned_tokens,
+            capacity.request_tokens,
+            capacity.minimum_free_tokens,
+        ),
+    )
+    .with_retry_after_secs(GENERATION_RETRY_AFTER_SECS)
+}
 
 pub(super) fn commit_local_generation_token(
     config: Option<&crate::frontend::GenerationReceiptConfig>,
@@ -62,6 +87,95 @@ struct KvRecordResult {
     proactive_evicted_entries: usize,
     proactive_evicted_tokens: u64,
     proactive_eviction_error: Option<anyhow::Error>,
+}
+
+impl Default for KvRecordResult {
+    fn default() -> Self {
+        Self {
+            resident_recorded_pages: 0,
+            proactive_eviction_status: "disabled",
+            proactive_eviction_error_kind: None,
+            proactive_eviction_target_tokens: 0,
+            proactive_evicted_entries: 0,
+            proactive_evicted_tokens: 0,
+            proactive_eviction_error: None,
+        }
+    }
+}
+
+fn insert_resident_capacity_attrs(
+    attrs: &mut BTreeMap<String, serde_json::Value>,
+    decision: &crate::kv_integration::ResidentCapacityDecision,
+) {
+    let status = if !decision.enabled {
+        "disabled"
+    } else if !decision.capacity_known {
+        "unknown_capacity"
+    } else if !decision.admitted {
+        "rejected"
+    } else if decision.evicted_entries > 0 {
+        "evicted"
+    } else {
+        "admitted"
+    };
+    attrs.insert(attr_key::KV_CAPACITY_STATUS.to_string(), json!(status));
+    attrs.insert(
+        attr_key::KV_CAPACITY_TOKENS.to_string(),
+        json!(decision.capacity_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_ACTIVE_TOKENS.to_string(),
+        json!(decision.active_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_PINNED_TOKENS.to_string(),
+        json!(decision.pinned_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_REQUEST_TOKENS.to_string(),
+        json!(decision.request_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_MINIMUM_FREE_TOKENS.to_string(),
+        json!(decision.minimum_free_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_TARGET_FREE_TOKENS.to_string(),
+        json!(decision.target_free_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_PROJECTED_FREE_TOKENS.to_string(),
+        json!(decision.projected_free_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_ADMISSION_DEFICIT_TOKENS.to_string(),
+        json!(decision.admission_deficit_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_REQUIRED_EVICTION_TOKENS.to_string(),
+        json!(decision.required_eviction_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_EVICTED_ENTRIES.to_string(),
+        json!(decision.evicted_entries),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_EVICTED_TOKENS.to_string(),
+        json!(decision.evicted_tokens),
+    );
+    attrs.insert(
+        attr_key::KV_CAPACITY_PREDICTED_RECOMPUTE_COST.to_string(),
+        json!(decision.predicted_recompute_cost),
+    );
+}
+
+struct KvRestoreOutcome {
+    runtime_sessions_before: RuntimeSessionStats,
+    runtime_sessions_after: RuntimeSessionStats,
+    restored_prefill: bool,
+    restored_prefill_tokens: usize,
+    capacity: crate::kv_integration::ResidentCapacityDecision,
+    record: KvRecordResult,
 }
 
 pub(super) struct DecodeState {
@@ -127,6 +241,29 @@ pub(in crate::frontend) fn linear_proposal_allowed(
     checkpoint_attempted: bool,
 ) -> bool {
     !recurrent_checkpoint_required || checkpoint_attempted
+}
+
+fn scheduler_generation_driver_eligible(
+    max_tokens: u32,
+    kv_enabled: bool,
+    linear_proposal_enabled: bool,
+    draft_enabled: bool,
+    native_mtp_enabled: bool,
+    speculative_strategy: &str,
+    hooks_enabled: bool,
+) -> bool {
+    // This predicate selects the scheduler's built-in plain-text generation
+    // driver. Speculative and extended requests keep their strategy-specific
+    // proposal/checkpoint state machine, but every target iteration,
+    // verification, and repair operation is submitted to the same scheduler
+    // worker, including strategy-specific runtime operations.
+    max_tokens > 0
+        && !kv_enabled
+        && !linear_proposal_enabled
+        && !draft_enabled
+        && !native_mtp_enabled
+        && speculative_strategy == "disabled"
+        && !hooks_enabled
 }
 
 impl StageOpenAiBackend {
@@ -195,13 +332,23 @@ impl StageOpenAiBackend {
             {
                 return Err(OpenAiError::backend("request cancelled"));
             }
+            if self.uses_scheduler_builtin_driver(&request) {
+                let model_generation_elapsed = self.run_scheduled_generation(
+                    &request,
+                    &session_id,
+                    &mut cache_stats,
+                    &mut emit_token,
+                )?;
+                receipt_model_generation_elapsed = Some(model_generation_elapsed);
+                return Ok(());
+            }
             let prefill = self.prefill_prompt(&request, &session_id, &mut cache_stats)?;
             self.configure_chat_sampling_if_needed(
                 &request,
                 &session_id,
                 prefill.chat_sampling_configured,
             )?;
-            let model_generation_elapsed = self.run_decode_loop(
+            let model_generation_elapsed = self.run_scheduler_feature_loop(
                 &mut request,
                 &session_id,
                 prefill.prompt_prefill_sample,
@@ -238,6 +385,104 @@ impl StageOpenAiBackend {
         Ok(cache_stats)
     }
 
+    fn uses_scheduler_builtin_driver(&self, request: &LocalGeneration<'_>) -> bool {
+        let kv_enabled = self.kv.is_some();
+        let linear_proposal_enabled = self.linear_proposal_ingress.is_some();
+        let draft_enabled = self.draft.is_some();
+        let hooks_enabled = self.hook_policy.is_some();
+        let eligible = scheduler_generation_driver_eligible(
+            request.max_tokens,
+            kv_enabled,
+            linear_proposal_enabled,
+            draft_enabled,
+            request.native_mtp_enabled,
+            &request.speculative.effective_strategy,
+            hooks_enabled,
+        );
+        let mut attrs = self.openai_attrs(request.ids);
+        attrs.insert("skippy.scheduler.eligible".to_string(), json!(eligible));
+        attrs.insert(
+            "skippy.scheduler.runtime_owner".to_string(),
+            json!("iteration-worker"),
+        );
+        attrs.insert(
+            "skippy.scheduler.generation_driver".to_string(),
+            json!(if eligible { "built-in" } else { "feature" }),
+        );
+        attrs.insert("skippy.scheduler.kv_enabled".to_string(), json!(kv_enabled));
+        attrs.insert(
+            "skippy.scheduler.linear_proposal_enabled".to_string(),
+            json!(linear_proposal_enabled),
+        );
+        attrs.insert(
+            "skippy.scheduler.draft_enabled".to_string(),
+            json!(draft_enabled),
+        );
+        attrs.insert(
+            "skippy.scheduler.native_mtp_enabled".to_string(),
+            json!(request.native_mtp_enabled),
+        );
+        attrs.insert(
+            "skippy.scheduler.speculative_strategy".to_string(),
+            json!(request.speculative.effective_strategy),
+        );
+        attrs.insert(
+            "skippy.scheduler.hooks_enabled".to_string(),
+            json!(hooks_enabled),
+        );
+        self.telemetry.emit_debug("stage.scheduler_route", attrs);
+        eligible
+    }
+
+    fn run_scheduled_generation(
+        &self,
+        request: &LocalGeneration<'_>,
+        session_id: &str,
+        cache_stats: &mut GenerationCacheStats,
+        emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+    ) -> OpenAiResult<Duration> {
+        let timer = PhaseTimer::start();
+        let stats = self.iteration_scheduler.generate(
+            ScheduledGenerationRequest {
+                id: session_id,
+                prompt_tokens: request.prompt_token_ids,
+                max_tokens: request.max_tokens,
+                sampling: request.sampling.enabled.then_some(request.sampling),
+                chat_sampling_metadata: request.chat_sampling_metadata,
+                cancellation: request.cancellation,
+            },
+            emit_token,
+        )?;
+        cache_stats.suffix_prefill_tokens = saturating_u32(request.prompt_token_ids.len());
+        cache_stats.prompt_ms = stats.prompt_ms;
+        cache_stats.predicted_ms = stats.predicted_ms;
+        let mut attrs = self.openai_attrs(request.ids);
+        attrs.insert(
+            "skippy.scheduler.serving_path".to_string(),
+            json!("iteration"),
+        );
+        attrs.insert(
+            "skippy.scheduler.prompt_tokens".to_string(),
+            json!(request.prompt_token_ids.len()),
+        );
+        attrs.insert(
+            "skippy.scheduler.max_tokens".to_string(),
+            json!(request.max_tokens),
+        );
+        attrs.insert(
+            "skippy.scheduler.prompt_ms".to_string(),
+            json!(stats.prompt_ms),
+        );
+        attrs.insert(
+            "skippy.scheduler.predicted_ms".to_string(),
+            json!(stats.predicted_ms),
+        );
+        self.emit_openai_phase("stage.openai_scheduler_generation", timer, attrs);
+        Ok(Duration::from_secs_f64(
+            (stats.prompt_ms + stats.predicted_ms) / 1_000.0,
+        ))
+    }
+
     fn can_sample_whole_prompt_in_prefill(
         &self,
         request: &LocalGeneration<'_>,
@@ -246,16 +491,18 @@ impl StageOpenAiBackend {
         if request.max_tokens == 0 || request.prompt_token_ids.len() <= 1 || self.kv.is_some() {
             return Ok(false);
         }
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        runtime
-            .ensure_session_active(session_id)
-            .map_err(openai_backend_error)?;
-        let batch_size = runtime
-            .admit_session_batch_size(session_id)
-            .map_err(openai_backend_error)?;
+        let scheduler_session_id = session_id.to_string();
+        let batch_size = self.iteration_scheduler.execute_runtime(
+            "feature-prefill-admission",
+            move |runtime| {
+                runtime
+                    .ensure_session_active(&scheduler_session_id)
+                    .map_err(openai_backend_error)?;
+                runtime
+                    .admit_session_batch_size(&scheduler_session_id)
+                    .map_err(openai_backend_error)
+            },
+        )?;
         Ok(prompt_fits_single_prefill_sample(
             request.prompt_token_ids.len(),
             batch_size,
@@ -305,27 +552,26 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
-        let lock_timer = PhaseTimer::start();
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let runtime_lock_hold_timer = PhaseTimer::start();
-        let runtime_sessions_before = runtime.session_stats();
-        let (predicted, _) = runtime
-            .prefill_final_frame_sampled(
-                session_id,
-                request.prompt_token_ids,
-                &[],
-                request.sampling.enabled.then_some(request.sampling),
-                None,
-            )
-            .map_err(openai_backend_error)?;
-        let prompt_prefill_sample = Some(predicted);
+        let runtime_sessions_before = self
+            .iteration_scheduler
+            .execute_runtime("feature-prefill-stats-before", |runtime| {
+                Ok(runtime.session_stats())
+            })?;
+        let outcome = self.iteration_scheduler.execute_iteration(
+            session_id,
+            request.prompt_token_ids,
+            &[],
+            request.sampling.enabled.then_some(request.sampling),
+            true,
+            skippy_runtime::IterationBatchPhase::Prefill,
+        )?;
+        let prompt_prefill_sample = Some(outcome.predicted);
         cache_stats.suffix_prefill_tokens = saturating_u32(request.prompt_token_ids.len());
-        let runtime_sessions_after = runtime.session_stats();
-        let runtime_lock_hold_ms = runtime_lock_hold_timer.elapsed_ms();
+        let runtime_sessions_after = self
+            .iteration_scheduler
+            .execute_runtime("feature-prefill-stats-after", |runtime| {
+                Ok(runtime.session_stats())
+            })?;
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.prefill_token_count".to_string(),
@@ -341,11 +587,11 @@ impl StageOpenAiBackend {
         attrs.insert("skippy.kv.recorded_pages".to_string(), json!(0));
         attrs.insert(
             "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
+            json!(outcome.runtime_lock_wait_ms),
         );
         attrs.insert(
             "llama_stage.runtime_lock_hold_ms".to_string(),
-            json!(runtime_lock_hold_ms),
+            json!(outcome.runtime_lock_hold_ms),
         );
         attrs.insert("llama_stage.runtime_lock_acquires".to_string(), json!(1));
         Self::insert_runtime_session_stats(
@@ -370,107 +616,65 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<()> {
         let prefill_timer = PhaseTimer::start();
-        let prefill_tokens = &request.prompt_token_ids[..request.prompt_token_ids.len() - 1];
-        let lock_timer = PhaseTimer::start();
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let runtime_lock_hold_timer = PhaseTimer::start();
-        let runtime_sessions_before = runtime.session_stats();
-        let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
-            cache_stats.status = "miss";
-            self.lookup_and_restore_kv(
-                kv,
-                &mut runtime,
-                session_id,
-                request.ids,
-                prefill_tokens,
-                cache_stats,
-            )
-        } else {
-            (false, 0)
-        };
-        let mut decoded_prefill_suffix = false;
-        if restored_prefill_tokens < prefill_tokens.len() {
-            decoded_prefill_suffix = true;
-            if let Some(checkpoint_tokens) =
-                request
-                    .recurrent_cache_prefix_token_ids
-                    .filter(|checkpoint_tokens| {
-                        !checkpoint_tokens.is_empty()
-                            && checkpoint_tokens.len() <= prefill_tokens.len()
-                            && prefill_tokens.starts_with(checkpoint_tokens)
-                            && restored_prefill_tokens < checkpoint_tokens.len()
-                    })
-            {
-                runtime
-                    .prefill(session_id, &checkpoint_tokens[restored_prefill_tokens..])
-                    .map_err(openai_backend_error)?;
-                let _ = self.record_exact_state_at_tokens(
-                    &mut runtime,
-                    session_id,
-                    request.ids,
-                    checkpoint_tokens,
-                    "chat_prefix_checkpoint",
-                );
-                runtime
-                    .prefill(session_id, &prefill_tokens[checkpoint_tokens.len()..])
-                    .map_err(openai_backend_error)?;
-            } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
-                // Recurrent and full-state payloads cannot reconstruct a shorter
-                // shared prefix from the state at the end of the request. Stop
-                // at the near-tail grid boundary while prefilling and snapshot
-                // native state there; the final exact state is recorded by
-                // `record_and_evict_kv` below. One checkpoint bounds both the
-                // extra prefill split and the very large recurrent-state export.
+        let prefill_tokens =
+            Arc::<[i32]>::from(&request.prompt_token_ids[..request.prompt_token_ids.len() - 1]);
+        let recurrent_cache_prefix_token_ids = request
+            .recurrent_cache_prefix_token_ids
+            .map(<[i32]>::to_vec);
+        let max_tokens = request.max_tokens;
+        let (cache_affinity, refresh_cache_affinity) = match self.kv.as_ref() {
+            Some(kv) => {
                 let base = self.local_kv_message_base(session_id, request.ids);
-                let checkpoint =
-                    kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
-                if let Some(identity) = checkpoint.filter(|identity| {
-                    identity.identity.token_count as usize > restored_prefill_tokens
-                }) {
-                    let boundary = identity.identity.token_count as usize;
-                    runtime
-                        .prefill(
-                            session_id,
-                            &prefill_tokens[restored_prefill_tokens..boundary],
-                        )
-                        .map_err(openai_backend_error)?;
-                    kv.record_exact_state(&mut runtime, session_id, &identity)
-                        .map_err(openai_backend_error)?;
-                    runtime
-                        .prefill(session_id, &prefill_tokens[boundary..])
-                        .map_err(openai_backend_error)?;
-                } else {
-                    runtime
-                        .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
-                        .map_err(openai_backend_error)?;
-                }
-            } else {
-                runtime
-                    .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
-                    .map_err(openai_backend_error)?;
+                let identities =
+                    kv.lookup_identities(&self.config, &base, 0, prefill_tokens.as_ref());
+                let affinity = kv.peek_cache_affinity(&self.config, &identities);
+                let kv = kv.clone();
+                let config = self.config.clone();
+                let refresh = Box::new(move || kv.peek_cache_affinity(&config, &identities))
+                    as Box<dyn Fn() -> skippy_scheduler::CacheAffinity + Send>;
+                (affinity, Some(refresh))
             }
-        }
-        cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
-        cache_stats.suffix_prefill_tokens =
-            saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
-        let record = self.record_and_evict_kv(
-            &mut runtime,
-            session_id,
-            request.ids,
-            prefill_tokens,
+            None => (skippy_scheduler::CacheAffinity::default(), None),
+        };
+        let scheduler_backend = self.clone();
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_ids = request.ids.clone();
+        let mut scheduler_cache_stats = std::mem::take(cache_stats);
+        let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
+            "feature-kv-restore-prefill-record",
+            cache_affinity,
+            Arc::clone(&prefill_tokens),
+            0,
+            refresh_cache_affinity,
+            move |runtime| {
+                let outcome = scheduler_backend.restore_or_record_kv_on_runtime(
+                    runtime,
+                    &scheduler_ids,
+                    &scheduler_session_id,
+                    prefill_tokens.as_ref(),
+                    recurrent_cache_prefix_token_ids.as_deref(),
+                    max_tokens,
+                    &mut scheduler_cache_stats,
+                )?;
+                Ok((outcome, scheduler_cache_stats))
+            },
+        )?;
+        let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+        let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+        let (outcome, updated_cache_stats) = outcome.value;
+        *cache_stats = updated_cache_stats;
+        let KvRestoreOutcome {
+            runtime_sessions_before,
+            runtime_sessions_after,
             restored_prefill,
-            decoded_prefill_suffix,
-        );
-        let runtime_sessions_after = runtime.session_stats();
-        let runtime_lock_hold_ms = runtime_lock_hold_timer.elapsed_ms();
+            restored_prefill_tokens,
+            capacity,
+            record,
+        } = outcome;
         let mut attrs = self.openai_attrs(request.ids);
         attrs.insert(
             "llama_stage.prefill_token_count".to_string(),
-            json!(prefill_tokens.len()),
+            json!(request.prompt_token_ids.len().saturating_sub(1)),
         );
         attrs.insert("llama_stage.prefill_chunk_count".to_string(), json!(1));
         attrs.insert(
@@ -483,12 +687,19 @@ impl StageOpenAiBackend {
         );
         attrs.insert(
             "skippy.kv.prefill_suffix_tokens".to_string(),
-            json!(prefill_tokens.len().saturating_sub(restored_prefill_tokens)),
+            json!(
+                request
+                    .prompt_token_ids
+                    .len()
+                    .saturating_sub(1)
+                    .saturating_sub(restored_prefill_tokens)
+            ),
         );
         attrs.insert(
             "skippy.kv.recorded_pages".to_string(),
             json!(record.resident_recorded_pages),
         );
+        insert_resident_capacity_attrs(&mut attrs, &capacity);
         attrs.insert(
             "llama_stage.runtime_lock_wait_ms".to_string(),
             json!(runtime_lock_wait_ms),
@@ -520,10 +731,145 @@ impl StageOpenAiBackend {
                 record.proactive_evicted_tokens,
             ),
         );
+        let mut capacity_attrs = self.openai_attrs(request.ids);
+        insert_resident_capacity_attrs(&mut capacity_attrs, &capacity);
+        self.telemetry
+            .emit("stage.openai_kv_capacity_decision", capacity_attrs);
+        if !capacity.admitted {
+            return Err(resident_capacity_admission_error(&capacity));
+        }
         if let Some(error) = record.proactive_eviction_error {
             return Err(openai_backend_error(error));
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn restore_or_record_kv_on_runtime(
+        &self,
+        runtime: &mut RuntimeState,
+        ids: &OpenAiGenerationIds,
+        session_id: &str,
+        prefill_tokens: &[i32],
+        recurrent_cache_prefix_token_ids: Option<&[i32]>,
+        max_tokens: u32,
+        cache_stats: &mut GenerationCacheStats,
+    ) -> OpenAiResult<KvRestoreOutcome> {
+        let runtime_sessions_before = runtime.session_stats();
+        let capacity = if let Some(kv) = self.kv.as_ref() {
+            let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
+            let target_free_tokens =
+                decode_batch_tokens.saturating_add(u64::from(max_tokens).min(decode_batch_tokens));
+            kv.admit_resident_capacity(
+                runtime,
+                session_id,
+                prefill_tokens.len() as u64,
+                decode_batch_tokens,
+                target_free_tokens,
+            )
+            .map_err(openai_backend_error)?
+        } else {
+            crate::kv_integration::ResidentCapacityDecision {
+                admitted: true,
+                ..crate::kv_integration::ResidentCapacityDecision::default()
+            }
+        };
+        if !capacity.admitted {
+            return Ok(KvRestoreOutcome {
+                runtime_sessions_before,
+                runtime_sessions_after: runtime.session_stats(),
+                restored_prefill: false,
+                restored_prefill_tokens: 0,
+                capacity,
+                record: KvRecordResult::default(),
+            });
+        }
+        let (restored_prefill, restored_prefill_tokens) = if let Some(kv) = self.kv.as_ref() {
+            cache_stats.status = "miss";
+            self.lookup_and_restore_kv(kv, runtime, session_id, ids, prefill_tokens, cache_stats)
+        } else {
+            (false, 0)
+        };
+        let mut decoded_prefill_suffix = false;
+        if restored_prefill_tokens < prefill_tokens.len() {
+            decoded_prefill_suffix = true;
+            if let Some(checkpoint_tokens) =
+                recurrent_cache_prefix_token_ids.filter(|checkpoint_tokens| {
+                    !checkpoint_tokens.is_empty()
+                        && checkpoint_tokens.len() <= prefill_tokens.len()
+                        && prefill_tokens.starts_with(checkpoint_tokens)
+                        && restored_prefill_tokens < checkpoint_tokens.len()
+                })
+            {
+                runtime
+                    .prefill(session_id, &checkpoint_tokens[restored_prefill_tokens..])
+                    .map_err(openai_backend_error)?;
+                let _ = self.record_exact_state_at_tokens(
+                    runtime,
+                    session_id,
+                    ids,
+                    checkpoint_tokens,
+                    "chat_prefix_checkpoint",
+                );
+                runtime
+                    .prefill(session_id, &prefill_tokens[checkpoint_tokens.len()..])
+                    .map_err(openai_backend_error)?;
+            } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
+                // Recurrent and full-state payloads cannot reconstruct a shorter
+                // shared prefix from the state at the end of the request. Stop
+                // at the near-tail grid boundary while prefilling and snapshot
+                // native state there; the final exact state is recorded by
+                // `record_and_evict_kv` below. One checkpoint bounds both the
+                // extra prefill split and the very large recurrent-state export.
+                let base = self.local_kv_message_base(session_id, ids);
+                let checkpoint =
+                    kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);
+                if let Some(identity) = checkpoint.filter(|identity| {
+                    identity.identity.token_count as usize > restored_prefill_tokens
+                }) {
+                    let boundary = identity.identity.token_count as usize;
+                    runtime
+                        .prefill(
+                            session_id,
+                            &prefill_tokens[restored_prefill_tokens..boundary],
+                        )
+                        .map_err(openai_backend_error)?;
+                    kv.record_exact_state(runtime, session_id, &identity)
+                        .map_err(openai_backend_error)?;
+                    runtime
+                        .prefill(session_id, &prefill_tokens[boundary..])
+                        .map_err(openai_backend_error)?;
+                } else {
+                    runtime
+                        .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
+                        .map_err(openai_backend_error)?;
+                }
+            } else {
+                runtime
+                    .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
+                    .map_err(openai_backend_error)?;
+            }
+        }
+        cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
+        cache_stats.suffix_prefill_tokens =
+            saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
+        let record = self.record_and_evict_kv(
+            runtime,
+            session_id,
+            ids,
+            prefill_tokens,
+            restored_prefill,
+            decoded_prefill_suffix,
+        );
+        let runtime_sessions_after = runtime.session_stats();
+        Ok(KvRestoreOutcome {
+            runtime_sessions_before,
+            runtime_sessions_after,
+            restored_prefill,
+            restored_prefill_tokens,
+            capacity,
+            record,
+        })
     }
 
     fn lookup_and_restore_kv(
@@ -632,10 +978,6 @@ impl StageOpenAiBackend {
                         attrs.insert(
                             "skippy.kv.resident_seq_id".to_string(),
                             json!(restored.seq_id),
-                        );
-                        attrs.insert(
-                            "skippy.kv.resident_lane_hit".to_string(),
-                            json!(restored.borrowed),
                         );
                         self.telemetry
                             .emit("stage.openai_kv_lookup_decision", attrs);
@@ -846,29 +1188,32 @@ impl StageOpenAiBackend {
         else {
             return false;
         };
-        let lock_timer = PhaseTimer::start();
         let mut attrs = self.openai_attrs(request.ids);
-        let Ok(mut runtime) = self.runtime.lock() else {
+        let scheduler_backend = self.clone();
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_ids = request.ids.clone();
+        let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
+            "feature-post-decode-checkpoint",
+            move |runtime| {
+                Ok(scheduler_backend.record_exact_state_at_tokens(
+                    runtime,
+                    &scheduler_session_id,
+                    &scheduler_ids,
+                    &checkpoint_tokens,
+                    "post_decode_checkpoint",
+                ))
+            },
+        ) else {
             attrs.insert(
                 "skippy.kv.decision".to_string(),
-                json!("post_decode_checkpoint_runtime_lock_poisoned"),
-            );
-            attrs.insert(
-                "llama_stage.runtime_lock_wait_ms".to_string(),
-                json!(lock_timer.elapsed_ms()),
+                json!("post_decode_checkpoint_scheduler_error"),
             );
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
             return false;
         };
-        let runtime_lock_wait_ms = lock_timer.elapsed_ms();
-        let recorded = self.record_exact_state_at_tokens(
-            &mut runtime,
-            session_id,
-            request.ids,
-            &checkpoint_tokens,
-            "post_decode_checkpoint",
-        );
+        let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+        let recorded = outcome.value;
         attrs.insert(
             "skippy.kv.decision".to_string(),
             json!(if recorded {
@@ -990,13 +1335,20 @@ impl StageOpenAiBackend {
         prompt_token_count: usize,
         sampling: Option<&SamplingConfig>,
     ) -> OpenAiResult<()> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        runtime
-            .configure_chat_sampling(session_id, metadata, prompt_token_count as u64, sampling)
-            .map_err(openai_backend_error)
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_metadata = metadata.to_string();
+        let scheduler_sampling = sampling.cloned();
+        self.iteration_scheduler
+            .execute_runtime("feature-chat-sampling", move |runtime| {
+                runtime
+                    .configure_chat_sampling(
+                        &scheduler_session_id,
+                        &scheduler_metadata,
+                        prompt_token_count as u64,
+                        scheduler_sampling.as_ref(),
+                    )
+                    .map_err(openai_backend_error)
+            })
     }
 
     fn configure_chat_sampling_if_needed(
@@ -1056,13 +1408,13 @@ impl StageOpenAiBackend {
             && !generation_hooks_active
             && greedy_linear_proposal_admitted(request.sampling, request.chat_sampling_metadata);
         let linear_proposal_max_tokens = if linear_proposal_enabled {
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            runtime
-                .admit_session_batch_size(session_id)
-                .map_err(openai_backend_error)?
+            let scheduler_session_id = session_id.to_string();
+            self.iteration_scheduler
+                .execute_runtime("linear-proposal-admission", move |runtime| {
+                    runtime
+                        .admit_session_batch_size(&scheduler_session_id)
+                        .map_err(openai_backend_error)
+                })?
                 .saturating_sub(1)
         } else {
             0
@@ -1109,7 +1461,11 @@ impl StageOpenAiBackend {
         })
     }
 
-    fn run_decode_loop(
+    /// Drives feature-specific proposal/checkpoint state while the iteration
+    /// scheduler worker remains the sole owner of target runtime execution.
+    /// This is not a fallback serving scheduler: native MTP, linear proposals,
+    /// hooks, and cache operations submit their target work to that worker.
+    fn run_scheduler_feature_loop(
         &self,
         request: &mut LocalGeneration<'_>,
         session_id: &str,
@@ -1236,6 +1592,86 @@ pub(super) fn decode_native_mtp(
             proposal_compute_us: draft.proposal_compute_us,
         }),
     ))
+}
+
+#[cfg(test)]
+#[test]
+fn resident_capacity_attrs_report_bounded_rejection_evidence() {
+    let mut attrs = BTreeMap::new();
+    insert_resident_capacity_attrs(
+        &mut attrs,
+        &crate::kv_integration::ResidentCapacityDecision {
+            enabled: true,
+            capacity_known: true,
+            admitted: false,
+            capacity_tokens: 100,
+            active_tokens: 60,
+            pinned_tokens: 30,
+            request_tokens: 8,
+            minimum_free_tokens: 5,
+            target_free_tokens: 10,
+            projected_free_tokens: 2,
+            admission_deficit_tokens: 3,
+            ..crate::kv_integration::ResidentCapacityDecision::default()
+        },
+    );
+
+    assert_eq!(
+        attrs.get(attr_key::KV_CAPACITY_STATUS),
+        Some(&json!("rejected"))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_CAPACITY_ADMISSION_DEFICIT_TOKENS),
+        Some(&json!(3))
+    );
+    assert!(!attrs.contains_key(attr_key::REQUEST_ID));
+    assert!(!attrs.contains_key(attr_key::SESSION_ID));
+}
+
+#[cfg(test)]
+#[test]
+fn default_local_text_serving_selects_iteration_scheduler() {
+    assert!(scheduler_generation_driver_eligible(
+        128, false, false, false, false, "disabled", false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        0, false, false, false, false, "disabled", false,
+    ));
+}
+
+#[cfg(test)]
+#[test]
+fn speculative_and_extended_serving_paths_select_the_scheduler_feature_driver() {
+    assert!(!scheduler_generation_driver_eligible(
+        128, true, false, false, false, "disabled", false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        128, false, true, false, false, "disabled", false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        128, false, false, true, false, "disabled", false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        128,
+        false,
+        false,
+        false,
+        true,
+        "native-mtp",
+        false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        128,
+        false,
+        false,
+        false,
+        false,
+        "ngram-cache",
+        false,
+    ));
+    assert!(!scheduler_generation_driver_eligible(
+        128, false, false, false, false, "disabled", true,
+    ));
 }
 
 #[cfg(test)]

@@ -1,22 +1,18 @@
-use std::{
-    collections::BTreeMap,
-    net::TcpStream,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{collections::BTreeMap, net::TcpStream, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
-        StageReply, StageReplyStats, StageStateHeader, StageWireMessage, WireActivationDType,
-        WireMessageKind, WireReplyKind,
+        StageReply, StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind,
+        WireReplyKind,
     },
 };
 
 use crate::{
-    kv_integration::KvStageIntegration, runtime_state::RuntimeState, telemetry::Telemetry,
+    frontend::iteration_scheduler::IterationScheduler, kv_integration::KvStageIntegration,
+    telemetry::Telemetry,
 };
 
 use super::{
@@ -62,14 +58,13 @@ fn restore_prefill_decode_route(
 pub(super) fn handle_binary_restore_prefill_decode_control(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
     wire_session_id: u64,
     mut message: StageWireMessage,
     downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     activation_width: i32,
     control_started: Instant,
@@ -86,7 +81,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             topology,
             message.request_id,
             message.session_id,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_sinks,
             prediction_return_streams,
@@ -94,15 +88,25 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     }
 
     let (prefix_tokens, current_token) = restore_decode_sideband(&message)?;
-    let local = maybe_prefix_cache_control(
-        config,
-        runtime,
-        kv,
-        telemetry,
-        session_id,
-        &message,
-        prefix_tokens,
-    );
+    let lookup_config = config.clone();
+    let lookup_kv = kv.cloned();
+    let lookup_telemetry = telemetry.clone();
+    let lookup_session_id = session_id.to_string();
+    let lookup_message = message.clone();
+    let lookup_tokens = prefix_tokens.to_vec();
+    let local = iteration_scheduler
+        .execute_runtime("binary-restore-prefix", move |runtime| {
+            Ok(maybe_prefix_cache_control(
+                &lookup_config,
+                runtime,
+                lookup_kv.as_ref(),
+                &lookup_telemetry,
+                &lookup_session_id,
+                &lookup_message,
+                &lookup_tokens,
+            ))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     control_stats.merge(local.stats);
     let route = restore_prefill_decode_route(local.hit, has_downstream);
     if route == RestorePrefillDecodeRoute::DirectMiss {
@@ -119,7 +123,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             config,
             topology,
             &message,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_streams,
             StageReply {
@@ -135,72 +138,66 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         return Ok(());
     }
 
-    let input = input_activation_frame(config, topology, &mut message, activation_width)?;
+    let input = input_activation_frame(config, topology, &mut message)?;
     let decode_message = restore_prefill_decode_as_decode_message(&message, current_token);
     let compute_started = Instant::now();
-    let (predicted_token, output, runtime_lock_wait_ms, runtime_lock_hold_ms, proactive_eviction) = {
-        let lock_started = Instant::now();
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-        let runtime_lock_wait_ms = elapsed_ms(lock_started);
-        let lock_hold_started = Instant::now();
-        if let Some(metadata) = message.chat_sampling_metadata.as_deref() {
-            let sampling = runtime_sampling_config(message.sampling.as_ref());
-            runtime
-                .configure_chat_sampling(
-                    session_id,
-                    metadata,
-                    message.state.prompt_token_count.max(0) as u64,
-                    sampling.as_ref(),
-                )
-                .context("configure restore-decode chat sampling")?;
-        }
-        let proactive_eviction = evict_binary_resident_prefix_for_decode(
-            &mut runtime,
-            kv,
-            session_id,
-            BinaryProactiveEvictionPlan {
-                required: true,
-                ensure_session_before_eviction: false,
-                target_tokens: None,
-            },
-        )?;
-        let (predicted, _, output, _) = run_binary_stage_message(
-            &mut runtime,
-            session_id,
-            &decode_message,
-            &[current_token],
-            input.as_ref(),
-            BinaryStageExecutionOptions::new(
-                route == RestorePrefillDecodeRoute::DirectHit,
-                stage_output_activation_capacity(
-                    config,
-                    decode_message.token_count,
-                    activation_width,
-                )?,
-                native_mtp_enabled,
-            ),
-        )
-        .context("execute restore-decode stage message")?;
-        (
-            predicted,
-            output,
-            runtime_lock_wait_ms,
-            elapsed_ms(lock_hold_started),
-            proactive_eviction,
-        )
-    };
+    let output_capacity =
+        stage_output_activation_capacity(config, decode_message.token_count, activation_width)?;
+    let scheduler_session_id = session_id.to_string();
+    let scheduler_message = message.clone();
+    let scheduler_decode_message = decode_message.clone();
+    let scheduler_kv = kv.cloned();
+    let sample = route == RestorePrefillDecodeRoute::DirectHit;
+    let outcome = iteration_scheduler
+        .execute_runtime_timed("binary-restore-prefill-decode", move |runtime| {
+            if let Some(metadata) = scheduler_message.chat_sampling_metadata.as_deref() {
+                let sampling = runtime_sampling_config(scheduler_message.sampling.as_ref());
+                runtime
+                    .configure_chat_sampling(
+                        &scheduler_session_id,
+                        metadata,
+                        scheduler_message.state.prompt_token_count.max(0) as u64,
+                        sampling.as_ref(),
+                    )
+                    .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
+            }
+            let proactive_eviction = evict_binary_resident_prefix_for_decode(
+                runtime,
+                scheduler_kv.as_ref(),
+                &scheduler_session_id,
+                BinaryProactiveEvictionPlan {
+                    required: true,
+                    ensure_session_before_eviction: false,
+                    target_tokens: None,
+                },
+            )
+            .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
+            let (predicted, _, output, _) = run_binary_stage_message(
+                runtime,
+                &scheduler_session_id,
+                &scheduler_decode_message,
+                &[current_token],
+                input.as_ref(),
+                BinaryStageExecutionOptions::new(sample, output_capacity, native_mtp_enabled),
+            )
+            .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
+            Ok((predicted, output, proactive_eviction))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
+        .context("execute scheduler-owned restore-decode stage message")?;
+    let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+    let runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+    let (predicted_token, output, proactive_eviction) = outcome.value;
     let compute_ms = elapsed_ms(compute_started);
     emit_binary_proactive_eviction(telemetry, &proactive_eviction);
 
     if route == RestorePrefillDecodeRoute::ForwardHit {
         let downstream = downstream.expect("forward route requires downstream stage");
-        let forwarded =
-            forwarded_stage_message_timed(config, &message, &output, wire_dtype, activation_width)
-                .context("forward restore-decode activation")?;
+        let forwarded = forwarded_stage_message_timed(config, &message, &output, activation_width)
+            .context("forward restore-decode activation")?;
         write_stage_message_conditioned(
             &mut *downstream,
             &forwarded.message,
-            wire_dtype,
             downstream_wire_condition,
         )
         .context("forward restore-decode downstream")?;
@@ -222,19 +219,25 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         return Ok(());
     }
 
-    {
-        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-        let record = maybe_record_binary_full_prefill(
-            config,
-            &mut runtime,
-            kv,
-            telemetry,
-            session_id,
-            &message,
-            message.tokens.as_slice(),
-        );
-        add_binary_record_stats(&mut control_stats, config, &record);
-    }
+    let record_config = config.clone();
+    let record_kv = kv.cloned();
+    let record_telemetry = telemetry.clone();
+    let record_session_id = session_id.to_string();
+    let record_message = message.clone();
+    let record = iteration_scheduler
+        .execute_runtime("binary-restore-record", move |runtime| {
+            Ok(maybe_record_binary_full_prefill(
+                &record_config,
+                runtime,
+                record_kv.as_ref(),
+                &record_telemetry,
+                &record_session_id,
+                &record_message,
+                record_message.tokens.as_slice(),
+            ))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
+    add_binary_record_stats(&mut control_stats, config, &record);
     emit_restore_decode_control(
         config,
         telemetry,
@@ -254,7 +257,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         config,
         topology,
         &message,
-        wire_dtype,
         downstream_connect_timeout_secs,
         prediction_return_streams,
         StageReply {
@@ -325,7 +327,6 @@ fn send_restore_decode_direct_reply(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-    wire_dtype: WireActivationDType,
     downstream_connect_timeout_secs: u64,
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
     reply: StageReply,
@@ -339,7 +340,6 @@ fn send_restore_decode_direct_reply(
         config,
         topology,
         message,
-        wire_dtype,
         downstream_connect_timeout_secs,
         reply,
     )
@@ -349,7 +349,6 @@ fn send_one_off_direct_return(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-    wire_dtype: WireActivationDType,
     downstream_connect_timeout_secs: u64,
     reply: StageReply,
 ) -> Result<()> {
@@ -358,7 +357,6 @@ fn send_one_off_direct_return(
         topology,
         message.request_id,
         message.session_id,
-        wire_dtype,
         downstream_connect_timeout_secs,
     )?;
     direct_return::send_direct_prediction_return(&mut stream, reply)
@@ -385,11 +383,7 @@ pub(super) fn restore_prefill_decode_as_decode_message(
     decode.positions.clear();
     decode.activation.clear();
     decode.raw_bytes.clear();
-    decode.state.phase = StageStateHeader::new(
-        WireMessageKind::DecodeEmbd,
-        message.state.dtype().unwrap_or(WireActivationDType::F32),
-    )
-    .phase;
+    decode.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
     decode.state.current_token = current_token;
     decode
 }
@@ -431,10 +425,7 @@ mod tests {
             seed: 42,
             ..StageSamplingConfig::default()
         };
-        let mut state = StageStateHeader::new(
-            WireMessageKind::TryRestorePrefillDecode,
-            WireActivationDType::F16,
-        );
+        let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode);
         state.prompt_token_count = 4;
         state.decode_step = 0;
         state.current_token = 104;

@@ -33,8 +33,8 @@ pub use crypto::{
     verify_release_attestation,
 };
 pub use logging::{
-    LoggingRuntimeState, OperationalAuditContext, OperationalAuditRecord, OperationalAuditSeverity,
-    OperationalAuditSubjectKind,
+    LoggingRuntimeState, OperationalAuditContext, OperationalAuditPathType, OperationalAuditRecord,
+    OperationalAuditSeverity, OperationalAuditSubjectKind,
 };
 pub use mesh::requirements::{
     BootstrapStatus, DIRECT_NODE_ADMISSION_PROOF_MAX_CLOCK_SKEW_MS, DirectNodeAdmissionProof,
@@ -114,9 +114,32 @@ pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;
 pub const RELEASE_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
 pub const VERSION: &str = RELEASE_VERSION;
 
+/// Configure the Hugging Face TLS provider before any one-shot or runtime
+/// client is constructed.
+pub fn configure_hf_tls_provider() {
+    let _ = model_hf::configure_hf_tls_provider();
+}
+
 pub use runtime::{
     MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
 };
+
+/// Configure the ggml Metal pipeline cache directory.
+///
+/// Point the patched ggml Metal backend at a process-wide on-disk pipeline
+/// cache before any native runtime library is loaded. Embedded hosts and
+/// binaries must call this exactly once from synchronous bootstrap, before
+/// the Tokio runtime is constructed; see
+/// `inference::skippy::metal_pipeline_cache` for the full contract. An
+/// explicit `GGML_METAL_PIPELINE_CACHE_DIR` set by the user wins.
+///
+/// # Safety
+///
+/// The caller must ensure no other thread can read or write the process
+/// environment for the duration of this call.
+pub unsafe fn configure_metal_pipeline_cache() {
+    unsafe { inference::skippy::metal_pipeline_cache::configure_metal_pipeline_cache() }
+}
 
 pub async fn run() -> Result<()> {
     initialize_host_runtime().await?;
@@ -164,6 +187,7 @@ pub async fn shutdown_logging_for_one_shot_cli() -> bool {
 }
 
 pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Result<()> {
+    configure_hf_tls_provider();
     if options.plugin.is_some() {
         return Ok(());
     }

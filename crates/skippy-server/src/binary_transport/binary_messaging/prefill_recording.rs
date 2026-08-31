@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use skippy_protocol::{StageConfig, binary::StageWireMessage};
 use skippy_runtime::ActivationFrame;
@@ -46,7 +46,7 @@ fn prefill_record_plan<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_completed_prefill(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -95,7 +95,7 @@ pub(super) fn record_completed_prefill(
 #[allow(clippy::too_many_arguments)]
 fn record_full_prefill_with_activations(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    runtime: &mut RuntimeState,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     session_id: &str,
@@ -104,17 +104,9 @@ fn record_full_prefill_with_activations(
     activation_width: i32,
     output: &ActivationFrame,
 ) -> BinaryKvRecordResult {
-    let mut runtime = runtime.lock().expect("runtime lock poisoned");
     let mut record = maybe_record_binary_full_prefill(
-        config,
-        &mut runtime,
-        kv,
-        telemetry,
-        session_id,
-        message,
-        tokens,
+        config, runtime, kv, telemetry, session_id, message, tokens,
     );
-    drop(runtime);
     if let Some(kv) = kv
         && config.downstream.is_some()
     {

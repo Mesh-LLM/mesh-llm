@@ -58,7 +58,6 @@ pub(super) fn stage_runtime_status_from_snapshot(
         state: status.state,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device,
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -95,7 +94,6 @@ pub(super) fn stage_snapshot_from_runtime_status(
         state,
         bind_addr: status.bind_addr.clone(),
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device.clone(),
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -214,12 +212,19 @@ pub(super) fn stage_load_to_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         projector_path: load.projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_to_proto(load.glm_dsa_policy) as i32,
+        generation_signal_window: load.generation_signal_window,
         selected_device: load.selected_device.map(stage_device_to_proto),
         bind_addr: load.bind_addr,
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: stage_wire_dtype_to_proto(load.wire_dtype) as i32,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
+        continuous_batching: Some(load.continuous_batching),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -228,6 +233,7 @@ pub(super) fn stage_load_to_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
+        runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -246,6 +252,30 @@ pub(super) fn stage_load_to_proto(
         },
         upstream: load.upstream.map(stage_peer_to_proto),
         downstream: load.downstream.map(stage_peer_to_proto),
+    }
+}
+
+fn stage_runtime_settings_to_proto(
+    settings: crate::inference::skippy::StageLoadRuntimeSettings,
+) -> skippy_stage_proto::StageLoadRuntimeSettings {
+    skippy_stage_proto::StageLoadRuntimeSettings {
+        repack: Some(settings.repack),
+        op_offload: settings.op_offload,
+        no_host_buffer: Some(settings.no_host_buffer),
+        check_tensors: Some(settings.check_tensors),
+        direct_io: Some(settings.direct_io),
+        main_gpu: settings.main_gpu,
+        split_mode: Some(match settings.split_mode {
+            skippy_protocol::SplitMode::Auto => -1,
+            skippy_protocol::SplitMode::None => 0,
+            skippy_protocol::SplitMode::Layer => 1,
+            skippy_protocol::SplitMode::Row => 2,
+            skippy_protocol::SplitMode::Tensor => 3,
+        }),
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
     }
 }
 
@@ -385,6 +415,13 @@ pub(super) fn stage_load_from_proto(
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
         projector_path: load.projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_from_proto(load.glm_dsa_policy),
+        generation_signal_window: load.generation_signal_window,
         selected_device: load
             .selected_device
             .map(stage_device_from_proto)
@@ -392,13 +429,13 @@ pub(super) fn stage_load_from_proto(
         bind_addr: load.bind_addr,
         activation_width: i32::try_from(load.activation_width)
             .context("stage activation_width exceeds i32")?,
-        wire_dtype: stage_wire_dtype_from_proto(load.wire_dtype),
         ctx_size: load.ctx_size,
         lane_count: if load.lane_count == 0 {
             4
         } else {
             load.lane_count
         },
+        continuous_batching: load.continuous_batching.unwrap_or(true),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -407,6 +444,7 @@ pub(super) fn stage_load_from_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
+        runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings),
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -420,6 +458,33 @@ pub(super) fn stage_load_from_proto(
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
     })
+}
+
+fn stage_runtime_settings_from_proto(
+    settings: Option<skippy_stage_proto::StageLoadRuntimeSettings>,
+) -> crate::inference::skippy::StageLoadRuntimeSettings {
+    let Some(settings) = settings else {
+        return crate::inference::skippy::StageLoadRuntimeSettings::default();
+    };
+    crate::inference::skippy::StageLoadRuntimeSettings {
+        repack: settings.repack.unwrap_or(false),
+        op_offload: settings.op_offload,
+        no_host_buffer: settings.no_host_buffer.unwrap_or(false),
+        check_tensors: settings.check_tensors.unwrap_or(false),
+        direct_io: settings.direct_io.unwrap_or(false),
+        main_gpu: settings.main_gpu,
+        split_mode: match settings.split_mode.unwrap_or(-1) {
+            0 => skippy_protocol::SplitMode::None,
+            1 => skippy_protocol::SplitMode::Layer,
+            2 => skippy_protocol::SplitMode::Row,
+            3 => skippy_protocol::SplitMode::Tensor,
+            _ => skippy_protocol::SplitMode::Auto,
+        },
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
+    }
 }
 
 pub(super) fn stage_coordinator_claim_from_proto(
@@ -484,23 +549,6 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> skippy_protocol::LoadMod
     }
 }
 
-pub(super) fn stage_wire_dtype_from_proto(value: i32) -> crate::inference::skippy::StageWireDType {
-    match skippy_stage_proto::StageWireDType::try_from(value)
-        .unwrap_or(skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified)
-    {
-        skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified
-        | skippy_stage_proto::StageWireDType::StageWireDtypeF16 => {
-            crate::inference::skippy::StageWireDType::F16
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeF32 => {
-            crate::inference::skippy::StageWireDType::F32
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeQ8 => {
-            crate::inference::skippy::StageWireDType::Q8
-        }
-    }
-}
-
 pub(super) fn stage_control_unavailable_response(
     request: crate::inference::skippy::StageControlRequest,
 ) -> crate::inference::skippy::StageControlResponse {
@@ -538,7 +586,6 @@ pub(super) fn stage_control_unavailable_response(
                 state: crate::inference::skippy::StageRuntimeState::Failed,
                 bind_addr: String::new(),
                 activation_width: 0,
-                wire_dtype: crate::inference::skippy::StageWireDType::F16,
                 selected_device: None,
                 ctx_size: 0,
                 lane_count: 0,
@@ -636,7 +683,6 @@ pub(super) fn stage_status_from_load(
         state,
         bind_addr: load.bind_addr.clone(),
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -1058,7 +1104,6 @@ pub(super) fn stage_status_to_proto(
         state: stage_runtime_state_to_proto(status.state) as i32,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_to_proto(status.wire_dtype) as i32,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
         selected_device: status.selected_device.map(stage_device_to_proto),
@@ -1096,7 +1141,6 @@ pub(super) fn stage_status_from_proto(
         state: stage_runtime_state_from_proto(status.state),
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_from_proto(status.wire_dtype),
         selected_device: status
             .selected_device
             .map(stage_device_from_proto)
@@ -1156,6 +1200,24 @@ pub(super) fn stage_flash_attn_type_from_proto(value: i32) -> skippy_protocol::F
         skippy_stage_proto::StageFlashAttnType::Enabled => {
             skippy_protocol::FlashAttentionType::Enabled
         }
+    }
+}
+
+fn stage_glm_dsa_policy_to_proto(
+    value: skippy_protocol::GlmDsaPolicy,
+) -> skippy_stage_proto::StageGlmDsaPolicy {
+    match value {
+        skippy_protocol::GlmDsaPolicy::Auto => skippy_stage_proto::StageGlmDsaPolicy::Auto,
+        skippy_protocol::GlmDsaPolicy::V1 => skippy_stage_proto::StageGlmDsaPolicy::V1,
+    }
+}
+
+fn stage_glm_dsa_policy_from_proto(value: i32) -> skippy_protocol::GlmDsaPolicy {
+    match skippy_stage_proto::StageGlmDsaPolicy::try_from(value)
+        .unwrap_or(skippy_stage_proto::StageGlmDsaPolicy::Auto)
+    {
+        skippy_stage_proto::StageGlmDsaPolicy::Auto => skippy_protocol::GlmDsaPolicy::Auto,
+        skippy_stage_proto::StageGlmDsaPolicy::V1 => skippy_protocol::GlmDsaPolicy::V1,
     }
 }
 
@@ -1270,19 +1332,85 @@ pub(super) fn stage_preparation_state_to_proto(
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
 
-pub(super) fn stage_wire_dtype_to_proto(
-    dtype: crate::inference::skippy::StageWireDType,
-) -> skippy_stage_proto::StageWireDType {
-    match dtype {
-        crate::inference::skippy::StageWireDType::F32 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF32
+    #[derive(Clone, PartialEq, Message)]
+    struct LegacyLoadStage {}
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatLoadStage {
+        #[prost(message, optional, tag = "43")]
+        runtime_settings: Option<CompatRuntimeSettings>,
+    }
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatRuntimeSettings {
+        #[prost(bool, optional, tag = "1")]
+        repack: Option<bool>,
+        #[prost(bool, optional, tag = "2")]
+        op_offload: Option<bool>,
+        #[prost(bool, optional, tag = "3")]
+        no_host_buffer: Option<bool>,
+        #[prost(bool, optional, tag = "4")]
+        check_tensors: Option<bool>,
+        #[prost(bool, optional, tag = "5")]
+        direct_io: Option<bool>,
+        #[prost(uint32, optional, tag = "6")]
+        main_gpu: Option<u32>,
+        #[prost(int32, optional, tag = "7")]
+        split_mode: Option<i32>,
+        #[prost(bool, optional, tag = "8")]
+        kv_offload: Option<bool>,
+        #[prost(bool, optional, tag = "9")]
+        kv_unified: Option<bool>,
+        #[prost(bool, optional, tag = "10")]
+        swa_full: Option<bool>,
+        #[prost(uint32, optional, tag = "11")]
+        cache_idle_slots: Option<u32>,
+    }
+
+    #[test]
+    fn stage_load_wire_round_trip_preserves_runtime_controls() {
+        let settings = CompatRuntimeSettings {
+            repack: Some(true),
+            op_offload: Some(false),
+            no_host_buffer: Some(true),
+            check_tensors: Some(true),
+            direct_io: Some(true),
+            main_gpu: Some(2),
+            split_mode: Some(3),
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        };
+        let mut encoded = skippy_stage_proto::LoadStage::default().encode_to_vec();
+        CompatLoadStage {
+            runtime_settings: Some(settings.clone()),
         }
-        crate::inference::skippy::StageWireDType::F16 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF16
-        }
-        crate::inference::skippy::StageWireDType::Q8 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeQ8
-        }
+        .encode(&mut encoded)
+        .expect("compat runtime settings encode");
+
+        let legacy = LegacyLoadStage::decode(encoded.as_slice())
+            .expect("legacy schema ignores additive runtime settings");
+        assert!(legacy.encode_to_vec().is_empty());
+
+        let decoded = skippy_stage_proto::LoadStage::decode(encoded.as_slice())
+            .expect("production load stage decode");
+        let request = stage_load_from_proto(decoded).expect("domain load request");
+        let reencoded = stage_load_to_proto(request).encode_to_vec();
+        let observed = CompatLoadStage::decode(reencoded.as_slice())
+            .expect("compat runtime settings decode")
+            .runtime_settings
+            .expect("runtime settings must survive production round trip");
+
+        assert_eq!(observed, settings);
+        assert_eq!(
+            stage_runtime_settings_from_proto(None),
+            crate::inference::skippy::StageLoadRuntimeSettings::default()
+        );
     }
 }

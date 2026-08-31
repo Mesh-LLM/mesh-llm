@@ -33,6 +33,48 @@ fn preview_snapshots_bounded_targets_and_rejects_invalid_typed_input() {
 }
 
 #[test]
+fn preview_cleanup_sanitizes_audit_detail_inside_transaction() {
+    // Given: a valid maintenance request whose reason contains a credential and home path.
+    let (_root, artifacts) = fixture();
+    let store = artifacts.store_ref();
+    let home = std::env::var("HOME").expect("HOME should be available to the test");
+    let request = CleanupPreviewRequest {
+        reason: MaintenanceReason::try_from(
+            format!("Bearer maintenance-credential at {home}/private/audit.json").as_str(),
+        )
+        .expect("valid maintenance reason"),
+        ..request(32, "2025-02-01T00:00:00Z")
+    };
+
+    // When: preview writes its audit row in the receipt transaction.
+    let receipt = store
+        .preview_cleanup(&request, &NeverCancelled)
+        .expect("preview cleanup");
+    let raw_detail: String = store
+        .conn()
+        .query_row(
+            "SELECT detail_json FROM audit_entries WHERE entry_id = ?1",
+            [receipt
+                .preview_audit_id
+                .as_deref()
+                .expect("preview audit ID")],
+            |row| row.get(0),
+        )
+        .expect("raw maintenance audit detail");
+
+    // Then: sensitive originals are absent and safe transaction fields remain structured.
+    assert!(!raw_detail.contains("Bearer"));
+    assert!(!raw_detail.contains("maintenance-credential"));
+    assert!(!raw_detail.contains(&home));
+    let stored: serde_json::Value =
+        serde_json::from_str(&raw_detail).expect("maintenance detail remains valid JSON");
+    assert_eq!(stored["actor"], "trusted_local_operator");
+    assert_eq!(stored["source"], "logs_api");
+    assert_eq!(stored["result"], "previewed");
+    assert_eq!(stored["operationId"], request.operation_id.to_string());
+}
+
+#[test]
 fn cleanup_targets_visible_requests_instead_of_hidden_management_traffic() {
     let (_root, artifacts) = fixture();
     let store = artifacts.store_ref();
@@ -84,6 +126,92 @@ fn cleanup_targets_visible_requests_instead_of_hidden_management_traffic() {
             .query_request("hidden-management-request")
             .unwrap()
             .is_some()
+    );
+}
+
+#[test]
+fn cleanup_exact_route_exclusion_is_persisted_and_omits_matching_targets() {
+    let (_root, artifacts) = fixture();
+    let store = artifacts.store_ref();
+    seed_terminal_with_metadata(
+        store,
+        "models-request",
+        "2025-01-01T00:00:00Z",
+        "models",
+        "model-a",
+        "mesh",
+        "skippy",
+        "completed",
+    );
+    seed_terminal_with_metadata(
+        store,
+        "chat-request",
+        "2025-01-01T00:00:01Z",
+        "chat_completions",
+        "model-a",
+        "mesh",
+        "skippy",
+        "completed",
+    );
+    let filters = serde_json::from_value::<CleanupFilters>(serde_json::json!({
+        "excludeRoute": "models",
+    }))
+    .expect("deserialize exact-route exclusion");
+    let request = CleanupPreviewRequest {
+        scope: CleanupScope::new(
+            MaintenanceTimestamp::try_from("2025-02-01T00:00:00Z").expect("cutoff"),
+            10,
+        )
+        .expect("scope")
+        .with_filters(filters),
+        ..request_with_limit(0x51, "2025-02-01T00:00:00Z", 10)
+    };
+
+    let receipt = store
+        .preview_cleanup(&request, &NeverCancelled)
+        .expect("preview exact-route exclusion");
+    let targets = store
+        .conn()
+        .prepare(
+            "SELECT request_id FROM maintenance_operation_targets WHERE operation_id = ?1 ORDER BY ordinal",
+        )
+        .expect("prepare cleanup targets")
+        .query_map([request.operation_id.to_string()], |row| row.get::<_, String>(0))
+        .expect("query cleanup targets")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect cleanup targets");
+
+    assert_eq!(targets, ["chat-request"]);
+    let persisted_filters =
+        serde_json::to_value(receipt.scope.filters()).expect("serialize receipt filters");
+    assert_eq!(persisted_filters["excludeRoute"], "models");
+}
+
+#[test]
+fn cleanup_exact_route_exclusion_changes_the_selection_fingerprint() {
+    let baseline = CleanupScope::new(
+        MaintenanceTimestamp::try_from("2025-02-01T00:00:00Z").expect("cutoff"),
+        10,
+    )
+    .expect("baseline scope");
+    let excluded = baseline.clone().with_filters(
+        serde_json::from_value::<CleanupFilters>(serde_json::json!({
+            "excludeRoute": "models",
+        }))
+        .expect("deserialize exact-route exclusion"),
+    );
+
+    assert_ne!(
+        super::super::execution::selection_fingerprint(
+            MaintenanceAction::Cleanup,
+            &baseline,
+            &["chat-request".to_owned()],
+        ),
+        super::super::execution::selection_fingerprint(
+            MaintenanceAction::Cleanup,
+            &excluded,
+            &["chat-request".to_owned()],
+        )
     );
 }
 

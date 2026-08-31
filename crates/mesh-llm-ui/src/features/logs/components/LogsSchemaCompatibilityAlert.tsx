@@ -4,7 +4,6 @@ import { StatusBadge } from '@/components/ui/StatusBadge'
 import type { LogsSchemaCompatibility } from '@/features/logs/lib/logs-schema-compatibility'
 
 export function LogsSchemaCompatibilityAlert({ schemaVersion, supportedSchemaVersion }: LogsSchemaCompatibility) {
-  const databaseIsNewer = schemaVersion > supportedSchemaVersion
   return (
     <Alert className="panel-shell rounded-[var(--radius)] border-warn/40 bg-warn/5 p-[var(--panel-x)]" role="alert">
       <div className="flex items-start gap-3">
@@ -12,10 +11,9 @@ export function LogsSchemaCompatibilityAlert({ schemaVersion, supportedSchemaVer
         <div className="min-w-0">
           <AlertTitle className="type-panel-title text-foreground">Log database version mismatch</AlertTitle>
           <AlertDescription className="type-caption mt-1 text-fg-dim">
-            {databaseIsNewer
-              ? `This node is running a MeshLLM build older than the local log database. Update the node to a build that supports schema v${schemaVersion}, then restart it.`
-              : 'This MeshLLM build cannot safely upgrade the local log database. Update MeshLLM or restore the node version that created it, then restart the node.'}
-            {' Log history was left unchanged, and inference remains available.'}
+            This MeshLLM build cannot safely open the local log database schema. Update MeshLLM or restore the build
+            that created the database, then restart the node. The database was left unchanged, and inference remains
+            available.
           </AlertDescription>
           <div className="mt-3 flex flex-wrap gap-2" aria-label="Log schema compatibility">
             <StatusBadge size="caption" tone="warn">

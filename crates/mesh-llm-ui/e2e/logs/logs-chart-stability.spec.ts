@@ -209,7 +209,7 @@ async function mountChart(page: Page) {
   const capture = captureErrors(page)
   await page.goto('/logs')
   await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('listbox', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
   await expect(page.locator('path.recharts-rectangle').first()).toBeVisible({ timeout: 30_000 })
   return capture
 }
@@ -224,7 +224,7 @@ async function assertChartAndNoLoop(page: Page, capture: ReturnType<typeof captu
     )
   }
   await expect(
-    page.getByRole('img', { name: /Events over time/i }).first(),
+    page.getByRole('listbox', { name: /Events over time/i }).first(),
     'chart subtree disappeared from the tree'
   ).toBeVisible({ timeout: 8_000 })
 }
@@ -250,7 +250,7 @@ test.describe('events over time chart stability', () => {
         body: capture.consoleIssues.join('\n') || '(none)'
       })
 
-      const chart = page.getByRole('img', { name: /Events over time/i }).first()
+      const chart = page.getByRole('listbox', { name: /Events over time/i }).first()
       await expect(chart).toBeVisible({ timeout: 30_000 })
       const barRects = page.locator('path.recharts-rectangle')
       await expect(barRects.first()).toBeVisible({ timeout: 30_000 })
@@ -264,13 +264,9 @@ test.describe('events over time chart stability', () => {
     test('renders a high-volume dataset without exceeding React update depth', async ({ page }) => {
       // 370 requests spanning [now-370min, now-1min] under frozen time.
       //
-      // mergeLogEventWindow caps the MERGED request+audit list at 64 rows
-      // (LOG_EVENT_WINDOW_LIMIT), newest first — the cap is not per-category.
-      // AUDIT_ROWS contributes 3 entries inside the newest 64 (system@20min,
-      // quic@30min, gossip@50min); the 4th (gossip@490min) falls outside the
-      // window. So the legend reports Requests61 + System1 + QUIC1 + Gossip1,
-      // summing to exactly 64. Asserting the total proves the full mock dataset
-      // reached the ledger and was windowed rather than silently dropped.
+      // With the ledger window cap removed, every loaded fixture row is
+      // expected in the legend: all 370 requests plus System3, QUIC2, and
+      // Gossip2 from the seven audit rows.
       // The bar count itself stays small, so the fidelity gate is "bars render
       // at all and no render loop fires".
       const manyRequests = Array.from({ length: 370 }, (_, i) =>
@@ -284,10 +280,10 @@ test.describe('events over time chart stability', () => {
       await page.waitForTimeout(2500)
 
       const legend = page.getByRole('list', { name: 'Visible event categories' })
-      await expect(legend).toContainText('Requests61')
-      await expect(legend).toContainText('System1')
-      await expect(legend).toContainText('QUIC1')
-      await expect(legend).toContainText('Gossip1')
+      await expect(legend).toContainText('Requests370')
+      await expect(legend).toContainText('System3')
+      await expect(legend).toContainText('QUIC2')
+      await expect(legend).toContainText('Gossip2')
       const bars = await page.locator('path.recharts-rectangle').count()
       expect(bars).toBeGreaterThan(0)
       expect(capture.depthErrors(), `render loop detected:\n${capture.depthErrors().join('\n')}`).toEqual([])
@@ -299,7 +295,7 @@ test.describe('events over time chart stability', () => {
       const capture = captureErrors(page)
       await page.goto('/logs')
       await expect(page.getByRole('heading', { name: /Logs/i })).toBeVisible({ timeout: 30_000 })
-      await expect(page.getByRole('img', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole('listbox', { name: /Events over time/i }).first()).toBeVisible({ timeout: 30_000 })
 
       await page.setViewportSize({ width: 900, height: 600 })
       await page.waitForTimeout(700)

@@ -460,7 +460,7 @@ mod tests {
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
     use skippy_protocol::StageConfig;
     use skippy_protocol::binary::{
-        StageReplyStats, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
+        StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind,
     };
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
             kind,
             pos_start: 0,
             token_count,
-            state: StageStateHeader::new(kind, WireActivationDType::F16),
+            state: StageStateHeader::new(kind),
             request_id: 11,
             session_id: 13,
             sampling: None,

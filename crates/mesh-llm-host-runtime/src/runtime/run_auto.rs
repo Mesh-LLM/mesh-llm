@@ -23,7 +23,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -734,7 +735,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
-    node.set_stage_control_sender(skippy::spawn_stage_control_loop(
+    node.set_stage_control_handle(skippy::spawn_stage_control_loop(
         Some(Arc::new(node.clone())),
         skippy_telemetry_options(options),
     ))
@@ -1125,6 +1126,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
+    let primary_device_override =
+        primary_startup_model.and_then(|model| startup_device_override(model.gpu_id.as_deref()));
     let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
     let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
@@ -1135,6 +1138,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_model_ref = primary_startup_model
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
+    let primary_config_model_id =
+        primary_startup_model.and_then(|model| model.config_model_id.clone());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
     let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
     let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -1149,6 +1154,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        config_model_id: primary_config_model_id,
         readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())
@@ -1159,6 +1165,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
+        device_override: primary_device_override,
         runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,
@@ -1364,39 +1371,20 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     node.set_hosted_models(Vec::new()).await;
     node.regossip().await;
 
-    let tunnel_mgr =
-        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
-    // Both halves of inbound reachability are established here for any node
-    // that can serve, rather than only as a side effect of a local model
-    // finishing load.
-    //
-    // `set_http_port` is what lets a plugin-only node (no local model ever
-    // loads) accept inbound requests at all: the api proxy it points at is
-    // already bound and already answers correctly with no models loaded, so a
-    // tunneled request arriving before any model is ready gets a normal "not
-    // available" response instead of being silently dropped (the previous
-    // behavior whenever this was still 0 — see `network/tunnel.rs`'s
-    // `port == 0` early-return). The three call sites in `startup_handles.rs`
-    // remain and are now redundant-but-harmless — same node, same `api_port`,
-    // for the lifetime of the process.
-    //
-    // `plugin_host_role::spawn` is the other half: whether peers actually
-    // route here.
-    //
-    // Both are gated on `!is_client`. A client node has no compute to offer
-    // and never advertises `Host`, so nothing selects it as a route target;
-    // leaving its inbound HTTP tunnel terminated at the `port == 0` check
-    // keeps it exactly as reachable as it was before this change — not at
-    // all — instead of turning it into a mesh-internal request relay for any
-    // admitted peer that dials it.
-    if !is_client {
-        tunnel_mgr.set_http_port(api_port);
-        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
-    }
-
-    // Election publishes per-model targets
+    // Election publishes per-model targets. The same receiver and affinity
+    // router serve local TCP and remote QUIC OpenAI ingress.
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
     let target_tx = std::sync::Arc::new(target_tx);
+
+    let tunnel_mgr =
+        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
+    // Serving hosts terminate inbound HTTP tunnel streams directly in the
+    // shared OpenAI ingress. Client-only nodes remain unreachable as hosts.
+    if !is_client {
+        tunnel_mgr.set_http_port(api_port);
+        tunnel_mgr.set_http_ingress(target_rx.clone(), affinity_router.clone());
+        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
+    }
 
     // Runtime control for local load/unload of extra models.
     let (control_tx, mut control_rx) =

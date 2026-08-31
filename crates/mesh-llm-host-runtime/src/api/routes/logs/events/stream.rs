@@ -59,14 +59,14 @@ async fn run(
         query_facade,
         subscription,
         recovery_cursor,
-        queue.clone(),
+        queue,
         updates,
     ));
 
     while let Some(frame) = receiver.recv().await {
         let write = tokio::time::timeout(WRITE_TIMEOUT, stream.write_all(frame.as_bytes())).await;
         if !matches!(write, Ok(Ok(()))) {
-            queue.cancel();
+            receiver.cancel();
             break;
         }
     }

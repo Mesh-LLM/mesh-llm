@@ -38,8 +38,8 @@ Completed local package gates:
 4. `60..61` with deterministic synthetic upstream activation and output head:
    pass, `2.03x` vs stage recompute.
 
-Keep `q8_wire_validation` as untested until the exact package ref is certified
-with q8 activation wire.
+Activation transport is fixed to raw f32. Any future transport-format experiment
+must start as a new protocol generation rather than a per-family cache policy.
 
 ## Follow-Up Certification
 

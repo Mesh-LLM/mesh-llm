@@ -519,10 +519,35 @@ pub enum ConfigValueSchema {
     Path,
     Url,
     SocketAddr,
-    Enum { values: Vec<String> },
-    OneOf { variants: Vec<ConfigValueSchema> },
-    Array { items: Box<ConfigValueSchema> },
-    Object,
+    Enum {
+        values: Vec<String>,
+    },
+    OneOf {
+        variants: Vec<ConfigValueSchema>,
+    },
+    Array {
+        items: Box<ConfigValueSchema>,
+    },
+    Object {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        properties: Vec<ConfigObjectPropertySchema>,
+    },
+}
+
+impl ConfigValueSchema {
+    pub const fn object() -> Self {
+        Self::Object {
+            properties: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConfigObjectPropertySchema {
+    pub name: String,
+    pub label: String,
+    pub required: bool,
+    pub value_schema: ConfigValueSchema,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

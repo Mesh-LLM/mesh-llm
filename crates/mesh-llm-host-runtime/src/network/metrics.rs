@@ -339,6 +339,15 @@ pub(crate) trait RoutingTelemetrySink: Send + Sync {
         target: &AttemptTarget,
         outcome: AttemptOutcome,
     );
+
+    fn record_prompt_shape(
+        &self,
+        _model: Option<&str>,
+        _prompt_tokens: Option<u64>,
+        _completion_tokens: Option<u64>,
+        _outcome: RequestOutcome,
+    ) {
+    }
 }
 
 #[derive(Clone)]

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
+import { startTransition, useEffect, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
 import {
   type ColumnFiltersState,
   type ColumnVisibilityState,
@@ -78,11 +78,30 @@ export function DataTable<TData extends RowData>({
       onColumnFiltersChange: setColumnFilters,
       onColumnVisibilityChange: setColumnVisibility,
       onPaginationChange: setPagination,
+      autoResetPageIndex: false,
       manualPagination: !enablePagination
     }),
     [columnFilters, columnVisibility, columns, data, enablePagination, getRowId, pagination, sorting]
   )
-  const table = useTable<DataTableFeatures, TData>(tableOptions)
+  const rowModelTable = useTable<DataTableFeatures, TData>(tableOptions)
+  const filteredRowCount = rowModelTable.getFilteredRowModel().rows.length
+  const lastPageIndex = Math.max(Math.ceil(filteredRowCount / pagination.pageSize) - 1, 0)
+  const effectiveTableOptions = useMemo(() => {
+    if (pagination.pageIndex <= lastPageIndex) return tableOptions
+    const effectivePagination = { ...pagination, pageIndex: lastPageIndex }
+    return {
+      ...tableOptions,
+      state: { ...tableOptions.state, pagination: effectivePagination }
+    }
+  }, [lastPageIndex, pagination, tableOptions])
+  const table = useTable<DataTableFeatures, TData>(effectiveTableOptions)
+
+  useEffect(() => {
+    const nextPageIndex = Math.max(Math.ceil(filteredRowCount / pagination.pageSize) - 1, 0)
+    if (pagination.pageIndex <= nextPageIndex) return
+
+    startTransition(() => setPagination((current) => ({ ...current, pageIndex: nextPageIndex })))
+  }, [filteredRowCount, pagination.pageIndex, pagination.pageSize])
 
   const filterValue = filterColumnId ? ((table.getColumn(filterColumnId)?.getFilterValue() as string) ?? '') : undefined
 

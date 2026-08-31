@@ -212,7 +212,7 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
           />
         ) : null}
         <ChatSessionProvider>
-          <main className="min-h-0 flex-1 overflow-y-auto">
+          <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
             <div className="density-shell mx-auto flex min-h-full flex-col px-[var(--shell-pad-x)] pb-[var(--shell-pad-bottom)] pt-[var(--shell-pad-top)]">
               <Outlet />
             </div>

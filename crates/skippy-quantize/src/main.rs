@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod artifacts;
 mod backend;
 mod command_reports;
+mod compose_mtp;
 mod direct_convert;
 mod direct_quantize;
 mod float_convert;
@@ -48,6 +49,7 @@ use backend::{
     BackendArgs, BackendKind, ensure_convert_backend, ensure_quant_backend, ensure_success,
 };
 use command_reports::{ConvertWindowPlan, QuantWindowPlan};
+use compose_mtp::{ComposeMtpArgs, run_compose_mtp};
 use direct_convert::{DirectConvertArgs, run_direct_convert};
 use direct_quantize::{DirectQuantizeArgs, run_direct_quantize};
 use hf_checkpoint::resolve_auto_output_type;
@@ -104,6 +106,7 @@ enum Command {
     Convert(DirectConvertArgs),
     PlanConvert(PlanConvertArgs),
     Quantize(DirectQuantizeArgs),
+    ComposeMtp(ComposeMtpArgs),
     QuantizeLayerPackage(QuantizeLayerPackageArgs),
     ConvertJob(ConvertJobArgs),
     QuantJob(QuantJobArgs),
@@ -501,6 +504,7 @@ fn main() -> Result<()> {
         Command::Convert(args) => run_direct_convert(args),
         Command::PlanConvert(args) => run_plan_convert(args),
         Command::Quantize(args) => run_direct_quantize(args),
+        Command::ComposeMtp(args) => run_compose_mtp(args),
         Command::QuantizeLayerPackage(args) => quantize_layer_package(args),
         Command::ConvertJob(args) => convert_job(args),
         Command::QuantJob(args) => quant_job(args),

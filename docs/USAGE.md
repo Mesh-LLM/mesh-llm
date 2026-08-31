@@ -3,7 +3,7 @@
 Use this operational reference for installation details, setup, service mode,
 model storage, and runtime control.
 
-For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md).
+For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md). For the field-by-field `config.toml` reference, see the [canonical configuration reference](https://meshllm.cloud/docs/pages/config-reference/).
 
 ## Installation details
 
@@ -446,7 +446,6 @@ priority               = "normal"  # scheduler priority hint (integer or string)
 
 # --- Skippy staged serving -----------------------------------------------
 [defaults.skippy]
-activation_wire_dtype           = "auto"    # auto f16 f32 bf16 q8 q4 q2
 binary_stage_transport          = "auto"    # auto on off
 prefill_chunking                = "fixed"   # fixed schedule none
 prefill_chunk_size              = 512       # tokens per prefill chunk
@@ -563,12 +562,16 @@ reasoning_budget  = "auto"   # integer token budget, or "auto"
 # --- Multimodal ----------------------------------------------------------
 [defaults.multimodal]
 mmproj           = "default-mmproj-f16.gguf"  # vision projector path or HF ref
+# mmproj_url     = "https://huggingface.co/org/repo/resolve/main/mmproj.gguf"
 mmproj_offload   = "auto"                     # bool or "auto"
-image_min_tokens = 0
+image_min_tokens = 1
 image_max_tokens = 4096
+media_marker = "<__media__>"
+batch_max_tokens = 1024
+glm_dsa_policy = "auto"                       # "auto" or "v1"
+generation_signal_window = 16
 
 # Schema-reserved (accepted, not yet wired):
-#   mmproj_url  — projector URL source
 #   embeddings, reranking, pooling, vocoder
 
 # --- Advanced server (operational — reject most in model config) ---------
@@ -635,7 +638,6 @@ threads             = 16
 threads_batch       = 8
 
 [models.skippy]
-activation_wire_dtype  = "f16"
 prefill_chunking       = "schedule"
 prefill_chunk_size     = 256
 prefill_chunk_schedule = "128,256,512,1024"
@@ -837,17 +839,25 @@ Config precedence:
   frontend boundary. Explicit request values win, and those defaults never
   become `StageConfig`, runtime load structs, protobuf payloads, or lower-layer
   runtime settings.
-- Explicit `--model` or `--gguf` ignores configured `[[models]]`.
+- Explicit `--model` or `--gguf` ignores configured `[[models]]` for model
+  selection and tuning. An exact, unique `--model` ref may still inherit its
+  configured pinned GPU selector. Unmatched `--model` refs and `--gguf` paths
+  carry no configured model identity but may inherit only
+  `defaults.hardware.device`.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
+- Explicit `--device` overrides the inherited device selector. Stable GPU IDs
+  and backend names such as `CUDA0` resolve before native startup, including
+  under automatic assignment. `--device CPU` selects CPU without requiring a
+  GPU inventory, while `--device auto` keeps the inherited selector.
 - Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the
   server-side mesh guardrail mode for hosted Skippy startup models and later
   runtime-loaded models.
 - `mmproj` is optional and only used when that startup model needs a projector
   sidecar.
-- `skippy.*` staged-serving controls stay staged-only. `activation_wire_dtype`,
-  prefill controls, speculative draft controls, and manual stage layer ranges
-  apply only when the model is started in staged mode.
+- `skippy.*` staged-serving controls stay staged-only. Prefill controls,
+  speculative draft controls, and manual stage layer ranges apply only when
+  the model is started in staged mode. Activation frames always use raw f32.
 - `safety_margin_gb` resolves to `hardware.fit_target_mib` by subtracting the
   reserved MiB from detected allocatable memory, and the derived target is not
   written back into TOML.

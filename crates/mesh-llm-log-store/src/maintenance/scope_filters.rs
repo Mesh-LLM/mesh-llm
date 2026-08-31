@@ -16,6 +16,7 @@ pub struct CleanupFilters {
     from: Option<String>,
     to: Option<String>,
     route: Option<String>,
+    exclude_route: Option<String>,
     model: Option<String>,
     provider: Option<String>,
     engine: Option<String>,
@@ -37,6 +38,7 @@ impl CleanupFilters {
             from: from.map(|value| value.0),
             to: to.map(|value| value.0),
             route: normalize_scope_filter(route, "route")?,
+            exclude_route: None,
             model: normalize_scope_filter(model, "model")?,
             provider: normalize_scope_filter(provider, "provider")?,
             engine: normalize_scope_filter(engine, "engine")?,
@@ -48,6 +50,14 @@ impl CleanupFilters {
         Ok(filters)
     }
 
+    pub fn with_exclude_route(
+        mut self,
+        exclude_route: Option<String>,
+    ) -> Result<Self, LogStoreError> {
+        self.exclude_route = normalize_scope_filter(exclude_route, "exclude_route")?;
+        Ok(self)
+    }
+
     pub fn from(&self) -> Option<&str> {
         self.from.as_deref()
     }
@@ -56,6 +66,9 @@ impl CleanupFilters {
     }
     pub fn route(&self) -> Option<&str> {
         self.route.as_deref()
+    }
+    pub fn exclude_route(&self) -> Option<&str> {
+        self.exclude_route.as_deref()
     }
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()

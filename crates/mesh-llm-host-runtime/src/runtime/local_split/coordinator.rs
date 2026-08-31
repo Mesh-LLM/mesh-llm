@@ -1,3 +1,4 @@
+use super::loading::stage_health_ticks;
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
     split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
@@ -70,7 +71,9 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) model_name: String,
     pub(super) model_path: PathBuf,
     pub(super) model_ref: String,
+    pub(super) config_model_id: Option<String>,
     pub(super) package: skippy::SkippyPackageIdentity,
+    pub(super) compact_meta: crate::models::gguf::GgufCompactMeta,
     pub(super) active: SplitTopologyGeneration,
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
@@ -82,6 +85,7 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<String>,
     pub(super) slots: usize,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
@@ -92,6 +96,7 @@ pub(super) struct SplitTopologyCoordinator {
     /// A locked topology may be withdrawn after stage loss, but never replaced
     /// or collapsed to a local fallback.
     pub(super) topology_locked: bool,
+    pub(super) health_interval: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,7 +114,7 @@ pub(super) fn spawn_split_topology_coordinator(
 impl SplitTopologyCoordinator {
     async fn run(mut self) {
         let mut peer_rx = self.node.peer_change_rx.clone();
-        let mut health_tick = tokio::time::interval(Duration::from_secs(30));
+        let mut health_tick = stage_health_ticks(self.health_interval);
         health_tick.tick().await;
         tracing::info!(
             model_ref = self.model_ref,
@@ -573,7 +578,7 @@ impl SplitTopologyCoordinator {
         let resources = SplitTopologyResourceInputs {
             ctx_size_override: Some(self.ctx_size),
             parallel_override: Some(self.slots),
-            ..self.topology_resources
+            ..self.topology_resources.clone()
         };
         let planned = plan_runtime_slice_topology_with_resources(
             &topology_id,
@@ -624,11 +629,13 @@ impl SplitTopologyCoordinator {
             node: &self.node,
             mesh_config: &self.mesh_config,
             model_ref: &self.model_ref,
+            config_model_id: self.config_model_id.as_deref(),
             model_path: &self.model_path,
             package: &self.package,
             generation: &candidate,
             projector_path: self.projector_path.clone(),
             ctx_size: self.ctx_size,
+            compact_meta: &self.compact_meta,
             cache_type_k_override: self.cache_type_k_override.as_deref(),
             cache_type_v_override: self.cache_type_v_override.as_deref(),
             n_batch_override: self.n_batch_override,
@@ -636,6 +643,7 @@ impl SplitTopologyCoordinator {
             flash_attention_override: self.flash_attention_override,
             openai_guardrail_policy: self.openai_guardrail_policy.clone(),
             pinned_gpu: self.pinned_gpu.as_ref(),
+            device_override: self.device_override.as_deref(),
             slots: self.slots,
             skippy_telemetry: self.skippy_telemetry.clone(),
             survey_telemetry: self.survey_telemetry.clone(),

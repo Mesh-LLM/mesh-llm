@@ -110,7 +110,13 @@ use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use model_identity::*;
 use node_identity::*;
-use operational_logging::{MeshOperationalEvent, record_mesh_operational_event};
+#[cfg(test)]
+use operational_logging::capture_mesh_operational_audits;
+use operational_logging::{
+    MeshHandlerFailureBoundary, MeshOperationalEvent, MeshPeerRemovalReason,
+    MeshPolicyRejectionReason, MeshQuicInboundOutcome, mesh_peer_operational_context,
+    record_mesh_operational_event, record_mesh_operational_event_with_context,
+};
 use owner_control::*;
 use owner_lifecycle_cache::*;
 use peer_state::*;

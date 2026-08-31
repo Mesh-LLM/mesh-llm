@@ -40,6 +40,7 @@ AUDITED_FILES = (
     "crates/mesh-llm-host-runtime/src/models/artifact_transfer.rs",
     "crates/mesh-llm-host-runtime/src/models/delete_tests.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
+    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/package_download.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization/cache_management.rs",
     "crates/model-hf/src/store/local.rs",
@@ -80,6 +81,14 @@ DEFERRED_FILES = {
     "crates/skippy-runtime/src/logging.rs",
     "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs",
     "crates/mesh-llm-host-runtime/src/runtime/run_auto.rs",
+}
+
+# Production mutations whose callers establish a real synchronous bootstrap
+# boundary. These are neither tests nor deferred assertions: the exact owning
+# function and the shipped binary's call order are part of the contract.
+SYNCHRONOUS_BOOTSTRAP_FILES = {
+    "crates/mesh-llm-host-runtime/src/inference/skippy/metal_pipeline_cache.rs":
+        "configure_metal_pipeline_cache",
 }
 
 MUTATION_RE = re.compile(r"(?:std::)?env::(?:set_var|remove_var)\s*\(")
@@ -175,6 +184,7 @@ def check_file(root: Path, relative_path: str) -> list[str]:
     errors: list[str] = []
     is_build_script = path.name == "build.rs"
     is_deferred = relative_path in DEFERRED_FILES
+    bootstrap_function = SYNCHRONOUS_BOOTSTRAP_FILES.get(relative_path)
     has_test_module = (
         any("#[cfg(test)]" in line for line in lines)
         or "/tests/" in relative_path
@@ -185,6 +195,7 @@ def check_file(root: Path, relative_path: str) -> list[str]:
     for line_index in mutation_lines(lines):
         line_number = line_index + 1
         nearby = preceding_comment_block(lines, line_index)
+        normalized_nearby = " ".join(nearby.split())
         function = nearest_function(lines, line_index)
         function_name = function[1] if function else "<module>"
 
@@ -204,6 +215,24 @@ def check_file(root: Path, relative_path: str) -> list[str]:
                 errors.append(
                     f"{relative_path}:{line_number} ({function_name}): "
                     "deferred runtime mutation needs adjacent SAFETY and audit TODO comments"
+                )
+            continue
+
+        if bootstrap_function is not None:
+            if function_name != bootstrap_function:
+                errors.append(
+                    f"{relative_path}:{line_number} ({function_name}): "
+                    f"bootstrap mutation must remain in {bootstrap_function}"
+                )
+            if (
+                "SAFETY:" not in normalized_nearby
+                or "single-threaded" not in normalized_nearby
+                or "Tokio runtime" not in normalized_nearby
+            ):
+                errors.append(
+                    f"{relative_path}:{line_number} ({function_name}): "
+                    "bootstrap mutation needs an adjacent SAFETY comment with the "
+                    "single-threaded pre-Tokio ordering guarantee"
                 )
             continue
 
@@ -234,6 +263,25 @@ def check_file(root: Path, relative_path: str) -> list[str]:
                     f"{relative_path}:{index + 1}: stale environment audit TODO remains"
                 )
     return errors
+
+
+def check_synchronous_bootstrap_order(root: Path) -> list[str]:
+    main_path = root / "crates/mesh-llm/src/main.rs"
+    if not main_path.is_file():
+        return ["crates/mesh-llm/src/main.rs: bootstrap caller is missing"]
+    text = main_path.read_text(encoding="utf-8")
+    start = text.find("fn main()")
+    mutation = text.find("configure_metal_pipeline_cache();", start)
+    thread_start = text.find("run_on_application_thread(", start)
+    runtime_build = text.find("tokio::runtime::Builder::new_multi_thread()", start)
+    if min(start, mutation, thread_start, runtime_build) < 0:
+        return ["crates/mesh-llm/src/main.rs: synchronous Metal bootstrap markers are missing"]
+    if not (start < mutation < thread_start < runtime_build):
+        return [
+            "crates/mesh-llm/src/main.rs: Metal cache environment mutation must run "
+            "before application-thread and Tokio runtime construction"
+        ]
+    return []
 
 
 def discover_mutation_files(root: Path) -> dict[str, int]:
@@ -276,6 +324,7 @@ def run(root: Path, files: tuple[str, ...] | None = None) -> int:
         for relative_path in AUDITED_FILES:
             if relative_path in discovered or (root / relative_path).is_file():
                 errors.extend(check_file(root, relative_path))
+        errors.extend(check_synchronous_bootstrap_order(root))
         mutation_count = sum(discovered.values())
         checked_file_count = len(discovered)
         audited_file_count = sum(relative_path in discovered for relative_path in AUDITED_FILES)

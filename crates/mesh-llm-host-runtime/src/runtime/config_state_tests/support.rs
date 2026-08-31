@@ -239,13 +239,11 @@ kv_unified = "auto"
 
 [defaults.hardware]
 gpu_layers = "auto"
-tensor_split = []
 
 [defaults.throughput]
 parallel = 3
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 
 [defaults.speculative]
 mode = "auto"
@@ -270,13 +268,9 @@ cache_type_k = "q8_0"
 
 [models.hardware]
 gpu_layers = 99
-tensor_split = [0.7, 0.3]
 
 [models.throughput]
 parallel = 4
-
-[models.skippy]
-binary_stage_transport = "auto"
 
 [models.speculative]
 mode = "auto"
@@ -301,7 +295,6 @@ pub(super) fn assert_representative_nested_fields(config: &MeshConfig) {
     assert_eq!(json["defaults"]["model_fit"]["kv_unified"], "auto");
     assert_eq!(json["defaults"]["hardware"]["gpu_layers"], "auto");
     assert_eq!(json["defaults"]["throughput"]["parallel"], 3);
-    assert_eq!(json["defaults"]["skippy"]["activation_wire_dtype"], "auto");
     assert_eq!(json["defaults"]["speculative"]["mode"], "auto");
     assert_eq!(
         json["defaults"]["request_defaults"]["reasoning_budget"],
@@ -319,10 +312,7 @@ pub(super) fn assert_representative_nested_fields(config: &MeshConfig) {
     assert_eq!(json["models"][0]["model_fit"]["ctx_size"], 16384);
     assert_eq!(json["models"][0]["hardware"]["gpu_layers"], 99);
     assert_eq!(json["models"][0]["throughput"]["parallel"], 4);
-    assert_eq!(
-        json["models"][0]["skippy"]["binary_stage_transport"],
-        "auto"
-    );
+    assert!(json["models"][0]["skippy"].is_null());
     assert_eq!(
         json["models"][0]["speculative"]["draft_selection_policy"],
         "auto"

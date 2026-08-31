@@ -11,5 +11,7 @@ keywords = ["llm", "mesh", "routing", "inference"]
 categories = ["network-programming"]
 
 [dependencies]
+blake3.workspace = true
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
+serde.workspace = true
 serde_json.workspace = true

@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{StageConfig, StageTopology, binary::WireActivationDType};
+use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::MtpSource;
 
 use crate::{
@@ -17,7 +17,6 @@ pub struct BinaryStageOptions {
     pub topology: Option<StageTopology>,
     pub bind_addr: SocketAddr,
     pub activation_width: i32,
-    pub wire_dtype: WireActivationDType,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -27,6 +26,12 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    /// Whether the iteration scheduler may serve multiple active lanes.
+    ///
+    /// Binary stages launched by the standalone CLI retain the historical
+    /// enabled default. Mesh-launched stages receive the resolved value from
+    /// the stage-control load request.
+    pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -63,7 +68,6 @@ impl BinaryStageOptions {
         if args.openai_prefill_chunk_size == 0 {
             bail!("--openai-prefill-chunk-size must be greater than zero");
         }
-        let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
         let downstream_wire_condition =
             WireCondition::new(args.downstream_wire_delay_ms, args.downstream_wire_mbps)?;
         let config = load_json::<StageConfig>(&args.config)
@@ -112,7 +116,6 @@ impl BinaryStageOptions {
             topology,
             bind_addr,
             activation_width: args.activation_width,
-            wire_dtype,
             metrics_otlp_grpc: args.metrics_otlp_grpc,
             telemetry_queue_capacity: args.telemetry_queue_capacity,
             telemetry_level: args.telemetry_level,
@@ -122,6 +125,7 @@ impl BinaryStageOptions {
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
+            continuous_batching: true,
             openai,
         })
     }
@@ -141,15 +145,6 @@ impl BinaryStageOptions {
         } else {
             MtpSource::Integrated
         }
-    }
-}
-
-pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
     }
 }
 
@@ -194,9 +189,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache: None,
@@ -205,6 +211,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -232,6 +239,7 @@ mod tests {
                 max_tokens: 6,
                 pipeline_depth: 2,
             },
+            ..SpeculativeDecodeConfig::default()
         }
     }
 

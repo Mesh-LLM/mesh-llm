@@ -264,21 +264,20 @@ The provider-isolation requirements below remain the desired end state:
    not change the plan or artifact graph.
 
 Until the provider supplies that end state, maintainers may deliberately accept
-the documented repository-wide cache risk for one exact same-repository PR
-head under all of these controls:
+the documented repository-wide cache risk for eligible same-repository PRs
+under all of these controls:
 
 - the exception has a checked-in UTC expiry and fails hosted after it;
 - `DEPOT_PR_RUNNERS_ENABLED` is exactly `true`;
-- `DEPOT_PR_APPROVED_REF` exactly matches `refs/pull/<number>/merge` and
-  `DEPOT_PR_APPROVED_SHA` exactly matches the current PR head SHA;
 - the head repository is exactly `Mesh-LLM/mesh-llm`; forks remain hosted;
 - CI-control, workflow, runner-policy and cache-policy changes force hosted;
 - the protected default-branch runner-owning workflows remain the executor;
 - PR jobs receive no repository secrets or registry credentials; and
-- rollback is deletion/false of the PR gate or either exact approval value.
+- rollback deletes `DEPOT_PR_CANARY_REF` and deletes or sets
+  `DEPOT_PR_RUNNERS_ENABLED=false`, so PR jobs return to hosted placement.
 
 This is an explicit speed-versus-isolation decision, not evidence that Depot
-cache is isolated. While active, GitHub Actions cache API consumers on selected
+cache is isolated. While active, GitHub Actions cache API consumers on eligible
 Depot PR and trusted-main jobs may share Depot's repository-wide namespace.
 Treat that namespace as attacker-controlled and keep release, publishing,
 deployment and credential-bearing jobs off it. Record the rationale, known
@@ -287,9 +286,8 @@ failure modes, owner, start, expiry and rollback in
 
 GitHub's `all_external_contributors` workflow-approval policy does not cover a
 same-repository branch pushed by a collaborator. Do not describe that setting
-as the approval boundary for this exception. The exact maintainer-controlled
-ref and head-SHA variables are the checked-in per-PR approval boundary and must
-be refreshed after every PR synchronization.
+as the approval boundary for this exception. The repository-wide PR gate and
+checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 

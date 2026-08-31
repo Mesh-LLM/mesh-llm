@@ -6,12 +6,13 @@ use std::{
 
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationDesc,
-    BackendDevice, Error, GenerationSignalWindow, KvPageDesc, LlamaLogCallback,
+    BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc, LlamaLogCallback,
     LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext, MtmdContextParams,
-    MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
-    NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
-    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
-    SlicePlan, Status, TensorInfo, TokenSignal, runtime_abi_supported,
+    MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
+    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
+    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, SlicePlan, Status, TensorInfo,
+    TokenSignal, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -193,6 +194,7 @@ dynamic_symbols! {
     skippy_verify_tokens(session: *mut Session, token_ids: *const i32, token_count: usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_decode_step_sampled(session: *mut Session, token_id: i32, sampling: *const SamplingConfig, input_activation: *const c_void, input_activation_bytes: usize, output_activation: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_decode_batch_sampled(sessions: *const *mut Session, token_ids: *const i32, sampling: *const *const SamplingConfig, request_count: usize, out_predicted_tokens: *mut i32, predicted_token_capacity: usize, out_error: *mut *mut Error) -> Status;
+    skippy_iteration_batch_sampled(requests: *const IterationRequest, request_count: usize, output_descs: *mut ActivationDesc, output_payloads: *const *mut c_void, output_payload_capacities: *const usize, out_output_payload_bytes: *mut usize, out_predicted_tokens: *mut i32, predicted_token_capacity: usize, out_error: *mut *mut Error) -> Status;
     skippy_prefill_chunk_frame(session: *mut Session, token_ids: *const i32, token_count: usize, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_prefill_chunk_frame_sampled(session: *mut Session, token_ids: *const i32, token_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_prefill_chunk_frame_with_positions(session: *mut Session, token_ids: *const i32, token_count: usize, positions: *const i32, position_count: usize, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -226,7 +228,7 @@ dynamic_symbols! {
     skippy_model_info_tensor_at(info: *mut ModelInfo, index: usize, out_tensor: *mut TensorInfo, out_error: *mut *mut Error) -> Status;
     skippy_slice_plan_create(info: *mut ModelInfo, out_plan: *mut *mut SlicePlan, out_error: *mut *mut Error) -> Status;
     skippy_slice_plan_free(plan: *mut SlicePlan, out_error: *mut *mut Error) -> Status;
-    skippy_slice_plan_add_layer_range(plan: *mut SlicePlan, stage_index: i32, layer_start: i32, layer_end: i32, include_embeddings: bool, include_output: bool, out_error: *mut *mut Error) -> Status;
+    skippy_slice_plan_add_layer_range(plan: *mut SlicePlan, stage_index: i32, layer_start: i32, layer_end: i32, include_embeddings: bool, include_output: bool, include_per_layer_token_embd: bool, out_error: *mut *mut Error) -> Status;
     skippy_write_slice_gguf(info: *mut ModelInfo, plan: *const SlicePlan, stage_index: i32, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     skippy_write_gguf_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
     mtmd_default_marker() -> *const c_char;
@@ -234,7 +236,9 @@ dynamic_symbols! {
     mtmd_context_params_default() -> MtmdContextParams;
     mtmd_init_from_file(mmproj_fname: *const c_char, text_model: *const Opaque, ctx_params: MtmdContextParams) -> *mut MtmdContext;
     mtmd_free(ctx: *mut MtmdContext);
-    mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize) -> *mut MtmdBitmap;
+    mtmd_helper_init_opt_default() -> MtmdHelperInitOpt;
+    mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize, placeholder: bool, opt: MtmdHelperInitOpt) -> MtmdHelperBitmapWrapper;
+    mtmd_helper_video_free(video: *mut MtmdHelperVideo);
     mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
     mtmd_input_chunks_init() -> *mut MtmdInputChunks;
     mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
@@ -285,6 +289,11 @@ type SkippyApplyChatTemplateJsonFn = unsafe extern "C" fn(
     parallel_tool_calls: bool,
     reasoning_format: *const c_char,
     chat_template_kwargs: *const c_char,
+    chat_template: *const c_char,
+    use_jinja: bool,
+    grammar: *const c_char,
+    json_schema: *const c_char,
+    skip_chat_parsing: bool,
     output_text: *mut c_char,
     output_text_capacity: usize,
     out_text_bytes: *mut usize,
@@ -385,6 +394,11 @@ pub unsafe fn skippy_apply_chat_template_json(
     parallel_tool_calls: bool,
     reasoning_format: *const c_char,
     chat_template_kwargs: *const c_char,
+    chat_template: *const c_char,
+    use_jinja: bool,
+    grammar: *const c_char,
+    json_schema: *const c_char,
+    skip_chat_parsing: bool,
     output_text: *mut c_char,
     output_text_capacity: usize,
     out_text_bytes: *mut usize,
@@ -408,6 +422,11 @@ pub unsafe fn skippy_apply_chat_template_json(
             parallel_tool_calls,
             reasoning_format,
             chat_template_kwargs,
+            chat_template,
+            use_jinja,
+            grammar,
+            json_schema,
+            skip_chat_parsing,
             output_text,
             output_text_capacity,
             out_text_bytes,

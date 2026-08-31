@@ -3,8 +3,8 @@ use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
     GenerationSignalWindow as RawGenerationSignalWindow,
     KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
-    LogitBias as RawLogitBias, SamplingConfig as RawSamplingConfig, TensorRole,
-    TokenSignal as RawTokenSignal,
+    LogitBias as RawLogitBias, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
+    MAX_SAMPLERS, SamplingConfig as RawSamplingConfig, TensorRole, TokenSignal as RawTokenSignal,
 };
 
 pub const MAX_LOGIT_BIAS: usize = 256;
@@ -120,6 +120,8 @@ pub struct RuntimeKvPageComponentDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    #[serde(default)]
+    pub k_idx_row_bytes: u32,
     pub payload_offset: u64,
     pub payload_bytes: u64,
     pub flags: u64,
@@ -138,6 +140,7 @@ impl RuntimeKvPageComponentDesc {
             k_row_bytes: self.k_row_bytes,
             v_row_bytes: self.v_row_bytes,
             v_element_bytes: self.v_element_bytes,
+            k_idx_row_bytes: self.k_idx_row_bytes,
             payload_offset: self.payload_offset,
             payload_bytes: self.payload_bytes,
             flags: self.flags,
@@ -157,6 +160,7 @@ impl From<RawKvPageComponentDesc> for RuntimeKvPageComponentDesc {
             k_row_bytes: raw.k_row_bytes,
             v_row_bytes: raw.v_row_bytes,
             v_element_bytes: raw.v_element_bytes,
+            k_idx_row_bytes: raw.k_idx_row_bytes,
             payload_offset: raw.payload_offset,
             payload_bytes: raw.payload_bytes,
             flags: raw.flags,
@@ -177,6 +181,8 @@ pub struct RuntimeKvPageDesc {
     pub k_row_bytes: u32,
     pub v_row_bytes: u32,
     pub v_element_bytes: u32,
+    #[serde(default)]
+    pub k_idx_row_bytes: u32,
     pub payload_bytes: u64,
     pub flags: u64,
     #[serde(default)]
@@ -193,22 +199,32 @@ impl RuntimeKvPageDesc {
         if self.payload_bytes != payload_len {
             return Err(anyhow!("KV page payload length does not match descriptor"));
         }
+        let has_k_idx_flag = self.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+        if (self.k_idx_row_bytes > 0) != (has_k_idx_flag != 0) {
+            return Err(anyhow!(
+                "KV page k_idx flag does not match its indexer row size"
+            ));
+        }
         match self.codec {
             0 | skippy_ffi::KV_PAGE_CODEC_SINGLE_V1 if self.component_count == 0 => Ok(()),
             skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1
                 if self.version == 2 && self.component_count == 2 =>
             {
                 let [base, swa] = *self.components;
+                let base_k_idx_flag = base.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+                let swa_k_idx_flag = swa.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
                 if base.version != 1
                     || base.role != 1
                     || base.payload_offset != 0
                     || base.token_start != self.token_start
                     || base.token_count != self.token_count
+                    || (base.k_idx_row_bytes > 0) != (base_k_idx_flag != 0)
                     || swa.version != 1
                     || swa.role != 2
                     || swa.token_start < self.token_start
                     || swa.token_start.checked_add(swa.token_count)
                         != self.token_start.checked_add(self.token_count)
+                    || (swa.k_idx_row_bytes > 0) != (swa_k_idx_flag != 0)
                     || swa.payload_offset != base.payload_bytes
                     || swa.payload_offset.checked_add(swa.payload_bytes) != Some(payload_len)
                 {
@@ -233,6 +249,7 @@ impl RuntimeKvPageDesc {
             k_row_bytes: self.k_row_bytes,
             v_row_bytes: self.v_row_bytes,
             v_element_bytes: self.v_element_bytes,
+            k_idx_row_bytes: self.k_idx_row_bytes,
             payload_bytes: self.payload_bytes,
             flags: self.flags,
             codec: self.codec,
@@ -259,6 +276,7 @@ impl From<RawKvPageDesc> for RuntimeKvPageDesc {
             k_row_bytes: raw.k_row_bytes,
             v_row_bytes: raw.v_row_bytes,
             v_element_bytes: raw.v_element_bytes,
+            k_idx_row_bytes: raw.k_idx_row_bytes,
             payload_bytes: raw.payload_bytes,
             flags: raw.flags,
             codec: raw.codec,
@@ -375,6 +393,32 @@ pub struct SamplingConfig {
     pub repeat_penalty: f32,
     pub penalty_last_n: i32,
     pub logit_bias: Vec<LogitBias>,
+    pub typical_p: f32,
+    pub top_nsigma: f32,
+    pub dynatemp_range: f32,
+    pub dynatemp_exponent: f32,
+    pub dry: DrySamplingConfig,
+    pub xtc: XtcSamplingConfig,
+    pub mirostat_mode: i32,
+    pub mirostat_entropy: f32,
+    pub mirostat_learning_rate: f32,
+    pub samplers: Vec<String>,
+    pub ignore_eos: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DrySamplingConfig {
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: i32,
+    pub penalty_last_n: i32,
+    pub sequence_breakers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct XtcSamplingConfig {
+    pub probability: f32,
+    pub threshold: f32,
 }
 
 impl Default for SamplingConfig {
@@ -391,28 +435,90 @@ impl Default for SamplingConfig {
             repeat_penalty: 1.0,
             penalty_last_n: -1,
             logit_bias: Vec::new(),
+            typical_p: 1.0,
+            top_nsigma: -1.0,
+            dynatemp_range: 0.0,
+            dynatemp_exponent: 1.0,
+            dry: DrySamplingConfig {
+                multiplier: 0.0,
+                base: 1.75,
+                allowed_length: 2,
+                penalty_last_n: 64,
+                sequence_breakers: vec!["\n".into(), ":".into(), "\"".into(), "*".into()],
+            },
+            xtc: XtcSamplingConfig {
+                probability: 0.0,
+                threshold: 0.1,
+            },
+            mirostat_mode: 0,
+            mirostat_entropy: 5.0,
+            mirostat_learning_rate: 0.1,
+            samplers: vec![
+                "penalties".into(),
+                "dry".into(),
+                "top_n_sigma".into(),
+                "top_k".into(),
+                "typical_p".into(),
+                "top_p".into(),
+                "min_p".into(),
+                "xtc".into(),
+                "temperature".into(),
+            ],
+            ignore_eos: false,
         }
     }
 }
 
 impl SamplingConfig {
-    pub(crate) fn as_raw(&self) -> RawSamplingConfig {
+    pub(crate) fn as_raw(&self) -> Result<RawSamplingConfig> {
+        if self.logit_bias.len() > MAX_LOGIT_BIAS {
+            return Err(anyhow!("sampling logit_bias exceeds the native limit"));
+        }
+        if self.samplers.len() > MAX_SAMPLERS {
+            return Err(anyhow!("sampling sampler order exceeds the native limit"));
+        }
+        if self.dry.sequence_breakers.len() > MAX_DRY_SEQUENCE_BREAKERS {
+            return Err(anyhow!(
+                "sampling DRY sequence breakers exceed the native count limit"
+            ));
+        }
+        if self
+            .dry
+            .sequence_breakers
+            .iter()
+            .any(|value| value.len() >= MAX_DRY_SEQUENCE_BREAKER_BYTES)
+        {
+            return Err(anyhow!(
+                "sampling DRY sequence breaker exceeds the native byte limit"
+            ));
+        }
         let mut logit_bias = [RawLogitBias {
             token_id: 0,
             bias: 0.0,
         }; MAX_LOGIT_BIAS];
-        for (target, source) in logit_bias.iter_mut().zip(
-            self.logit_bias
-                .iter()
-                .take(self.logit_bias.len().min(MAX_LOGIT_BIAS)),
-        ) {
+        for (target, source) in logit_bias.iter_mut().zip(&self.logit_bias) {
             *target = RawLogitBias {
                 token_id: source.token_id,
                 bias: source.bias,
             };
         }
-        RawSamplingConfig {
-            version: 1,
+        let mut samplers = [0_u32; MAX_SAMPLERS];
+        for (target, source) in samplers.iter_mut().zip(&self.samplers) {
+            *target = sampler_id(source)
+                .ok_or_else(|| anyhow!("sampling sampler order contains {source:?}"))?;
+        }
+        let mut dry_sequence_breakers =
+            [[0_u8; MAX_DRY_SEQUENCE_BREAKER_BYTES]; MAX_DRY_SEQUENCE_BREAKERS];
+        for (target, source) in dry_sequence_breakers
+            .iter_mut()
+            .zip(self.dry.sequence_breakers.iter())
+        {
+            let bytes = source.as_bytes();
+            let length = bytes.len();
+            target[..length].copy_from_slice(&bytes[..length]);
+        }
+        Ok(RawSamplingConfig {
+            version: 2,
             flags: u32::from(self.enabled),
             seed: self.seed,
             top_k: self.top_k,
@@ -422,10 +528,43 @@ impl SamplingConfig {
             presence_penalty: self.presence_penalty,
             frequency_penalty: self.frequency_penalty,
             repeat_penalty: self.repeat_penalty,
-            logit_bias_count: self.logit_bias.len().min(MAX_LOGIT_BIAS) as u32,
+            logit_bias_count: self.logit_bias.len() as u32,
             min_p: self.min_p,
+            typical_p: self.typical_p,
+            top_nsigma: self.top_nsigma,
+            dynatemp_range: self.dynatemp_range,
+            dynatemp_exponent: self.dynatemp_exponent,
+            dry_multiplier: self.dry.multiplier,
+            dry_base: self.dry.base,
+            dry_allowed_length: self.dry.allowed_length,
+            dry_penalty_last_n: self.dry.penalty_last_n,
+            xtc_probability: self.xtc.probability,
+            xtc_threshold: self.xtc.threshold,
+            mirostat_mode: self.mirostat_mode,
+            mirostat_entropy: self.mirostat_entropy,
+            mirostat_learning_rate: self.mirostat_learning_rate,
+            sampler_count: self.samplers.len() as u32,
+            samplers,
+            ignore_eos: u32::from(self.ignore_eos),
+            dry_sequence_breaker_count: self.dry.sequence_breakers.len() as u32,
+            dry_sequence_breakers,
             logit_bias,
-        }
+        })
+    }
+}
+
+fn sampler_id(name: &str) -> Option<u32> {
+    match name {
+        "penalties" => Some(1),
+        "dry" => Some(2),
+        "top_n_sigma" => Some(3),
+        "top_k" => Some(4),
+        "typical_p" | "typ_p" => Some(5),
+        "top_p" => Some(6),
+        "min_p" => Some(7),
+        "xtc" => Some(8),
+        "temperature" | "temp" => Some(9),
+        _ => None,
     }
 }
 
@@ -478,6 +617,11 @@ pub struct ChatTemplateOptions {
     pub enable_thinking: Option<bool>,
     pub reasoning_format: Option<ChatReasoningFormat>,
     pub chat_template_kwargs: Option<String>,
+    pub chat_template: Option<String>,
+    pub use_jinja: bool,
+    pub grammar: Option<String>,
+    pub json_schema: Option<String>,
+    pub skip_chat_parsing: bool,
 }
 
 impl Default for ChatTemplateOptions {
@@ -487,6 +631,11 @@ impl Default for ChatTemplateOptions {
             enable_thinking: None,
             reasoning_format: None,
             chat_template_kwargs: None,
+            chat_template: None,
+            use_jinja: true,
+            grammar: None,
+            json_schema: None,
+            skip_chat_parsing: false,
         }
     }
 }
@@ -500,6 +649,11 @@ pub struct ChatTemplateJsonOptions {
     pub tools_json: Option<String>,
     pub tool_choice_json: Option<String>,
     pub parallel_tool_calls: bool,
+    pub chat_template: Option<String>,
+    pub use_jinja: bool,
+    pub grammar: Option<String>,
+    pub json_schema: Option<String>,
+    pub skip_chat_parsing: bool,
 }
 
 impl Default for ChatTemplateJsonOptions {
@@ -512,6 +666,11 @@ impl Default for ChatTemplateJsonOptions {
             tools_json: None,
             tool_choice_json: None,
             parallel_tool_calls: true,
+            chat_template: None,
+            use_jinja: true,
+            grammar: None,
+            json_schema: None,
+            skip_chat_parsing: false,
         }
     }
 }
@@ -561,6 +720,7 @@ mod kv_page_descriptor_tests {
             k_row_bytes: 0,
             v_row_bytes: 0,
             v_element_bytes: 0,
+            k_idx_row_bytes: 0,
             flags: 0,
         }
     }
@@ -583,6 +743,7 @@ mod kv_page_descriptor_tests {
                 k_row_bytes: 0,
                 v_row_bytes: 0,
                 v_element_bytes: 0,
+                k_idx_row_bytes: 0,
                 flags: 0,
                 components: Box::default(),
             };
@@ -622,5 +783,43 @@ mod kv_page_descriptor_tests {
         overflowing_swa.components[1].token_count = 2;
         assert!(overflowing_swa.validate_payload(12).is_err());
         assert!(composite().validate_payload(11).is_err());
+    }
+
+    #[test]
+    fn sampling_raw_accepts_exact_native_dry_breaker_payload() {
+        let sampling = SamplingConfig {
+            dry: DrySamplingConfig {
+                sequence_breakers: vec!["123456789012345".to_string()],
+                ..DrySamplingConfig::default()
+            },
+            ..SamplingConfig::default()
+        };
+
+        assert!(sampling.as_raw().is_ok());
+    }
+
+    #[test]
+    fn sampling_raw_rejects_dry_breakers_that_cannot_fit_native_payload() {
+        for breaker in ["1234567890123456", "🐍🐍🐍🐍"] {
+            let sampling = SamplingConfig {
+                dry: DrySamplingConfig {
+                    sequence_breakers: vec![breaker.to_string()],
+                    ..DrySamplingConfig::default()
+                },
+                ..SamplingConfig::default()
+            };
+
+            assert!(sampling.as_raw().is_err(), "breaker={breaker:?}");
+        }
+    }
+
+    #[test]
+    fn sampling_raw_rejects_unknown_sampler_names() {
+        let sampling = SamplingConfig {
+            samplers: vec!["unknown".to_string()],
+            ..SamplingConfig::default()
+        };
+
+        assert!(sampling.as_raw().is_err());
     }
 }

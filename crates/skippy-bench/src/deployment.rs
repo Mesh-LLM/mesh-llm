@@ -17,15 +17,12 @@ use skippy_protocol::binary::{StageWireMessage, recv_ready, write_stage_message}
 use skippy_protocol::{LoadMode, StageTopology, StageTopologyEntry};
 use skippy_runtime::write_gguf_from_parts;
 use skippy_topology::{
-    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, dense_attention_layers,
+    infer_family_capability, plan_contiguous_with_splits,
 };
 
 use super::{path_string, write_json_file};
-use crate::{
-    cli::RunArgs,
-    support::{ChildGuard, parse_wire_dtype},
-};
+use crate::{cli::RunArgs, support::ChildGuard};
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct StageAssignment {
@@ -155,25 +152,6 @@ pub(super) fn validate_topology_plan(
     };
     let splits = split_boundaries_from_ranges(ranges);
     let plan = plan_contiguous_with_splits(&request, &splits).context("topology planner failed")?;
-
-    if args.activation_wire_dtype.eq_ignore_ascii_case("q8") {
-        match family.as_ref().map(|family| family.q8_wire_validation) {
-            Some(WireValidation::Validated) => {}
-            Some(WireValidation::Rejected) => {
-                bail!(
-                    "topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record",
-                    args.model_id
-                );
-            }
-            Some(WireValidation::Untested) => {
-                bail!(
-                    "topology planner has no q8 validation for {}; use f16 until this family/split passes correctness",
-                    args.model_id
-                );
-            }
-            None => {}
-        }
-    }
 
     let rejected = plan
         .boundaries
@@ -738,14 +716,13 @@ fn stage_server_command(
         .map(|mbps| format!(" --downstream-wire-mbps {mbps}"))
         .unwrap_or_default();
     format!(
-        "{} serve-binary --config {} --topology {} --activation-width {} --activation-wire-dtype {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
+        "{} serve-binary --config {} --topology {} --activation-width {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
         shell_quote(bin),
         shell_quote(config_path),
         shell_quote(
             &stage_remote_topology_path(stage).unwrap_or_else(|_| "topology.json".to_string())
         ),
         args.activation_width,
-        shell_quote(&args.activation_wire_dtype),
         shell_quote(&plan.metrics_otlp_grpc),
         args.stage_telemetry_queue_capacity,
         shell_quote(&args.stage_telemetry_level),
@@ -806,8 +783,7 @@ fn probe_remote_chain_readiness(args: &RunArgs, plan: &DeploymentPlan) -> Result
         .context("deployment plan has no stages")?;
     let mut stream = connect_endpoint_ready(&first.endpoint, args.startup_timeout_secs)
         .with_context(|| format!("connect to first binary stage {}", first.endpoint))?;
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
-    write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
+    write_stage_message(&mut stream, &StageWireMessage::stop())
         .context("send readiness stop frame")?;
     Ok(())
 }
@@ -1513,7 +1489,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,
@@ -1688,7 +1663,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,
@@ -1782,23 +1756,6 @@ mod tests {
         assert!(command.contains("summary"));
     }
     #[test]
-    fn planner_rejects_qwen_q8_before_launch() {
-        let mut args = test_run_args();
-        args.model_id = "Qwen/Qwen3-0.6B".to_string();
-        args.hosts = "host-a,host-b".to_string();
-        args.splits = "14".to_string();
-        args.layer_end = 28;
-        args.activation_width = 1024;
-        args.activation_wire_dtype = "q8".to_string();
-        let hosts = parse_hosts(&args.hosts).unwrap();
-        let ranges = parse_stage_ranges(&args.splits, args.layer_end).unwrap();
-
-        let err = validate_topology_plan(&args, &hosts, &ranges).unwrap_err();
-
-        assert!(err.to_string().contains("rejected q8"));
-    }
-
-    #[test]
     fn planner_rejects_gemma_known_bad_split_before_launch() {
         let mut args = test_run_args();
         args.model_id = "gemma-4-e4b".to_string();
@@ -1806,7 +1763,6 @@ mod tests {
         args.splits = "14,28".to_string();
         args.layer_end = 42;
         args.activation_width = 2560;
-        args.activation_wire_dtype = "f16".to_string();
         let hosts = parse_hosts(&args.hosts).unwrap();
         let ranges = parse_stage_ranges(&args.splits, args.layer_end).unwrap();
 
@@ -1823,7 +1779,6 @@ mod tests {
         args.splits = "21".to_string();
         args.layer_end = 42;
         args.activation_width = 2560;
-        args.activation_wire_dtype = "f16".to_string();
         let hosts = parse_hosts(&args.hosts).unwrap();
         let ranges = parse_stage_ranges(&args.splits, args.layer_end).unwrap();
 
@@ -1848,7 +1803,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,

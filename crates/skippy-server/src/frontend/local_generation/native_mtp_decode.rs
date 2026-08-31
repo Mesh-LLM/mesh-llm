@@ -116,7 +116,7 @@ impl StageOpenAiBackend {
         }
 
         let base_position = self
-            .native_mtp_span_base_position(session_id)
+            .native_mtp_span_base_position(session_id)?
             .ok_or_else(|| OpenAiError::backend("native MTP span session is not active"))?;
         let mut verify_inputs = Vec::with_capacity(draft_tokens.len().saturating_add(1));
         verify_inputs.push(state.current);
@@ -202,11 +202,12 @@ impl StageOpenAiBackend {
         }
     }
 
-    fn native_mtp_span_base_position(&self, session_id: &str) -> Option<u64> {
-        self.runtime
-            .lock()
-            .ok()
-            .and_then(|runtime| runtime.session_token_count(session_id))
+    fn native_mtp_span_base_position(&self, session_id: &str) -> OpenAiResult<Option<u64>> {
+        let session_id = session_id.to_string();
+        self.iteration_scheduler
+            .execute_runtime("native-mtp-position", move |runtime| {
+                Ok(runtime.session_token_count(&session_id))
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -222,33 +223,46 @@ impl StageOpenAiBackend {
         emit_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
     ) -> OpenAiResult<VerifiedSpan> {
         let verify_timer = Instant::now();
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let (predictions, next_draft) = runtime
-            .verify_tokens_sampled_mtp(
-                session_id,
-                verify_inputs,
-                request.sampling.enabled.then_some(request.sampling),
-                state.native_mtp_options.max_draft_tokens,
-            )
-            .map_err(openai_backend_error)?;
-        let decision = classify_native_mtp_verify_window(
-            draft_tokens,
-            &predictions,
-            state.decoded_tokens,
-            request.max_tokens as usize,
-            |token| {
-                runtime
-                    .model
-                    .token_is_eog(token)
-                    .map_err(openai_backend_error)
-            },
-        )?;
-        let position_after_verification = runtime
-            .session_token_count(session_id)
-            .ok_or_else(|| OpenAiError::backend("native MTP span session disappeared"))?;
+        let owned_session_id = session_id.to_string();
+        let owned_verify_inputs = verify_inputs.to_vec();
+        let owned_draft_tokens = draft_tokens.to_vec();
+        let sampling = request.sampling.enabled.then_some(request.sampling.clone());
+        let max_draft_tokens = state.native_mtp_options.max_draft_tokens;
+        let decoded_tokens = state.decoded_tokens;
+        let max_tokens = request.max_tokens as usize;
+        let (predictions, next_draft, decision, position_after_verification) = self
+            .iteration_scheduler
+            .execute_runtime("native-mtp-verify", move |runtime| {
+                let (predictions, next_draft) = runtime
+                    .verify_tokens_sampled_mtp(
+                        &owned_session_id,
+                        &owned_verify_inputs,
+                        sampling.as_ref(),
+                        max_draft_tokens,
+                    )
+                    .map_err(openai_backend_error)?;
+                let decision = classify_native_mtp_verify_window(
+                    &owned_draft_tokens,
+                    &predictions,
+                    decoded_tokens,
+                    max_tokens,
+                    |token| {
+                        runtime
+                            .model
+                            .token_is_eog(token)
+                            .map_err(openai_backend_error)
+                    },
+                )?;
+                let position_after_verification = runtime
+                    .session_token_count(&owned_session_id)
+                    .ok_or_else(|| OpenAiError::backend("native MTP span session disappeared"))?;
+                Ok((
+                    predictions,
+                    next_draft,
+                    decision,
+                    position_after_verification,
+                ))
+            })?;
         let expected_position = base_position
             .checked_add(
                 u64::try_from(verify_inputs.len())
@@ -260,7 +274,6 @@ impl StageOpenAiBackend {
                 "native MTP span verification position mismatch: observed {position_after_verification}, expected {expected_position}"
             )));
         }
-        drop(runtime);
         let verification_elapsed_us =
             u64::try_from(verify_timer.elapsed().as_micros()).unwrap_or(u64::MAX);
 
@@ -349,46 +362,46 @@ impl StageOpenAiBackend {
                     .map_err(|_| OpenAiError::backend("committed token count exceeds u64"))?,
             )
             .ok_or_else(|| OpenAiError::backend("native MTP span canonical position overflow"))?;
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned during span repair"))?;
-        if full_accept {
-            return runtime
-                .retire_verify_checkpoint(
-                    session_id,
-                    base_position,
-                    u64::try_from(verification_rows)
-                        .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?,
-                )
-                .map_err(openai_backend_error);
-        }
-        if let Err(error) = runtime.trim_session(session_id, canonical_position) {
-            let _ = runtime.drop_session_timed(session_id);
-            return Err(OpenAiError::backend(format!(
-                "native MTP span repair failed and the session was retired: {error:#}"
-            )));
-        }
-        if let Some(metadata) = request.chat_sampling_metadata {
-            runtime
-                .configure_chat_sampling(
-                    session_id,
-                    metadata,
-                    u64::try_from(request.prompt_token_ids.len()).unwrap_or(u64::MAX),
-                    request.sampling.enabled.then_some(request.sampling),
-                )
-                .map_err(openai_backend_error)?;
-        }
-        let repaired_position = runtime
-            .session_token_count(session_id)
-            .ok_or_else(|| OpenAiError::backend("repaired native MTP span session disappeared"))?;
-        if repaired_position != canonical_position {
-            let _ = runtime.drop_session_timed(session_id);
-            return Err(OpenAiError::backend(format!(
-                "native MTP span repair position mismatch: observed {repaired_position}, expected {canonical_position}"
-            )));
-        }
-        Ok(())
+        let session_id = session_id.to_string();
+        let verification_rows = u64::try_from(verification_rows)
+            .map_err(|_| OpenAiError::backend("verification row count exceeds u64"))?;
+        let chat_sampling_metadata = request.chat_sampling_metadata.map(str::to_string);
+        let prompt_token_count = u64::try_from(request.prompt_token_ids.len()).unwrap_or(u64::MAX);
+        let sampling = request.sampling.enabled.then_some(request.sampling.clone());
+        self.iteration_scheduler
+            .execute_runtime("native-mtp-repair", move |runtime| {
+            if full_accept {
+                return runtime
+                    .retire_verify_checkpoint(&session_id, base_position, verification_rows)
+                    .map_err(openai_backend_error);
+            }
+            if let Err(error) = runtime.trim_session(&session_id, canonical_position) {
+                let _ = runtime.drop_session_timed(&session_id);
+                return Err(OpenAiError::backend(format!(
+                    "native MTP span repair failed and the session was retired: {error:#}"
+                )));
+            }
+            if let Some(metadata) = chat_sampling_metadata.as_deref() {
+                runtime
+                    .configure_chat_sampling(
+                        &session_id,
+                        metadata,
+                        prompt_token_count,
+                        sampling.as_ref(),
+                    )
+                    .map_err(openai_backend_error)?;
+            }
+            let repaired_position = runtime.session_token_count(&session_id).ok_or_else(|| {
+                OpenAiError::backend("repaired native MTP span session disappeared")
+            })?;
+            if repaired_position != canonical_position {
+                let _ = runtime.drop_session_timed(&session_id);
+                return Err(OpenAiError::backend(format!(
+                    "native MTP span repair position mismatch: observed {repaired_position}, expected {canonical_position}"
+                )));
+            }
+            Ok(())
+            })
     }
 }
 

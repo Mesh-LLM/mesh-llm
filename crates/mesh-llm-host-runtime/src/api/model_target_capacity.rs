@@ -30,6 +30,7 @@ struct ModelSizeHint {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModelTargetSizeLookup {
     hints_by_key: HashMap<String, ModelSizeHint>,
+    split_capable_by_key: HashMap<String, bool>,
 }
 
 impl ModelTargetSizeLookup {
@@ -54,6 +55,15 @@ impl ModelTargetSizeLookup {
                     .packages
                     .iter()
                     .any(|package| package.package_type == "layer-package");
+                if split_capable {
+                    lookup.insert_split_capability_aliases(
+                        variant_name,
+                        &variant.curated.name,
+                        &variant.source.repo,
+                        variant.source.revision.as_deref(),
+                        source_file,
+                    );
+                }
                 if let Some(model_bytes) = variant
                     .curated
                     .size
@@ -78,6 +88,7 @@ impl ModelTargetSizeLookup {
                     .iter()
                     .filter(|package| package.package_type == "layer-package")
                 {
+                    lookup.insert_split_capability(&package.repo, true);
                     if let Some(model_bytes) = package.total_bytes {
                         lookup.insert_package_alias(
                             &package.repo,
@@ -95,6 +106,23 @@ impl ModelTargetSizeLookup {
 
     fn find(&self, query: &str) -> Option<ModelSizeHint> {
         self.hints_by_key.get(&normalize_match_key(query)).copied()
+    }
+
+    fn split_capable(&self, query: &str) -> Option<bool> {
+        self.find(query)
+            .map(|hint| hint.split_capable)
+            .or_else(|| {
+                self.split_capable_by_key
+                    .get(&normalize_match_key(query))
+                    .copied()
+            })
+            .or_else(|| {
+                model_ref::ModelRef::parse(query).ok().and_then(|parsed| {
+                    self.split_capable_by_key
+                        .get(&normalize_match_key(&parsed.repo))
+                        .copied()
+                })
+            })
     }
 
     fn insert_model_aliases(
@@ -141,6 +169,45 @@ impl ModelTargetSizeLookup {
     fn insert_package_alias(&mut self, alias: &str, hint: ModelSizeHint) {
         self.hints_by_key.insert(normalize_match_key(alias), hint);
     }
+
+    fn insert_split_capability(&mut self, alias: &str, split_capable: bool) {
+        self.split_capable_by_key
+            .insert(normalize_match_key(alias), split_capable);
+    }
+
+    fn insert_split_capability_aliases(
+        &mut self,
+        variant_name: &str,
+        curated_name: &str,
+        repo: &str,
+        revision: Option<&str>,
+        source_file: &str,
+    ) {
+        let basename = source_file.rsplit('/').next().unwrap_or(source_file);
+        let selector = model_ref::quant_selector_from_gguf_file(source_file);
+        let model_ref_with_revision =
+            model_ref::format_model_ref(repo, revision, selector.as_deref());
+        let model_ref_without_revision =
+            model_ref::format_model_ref(repo, None, selector.as_deref());
+        let canonical_ref =
+            revision.map(|revision| model_ref::format_canonical_ref(repo, revision, source_file));
+
+        for alias in [
+            variant_name,
+            curated_name,
+            repo,
+            source_file,
+            basename,
+            basename.trim_end_matches(".gguf"),
+            model_ref_with_revision.as_str(),
+            model_ref_without_revision.as_str(),
+        ] {
+            self.insert_split_capability(alias, true);
+        }
+        if let Some(canonical_ref) = canonical_ref {
+            self.insert_split_capability(&canonical_ref, true);
+        }
+    }
 }
 
 pub(crate) fn evaluate_model_target_capacity(
@@ -155,7 +222,15 @@ pub(crate) fn evaluate_model_target_capacity(
     let required_bytes = size_hint
         .map(|hint| runtime::runtime_model_required_bytes(hint.model_bytes))
         .filter(|required| *required > 0);
-    let split_capable = size_hint.map(|hint| hint.split_capable).unwrap_or(false);
+    let split_capable = input
+        .size_lookup
+        .split_capable(input.model_ref)
+        .or_else(|| {
+            input
+                .model_name
+                .and_then(|name| input.size_lookup.split_capable(name))
+        });
+    let split_capable_for_capacity = split_capable == Some(true);
 
     if input.serving_node_count > 0 {
         return advice(
@@ -225,7 +300,7 @@ pub(crate) fn evaluate_model_target_capacity(
         );
     }
 
-    if split_capable
+    if split_capable_for_capacity
         && capacity.eligible_node_count >= 2
         && capacity.aggregate_capacity_bytes >= required_bytes
     {
@@ -241,7 +316,7 @@ pub(crate) fn evaluate_model_target_capacity(
         );
     }
 
-    let comparable_capacity = if split_capable && capacity.eligible_node_count >= 2 {
+    let comparable_capacity = if split_capable_for_capacity && capacity.eligible_node_count >= 2 {
         capacity.aggregate_capacity_bytes
     } else {
         capacity.best_single_node_capacity_bytes.unwrap_or_default()
@@ -306,7 +381,7 @@ fn record_node_capacity(summary: &mut CapacitySummary, role: &NodeRole, vram_byt
 struct AdviceDetails {
     required_bytes: Option<u64>,
     shortfall_bytes: Option<u64>,
-    split_capable: bool,
+    split_capable: Option<bool>,
 }
 
 fn advice(
@@ -410,6 +485,76 @@ mod tests {
                 model_bytes: 24_000_000_000,
                 split_capable: true,
             })
+        );
+    }
+
+    #[test]
+    fn split_capability_is_known_when_layer_package_size_is_missing() {
+        let mut entry = catalog_entry();
+        entry.variants.get_mut("Model-Q4_K_M").unwrap().packages[0].total_bytes = None;
+        let lookup = ModelTargetSizeLookup::from_entries(vec![entry]);
+
+        assert_eq!(lookup.find("meshllm/model-q4_k_m-layers"), None);
+        assert_eq!(
+            lookup.split_capable("meshllm/model-q4_k_m-layers"),
+            Some(true)
+        );
+        assert_eq!(
+            lookup.split_capable("meshllm/model-q4_k_m-layers@rev-a"),
+            Some(true)
+        );
+        assert_eq!(
+            lookup.split_capable("hf://example/source@rev-a:Q4_K_M"),
+            Some(true)
+        );
+        assert_eq!(lookup.split_capable("Model-Q4_K_M"), Some(true));
+    }
+
+    #[test]
+    fn capacity_advice_preserves_layer_package_capability_without_size() {
+        let mut entry = catalog_entry();
+        entry.variants.get_mut("Model-Q4_K_M").unwrap().packages[0].total_bytes = None;
+        let lookup = ModelTargetSizeLookup::from_entries(vec![entry]);
+        let local_role = NodeRole::Host { http_port: 9337 };
+
+        let payload = evaluate_model_target_capacity(ModelTargetCapacityInput {
+            model_ref: "meshllm/model-q4_k_m-layers",
+            model_name: None,
+            serving_node_count: 0,
+            local_role: &local_role,
+            local_vram_bytes: 8_000_000_000,
+            peers: &[],
+            size_lookup: &lookup,
+        });
+
+        assert_eq!(
+            payload.state,
+            ModelTargetCapacityAdviceState::UnknownModelSize
+        );
+        assert_eq!(payload.split_capable, Some(true));
+    }
+
+    #[test]
+    fn capacity_advice_omits_unknown_split_capability() {
+        let lookup = ModelTargetSizeLookup::default();
+        let local_role = NodeRole::Host { http_port: 9337 };
+
+        let payload = evaluate_model_target_capacity(ModelTargetCapacityInput {
+            model_ref: "unknown/model",
+            model_name: None,
+            serving_node_count: 0,
+            local_role: &local_role,
+            local_vram_bytes: 8_000_000_000,
+            peers: &[],
+            size_lookup: &lookup,
+        });
+
+        assert_eq!(payload.split_capable, None);
+        assert!(
+            serde_json::to_value(payload)
+                .unwrap()
+                .get("split_capable")
+                .is_none()
         );
     }
 

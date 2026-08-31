@@ -18,7 +18,7 @@ impl KvStageIntegration {
         }
         // Walk lookup candidates longest-prefix-first; the first validated
         // cache hit is the longest activation frame reachable from this prompt.
-        for identity in self.lookup_identities(config, base, token_start, token_ids) {
+        for identity in self.activation_lookup_identities(config, base, token_start, token_ids) {
             let page_id = activation_page_id(&identity.page_id, activation_width);
             let Some(lookup) = self
                 .activations
@@ -61,7 +61,7 @@ impl KvStageIntegration {
             return Vec::new();
         }
         let token_count = token_ids.len() as u64;
-        if token_count < self.candidate_policy.min_tokens || frame.payload.is_empty() {
+        if token_count < self.checkpoint_policy.min_tokens || frame.payload.is_empty() {
             return Vec::new();
         }
         if u64::from(frame.desc.token_count) != token_count
@@ -69,7 +69,7 @@ impl KvStageIntegration {
         {
             return Vec::new();
         }
-        let identities = self.record_identities(config, base, token_start, token_ids);
+        let identities = self.activation_record_identities(config, base, token_start, token_ids);
         let mut cache = self
             .activations
             .lock()
@@ -167,9 +167,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: Some(StageKvCacheConfig {
@@ -186,6 +197,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

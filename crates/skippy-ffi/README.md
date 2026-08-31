@@ -243,6 +243,6 @@ hook currently bound by this crate.
 | `skippy_model_info_tensor_at` | Returns tensor metadata for one index. |
 | `skippy_slice_plan_create` | Creates a GGUF slicing plan from model metadata. |
 | `skippy_slice_plan_free` | Releases a slicing plan. |
-| `skippy_slice_plan_add_layer_range` | Adds one stage layer range and embedding/output ownership flags to a plan. |
+| `skippy_slice_plan_add_layer_range` | Adds one stage layer range and shared-tensor ownership flags to a plan. |
 | `skippy_write_slice_gguf` | Writes one planned stage slice as a GGUF artifact. |
 | `skippy_write_gguf_from_parts` | Composes multiple GGUF parts into one materialized package. |

@@ -2,15 +2,46 @@
 fn stage_load_proto_roundtrip_preserves_source_model_bytes() {
     let load = stage_load_request();
     let proto = stage_load_to_proto(load.clone());
-    assert_eq!(proto.source_model_bytes, Some(123_456_789));
-    assert_eq!(proto.mmap, Some(false));
-    assert_eq!(proto.mlock, Some(true));
+    assert_encoded_stage_load(&proto);
 
     let decoded = stage_load_from_proto(proto).unwrap();
+    assert_decoded_stage_load(&decoded);
+}
+
+fn assert_encoded_stage_load(proto: &skippy_stage_proto::LoadStage) {
+    assert_eq!(proto.source_model_bytes, Some(123_456_789));
+    assert_eq!(proto.continuous_batching, Some(false));
+    assert_eq!(proto.mmap, Some(false));
+    assert_eq!(proto.mlock, Some(true));
+    assert_eq!(proto.projector_use_gpu, Some(false));
+    assert_eq!(proto.media_marker.as_deref(), Some("<media>"));
+    assert_eq!(proto.image_min_tokens, Some(32));
+    assert_eq!(proto.image_max_tokens, Some(2048));
+    assert_eq!(proto.batch_max_tokens, Some(512));
+    assert_eq!(proto.glm_dsa_policy, 1);
+    assert_eq!(proto.generation_signal_window, Some(24));
+}
+
+fn assert_decoded_stage_load(decoded: &crate::inference::skippy::StageLoadRequest) {
     assert_eq!(decoded.source_model_bytes, Some(123_456_789));
+    assert!(!decoded.continuous_batching);
     assert_eq!(decoded.model_path.as_deref(), Some("/models/demo.gguf"));
     assert_eq!(decoded.mmap, Some(false));
     assert!(decoded.mlock);
+    assert_eq!(decoded.projector_use_gpu, Some(false));
+    assert_eq!(decoded.media_marker.as_deref(), Some("<media>"));
+    assert_eq!(decoded.image_min_tokens, Some(32));
+    assert_eq!(decoded.image_max_tokens, Some(2048));
+    assert_eq!(decoded.batch_max_tokens, Some(512));
+    assert_eq!(decoded.glm_dsa_policy, skippy_protocol::GlmDsaPolicy::V1);
+    assert_eq!(decoded.generation_signal_window, Some(24));
+}
+
+#[test]
+fn stage_load_proto_missing_continuous_batching_keeps_legacy_enabled_default() {
+    let decoded = stage_load_from_proto(skippy_stage_proto::LoadStage::default()).unwrap();
+
+    assert!(decoded.continuous_batching);
 }
 
 #[test]

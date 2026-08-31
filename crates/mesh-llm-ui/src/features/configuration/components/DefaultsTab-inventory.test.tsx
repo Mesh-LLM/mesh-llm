@@ -107,7 +107,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
         threads: '12',
         temperature: '0.8',
         'top-k': '55',
-        'activation-wire-dtype': 'q8',
         'binary-stage-transport': 'on',
         'image-min-tokens': '64',
         'mmproj-offload': 'on',
@@ -118,11 +117,12 @@ describe('DefaultsTab visual inventory and metadata', () => {
     })
 
     const rail = defaultsRail()
-    expect(rail.getAllByRole('button')).toHaveLength(6)
+    expect(rail.getAllByRole('button')).toHaveLength(7)
     expect(rail.getByRole('button', { name: /runtime/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /request defaults/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /skippy transport/i })).toBeInTheDocument()
     expect(rail.getByRole('button', { name: /multimodal/i })).toBeInTheDocument()
+    expect(rail.getByRole('button', { name: /topology/i })).toBeInTheDocument()
     expect(rail.queryByRole('button', { name: /advanced server/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
     expect(screen.queryByText('Memory lock')).not.toBeInTheDocument()
@@ -136,7 +136,7 @@ describe('DefaultsTab visual inventory and metadata', () => {
     await user.click(rail.getByRole('button', { name: /skippy transport/i }))
     expect(rail.getByRole('button', { name: /skippy transport/i })).toHaveAttribute('aria-current', 'true')
     expect(screen.getByRole('heading', { name: 'Skippy Transport' })).toBeInTheDocument()
-    expect(screen.getByText('Activation wire dtype')).toBeInTheDocument()
+    expect(screen.getByText('Binary stage transport')).toBeInTheDocument()
 
     await user.click(rail.getByRole('button', { name: /multimodal/i }))
     expect(rail.getByRole('button', { name: /multimodal/i })).toHaveAttribute('aria-current', 'true')
@@ -151,7 +151,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     expect(previewSource().value).toContain('temperature = 0.8')
     expect(previewSource().value).toContain('top_k = 55')
     expect(previewSource().value).toContain('[defaults.skippy]')
-    expect(previewSource().value).toContain('activation_wire_dtype = "q8"')
     expect(previewSource().value).toContain('binary_stage_transport = "on"')
     expect(previewSource().value).toContain('mlock = true')
     expect(previewSource().value).toContain('[defaults.multimodal]')
@@ -167,7 +166,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
           threads: '12',
           temperature: '0.8',
           'top-k': '55',
-          'activation-wire-dtype': 'q8',
           'binary-stage-transport': 'on',
           'image-min-tokens': '64',
           'mmproj-offload': 'on',
@@ -205,17 +203,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     const liveHydratedDefaults = {
       ...CONFIGURATION_DEFAULTS,
       settings: CONFIGURATION_DEFAULTS.settings.map((setting) => {
-        if (setting.id === 'activation-wire-dtype') {
-          return {
-            ...setting,
-            baselineValue: setting.control.value,
-            control: {
-              ...setting.control,
-              value: 'q8'
-            }
-          }
-        }
-
         if (setting.id === 'image-min-tokens') {
           return {
             ...setting,
@@ -248,8 +235,6 @@ describe('DefaultsTab visual inventory and metadata', () => {
     })
 
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
-    expect(previewSource().value).toContain('[defaults.skippy]')
-    expect(previewSource().value).toContain('activation_wire_dtype = "q8"')
     expect(previewSource().value).toContain('[defaults.multimodal]')
     expect(previewSource().value).toContain('image_min_tokens = 64')
     expect(previewSource().value).toContain('[defaults.advanced.server]')
@@ -402,14 +387,14 @@ describe('DefaultsTab visual inventory and metadata', () => {
     renderDefaultsTab({ data: CONFIGURATION_DEFAULTS })
 
     const rail = defaultsRail()
-    expect(rail.getAllByRole('button')).toHaveLength(6)
+    expect(rail.getAllByRole('button')).toHaveLength(7)
     expect(screen.queryByText('Mirostat mode')).not.toBeInTheDocument()
     expect(screen.queryByText('Server alias')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /show advanced/i }))
 
     await waitFor(() => {
-      expect(rail.getAllByRole('button')).toHaveLength(7)
+      expect(rail.getAllByRole('button')).toHaveLength(8)
       expect(rail.getByRole('button', { name: /advanced server/i })).toBeInTheDocument()
       expect(screen.getByText('Mirostat mode')).toBeInTheDocument()
       expect(screen.getByText('Server alias')).toBeInTheDocument()
@@ -421,7 +406,7 @@ describe('DefaultsTab visual inventory and metadata', () => {
     await user.click(screen.getByRole('button', { name: /hide advanced/i }))
 
     await waitFor(() => {
-      expect(rail.getAllByRole('button')).toHaveLength(6)
+      expect(rail.getAllByRole('button')).toHaveLength(7)
       expect(rail.queryByRole('button', { name: /advanced server/i })).not.toBeInTheDocument()
       expect(screen.queryByText('Mirostat mode')).not.toBeInTheDocument()
       expect(screen.queryByText('Server alias')).not.toBeInTheDocument()

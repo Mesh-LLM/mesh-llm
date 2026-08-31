@@ -1,4 +1,3 @@
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::WireCondition;
@@ -9,13 +8,13 @@ use crate::frontend::NativeMtpDraft;
 use crate::frontend::NativeMtpStats;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::decode_scheduler::VerifyWindowPipelineStats;
 use crate::frontend::generation::DraftRunner;
 use crate::frontend::generation::GenerationTokenLimit;
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PreparedGenerationPrompt;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::frontend::native_mtp::NativeMtpDecodeTelemetry;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::speculative::OpenAiSpeculativeStats;
@@ -32,7 +31,6 @@ use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -71,8 +69,7 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) generation_receipt: Option<GenerationReceiptConfig>,
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub(in crate::frontend) kv: Option<Arc<KvStageIntegration>>,
-    pub(in crate::frontend) decode_batcher: DecodeBatcher,
-    pub(in crate::frontend) decode_frame_batcher: DecodeFrameBatcher,
+    pub(in crate::frontend) iteration_scheduler: IterationScheduler,
 }
 
 #[derive(Clone)]
@@ -81,7 +78,6 @@ pub(in crate::frontend) enum OpenAiBackendMode {
     LocalRuntime,
     EmbeddedStageZero {
         config: StageConfig,
-        wire_dtype: WireActivationDType,
         prefill_chunk_policy: PrefillChunkPolicy,
         activation_width: i32,
         downstream_wire_condition: WireCondition,
@@ -154,7 +150,6 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
 
 pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) config: &'a StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) prefill_chunk_policy: &'a PrefillChunkPolicy,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
@@ -185,7 +180,6 @@ pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
     pub(in crate::frontend) cancellation: Option<&'a openai_frontend::CancellationToken>,
     pub(in crate::frontend) ids: OpenAiGenerationIds,
     pub(in crate::frontend) config: StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
     pub(in crate::frontend) lane_pool: Arc<PersistentStageLanePool>,

@@ -29,9 +29,9 @@ afterEach(() => {
 })
 
 describe('JsonPayloadView', () => {
-  it('renders the pretty representation with visible line numbers', () => {
+  it('renders the controlled pretty representation with visible line numbers and no local format control', () => {
     // Given / When
-    const { container } = render(<JsonPayloadView prettyText={PRETTY_JSON} text={RAW_JSON} />)
+    const { container } = render(<JsonPayloadView format="pretty" prettyText={PRETTY_JSON} text={RAW_JSON} />)
 
     // Then
     expect(renderedLines(container)).toBe(PRETTY_JSON)
@@ -41,20 +41,18 @@ describe('JsonPayloadView', () => {
       '3',
       '4'
     ])
-    expect(screen.getByRole('radio', { name: 'Pretty' })).toBeChecked()
+    expect(screen.queryByRole('radiogroup', { name: 'JSON format' })).not.toBeInTheDocument()
   })
 
-  it('switches between Pretty and Raw without replacing the payload component', async () => {
+  it('updates the representation when the controlled format changes', () => {
     // Given
-    const user = userEvent.setup()
-    const { container } = render(<JsonPayloadView prettyText={PRETTY_JSON} text={RAW_JSON} />)
+    const { container, rerender } = render(<JsonPayloadView format="pretty" prettyText={PRETTY_JSON} text={RAW_JSON} />)
 
     // When
-    await user.click(screen.getByRole('radio', { name: 'Raw' }))
+    rerender(<JsonPayloadView format="raw" prettyText={PRETTY_JSON} text={RAW_JSON} />)
 
     // Then
     expect(renderedLines(container)).toBe(RAW_JSON)
-    expect(screen.getByRole('radio', { name: 'Raw' })).toBeChecked()
     expect(screen.getByRole('status')).toHaveTextContent('Raw JSON representation selected.')
   })
 
@@ -63,16 +61,9 @@ describe('JsonPayloadView', () => {
     const user = userEvent.setup()
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
     installClipboard(writeText)
-    render(<JsonPayloadView prettyText={PRETTY_JSON} text={RAW_JSON} />)
+    render(<JsonPayloadView format="raw" prettyText={PRETTY_JSON} text={RAW_JSON} />)
 
     // When
-    await user.click(screen.getByRole('button', { name: 'Copy JSON payload' }))
-
-    // Then
-    expect(writeText).toHaveBeenLastCalledWith(PRETTY_JSON)
-
-    // When
-    await user.click(screen.getByRole('radio', { name: 'Raw' }))
     await user.click(screen.getByRole('button', { name: 'Copy JSON payload' }))
 
     // Then
@@ -80,24 +71,11 @@ describe('JsonPayloadView', () => {
     expect(screen.getByText('Copied')).toBeInTheDocument()
   })
 
-  it('keeps format and copy controls keyboard reachable', async () => {
+  it('keeps the copy control keyboard reachable', async () => {
     // Given
     const user = userEvent.setup()
     installClipboard(vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined))
-    render(<JsonPayloadView prettyText={PRETTY_JSON} text={RAW_JSON} />)
-    const pretty = screen.getByRole('radio', { name: 'Pretty' })
-
-    // When
-    await user.tab()
-
-    // Then
-    expect(pretty).toHaveFocus()
-
-    // When
-    await user.tab()
-
-    // Then
-    expect(screen.getByRole('radio', { name: 'Raw' })).toHaveFocus()
+    render(<JsonPayloadView format="pretty" prettyText={PRETTY_JSON} text={RAW_JSON} />)
 
     // When
     await user.tab()
@@ -106,13 +84,25 @@ describe('JsonPayloadView', () => {
     expect(screen.getByRole('button', { name: 'Copy JSON payload' })).toHaveFocus()
   })
 
+  it('anchors the copy toolbar independently from wide JSON content', () => {
+    // Given / When
+    render(<JsonPayloadView format="raw" prettyText={PRETTY_JSON} text={RAW_JSON} />)
+
+    // Then
+    const copy = screen.getByRole('button', { name: 'Copy JSON payload' })
+    expect(copy.closest('section')).toHaveClass('min-w-full', 'w-max')
+    const toolbar = copy.parentElement
+    expect(toolbar).toHaveClass('sticky', 'left-0', 'w-[100cqw]')
+    expect(toolbar).not.toHaveClass('min-w-max', 'right-0', 'ml-auto', 'w-fit')
+  })
+
   it('uses distinct syntax tokens while keeping hostile JSON strings inert', () => {
     // Given
     const rawText = '{"markup":"<img src=x onerror=alert(1)>","enabled":true}'
     const prettyText = '{\n  "markup": "<img src=x onerror=alert(1)>",\n  "enabled": true\n}'
 
     // When
-    const { container } = render(<JsonPayloadView prettyText={prettyText} text={rawText} />)
+    const { container } = render(<JsonPayloadView format="pretty" prettyText={prettyText} text={rawText} />)
 
     // Then
     expect(screen.getByText('"markup"')).toHaveAttribute('data-json-token', 'key')

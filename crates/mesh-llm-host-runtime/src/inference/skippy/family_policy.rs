@@ -1,14 +1,12 @@
 use std::path::Path;
 
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
-use skippy_topology::{FamilyCapabilityRecord, WireDType, infer_family_capability};
+use skippy_topology::{FamilyCapabilityRecord, infer_family_capability};
 
-use super::StageWireDType;
 use crate::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FamilyPolicy {
-    pub(crate) activation_wire_dtype: StageWireDType,
     pub(crate) default_kv_cache_type: Option<&'static str>,
     pub(crate) prefix_cache: FamilyPrefixCachePolicy,
 }
@@ -233,10 +231,7 @@ fn family_policy_for_gguf_meta(meta: &GgufCompactMeta, model_id: Option<&str>) -
 }
 
 fn family_policy_for_capability(capability: &FamilyCapabilityRecord) -> FamilyPolicy {
-    let mut policy = family_policy_for_normalized_family_id(
-        capability.family_id.as_str(),
-        wire_dtype_from_capability(capability.default_wire_dtype),
-    );
+    let mut policy = family_policy_for_normalized_family_id(capability.family_id.as_str());
     if capability.family_id == "inkling" {
         policy.default_kv_cache_type = Some("q4_0");
     }
@@ -250,7 +245,7 @@ fn family_policy_for_model_id(model_id: &str) -> FamilyPolicy {
     infer_family_capability(model_id, 0, 0)
         .as_ref()
         .map(family_policy_for_capability)
-        .unwrap_or_else(|| unknown_family_policy_with_wire_dtype(StageWireDType::F16))
+        .unwrap_or_else(unknown_family_policy)
 }
 
 fn capability_from_gguf_meta(
@@ -273,13 +268,9 @@ fn capability_from_gguf_meta(
     None
 }
 
-fn family_policy_for_normalized_family_id(
-    family_id: &str,
-    activation_wire_dtype: StageWireDType,
-) -> FamilyPolicy {
+fn family_policy_for_normalized_family_id(family_id: &str) -> FamilyPolicy {
     if matches!(family_id, "dream" | "llada" | "llada_moe") {
         return disabled_family_policy(
-            activation_wire_dtype,
             "non-causal diffusion family has no resident KV state to cache",
         );
     }
@@ -289,9 +280,9 @@ fn family_policy_for_normalized_family_id(
         .find(|expected| expected.family_id == family_id)
     {
         return if expected.recurrent_or_hybrid {
-            kv_recurrent_policy(activation_wire_dtype)
+            kv_recurrent_policy()
         } else {
-            resident_kv_policy(activation_wire_dtype)
+            resident_kv_policy()
         };
     }
 
@@ -304,19 +295,18 @@ fn family_policy_for_normalized_family_id(
         | "gpt2" | "mistral" | "internlm2" | "baichuan" | "exaone" | "exaone4" | "cohere2"
         | "command_r" | "falcon" | "qwen2vl" | "qwen3vl" | "deepseek2ocr" | "qwen3vlmoe"
         | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" | "muse_glimmer" => {
-            resident_kv_policy(activation_wire_dtype)
+            resident_kv_policy()
         }
-        "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6" | "rwkv7"
-        | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => {
-            kv_recurrent_policy(activation_wire_dtype)
+        "qwen3next" | "qwen4exp" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2"
+        | "rwkv6" | "rwkv7" | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => {
+            kv_recurrent_policy()
         }
-        _ => unknown_family_policy_with_wire_dtype(activation_wire_dtype),
+        _ => unknown_family_policy(),
     }
 }
 
-fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
+fn resident_kv_policy() -> FamilyPolicy {
     FamilyPolicy {
-        activation_wire_dtype,
         default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::ResidentKv,
@@ -352,9 +342,8 @@ fn resident_kv_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
     }
 }
 
-fn kv_recurrent_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
+fn kv_recurrent_policy() -> FamilyPolicy {
     FamilyPolicy {
-        activation_wire_dtype,
         default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::KvRecurrent,
@@ -368,32 +357,13 @@ fn kv_recurrent_policy(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
 }
 
 fn unknown_family_policy() -> FamilyPolicy {
-    unknown_family_policy_with_wire_dtype(StageWireDType::F16)
+    disabled_family_policy("family cache policy is not certified")
 }
 
-fn unknown_family_policy_with_wire_dtype(activation_wire_dtype: StageWireDType) -> FamilyPolicy {
-    disabled_family_policy(
-        activation_wire_dtype,
-        "family cache policy is not certified",
-    )
-}
-
-fn disabled_family_policy(
-    activation_wire_dtype: StageWireDType,
-    reason: &'static str,
-) -> FamilyPolicy {
+fn disabled_family_policy(reason: &'static str) -> FamilyPolicy {
     FamilyPolicy {
-        activation_wire_dtype,
         default_kv_cache_type: None,
         prefix_cache: FamilyPrefixCachePolicy::Disabled { reason },
-    }
-}
-
-fn wire_dtype_from_capability(dtype: WireDType) -> StageWireDType {
-    match dtype {
-        WireDType::F32 => StageWireDType::F32,
-        WireDType::F16 => StageWireDType::F16,
-        WireDType::Q8 => StageWireDType::Q8,
     }
 }
 
@@ -527,6 +497,13 @@ mod tests {
             materialized_pinned: false,
             model_path: None,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,
@@ -538,9 +515,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "q8_0".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -604,8 +592,6 @@ mod tests {
     #[test]
     fn qwen_policy_comes_from_gguf_architecture() {
         let policy = family_policy_for_gguf_meta(&meta("qwen3"), None);
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert_eq!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -625,8 +611,6 @@ mod tests {
     #[test]
     fn muse_glimmer_policy_comes_from_gguf_architecture() {
         let policy = family_policy_for_gguf_meta(&meta("muse-glimmer"), None);
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert_eq!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -653,8 +637,6 @@ mod tests {
     #[test]
     fn llama_policy_comes_from_capability_family_id() {
         let policy = family_policy_for_model_id("llama");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -667,8 +649,6 @@ mod tests {
     #[test]
     fn falcon_h1_uses_kv_recurrent_cache_shape() {
         let policy = family_policy_for_model_id("tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -681,8 +661,6 @@ mod tests {
     #[test]
     fn deepseek3_uses_resident_kv_cache_shape_until_mla_is_certified() {
         let policy = family_policy_for_model_id("unsloth/DeepSeek-V3.2-GGUF:Q4_K_M");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -696,8 +674,6 @@ mod tests {
     fn qwen3_coder_active_parameter_package_uses_resident_kv_cache_shape() {
         let policy =
             family_policy_for_model_id("unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:UD-Q4_K_XL");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -710,8 +686,6 @@ mod tests {
     #[test]
     fn gemma_family_uses_resident_kv_cache_shape() {
         let policy = family_policy_for_gguf_meta(&meta("gemma3"), None);
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F16);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -724,8 +698,6 @@ mod tests {
     #[test]
     fn gemma_small_reviewed_policy_uses_f32_activation_wire() {
         let policy = family_policy_for_model_id("ggml-org/gemma-3-270m-it-GGUF:Q8_0");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F32);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -738,8 +710,6 @@ mod tests {
     #[test]
     fn apertus_reviewed_policy_uses_f32_activation_wire() {
         let policy = family_policy_for_model_id("unsloth/Apertus-8B-Instruct-2509-GGUF:UD-IQ2_M");
-
-        assert_eq!(policy.activation_wire_dtype, StageWireDType::F32);
         assert!(matches!(
             policy.prefix_cache,
             FamilyPrefixCachePolicy::Auto {
@@ -880,6 +850,8 @@ mod tests {
             "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
             "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
             "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
+            "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ1_S",
+            "qwen4exp",
         ] {
             let policy = family_policy_for_model_id(model_id);
             assert!(
@@ -948,7 +920,6 @@ mod tests {
         config.source_model_path = Some("/source/not-downloaded/model.gguf".to_string());
         config.model_path = Some("hf://mesh-llm/laguna-layers".to_string());
         let policy = FamilyPolicy {
-            activation_wire_dtype: StageWireDType::F16,
             default_kv_cache_type: None,
             prefix_cache: FamilyPrefixCachePolicy::Auto {
                 payload: FamilyPrefixCachePayload::ResidentKv,

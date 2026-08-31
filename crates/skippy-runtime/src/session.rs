@@ -65,7 +65,7 @@ impl StageSession {
     ) -> Result<()> {
         let metadata_json = CString::new(metadata_json)
             .context("chat sampling metadata contains an interior NUL byte")?;
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -192,7 +192,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -233,7 +233,7 @@ impl StageSession {
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -271,8 +271,8 @@ impl StageSession {
             .collect::<Vec<_>>();
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let sampling = raw_sampling
             .iter()
             .map(|sampling| {

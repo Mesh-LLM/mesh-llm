@@ -10,6 +10,58 @@ use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 use tokio::sync::{Mutex as TokioMutex, oneshot};
 
+#[tokio::test]
+async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
+    let handle = spawn_stage_control_loop(None, super::super::SkippyTelemetryOptions::default());
+    let sender = handle.sender();
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("stage control shutdown should be bounded")
+        .expect("stage control shutdown should succeed");
+    let (resp, _rx) = oneshot::channel();
+    assert!(
+        sender
+            .send(StageControlCommand {
+                request: StageControlRequest::Status(StageStatusFilter {
+                    topology_id: None,
+                    run_id: None,
+                    stage_id: None,
+                }),
+                resp,
+            })
+            .is_err(),
+        "shutdown must close the stage control command channel"
+    );
+}
+
+#[tokio::test]
+async fn stage_control_shutdown_interrupts_an_active_request() {
+    let state = StageControlState::default();
+    let preparations = Arc::clone(&state.preparations);
+    let preparations_guard = preparations.lock().await;
+    let handle = spawn_stage_control_loop_with_state(state);
+    let (resp, _rx) = oneshot::channel();
+    handle
+        .sender()
+        .send(StageControlCommand {
+            request: StageControlRequest::StatusUpdate(preparation_status_from_load(
+                &load_request(),
+                StagePreparationState::Assigned,
+                None,
+            )),
+            resp,
+        })
+        .expect("control command accepted");
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    tokio::time::timeout(Duration::from_secs(1), handle.shutdown())
+        .await
+        .expect("shutdown must interrupt the active request")
+        .expect("stage control shutdown should succeed");
+    drop(preparations_guard);
+}
+
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
         topology_id: "topology-a".to_string(),
@@ -25,6 +77,13 @@ fn load_request() -> StageLoadRequest {
         model_path: Some("/models/model.gguf".to_string()),
         source_model_bytes: Some(64 * 1024 * 1024 * 1024),
         projector_path: Some("/models/mmproj.gguf".to_string()),
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: Some(StageDevice {
             backend_device: "CUDA0".to_string(),
             stable_id: Some("GPU-123".to_string()),
@@ -33,9 +92,9 @@ fn load_request() -> StageLoadRequest {
         }),
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
-        wire_dtype: StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 3,
+        continuous_batching: true,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -44,6 +103,19 @@ fn load_request() -> StageLoadRequest {
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: FlashAttentionType::Enabled,
+        runtime_settings: StageLoadRuntimeSettings {
+            repack: true,
+            op_offload: Some(false),
+            no_host_buffer: true,
+            check_tensors: true,
+            direct_io: true,
+            main_gpu: Some(2),
+            split_mode: skippy_protocol::SplitMode::Row,
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        },
         native_mtp_enabled: true,
         shutdown_generation: 7,
         coordinator_term: 0,
@@ -190,6 +262,23 @@ fn stage_config_preserves_backend_neutral_load_fields() {
     let config = stage_config(&request, None, None).unwrap();
 
     assert_stage_config_core_fields(&config);
+    assert_eq!(config.repack, request.runtime_settings.repack);
+    assert_eq!(config.op_offload, request.runtime_settings.op_offload);
+    assert_eq!(
+        config.no_host_buffer,
+        request.runtime_settings.no_host_buffer
+    );
+    assert_eq!(config.check_tensors, request.runtime_settings.check_tensors);
+    assert_eq!(config.direct_io, request.runtime_settings.direct_io);
+    assert_eq!(config.main_gpu, request.runtime_settings.main_gpu);
+    assert_eq!(config.split_mode, request.runtime_settings.split_mode);
+    assert_eq!(config.kv_offload, request.runtime_settings.kv_offload);
+    assert_eq!(config.kv_unified, request.runtime_settings.kv_unified);
+    assert_eq!(config.swa_full, request.runtime_settings.swa_full);
+    assert_eq!(
+        config.cache_idle_slots,
+        request.runtime_settings.cache_idle_slots
+    );
 }
 
 fn assert_stage_config_core_fields(config: &StageConfig) {
@@ -356,10 +445,45 @@ async fn binary_stage_ready_probe_waits_for_wire_handshake() {
     });
 
     let started = Instant::now();
-    wait_for_binary_stage_ready(bind_addr, Duration::from_secs(2))
+    let mut probe = start_binary_stage_ready_probe(bind_addr, Duration::from_secs(2));
+    (&mut probe.handle)
         .await
+        .expect("join readiness probe")
         .unwrap();
     assert!(started.elapsed() >= Duration::from_millis(50));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind_addr = listener.local_addr().unwrap();
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        accepted_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let state = StageControlState {
+        readiness_probe: Some(start_binary_stage_ready_probe(
+            bind_addr,
+            Duration::from_secs(900),
+        )),
+        ..Default::default()
+    };
+    let handle = spawn_stage_control_loop_with_state(state);
+    accepted_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("readiness probe connected to silent stage");
+
+    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+        .await
+        .expect("shutdown must not wait for the readiness deadline")
+        .expect("stage control shutdown should succeed");
+
+    release_tx.send(()).unwrap();
     server.join().unwrap();
 }
 

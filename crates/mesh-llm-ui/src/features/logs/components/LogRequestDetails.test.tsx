@@ -189,7 +189,7 @@ describe('LogRequestDetails', () => {
   it.each(queryCases)('consolidates retained-data query enables for $name', ({ tab, events, artifacts, attempts }) => {
     renderDetails(tab)
 
-    expect(hooks.summary).toHaveBeenCalledWith(REQUEST_ID)
+    expect(hooks.summary).toHaveBeenCalledWith(REQUEST_ID, undefined)
     expect(hooks.events).toHaveBeenCalledWith(REQUEST_ID, events)
     expect(hooks.artifacts).toHaveBeenCalledWith(REQUEST_ID, artifacts)
     expect(hooks.attempts).toHaveBeenCalledWith(REQUEST_ID, attempts)

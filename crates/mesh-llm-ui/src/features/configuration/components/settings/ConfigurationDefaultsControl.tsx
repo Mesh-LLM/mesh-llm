@@ -17,6 +17,7 @@ import {
   type SchemaSettingControlProps,
   type SettingAvailabilityState
 } from '@/features/configuration/components/settings/schema-control-utils'
+import { objectArrayItemSchema } from '@/features/configuration/lib/schema-object-array'
 import { cn } from '@/lib/cn'
 
 type ConfigurationDefaultsControlProps = SchemaSettingControlProps & {
@@ -94,14 +95,17 @@ export function configurationControlDetailBuckets(
   }
 
   const textFormat = textFormatForSetting(setting)
+  const objectArraySchema = objectArrayItemSchema(setting.valueSchema)
   if (textFormat === 'path') {
     pushUnique(visibleDetails, 'Paths are resolved on the machine running this MeshLLM node.')
   }
   if (textFormat === 'url') pushUnique(visibleDetails, 'URL hint: enter a full URL including protocol.')
-  if (hasSchemaKind(setting.valueSchema, 'array')) {
+  if (objectArraySchema) {
+    pushUnique(visibleDetails, 'Structured list: add, remove, or reorder entries below.')
+  } else if (hasSchemaKind(setting.valueSchema, 'array')) {
     pushUnique(visibleDetails, 'List input: enter one item per line. Saved as a TOML string array.')
   }
-  if (hasSchemaKind(setting.valueSchema, 'object')) {
+  if (!objectArraySchema && hasSchemaKind(setting.valueSchema, 'object')) {
     pushUnique(visibleDetails, 'Object input: enter a JSON object.')
     if (value.trim().length > 0) {
       try {

@@ -23,6 +23,8 @@ pub(crate) struct StagePlan {
     pub(crate) layer_end: u32,
     pub(crate) includes_embeddings: bool,
     pub(crate) includes_output: bool,
+    #[serde(skip_serializing)]
+    pub(crate) includes_per_layer_token_embd: bool,
     pub(crate) tensor_count: usize,
     pub(crate) tensor_bytes: u64,
 }
@@ -45,7 +47,9 @@ pub(crate) fn build_plan_from_tensors(stages: usize, tensors: &[TensorInfo]) -> 
     for (stage_index, (layer_start, layer_end)) in ranges.iter().copied().enumerate() {
         let tensors_for_stage = tensors
             .iter()
-            .filter(|tensor| tensor_in_stage(tensor, stage_index, stages, layer_start, layer_end))
+            .filter(|tensor| {
+                tensor_in_stage(tensor, tensors, stage_index, stages, layer_start, layer_end)
+            })
             .collect();
         stage_tensors.insert(stage_index, tensors_for_stage);
     }
@@ -65,6 +69,9 @@ pub(crate) fn build_plan_from_tensors(stages: usize, tensors: &[TensorInfo]) -> 
                     layer_end,
                     includes_embeddings: stage_index == 0,
                     includes_output: stage_index + 1 == stages,
+                    includes_per_layer_token_embd: tensors
+                        .iter()
+                        .any(|tensor| is_per_layer_token_embd(&tensor.name)),
                     tensor_count: tensors.len(),
                     tensor_bytes: tensors.iter().map(|tensor| tensor.byte_size).sum(),
                 }
@@ -95,6 +102,7 @@ pub(crate) fn stage_plan_from_tensors(
         .filter(|tensor| {
             tensor_in_explicit_stage(
                 tensor,
+                tensors,
                 layer_start,
                 layer_end,
                 includes_embeddings,
@@ -108,6 +116,9 @@ pub(crate) fn stage_plan_from_tensors(
         layer_end,
         includes_embeddings,
         includes_output,
+        includes_per_layer_token_embd: selected
+            .iter()
+            .any(|tensor| is_per_layer_token_embd(&tensor.name)),
         tensor_count: selected.len(),
         tensor_bytes: selected.iter().map(|tensor| tensor.byte_size).sum(),
     }
@@ -115,6 +126,7 @@ pub(crate) fn stage_plan_from_tensors(
 
 fn tensor_in_stage(
     tensor: &TensorInfo,
+    all_tensors: &[TensorInfo],
     stage_index: usize,
     stages: usize,
     layer_start: u32,
@@ -122,6 +134,7 @@ fn tensor_in_stage(
 ) -> bool {
     tensor_in_explicit_stage(
         tensor,
+        all_tensors,
         layer_start,
         layer_end,
         stage_index == 0,
@@ -131,11 +144,15 @@ fn tensor_in_stage(
 
 fn tensor_in_explicit_stage(
     tensor: &TensorInfo,
+    all_tensors: &[TensorInfo],
     layer_start: u32,
     layer_end: u32,
     includes_embeddings: bool,
     includes_output: bool,
 ) -> bool {
+    if is_per_layer_token_embd(&tensor.name) {
+        return per_layer_embedding_retained(all_tensors, layer_start, layer_end);
+    }
     matches!(
         tensor.layer_index,
         Some(layer) if layer >= layer_start && layer < layer_end
@@ -145,6 +162,55 @@ fn tensor_in_explicit_stage(
             tensor.role,
             TensorRole::Metadata | TensorRole::Tokenizer | TensorRole::Unknown
         )
+}
+
+pub(crate) const PER_LAYER_TOKEN_EMBD: &str = "per_layer_token_embd.weight";
+
+fn is_per_layer_token_embd(name: &str) -> bool {
+    name == PER_LAYER_TOKEN_EMBD
+}
+
+/// Decide whether a stage must retain the shared per-layer token embedding table.
+///
+/// The table is classified as an embedding tensor, but it is gathered from by
+/// per-layer consumers rather than by the stage that owns the token embeddings.
+/// Selecting it on embedding ownership alone drops it from a stage that needs
+/// it; selecting it unconditionally ships a very large table to every stage.
+///
+/// Only qwen4exp is known to consume it from a *sparse* subset of layers
+/// (`blk.N.ple_*`; `qwen4exp.ple.layers = [1]` on Qwen3.8-Flash-Next), so only
+/// one stage of a split can ever read it. Retain it only with those consumers.
+///
+/// Retain the table on every stage for every other artifact. This matters:
+/// Gemma3n/Gemma4 gather the same table through per-block tensors named
+/// `blk.N.inp_gate`, `blk.N.proj`
+/// and `blk.N.post_norm` (`llama-arch.cpp:568-570`) — *not* `per_layer_*` — so
+/// a name-based consumer scan finds nothing for them. Failing closed here would
+/// silently drop their table from every stage.
+fn per_layer_embedding_retained(
+    all_tensors: &[TensorInfo],
+    layer_start: u32,
+    layer_end: u32,
+) -> bool {
+    let mut saw_sparse_consumer = false;
+    let mut retained = false;
+    for tensor in all_tensors {
+        if !is_sparse_per_layer_embedding_consumer(&tensor.name) {
+            continue;
+        }
+        saw_sparse_consumer = true;
+        if matches!(tensor.layer_index, Some(layer) if layer >= layer_start && layer < layer_end) {
+            retained = true;
+            break;
+        }
+    }
+    !saw_sparse_consumer || retained
+}
+
+fn is_sparse_per_layer_embedding_consumer(name: &str) -> bool {
+    name.split_once('.')
+        .and_then(|(_, rest)| rest.split_once('.'))
+        .is_some_and(|(_, suffix)| suffix.starts_with("ple_"))
 }
 
 pub(crate) fn parse_layer_range(layers: &str) -> Result<(u32, u32)> {

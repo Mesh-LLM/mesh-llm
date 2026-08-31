@@ -14,9 +14,9 @@ pub use family_capability::{
     gemma4_a4b_capability, gemma4_e4b_capability, glm4_capability, glm47_flash_capability,
     infer_family_capability, kimi_linear_capability, laguna_capability, llama_capability,
     minimax_m27_capability, olmo_capability, qwen2moe_capability, qwen3_dense_capability,
-    qwen3moe_capability, qwen3next_capability, qwen3next_layers, qwen35_series_capability,
-    recurrent_family_capability, reviewed_capability_for_identity, reviewed_capability_records,
-    rwkv6_capability, rwkv7_capability,
+    qwen3moe_capability, qwen3next_capability, qwen3next_layers, qwen4exp_capability,
+    qwen35_series_capability, recurrent_family_capability, reviewed_capability_for_identity,
+    reviewed_capability_records, rwkv6_capability, rwkv7_capability,
 };
 pub use planning::{
     classify_layers, plan_contiguous_with_splits, plan_even_contiguous,
@@ -129,7 +129,6 @@ pub struct BoundaryPlan {
     pub consumer_stage_index: u32,
     pub layer_boundary: u32,
     pub decision: BoundaryDecision,
-    pub wire_dtype: WireDType,
     pub raw_activation_bytes_per_token: u64,
     pub wire_payload_bytes_per_token: u64,
     #[serde(default)]
@@ -189,9 +188,6 @@ pub enum PlanReasonCode {
     SharedKvRegionCut,
     TokenSidebandRequired,
     ActivationSidebandRequired,
-    DefaultWireDtypeF16,
-    Q8WireValidated,
-    Q8WireRejected,
     ExactStateMobilityAccepted,
     ExactStateMobilityRejected,
     CacheLocalityPreferred,
@@ -205,8 +201,6 @@ pub struct FamilyCapabilityRecord {
     pub family_id: String,
     pub layer_count: u32,
     pub activation_width: u32,
-    pub default_wire_dtype: WireDType,
-    pub q8_wire_validation: WireValidation,
     pub exact_state_mobility: ExactStateMobility,
     #[serde(default)]
     pub recurrent_ranges: Vec<LayerRange>,
@@ -214,22 +208,6 @@ pub struct FamilyCapabilityRecord {
     pub split_constraints: Vec<SplitConstraint>,
     #[serde(default)]
     pub sidebands: Vec<SidebandRequirement>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WireDType {
-    F32,
-    F16,
-    Q8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WireValidation {
-    Untested,
-    Validated,
-    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -326,7 +326,6 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
         ctx_size: args.ctx_size,
         n_gpu_layers: args.n_gpu_layers,
         activation_width: args.activation_width,
-        activation_wire_dtype: args.activation_wire_dtype,
         prefill_chunk_size: args.prefill_chunk_size,
         max_new_tokens: args.max_new_tokens,
         draft_model_path: args.draft_model_path,

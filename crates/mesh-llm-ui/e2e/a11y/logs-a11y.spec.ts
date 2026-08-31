@@ -175,29 +175,58 @@ test('fallback log polling toggle remains AA-compliant while paused', async ({ p
     (storageKey) => window.localStorage.setItem(storageKey, 'live'),
     'mesh-llm-ui-preview:data-mode:v2'
   )
-  await page.route('**/api/logs/requests*', (route) => route.fulfill({ json: { items: [], nextCursor: null } }))
-  await page.route('**/api/logs/audit*', (route) => route.fulfill({ json: { items: [], nextCursor: null } }))
-  // Hold the SSE connection open — see the comment on the previous test.
-  let releaseEventsStream: (() => void) | undefined
+  let resolveFallbackRequestsFulfillment: (() => void) | undefined
+  let resolveFallbackAuditFulfillment: (() => void) | undefined
+  await page.route('**/api/logs/requests*', async (route) => {
+    const resolveFulfillment = resolveFallbackRequestsFulfillment
+    resolveFallbackRequestsFulfillment = undefined
+    await route.fulfill({ json: { items: [], nextCursor: null } })
+    resolveFulfillment?.()
+  })
+  await page.route('**/api/logs/audit*', async (route) => {
+    const resolveFulfillment = resolveFallbackAuditFulfillment
+    resolveFallbackAuditFulfillment = undefined
+    await route.fulfill({ json: { items: [], nextCursor: null } })
+    resolveFulfillment?.()
+  })
+  // Hold both SSE connections open — see the comment on the previous test.
+  let releaseRequestsStream: (() => void) | undefined
+  let releaseAuditStream: (() => void) | undefined
   await page.route('**/api/logs/events*', async (route) => {
+    const isAuditStream = new URL(route.request().url()).searchParams.get('audit') === '1'
     await new Promise<void>((resolve) => {
-      releaseEventsStream = resolve
+      if (isAuditStream) {
+        releaseAuditStream = resolve
+      } else {
+        releaseRequestsStream = resolve
+      }
     })
     await route.fulfill({
       contentType: 'text/event-stream',
-      body: 'retry: 600000\nid: v1:0.0.0\nevent: stream_error\ndata: {"code":"invalid_event"}\n\n'
+      body: 'retry: 600000\n\n'
     })
   })
 
   await page.goto('/logs')
   await expect(page.getByRole('heading', { level: 1, name: 'System logs' })).toBeVisible()
-  await expect.poll(() => releaseEventsStream).toBeDefined()
+  await expect.poll(() => releaseRequestsStream).toBeDefined()
+  await expect.poll(() => releaseAuditStream).toBeDefined()
   await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)))
-  releaseEventsStream?.()
+  releaseRequestsStream?.()
+  releaseAuditStream?.()
   await expect(page.getByText('Reconnecting', { exact: true })).toBeVisible()
-  // Step deliberately past FALLBACK_DELAY_MS (1s) into the `polling` state,
-  // where the toggle under test renders.
+  const fallbackRequestsFulfilled = new Promise<void>((resolve) => {
+    resolveFallbackRequestsFulfillment = resolve
+  })
+  const fallbackAuditFulfilled = new Promise<void>((resolve) => {
+    resolveFallbackAuditFulfillment = resolve
+  })
+  // Trigger fallback at exactly FALLBACK_DELAY_MS (1s). Active fallback stays
+  // `reconnecting`; await both hydrations and flush query notifications.
   await page.clock.runFor(1_000)
+  await Promise.all([fallbackRequestsFulfilled, fallbackAuditFulfilled])
+  await page.clock.runFor(0)
+  await expect(page.getByText('Updating', { exact: true })).toHaveCount(0)
   const pollingToggle = page.getByRole('button', { name: 'Fallback log polling' })
   await expect(pollingToggle).toHaveAttribute('aria-pressed', 'true')
 

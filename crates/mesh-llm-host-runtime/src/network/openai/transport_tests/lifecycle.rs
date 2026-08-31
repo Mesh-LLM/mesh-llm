@@ -26,6 +26,7 @@ async fn route_observer_fails_open_without_a_parent_or_proxy_record() {
 fn passive_moa_chat_and_responses_streams_record_usage_lifecycle() {
     let usage = TokenUsage {
         prompt_tokens: Some(8),
+        cached_prompt_tokens: None,
         completion_tokens: Some(5),
         total_tokens: Some(13),
     };
@@ -785,7 +786,7 @@ fn remote_transports_record_target_failover_and_retry_under_one_parent() {
             "completed",
         ]
     );
-    for pair in attempt_events.chunks_exact(2) {
+    for pair in attempt_events.as_chunks::<2>().0 {
         assert_eq!(pair[0].1, pair[1].1);
     }
     for record in service.bus_ref().replay_window().records {

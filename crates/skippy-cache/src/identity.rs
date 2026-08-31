@@ -88,6 +88,18 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
         Some(device) => hasher.update(device.backend_device.as_bytes()),
         None => hasher.update(b"<no-selected-device>"),
     };
+    hasher.update(b"kv-unified:");
+    hasher.update(match config.kv_unified {
+        Some(true) => b"true",
+        Some(false) => b"false",
+        None => b"absent",
+    });
+    hasher.update(b"swa-full:");
+    hasher.update(match config.swa_full {
+        Some(true) => b"true",
+        Some(false) => b"false",
+        None => b"absent",
+    });
 }
 
 /// Hash the identity of the *weights* a stage is serving.
@@ -145,6 +157,30 @@ pub fn prefix_hash_with_namespace(
     token_ids: &[i32],
     cache_namespace: Option<&str>,
 ) -> String {
+    let mut hasher = prefix_namespace_hasher(config, token_start, cache_namespace);
+    for token_id in token_ids {
+        hasher.update(token_id.to_le_bytes().as_slice());
+    }
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+/// Stable namespace for one radix tree. It binds every non-token input that
+/// changes native cache bytes while leaving the token sequence as the radix
+/// path itself.
+pub fn prefix_namespace_hash(
+    config: &StageConfig,
+    token_start: u64,
+    cache_namespace: Option<&str>,
+) -> String {
+    let hasher = prefix_namespace_hasher(config, token_start, cache_namespace);
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+fn prefix_namespace_hasher(
+    config: &StageConfig,
+    token_start: u64,
+    cache_namespace: Option<&str>,
+) -> blake3::Hasher {
     let mut hasher = blake3::Hasher::new();
     update_weight_identity(&mut hasher, config);
     // `topology_id` is deliberately **not** hashed. It is an instance
@@ -171,10 +207,7 @@ pub fn prefix_hash_with_namespace(
         hasher.update(cache_namespace.as_bytes());
     }
     hasher.update(&token_start.to_le_bytes());
-    for token_id in token_ids {
-        hasher.update(token_id.to_le_bytes().as_slice());
-    }
-    format!("blake3:{}", hasher.finalize().to_hex())
+    hasher
 }
 
 pub fn page_id(
@@ -218,6 +251,13 @@ mod identity_completeness_tests {
             materialized_pinned: false,
             model_path: None,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,
@@ -229,9 +269,20 @@ mod identity_completeness_tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -280,15 +331,81 @@ mod identity_completeness_tests {
     fn flash_attention_changes_page_identity() {
         let enabled = StageConfig {
             flash_attn_type: FlashAttentionType::Enabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
         let disabled = StageConfig {
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             ..test_config()
         };
 
         assert_ne!(hash_of(&test_config()), hash_of(&enabled));
         assert_ne!(hash_of(&enabled), hash_of(&disabled));
+    }
+
+    #[test]
+    fn kv_unified_option_changes_page_and_prefix_identity() {
+        let absent = test_config();
+        let disabled = StageConfig {
+            kv_unified: Some(false),
+            ..test_config()
+        };
+        let enabled = StageConfig {
+            kv_unified: Some(true),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&absent), hash_of(&disabled));
+        assert_ne!(hash_of(&absent), hash_of(&enabled));
+        assert_ne!(hash_of(&disabled), hash_of(&enabled));
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+    }
+
+    #[test]
+    fn swa_full_option_changes_page_and_prefix_identity() {
+        let absent = test_config();
+        let disabled = StageConfig {
+            swa_full: Some(false),
+            ..test_config()
+        };
+        let enabled = StageConfig {
+            swa_full: Some(true),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&absent), hash_of(&disabled));
+        assert_ne!(hash_of(&absent), hash_of(&enabled));
+        assert_ne!(hash_of(&disabled), hash_of(&enabled));
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&absent, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
+        assert_ne!(
+            prefix_identity(&disabled, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&enabled, 0, &[1, 2, 3, 4]).page_id
+        );
     }
 
     #[test]
@@ -410,6 +527,13 @@ mod identity_stability_tests {
             materialized_pinned: false,
             model_path: None,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,
@@ -421,9 +545,20 @@ mod identity_stability_tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,

@@ -30,7 +30,6 @@ pub struct SplitReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
-    pub wire_dtype: String,
     pub boundary: BoundaryReport,
 }
 
@@ -106,7 +105,6 @@ pub struct ChainReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
-    pub wire_dtype: String,
     pub stages: Vec<ChainStageReport>,
     pub stage_models: Vec<StageModelReport>,
 }
@@ -146,17 +144,6 @@ pub struct SplitScanReport {
     pub model_identity: ModelIdentity,
     pub baseline: BaselineReport,
     pub split_count: usize,
-    pub mismatch_count: usize,
-    pub results: Vec<SingleStepReport>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DtypeMatrixReport {
-    pub mode: &'static str,
-    pub status: &'static str,
-    pub model_identity: ModelIdentity,
-    pub baseline: BaselineReport,
-    pub dtype_count: usize,
     pub mismatch_count: usize,
     pub results: Vec<SingleStepReport>,
 }
@@ -258,7 +245,6 @@ pub struct NativeMtpOpenAiAbReport {
     pub split_layer: u32,
     pub layer_end: u32,
     pub activation_width: i32,
-    pub activation_wire_dtype: String,
     pub exact_content_match: bool,
     pub batched_events_required: bool,
     pub batched_events_present: bool,
@@ -266,6 +252,38 @@ pub struct NativeMtpOpenAiAbReport {
     pub baseline: NativeMtpOpenAiCaseReport,
     pub n1: NativeMtpOpenAiCaseReport,
     pub batched: NativeMtpOpenAiCaseReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SplitPrefixHitCaseReport {
+    pub case: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warmup_http_status: Option<u16>,
+    pub http_status: u16,
+    pub content: String,
+    pub completion_tokens: Option<u64>,
+    pub partial_prefix_hits: u64,
+    pub full_prefix_hits: u64,
+    pub fatal_error_events: u64,
+    pub openai_bind_addr: String,
+    pub stage1_bind_addr: String,
+    pub stage0_log: String,
+    pub stage1_log: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SplitPrefixHitReport {
+    pub mode: &'static str,
+    pub status: &'static str,
+    pub model_identity: ModelIdentity,
+    pub split_layer: u32,
+    pub layer_end: u32,
+    pub prompt: String,
+    pub extended_prompt: String,
+    pub matches: bool,
+    pub partial_hit_observed: bool,
+    pub warm: SplitPrefixHitCaseReport,
+    pub control: SplitPrefixHitCaseReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,7 +321,6 @@ pub struct GlmDsaStage0TraceReport {
     pub case_root: String,
     pub stage_layer_end: u32,
     pub activation_width: i32,
-    pub activation_wire_dtype: String,
     pub prefill_chunk_size: u32,
     pub max_new_tokens: u32,
     pub trace_filter: String,

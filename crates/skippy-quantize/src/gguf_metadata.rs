@@ -2,6 +2,8 @@ use std::io::Write;
 
 use anyhow::{Result, ensure};
 
+pub(crate) const GGUF_TYPE_UINT8: u32 = 0;
+pub(crate) const GGUF_TYPE_INT8: u32 = 1;
 pub(crate) const GGUF_TYPE_UINT16: u32 = 2;
 pub(crate) const GGUF_TYPE_UINT32: u32 = 4;
 pub(crate) const GGUF_TYPE_INT32: u32 = 5;
@@ -10,21 +12,65 @@ pub(crate) const GGUF_TYPE_BOOL: u32 = 7;
 pub(crate) const GGUF_TYPE_STRING: u32 = 8;
 pub(crate) const GGUF_TYPE_ARRAY: u32 = 9;
 pub(crate) const GGUF_TYPE_UINT64: u32 = 10;
+pub(crate) const GGUF_TYPE_INT64: u32 = 11;
+pub(crate) const GGUF_TYPE_FLOAT64: u32 = 12;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GgufKv {
-    ArrayBool { key: String, value: Vec<bool> },
-    ArrayF32 { key: String, value: Vec<f32> },
-    ArrayI32 { key: String, value: Vec<i32> },
-    ArrayString { key: String, value: Vec<String> },
-    ArrayU32 { key: String, value: Vec<u32> },
-    Bool { key: String, value: bool },
-    F32 { key: String, value: f32 },
-    I32 { key: String, value: i32 },
-    String { key: String, value: String },
-    U16 { key: String, value: u16 },
-    U32 { key: String, value: u32 },
-    U64 { key: String, value: u64 },
+    ArrayBool {
+        key: String,
+        value: Vec<bool>,
+    },
+    ArrayF32 {
+        key: String,
+        value: Vec<f32>,
+    },
+    ArrayI32 {
+        key: String,
+        value: Vec<i32>,
+    },
+    ArrayString {
+        key: String,
+        value: Vec<String>,
+    },
+    ArrayU32 {
+        key: String,
+        value: Vec<u32>,
+    },
+    Bool {
+        key: String,
+        value: bool,
+    },
+    F32 {
+        key: String,
+        value: f32,
+    },
+    I32 {
+        key: String,
+        value: i32,
+    },
+    String {
+        key: String,
+        value: String,
+    },
+    U16 {
+        key: String,
+        value: u16,
+    },
+    U32 {
+        key: String,
+        value: u32,
+    },
+    U64 {
+        key: String,
+        value: u64,
+    },
+    /// Losslessly preserved metadata for value types without a typed variant.
+    Raw {
+        key: String,
+        value_type: u32,
+        bytes: Vec<u8>,
+    },
 }
 
 impl GgufKv {
@@ -111,6 +157,13 @@ impl GgufKv {
             value,
         }
     }
+
+    pub(crate) fn u32_value_mut(&mut self) -> Option<&mut u32> {
+        match self {
+            GgufKv::U32 { value, .. } => Some(value),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn write_kv<W: Write>(writer: &mut W, kv: &GgufKv) -> Result<()> {
@@ -172,6 +225,20 @@ pub(crate) fn write_kv<W: Write>(writer: &mut W, kv: &GgufKv) -> Result<()> {
         GgufKv::U64 { key, value } => {
             write_scalar_header(writer, key, GGUF_TYPE_UINT64)?;
             writer.write_all(&value.to_le_bytes())?;
+        }
+        GgufKv::Raw {
+            key,
+            value_type,
+            bytes,
+        } => {
+            write_scalar_header(writer, key, *value_type)?;
+            if *value_type == GGUF_TYPE_ARRAY {
+                ensure!(
+                    bytes.len() >= 12,
+                    "raw GGUF array metadata for {key:?} is missing the array header (element type + count)"
+                );
+            }
+            writer.write_all(bytes)?;
         }
     }
     Ok(())

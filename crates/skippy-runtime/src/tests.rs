@@ -5,8 +5,9 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        GGML_TYPE_F16, GlmDsaPolicy, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig,
+        RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession, Status, TensorRole,
+        format_skippy_error,
     };
     use std::{
         env,
@@ -74,16 +75,32 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: FlashAttentionType::Auto,
             load_mode: RuntimeLoadMode::RuntimeSlice,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: GlmDsaPolicy::Auto,
             include_embeddings: true,
             include_output: true,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
         };
         StageModel::open(model_path, &config)
     }

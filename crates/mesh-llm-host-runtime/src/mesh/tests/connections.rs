@@ -17,6 +17,110 @@ use tokio::sync::{mpsc, watch};
 mod direct_path;
 
 #[tokio::test]
+async fn inbound_http_tunnel_channel_retains_authenticated_remote_endpoint() {
+    async fn start_node() -> (Node, TunnelChannels) {
+        let relay_urls = Vec::new();
+        let relay_auths = HashMap::new();
+        Node::start(
+            super::NodeRole::Client,
+            RelayConfig {
+                urls: &relay_urls,
+                auths: &relay_auths,
+                policy: RelayPolicy::Disabled,
+            },
+            QuicBindSelection {
+                ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port: Some(0),
+            },
+            Some(0.0),
+            false,
+            None,
+            None,
+            crate::MeshRequirements::unrestricted(),
+        )
+        .await
+        .expect("start tunnel identity test node")
+    }
+
+    let (sender, _sender_channels) = start_node().await;
+    let (receiver, mut receiver_channels) = start_node().await;
+    sender.start_accepting();
+    receiver.start_accepting();
+    sender
+        .connect_to_peer(receiver.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect tunnel identity test nodes");
+
+    let _outbound = sender
+        .open_http_tunnel(receiver.id())
+        .await
+        .expect("open authenticated HTTP tunnel");
+    let (remote, _send, _recv) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        receiver_channels.http.recv(),
+    )
+    .await
+    .expect("HTTP tunnel should reach receiver")
+    .expect("HTTP tunnel channel should remain open");
+
+    assert_eq!(remote, sender.id());
+}
+
+#[tokio::test]
+#[serial]
+async fn stage_alpn_emits_authenticated_direct_peer_audit_before_stream_dispatch() {
+    let (mut audits, _capture) = super::capture_mesh_operational_audits();
+    let sender = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("sender node");
+    let expected_sender_id = hex::encode(sender.id().as_bytes());
+    let receiver = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("receiver node");
+    receiver.start_accepting();
+    record_mesh_operational_event_with_context(
+        MeshOperationalEvent::QuicInboundAccepted(MeshQuicInboundOutcome::Accepted),
+        mesh_peer_operational_context(receiver.id(), None),
+    );
+
+    let _connection = sender
+        .endpoint
+        .connect(
+            receiver.endpoint_addr_for_advertisement(),
+            skippy_protocol::STAGE_ALPN_V2,
+        )
+        .await
+        .expect("authenticated stage connection");
+
+    let audit = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let record = audits.recv().await.expect("audit capture remains open");
+            if record.code() == "mesh_quic_inbound_accepted"
+                && record.context().is_some_and(|context| {
+                    let fields = context.fields();
+                    fields["subject_id"].as_str() == Some(expected_sender_id.as_str())
+                })
+            {
+                return record;
+            }
+        }
+    })
+    .await
+    .expect("stage audit should be emitted before waiting for a stream");
+
+    let fields = audit.context().expect("stage audit context").fields();
+    assert_eq!(fields["subject_kind"], "mesh_peer");
+    assert_eq!(fields["subject_id"], expected_sender_id);
+    assert_eq!(fields["path_type"], "direct");
+    assert!(fields["remote_addr"].as_str().is_some());
+    assert_eq!(fields["outcome"], "accepted");
+    assert_eq!(
+        fields["numeric_summaries"]["protocol_gen"],
+        skippy_protocol::STAGE_PROTOCOL_GENERATION
+    );
+}
+
+#[tokio::test]
 async fn owner_control_stream_work_is_bounded_per_connection() {
     let permits = control_stream_semaphore();
     let mut held = Vec::new();
@@ -193,12 +297,19 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/models/demo.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         projector_path: None,
+        projector_use_gpu: Some(false),
+        media_marker: Some("<media>".to_string()),
+        image_min_tokens: Some(32),
+        image_max_tokens: Some(2048),
+        batch_max_tokens: Some(512),
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::V1,
+        generation_signal_window: Some(24),
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 4096,
-        wire_dtype: crate::inference::skippy::StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 2,
+        continuous_batching: false,
         n_batch: Some(1024),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -207,6 +318,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+        runtime_settings: Default::default(),
         native_mtp_enabled: true,
         shutdown_generation: 3,
         coordinator_term: 11,
@@ -311,6 +423,9 @@ async fn make_test_node_with_requirements(
         inflight_change_tx,
         routing_metrics: crate::network::metrics::RoutingMetrics::default(),
         routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+        cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+            mesh_llm_routing::cache_inventory::CacheInventory::default(),
+        )),
         swarm_capture: Arc::new(std::sync::Mutex::new(None)),
         local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
         runtime_data_producer,
@@ -318,6 +433,7 @@ async fn make_test_node_with_requirements(
         tunnel_http_tx,
         stage_transport_tx,
         stage_control_tx: Arc::new(Mutex::new(None)),
+        stage_control_lifecycle: Arc::new(Mutex::new(None)),
         stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
         stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
         stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),

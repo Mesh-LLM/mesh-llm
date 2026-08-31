@@ -4,7 +4,8 @@ use std::ptr;
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
-    NativeMtpDraft as RawNativeMtpDraft, SamplingConfig as RawSamplingConfig,
+    IterationRequest as RawIterationRequest, NativeMtpDraft as RawNativeMtpDraft,
+    SamplingConfig as RawSamplingConfig,
 };
 
 use crate::error::{ensure_ok, free_error};
@@ -43,7 +44,196 @@ pub struct DecodeFrameBatchRequest<'a> {
     pub input: Option<&'a ActivationFrame>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IterationBatchPhase {
+    Prefill,
+    Decode,
+}
+
+pub struct IterationBatchRequest<'a> {
+    pub session: &'a mut StageSession,
+    pub token_ids: &'a [i32],
+    pub positions: &'a [i32],
+    pub sampling: Option<&'a SamplingConfig>,
+    pub input: Option<&'a ActivationFrame>,
+    pub sample_last: bool,
+    pub phase: IterationBatchPhase,
+}
+
 impl StageSession {
+    pub fn iteration_batch_sampled(
+        requests: &mut [IterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
+    }
+
+    fn iteration_batch_sampled_raw(
+        requests: &mut [IterationBatchRequest<'_>],
+        output_capacities: &[usize],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let raw_sampling = requests
+            .iter()
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
+        let input_frames = requests
+            .iter()
+            .map(|request| raw_input_frame(request.input))
+            .collect::<Result<Vec<_>>>()?;
+        let raw_requests = requests
+            .iter()
+            .zip(raw_sampling.iter())
+            .zip(input_frames.iter())
+            .map(|((request, sampling), input)| RawIterationRequest {
+                session: request.session.raw,
+                token_ids: request.token_ids.as_ptr(),
+                token_count: request.token_ids.len(),
+                positions: if request.positions.is_empty() {
+                    ptr::null()
+                } else {
+                    request.positions.as_ptr()
+                },
+                position_count: request.positions.len(),
+                sampling: sampling
+                    .as_ref()
+                    .map_or(ptr::null(), |config| config as *const RawSamplingConfig),
+                input_desc: raw_input_desc_ptr(input),
+                input_payload: input.1,
+                sample_last: request.sample_last,
+            })
+            .collect::<Vec<_>>();
+        let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
+        let mut output_payloads = output_capacities
+            .iter()
+            .map(|capacity| vec![0_u8; *capacity])
+            .collect::<Vec<_>>();
+        let output_payload_ptrs = output_payloads
+            .iter_mut()
+            .map(|payload| payload.as_mut_ptr().cast())
+            .collect::<Vec<_>>();
+        let mut output_bytes = vec![0_usize; requests.len()];
+        let mut predicted_tokens = vec![-1_i32; requests.len()];
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_iteration_batch_sampled(
+                raw_requests.as_ptr(),
+                raw_requests.len(),
+                output_descs.as_mut_ptr(),
+                output_payload_ptrs.as_ptr(),
+                output_capacities.as_ptr(),
+                output_bytes.as_mut_ptr(),
+                predicted_tokens.as_mut_ptr(),
+                predicted_tokens.len(),
+                &mut error,
+            )
+        };
+        if status == Status::BufferTooSmall
+            && output_bytes
+                .iter()
+                .zip(output_capacities.iter())
+                .any(|(required, capacity)| required > capacity)
+        {
+            free_error(error);
+            return Self::iteration_batch_sampled_raw(requests, &output_bytes);
+        }
+        if status == Status::Unsupported {
+            free_error(error);
+            return Self::iteration_batch_sampled_serial(requests);
+        }
+        ensure_ok(status, error)?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(
+                        u64::try_from(request.token_ids.len())
+                            .context("token count exceeds u64")?,
+                    )
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (request, updated) in requests.iter_mut().zip(updated_counts) {
+            request.session.token_count = updated;
+        }
+        Ok(output_payloads
+            .into_iter()
+            .zip(output_descs)
+            .zip(output_bytes)
+            .zip(predicted_tokens)
+            .map(|(((mut payload, desc), bytes), predicted_token)| {
+                payload.truncate(bytes);
+                DecodeFrameBatchOutput {
+                    predicted_token,
+                    output: ActivationFrame {
+                        desc: desc.into(),
+                        payload,
+                    },
+                }
+            })
+            .collect())
+    }
+
+    fn iteration_batch_sampled_serial(
+        requests: &mut [IterationBatchRequest<'_>],
+    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+        requests
+            .iter_mut()
+            .map(|request| {
+                let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
+                    validate_serial_decode_request(request)?;
+                    request.session.decode_step_frame_sampled(
+                        request.token_ids[0],
+                        request.sampling,
+                        request.input,
+                        0,
+                    )?
+                } else if request.sample_last {
+                    if request.positions.is_empty() {
+                        request.session.prefill_chunk_frame_sampled(
+                            request.token_ids,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    } else {
+                        request.session.prefill_chunk_frame_sampled_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.sampling,
+                            request.input,
+                            0,
+                        )?
+                    }
+                } else {
+                    let output = if request.positions.is_empty() {
+                        request
+                            .session
+                            .prefill_chunk_frame(request.token_ids, request.input, 0)?
+                    } else {
+                        request.session.prefill_chunk_frame_with_positions(
+                            request.token_ids,
+                            request.positions,
+                            request.input,
+                            0,
+                        )?
+                    };
+                    (-1, output)
+                };
+                Ok(DecodeFrameBatchOutput {
+                    predicted_token,
+                    output,
+                })
+            })
+            .collect()
+    }
+
     pub fn prefill_chunk_frame(
         &mut self,
         token_ids: &[i32],
@@ -195,7 +385,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -348,7 +538,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -408,7 +598,7 @@ impl StageSession {
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -476,8 +666,8 @@ impl StageSession {
             .collect::<Vec<_>>();
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let sampling = raw_sampling
             .iter()
             .map(|sampling| {
@@ -540,12 +730,21 @@ impl StageSession {
             return Self::decode_step_frame_batch_sampled_serial(requests);
         }
         ensure_ok(status, error)?;
-        for request in requests.iter_mut() {
-            request.session.token_count = request
-                .session
-                .token_count
-                .checked_add(1)
-                .context("session token count overflow")?;
+        // The native call has already advanced every session, so compute all
+        // new counts before storing any: a mid-loop overflow error must not
+        // leave a subset of sessions updated and the rest desynced.
+        let updated_counts = requests
+            .iter()
+            .map(|request| {
+                request
+                    .session
+                    .token_count
+                    .checked_add(1)
+                    .context("session token count overflow")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (request, updated) in requests.iter_mut().zip(updated_counts) {
+            request.session.token_count = updated;
         }
         Ok(output_payloads
             .into_iter()
@@ -690,7 +889,7 @@ impl StageSession {
         let mut output_token_count = 0usize;
         let mut output_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -798,7 +997,7 @@ impl StageSession {
     }
 
     pub fn sample_current(&mut self, sampling: Option<&SamplingConfig>) -> Result<i32> {
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -817,10 +1016,45 @@ impl StageSession {
     }
 }
 
+fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
+    let framed_origin = request.session.token_count() == 0
+        && request.input.is_some()
+        && (request.positions.is_empty() || request.positions == [0]);
+    anyhow::ensure!(
+        request.session.token_count() > 0 || framed_origin,
+        "serial decode fallback requires an established session or a framed origin decode"
+    );
+    anyhow::ensure!(
+        request.token_ids.len() == 1,
+        "serial decode fallback requires exactly one token"
+    );
+    anyhow::ensure!(
+        request.sample_last,
+        "serial decode fallback requires sampling"
+    );
+    if let Some(position) = request.positions.first() {
+        anyhow::ensure!(
+            request.positions.len() == 1,
+            "serial decode fallback accepts at most one explicit position"
+        );
+        let position = u64::try_from(*position).context("decode position is negative")?;
+        anyhow::ensure!(
+            position == request.session.token_count(),
+            "serial decode position {position} does not match session position {}",
+            request.session.token_count()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::raw_input_frame;
+    use super::{
+        IterationBatchPhase, IterationBatchRequest, raw_input_frame, validate_serial_decode_request,
+    };
+    use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
+    use std::ptr;
 
     fn activation_desc(payload_bytes: u64) -> ActivationDesc {
         ActivationDesc {
@@ -864,5 +1098,93 @@ mod tests {
         assert_eq!(desc.unwrap().payload_bytes, 1);
         assert_eq!(payload, frame.payload.as_ptr().cast());
         Ok(())
+    }
+
+    #[test]
+    fn serial_decode_accepts_explicit_phase_and_matching_position() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[],
+            sampling: None,
+            input: None,
+            sample_last: true,
+            phase: IterationBatchPhase::Decode,
+        };
+
+        validate_serial_decode_request(&request).unwrap();
+    }
+
+    #[test]
+    fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
+        for positions in [&[][..], &[0][..]] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: 0,
+            };
+            let frame = ActivationFrame {
+                desc: activation_desc(1),
+                payload: vec![1],
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids: &[7],
+                positions,
+                sampling: None,
+                input: Some(&frame),
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            };
+
+            validate_serial_decode_request(&request).unwrap();
+        }
+    }
+
+    #[test]
+    fn serial_decode_rejects_invalid_decode_shapes() {
+        for (session_tokens, token_ids, positions, sample_last) in [
+            (0, &[7][..], &[][..], true),
+            (4, &[7, 8][..], &[][..], true),
+            (4, &[7][..], &[3][..], true),
+            (4, &[7][..], &[][..], false),
+        ] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: session_tokens,
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids,
+                positions,
+                sampling: None,
+                input: None,
+                sample_last,
+                phase: IterationBatchPhase::Decode,
+            };
+
+            assert!(validate_serial_decode_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn one_token_prefill_tail_is_explicitly_not_decode() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[4],
+            sampling: None,
+            input: None,
+            sample_last: false,
+            phase: IterationBatchPhase::Prefill,
+        };
+        assert_eq!(request.phase, IterationBatchPhase::Prefill);
     }
 }

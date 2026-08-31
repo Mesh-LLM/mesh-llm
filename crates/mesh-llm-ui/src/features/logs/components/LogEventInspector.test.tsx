@@ -4,6 +4,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { isSafeCommandSummary } from '@/features/logs/api/command-summary'
 import { LogRequestId } from '@/features/logs/api/ids'
 import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import type { LogInspector } from '@/features/logs/lib/log-inspector'
@@ -61,10 +62,12 @@ function ready<T>(data: T) {
 
 function InspectorHarness({
   audit = AUDIT,
-  initialInspector
+  initialInspector,
+  requestRows
 }: {
   readonly audit?: LogAuditEntry
   readonly initialInspector?: LogInspector
+  readonly requestRows?: readonly LogRequest[]
 }) {
   const [inspector, setInspector] = useState<LogInspector | undefined>(initialInspector)
   return (
@@ -80,6 +83,7 @@ function InspectorHarness({
         inspector={inspector}
         onClose={() => setInspector(undefined)}
         onRequestTabChange={vi.fn()}
+        requestRows={requestRows}
         requestTab="overview"
       />
     </>
@@ -116,14 +120,14 @@ describe('LogEventInspector', () => {
       AUDIT.operationId ?? '',
       AUDIT.requestId ?? '',
       AUDIT.reasonCode ?? '',
-      AUDIT.outcome ?? '',
       `${AUDIT.durationMs} ms`,
       String(AUDIT.numericSummaries?.layers)
     ]) {
       expect(within(dialog).getByText(value, { exact: true })).toBeInTheDocument()
     }
-    expect(within(dialog).getAllByRole('term')).toHaveLength(13)
-    expect(within(dialog).getAllByRole('definition')).toHaveLength(13)
+    expect(within(dialog).getAllByRole('term')).toHaveLength(11)
+    expect(within(dialog).getAllByRole('definition')).toHaveLength(11)
+    expect(within(dialog).queryByText('Command', { exact: true })).not.toBeInTheDocument()
     expect(dialog).not.toHaveTextContent(/payload|destination|peer address|raw fields/i)
     expect(requestQueries.summary).not.toHaveBeenCalled()
     expect(requestQueries.events).not.toHaveBeenCalled()
@@ -131,7 +135,20 @@ describe('LogEventInspector', () => {
     expect(requestQueries.attempts).not.toHaveBeenCalled()
   })
 
-  it('makes the event code the primary identity and promotes state above the metadata ledger', async () => {
+  it('renders a present command summary as semantic monospace code', () => {
+    const summary = 'mesh-llm runtime load name [REDACTED] --root-relay [REDACTED]'
+    expect(isSafeCommandSummary(summary)).toBe(true)
+    const audit = { ...AUDIT, commandSummary: summary }
+    render(<InspectorHarness audit={audit} initialInspector={{ type: 'audit', id: audit.entryId }} />)
+    const dialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
+    const command = within(dialog).getByText(summary, {
+      selector: 'code'
+    })
+    expect(command).toBeInTheDocument()
+    expect(within(dialog).getAllByRole('term')).toHaveLength(11)
+  })
+
+  it('makes the event code the primary identity and promotes state into the header', async () => {
     const user = userEvent.setup()
     render(<InspectorHarness />)
 
@@ -148,9 +165,12 @@ describe('LogEventInspector', () => {
       'text-fg'
     )
 
-    const state = within(dialog).getByRole('heading', { name: 'Event state' })
-    expect(state.parentElement).toContainElement(within(dialog).getByText('info', { exact: true }))
-    expect(state.parentElement).toContainElement(within(dialog).getByText('ready', { exact: true }))
+    expect(dialog.querySelector('[data-log-category="system"]')).toHaveTextContent('System')
+    const header = title.parentElement
+    expect(header).not.toBeNull()
+    if (!header) throw new Error('Audit inspector header is missing')
+    expect(within(header).getByText('info', { exact: true })).toBeInTheDocument()
+    expect(within(dialog).queryByText('ready', { exact: true })).not.toBeInTheDocument()
     expect(within(dialog).getByRole('heading', { name: 'Event metadata' })).toBeInTheDocument()
   })
 
@@ -168,17 +188,6 @@ describe('LogEventInspector', () => {
     const requestClasses = Array.from(requestTitle.classList).filter((className) => className !== 'flex-1')
 
     expect(auditClasses).toEqual(requestClasses)
-  })
-
-  it('keeps unknown outcome values muted instead of inferring a state from substrings', async () => {
-    const user = userEvent.setup()
-    const audit = { ...AUDIT, outcome: 'unblocked' }
-    render(<InspectorHarness audit={audit} />)
-
-    await user.click(screen.getByRole('button', { name: 'Open audit' }))
-
-    const dialog = screen.getByRole('dialog', { name: 'Operational event runtime_ready' })
-    expect(within(dialog).getByText('unblocked', { exact: true })).toHaveStyle({ color: 'var(--color-fg-dim)' })
   })
 
   it('keeps the request frame fixed while audit content adapts with a named scroll body', () => {
@@ -251,10 +260,19 @@ describe('LogEventInspector', () => {
         .getAllByRole('tab')
         .map((tab) => tab.textContent)
     ).toEqual(['Overview', 'Payloads', 'Timeline', 'Diagnostics'])
-    expect(requestQueries.summary).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID))
+    expect(requestQueries.summary).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID), undefined)
     expect(requestQueries.events).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID), true)
     expect(requestQueries.artifacts).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID), true)
     expect(requestQueries.attempts).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID), true)
+  })
+
+  it('seeds the request summary with the ledger row already loaded instead of reloading it', async () => {
+    const user = userEvent.setup()
+    render(<InspectorHarness requestRows={[REQUEST]} />)
+
+    await user.click(screen.getByRole('button', { name: 'Open request' }))
+
+    expect(requestQueries.summary).toHaveBeenCalledWith(LogRequestId.parse(REQUEST_ID), REQUEST)
   })
 
   it('keeps request identity, outcome, and close actions in the fixed header', async () => {

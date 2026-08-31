@@ -2,7 +2,6 @@ use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 
 mod admission;
 mod backend;
-mod decode_batcher;
 mod decode_scheduler;
 mod embedded_execution;
 mod embedded_generation;
@@ -10,6 +9,7 @@ mod generation;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;
+pub(crate) mod iteration_scheduler;
 mod linear_proposal;
 mod local_generation;
 mod native_mtp;
@@ -30,6 +30,7 @@ use self::{
 };
 
 pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
+pub(crate) use self::generation::serve_embedded_openai_with_scheduler;
 use self::generation::*;
 pub use self::generation::{
     CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,

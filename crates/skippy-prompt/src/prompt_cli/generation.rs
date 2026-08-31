@@ -4,7 +4,6 @@ struct PromptRun<'a> {
     chat_template_model: Option<&'a StageModel>,
     draft: Option<&'a mut DraftRunner>,
     interrupt: &'a Arc<PromptInterruptState>,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     session_id: &'a str,
     wire_session_id: u64,
     prompt_index: usize,
@@ -19,7 +18,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         chat_template_model,
         mut draft,
         interrupt,
-        wire_dtype,
         session_id,
         wire_session_id,
         prompt_index,
@@ -76,7 +74,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             reset_live_prompt_runtime(
                 live,
                 args,
-                wire_dtype,
                 prompt_index,
                 request_id,
                 wire_session_id,
@@ -102,7 +99,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                     .context("live prompt stream was not connected")?;
                 send_trim_session(
                     stream,
-                    wire_dtype,
                     prompt_index,
                     request_id,
                     wire_session_id,
@@ -118,7 +114,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                 reset_live_prompt_runtime(
                     live,
                     args,
-                    wire_dtype,
                     prompt_index,
                     request_id,
                     wire_session_id,
@@ -177,7 +172,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     let mut reply_stats = StageReplyStats::default();
     let generation_config = send_generation_config(
         stream,
-        wire_dtype,
         request_id,
         wire_session_id,
         token_ids.len(),
@@ -192,7 +186,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         );
         let restore = send_try_restore_prefill(
             stream,
-            wire_dtype,
             prompt_index,
             request_id,
             wire_session_id,
@@ -246,7 +239,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             );
             send_prefill_chunk(
                 stream,
-                wire_dtype,
                 ReplPrefillChunk {
                     prompt_index,
                     request_id,
@@ -311,7 +303,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             let decode_index = generated.len();
             let reply = send_decode_step(
                 stream,
-                wire_dtype,
                 prompt_index,
                 request_id,
                 wire_session_id,
@@ -354,7 +345,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
         let reply = send_verify_window(
             stream,
-            wire_dtype,
             request_id,
             wire_session_id,
             token_ids.len(),
@@ -428,7 +418,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             tokenizer,
             chat_template_model,
             args,
-            wire_dtype,
             prompt_index,
             request_id,
             wire_session_id,
@@ -447,7 +436,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     }
 
     if !live_enabled {
-        stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)?;
+        stop_prompt_stream(stream, request_id, wire_session_id, args)?;
     }
 
     let wallblock_ms = elapsed_ms(wall_started);

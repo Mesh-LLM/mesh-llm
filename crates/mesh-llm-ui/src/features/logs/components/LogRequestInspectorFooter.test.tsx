@@ -63,17 +63,26 @@ describe('Request Inspector footer', () => {
     (tab) => {
       const view = renderDetails(tab)
       const footer = screen.getByRole('contentinfo', { name: 'Request inspector actions' })
+      const scrollBodies = view.container.querySelectorAll('[data-request-inspector-scroll="body"]')
+      const scrollBody = scrollBodies.item(0)
 
       expect(footer).toHaveClass('shrink-0')
       expect(within(footer).getByRole('button', { name: 'Close' })).toBeInTheDocument()
       expect(within(footer).getByRole('button', { name: 'Delete terminal request' })).toBeInTheDocument()
-      expect(view.container.querySelectorAll('[data-request-inspector-scroll="body"]')).toHaveLength(1)
-      expect(view.container.querySelector('[data-request-inspector-scroll="body"]')).toHaveClass(
+      expect(scrollBodies).toHaveLength(1)
+      expect(view.container.querySelectorAll('.overflow-y-auto')).toHaveLength(1)
+      expect(scrollBody).toHaveClass(
         'min-h-0',
         'flex-1',
-        'overflow-y-auto'
+        'overflow-y-auto',
+        'overscroll-y-contain',
+        'outline-none',
+        'focus-visible:outline-2',
+        'focus-visible:outline-offset-[-2px]',
+        'focus-visible:outline-accent',
+        'focus-visible:outline-solid'
       )
-      expect(view.container.querySelector('[data-request-inspector-scroll="body"]')).toHaveAttribute('tabindex', '0')
+      expect(scrollBody).toHaveAttribute('tabindex', '0')
     }
   )
 
@@ -95,7 +104,19 @@ describe('Request Inspector footer', () => {
     const close = within(footer).getByRole('button', { name: 'Close' })
     const deleteRequest = within(footer).getByRole('button', { name: 'Delete terminal request' })
 
-    expect(footer).toHaveClass('flex-col-reverse', 'sm:flex-row', 'sm:items-center', 'sm:justify-end')
+    expect(footer).toHaveClass(
+      'min-w-0',
+      'shrink-0',
+      'flex-col',
+      'gap-2',
+      'px-4',
+      'py-2.5',
+      'sm:flex-row',
+      'sm:flex-wrap',
+      'sm:items-center',
+      'sm:justify-end'
+    )
+    expect(footer).not.toHaveClass('fixed', 'sticky')
     expect(close.parentElement).toBe(footer)
     expect(deleteRequest.parentElement).toBe(footer)
     for (const action of [close, deleteRequest]) {

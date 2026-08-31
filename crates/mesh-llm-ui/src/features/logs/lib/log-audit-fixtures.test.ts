@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { parseLogAuditPage } from '@/features/logs/api/schemas'
+import type { LogAuditEntry } from '@/features/logs/api/schemas'
 import { HARNESS_LOG_AUDIT_FIXTURES } from '@/features/logs/lib/log-fixtures'
+
+const TYPED_AUDIT_FIXTURE: LogAuditEntry = {
+  entryId: 'audit-typed-context',
+  occurredAt: '2026-08-08T12:02:00Z',
+  source: 'cli',
+  code: 'cli_command_completed',
+  severity: 'info',
+  sequence: 100,
+  contextVersion: 1,
+  operationId: 'runtime-instance-7',
+  requestId: '00000000-0000-4000-8000-000000000001',
+  commandSummary: 'mesh-llm load name [REDACTED] --root-relay [REDACTED]'
+}
+
+const AUDIT_FIXTURES: readonly LogAuditEntry[] = [...HARNESS_LOG_AUDIT_FIXTURES, TYPED_AUDIT_FIXTURE]
 
 const EXPECTED_AUDIT_CODES = [
   'runtime_startup_started',
@@ -74,11 +90,58 @@ describe('operational audit harness fixtures', () => {
     )
   })
 
-  it('keeps operational audits bounded to public DTO fields and private-content free', () => {
-    const serialized = JSON.stringify(HARNESS_LOG_AUDIT_FIXTURES).toLowerCase()
+  it('uses producer-backed mesh reasons while accepting bounded historical reason strings', () => {
+    const handlerReasons = HARNESS_LOG_AUDIT_FIXTURES.filter(
+      (entry) => entry.code === 'mesh_quic_handler_failed' || entry.code === 'mesh_control_handler_failed'
+    ).map((entry) => entry.reasonCode)
+    const peerRemoval = HARNESS_LOG_AUDIT_FIXTURES.find((entry) => entry.code === 'gossip_peer_removed')
 
-    for (const entry of HARNESS_LOG_AUDIT_FIXTURES) {
-      expect(Object.keys(entry).sort()).toEqual(['code', 'entryId', 'occurredAt', 'sequence', 'severity', 'source'])
+    expect(handlerReasons).toEqual(['internal', 'internal'])
+    expect(peerRemoval?.reasonCode).toBe('reconnect_failed')
+    expect(
+      parseLogAuditPage({
+        items: [
+          {
+            entryId: 'audit-historical-reason',
+            occurredAt: '2026-08-08T12:01:00Z',
+            source: 'mesh',
+            code: 'mesh_quic_handler_failed',
+            severity: 'warning',
+            sequence: 1,
+            reasonCode: 'historical_unknown_reason'
+          }
+        ],
+        nextCursor: null
+      }).items[0]?.reasonCode
+    ).toBe('historical_unknown_reason')
+  })
+
+  it('keeps operational audits bounded to public DTO fields and private-content free', () => {
+    expect(parseLogAuditPage({ items: AUDIT_FIXTURES, nextCursor: null }).items).toEqual(AUDIT_FIXTURES)
+    const serialized = JSON.stringify(AUDIT_FIXTURES).toLowerCase()
+    const allowedFields = new Set([
+      'code',
+      'commandSummary',
+      'contextVersion',
+      'durationMs',
+      'entryId',
+      'numericSummaries',
+      'occurredAt',
+      'operationId',
+      'outcome',
+      'pathType',
+      'reasonCode',
+      'remoteAddr',
+      'requestId',
+      'sequence',
+      'severity',
+      'source',
+      'subjectId',
+      'subjectKind'
+    ])
+
+    for (const entry of AUDIT_FIXTURES) {
+      expect(Object.keys(entry).every((field) => allowedFields.has(field))).toBe(true)
       expect(entry.code).toMatch(/^[a-z][a-z0-9_]{0,47}$/)
     }
     for (const privateFragment of [
@@ -95,5 +158,24 @@ describe('operational audit harness fixtures', () => {
     ]) {
       expect(serialized).not.toContain(privateFragment)
     }
+  })
+
+  it('covers direct, relay, repeated, and legacy mesh audit identities', () => {
+    const peerEntries = HARNESS_LOG_AUDIT_FIXTURES.filter((entry) => entry.subjectKind === 'mesh_peer')
+    const directEntries = peerEntries.filter((entry) => entry.pathType === 'direct')
+    const relayEntries = peerEntries.filter((entry) => entry.pathType === 'relay')
+    const peerCounts = new Map<string, number>()
+    for (const entry of peerEntries) {
+      if (entry.subjectId) peerCounts.set(entry.subjectId, (peerCounts.get(entry.subjectId) ?? 0) + 1)
+    }
+
+    expect(peerEntries.every((entry) => /^[a-f0-9]{64}$/.test(entry.subjectId ?? ''))).toBe(true)
+    expect(directEntries.some((entry) => entry.remoteAddr !== undefined)).toBe(true)
+    expect(relayEntries.every((entry) => entry.remoteAddr === undefined)).toBe(true)
+    expect([...peerCounts.values()].some((count) => count > 1)).toBe(true)
+    expect(HARNESS_LOG_AUDIT_FIXTURES.some((entry) => entry.code === 'mesh_auto_join_succeeded')).toBe(true)
+    expect(
+      HARNESS_LOG_AUDIT_FIXTURES.find((entry) => entry.code === 'mesh_auto_join_succeeded')?.subjectKind
+    ).toBeUndefined()
   })
 })

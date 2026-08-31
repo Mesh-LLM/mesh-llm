@@ -393,8 +393,6 @@ pub struct RunArgs {
     pub cache_type_v: String,
     #[arg(long, default_value_t = 2048)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value = "Hello")]
     pub prompt: String,
     #[arg(long)]
@@ -567,8 +565,6 @@ pub struct LocalSplitBinaryArgs {
     pub prompt: String,
     #[arg(long, default_value = "127.0.0.1:19011")]
     pub stage1_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub child_logs: bool,
     #[arg(long, default_value_t = 60)]
@@ -595,8 +591,6 @@ pub struct LocalSplitCompareArgs {
     pub prompt: String,
     #[arg(long, default_value = "127.0.0.1:19021")]
     pub stage1_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub child_logs: bool,
     #[arg(long, default_value_t = 60)]
@@ -629,8 +623,6 @@ pub struct LocalSplitChainBinaryArgs {
     pub stage1_bind_addr: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:19032")]
     pub stage2_bind_addr: SocketAddr,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long)]
     pub child_logs: bool,
     #[arg(long, default_value_t = 60)]

@@ -8,7 +8,6 @@ use skippy_protocol::StageTopology;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageReplyWindow;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -43,7 +42,6 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
     topology: Option<&StageTopology>,
     request_id: u64,
     session_id: u64,
-    wire_dtype: WireActivationDType,
     downstream_connect_timeout_secs: u64,
     prediction_return_sinks: &PredictionReturnSinks,
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
@@ -68,7 +66,6 @@ pub(in crate::binary_transport) fn configure_prediction_return_stream(
         topology,
         request_id,
         session_id,
-        wire_dtype,
         downstream_connect_timeout_secs,
     ) {
         Ok(stream) => {
@@ -128,7 +125,7 @@ mod tests {
     #[test]
     fn verify_window_reply_reports_only_the_coordinator_window_id() {
         let kind = WireMessageKind::VerifyWindow;
-        let mut state = StageStateHeader::new(kind, WireActivationDType::F16);
+        let mut state = StageStateHeader::new(kind);
         state.seq_id = 42;
         let message = StageWireMessage {
             kind,

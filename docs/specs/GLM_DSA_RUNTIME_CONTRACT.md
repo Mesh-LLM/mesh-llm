@@ -1,5 +1,12 @@
 # GLM-DSA Runtime Contract
 
+> **Implementation status:** design and offline artifact contract only. The
+> pinned llama.cpp runtime does not currently carry the GLM-DSA staged graph
+> patch, so Mesh LLM does not advertise `glm-dsa` as a runnable stage-runtime
+> family. Quantizer, inventory, and package-policy tooling may prepare and
+> inspect artifacts, but certification and serving must fail closed until the
+> native runtime support is restored and passes the four-lane family battery.
+
 This contract describes the native llama.cpp execution surface required for
 GLM-5.2-style GLM-DSA models. Skippy split serving must inherit this behavior;
 it must not compensate for missing llama.cpp semantics.

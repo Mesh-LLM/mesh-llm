@@ -420,6 +420,14 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
 
     node.set_serving_models(Vec::new()).await;
     node.set_hosted_models(Vec::new()).await;
+
+    // Last mesh-facing step: every subsystem that speaks over the mesh endpoint
+    // has now stopped, so close it explicitly. Dropping it instead makes iroh
+    // log `Endpoint dropped without calling `Endpoint::close`. Aborting
+    // ungracefully.` and abandon the connection-close frames, leaving peers to
+    // time this node out rather than seeing it depart.
+    node.close_endpoint().await;
+
     cleanup_run_auto_runtime_dir(runtime);
 }
 
@@ -437,12 +445,14 @@ pub(super) async fn run_auto_handle_control_request(
         }
         api::RuntimeControlRequest::Load {
             spec,
+            config_model_id,
             profile,
             resp,
         } => {
             let intent = ModelIntent::Load {
                 intent_id: None,
                 spec,
+                config_model_id,
                 profile,
                 source: IntentSource::ApiLoad,
                 completion: Some(resp),
@@ -491,6 +501,7 @@ pub(super) async fn run_auto_handle_model_intent(
         ModelIntent::Load {
             intent_id,
             spec,
+            config_model_id,
             profile,
             source,
             completion,
@@ -535,7 +546,9 @@ pub(super) async fn run_auto_handle_model_intent(
                     .stack_load_completion(&spec, &profile, tx);
             }
 
-            let result = run_auto_load_runtime_model(ctx, spec.clone(), profile.clone()).await;
+            let result =
+                run_auto_load_runtime_model(ctx, spec.clone(), config_model_id, profile.clone())
+                    .await;
             match &result {
                 Ok(response) => {
                     ctx.model_target_reconciliation_state

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use openai_frontend::{OpenAiError, OpenAiResult};
+use openai_frontend::OpenAiResult;
 use serde_json::json;
 
 use crate::frontend::generation::{
@@ -12,6 +12,17 @@ use crate::frontend::{NativeMtpDraft, NativeMtpDraftOrigin};
 use super::token_generation::{DecodeState, decode_native_mtp};
 
 impl StageOpenAiBackend {
+    pub(in crate::frontend) fn generation_signal_window_tokens(&self) -> u32 {
+        match &self.mode {
+            crate::frontend::OpenAiBackendMode::EmbeddedStageZero { config, .. } => {
+                config.generation_signal_window.unwrap_or(16)
+            }
+            crate::frontend::OpenAiBackendMode::LocalRuntime => {
+                self.config.generation_signal_window.unwrap_or(16)
+            }
+        }
+    }
+
     pub(super) fn decode_one_token(
         &self,
         request: &LocalGeneration<'_>,
@@ -30,24 +41,28 @@ impl StageOpenAiBackend {
             token_runtime_lock_wait_ms,
             token_runtime_lock_hold_ms,
         ) = if request.native_mtp_enabled {
-            let lock_timer = PhaseTimer::start();
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            let token_runtime_lock_wait_ms = lock_timer.elapsed_ms();
-            let hold_timer = PhaseTimer::start();
-            let (predicted, draft) = decode_native_mtp(
-                &mut *runtime,
-                session_id,
-                state.current,
-                request.sampling.enabled.then_some(request.sampling),
-                state.native_mtp_options.max_draft_tokens,
+            let session_id = session_id.to_string();
+            let sampling = request.sampling.enabled.then_some(request.sampling.clone());
+            let max_draft_tokens = state.native_mtp_options.max_draft_tokens;
+            let current = state.current;
+            let outcome = self.iteration_scheduler.execute_runtime_timed(
+                "native-mtp-decode",
+                move |runtime| {
+                    decode_native_mtp(
+                        runtime,
+                        &session_id,
+                        current,
+                        sampling.as_ref(),
+                        max_draft_tokens,
+                    )
+                },
             )?;
+            let (predicted, draft) = outcome.value;
             let native_mtp_draft = draft;
             let token_batch_size = 1;
-            let token_batch_wait_ms = 0.0;
-            let token_runtime_lock_hold_ms = hold_timer.elapsed_ms();
+            let token_batch_wait_ms = outcome.queue_wait_ms;
+            let token_runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+            let token_runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
             (
                 predicted,
                 native_mtp_draft,
@@ -57,10 +72,13 @@ impl StageOpenAiBackend {
                 token_runtime_lock_hold_ms,
             )
         } else {
-            let outcome = self.decode_batcher.decode(
+            let outcome = self.iteration_scheduler.execute_iteration(
                 session_id,
-                state.current,
+                &[state.current],
+                &[],
                 request.sampling.enabled.then_some(request.sampling),
+                true,
+                skippy_runtime::IterationBatchPhase::Decode,
             )?;
             (
                 outcome.predicted,
@@ -107,16 +125,21 @@ impl StageOpenAiBackend {
         };
         let (token_signal, signal_window, token_signal_ms) = if state.generation_hooks_active {
             let signal_timer = PhaseTimer::start();
-            let mut runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            state
-                .runtime_sessions_before
-                .get_or_insert_with(|| runtime.session_stats());
-            let token_signal = runtime.last_token_signal(session_id).ok();
-            let signal_window = runtime.signal_window(session_id, 16).ok();
-            state.runtime_sessions_after = Some(runtime.session_stats());
+            let scheduler_session_id = session_id.to_string();
+            let signal_window_tokens = self.generation_signal_window_tokens();
+            let (sessions_before, token_signal, signal_window, sessions_after) = self
+                .iteration_scheduler
+                .execute_runtime("generation-hook-signals", move |runtime| {
+                    let sessions_before = runtime.session_stats();
+                    let token_signal = runtime.last_token_signal(&scheduler_session_id).ok();
+                    let signal_window = runtime
+                        .signal_window(&scheduler_session_id, signal_window_tokens)
+                        .ok();
+                    let sessions_after = runtime.session_stats();
+                    Ok((sessions_before, token_signal, signal_window, sessions_after))
+                })?;
+            state.runtime_sessions_before.get_or_insert(sessions_before);
+            state.runtime_sessions_after = Some(sessions_after);
             (token_signal, signal_window, signal_timer.elapsed_ms())
         } else {
             (None, None, 0.0)

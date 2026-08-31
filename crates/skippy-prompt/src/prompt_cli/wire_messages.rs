@@ -20,7 +20,6 @@ struct SessionControlReply {
 #[allow(clippy::too_many_arguments)]
 fn send_decode_step(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     request_id: u64,
     session_id: u64,
@@ -30,7 +29,7 @@ fn send_decode_step(
     current: i32,
 ) -> Result<DecodeStepReply> {
     let decode_started = Instant::now();
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?;
@@ -52,7 +51,7 @@ fn send_decode_step(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype)
+    write_stage_message(&mut *stream, &message)
         .with_context(|| format!("send decode step {decode_index}"))?;
     let reply = recv_reply(&mut *stream)
         .with_context(|| format!("receive decode step {decode_index} reply"))?;
@@ -67,7 +66,6 @@ fn send_decode_step(
 #[allow(clippy::too_many_arguments)]
 fn send_verify_window(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
@@ -79,7 +77,7 @@ fn send_verify_window(
         bail!("verify window requires at least one token");
     }
     let verify_started = Instant::now();
-    let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
     state.seq_id = i32::try_from(decode_index).context("decode step exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?;
@@ -101,7 +99,7 @@ fn send_verify_window(
         raw_bytes: Vec::new(),
     };
     let write_started = Instant::now();
-    write_stage_message(&mut *stream, &message, wire_dtype)
+    write_stage_message(&mut *stream, &message)
         .with_context(|| format!("send verify window at decode step {decode_index}"))?;
     let write_ms = elapsed_ms(write_started);
     let wait_started = Instant::now();
@@ -127,21 +125,19 @@ fn ensure_reply_kind(reply: &StageReply, expected: WireReplyKind) -> Result<()> 
 
 fn send_generation_config(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
 ) -> Result<SessionControlReply> {
     let started = Instant::now();
     let message = StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
         None,
         None,
     );
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    write_stage_message(&mut *stream, &message).context("send configure-generation")?;
     let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
     if reply.kind != WireReplyKind::Ack {
         bail!("expected configure-generation ACK, got {:?}", reply.kind);
@@ -371,7 +367,6 @@ fn print_stats(stats: Stats) {
 
 fn send_try_restore_prefill(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     request_id: u64,
     session_id: u64,
@@ -381,7 +376,7 @@ fn send_try_restore_prefill(
         bail!("exact-prefix restore requires at least one token");
     }
     let started = Instant::now();
-    let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefill, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefill);
     state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(tokens.len()).context("prefix token count exceeds i32")?;
@@ -401,7 +396,7 @@ fn send_try_restore_prefill(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype)
+    write_stage_message(&mut *stream, &message)
         .context("send exact-prefix restore request")?;
     let reply = recv_reply(&mut *stream).context("receive exact-prefix restore ACK")?;
     if reply.kind != WireReplyKind::Ack {
@@ -424,10 +419,9 @@ struct ReplPrefillChunk<'a> {
 
 fn send_prefill_chunk(
     stream: &mut std::net::TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     chunk: ReplPrefillChunk<'_>,
 ) -> Result<()> {
-    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
     state.seq_id = i32::try_from(chunk.prompt_index).context("prompt index exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(chunk.prefill_token_count).context("prefill token count exceeds i32")?;
@@ -448,7 +442,7 @@ fn send_prefill_chunk(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype)
+    write_stage_message(&mut *stream, &message)
         .with_context(|| format!("send prefill chunk at {}", chunk.pos_start))?;
     let reply = recv_reply(&mut *stream)
         .with_context(|| format!("receive prefill chunk ACK at {}", chunk.pos_start))?;

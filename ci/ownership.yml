@@ -114,6 +114,7 @@
         "Cargo.toml",
         "Cargo.lock",
         "Justfile",
+        "just/**",
         "rust-toolchain",
         "rust-toolchain.toml",
         "crates/**",

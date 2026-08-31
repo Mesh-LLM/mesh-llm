@@ -237,19 +237,39 @@ cat > "$ARTIFACT_UPLOAD_SCRIPT" <<'PYTHON'
 from huggingface_hub import HfApi
 from pathlib import Path
 import os
+import time
 
 path = Path(os.environ["SKIPPY_PACKAGE_ARTIFACT_PATH"])
 relative = os.environ["SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"]
 target_repo = os.environ["TARGET_REPO"]
+max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "4"))
 
 api = HfApi(token=os.environ["HF_TOKEN"])
-api.upload_file(
-    repo_id=target_repo,
-    path_or_fileobj=str(path),
-    path_in_repo=relative,
-    repo_type="model",
-    commit_message=f"Add package artifact {relative}",
-)
+last_error = None
+for attempt in range(1, max_attempts + 1):
+    try:
+        api.upload_file(
+            repo_id=target_repo,
+            path_or_fileobj=str(path),
+            path_in_repo=relative,
+            repo_type="model",
+            commit_message=f"Add package artifact {relative}",
+        )
+        last_error = None
+        break
+    except Exception as err:
+        last_error = err
+        if attempt == max_attempts:
+            break
+        delay = min(60, 5 * attempt)
+        print(
+            f"  Upload failed for {relative} on attempt {attempt}/{max_attempts}: {err}. "
+            f"Retrying in {delay}s...",
+            flush=True,
+        )
+        time.sleep(delay)
+if last_error is not None:
+    raise last_error
 size = path.stat().st_size
 path.unlink()
 print(f"  Uploaded and removed {relative} ({size} bytes)")

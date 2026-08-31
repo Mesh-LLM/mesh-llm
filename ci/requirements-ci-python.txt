@@ -1,4 +1,5 @@
-huggingface_hub[cli]
+PyYAML>=6.0
+huggingface_hub[cli]>=1.1.0
 langchain-openai
 litellm
 openai

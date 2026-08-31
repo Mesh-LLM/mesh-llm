@@ -1,4 +1,46 @@
 use super::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+type PromptShapeObservation = (Option<String>, Option<u64>, Option<u64>);
+
+#[derive(Default)]
+struct PromptShapeSink {
+    observations: std::sync::Mutex<Vec<PromptShapeObservation>>,
+}
+
+impl crate::network::metrics::RoutingTelemetrySink for PromptShapeSink {
+    fn observe_inflight_requests(&self, _current: u64) {}
+
+    fn record_model_request(
+        &self,
+        _model: Option<&str>,
+        _attempts: usize,
+        _outcome: crate::network::metrics::RequestOutcome,
+    ) {
+    }
+
+    fn record_route_attempt(
+        &self,
+        _model: Option<&str>,
+        _target: &crate::network::metrics::AttemptTarget,
+        _outcome: crate::network::metrics::AttemptOutcome,
+    ) {
+    }
+
+    fn record_prompt_shape(
+        &self,
+        model: Option<&str>,
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        _outcome: crate::network::metrics::RequestOutcome,
+    ) {
+        self.observations.lock().expect("prompt-shape lock").push((
+            model.map(str::to_string),
+            prompt_tokens,
+            completion_tokens,
+        ));
+    }
+}
 
 fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
     mesh::PeerInfo {
@@ -45,6 +87,7 @@ fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::Peer
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         display_rtt: None,
         selected_path: None,
         propagated_latency: None,
@@ -81,6 +124,33 @@ fn text_auto_request() -> BufferedHttpRequest {
         body_len_bytes: 0,
         completion_tokens: None,
         model_name: Some("auto".to_string()),
+        stream: None,
+        request_object_request_ids: Vec::new(),
+        response_adapter: ResponseAdapter::None,
+        correlation_id: None,
+    }
+}
+fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a scheduler."},
+            {"role": "user", "content": "Explain this trace."}
+        ]
+    });
+    let body_bytes = serde_json::to_vec(&body).expect("request body should serialize");
+    BufferedHttpRequest {
+        raw: Vec::new(),
+        method: "POST".to_string(),
+        path: "/v1/chat/completions".to_string(),
+        client_path: "/v1/chat/completions".to_string(),
+        request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
+        body_json: None,
+        body_json_attempted: false,
+        body_len_bytes: body_bytes.len(),
+        body_bytes: Some(body_bytes),
+        completion_tokens: None,
+        model_name: Some(model.to_string()),
         stream: None,
         request_object_request_ids: Vec::new(),
         response_adapter: ResponseAdapter::None,
@@ -197,6 +267,71 @@ fn tokenizer_effective_model_cannot_override_authoritative_identity() {
 
     assert_eq!(request.model_name.as_deref(), Some(model));
     assert_eq!(request.raw, raw_before);
+}
+
+#[test]
+fn single_remote_target_still_derives_a_cache_prefix() {
+    let model = "acme/code-model:Q4_K_M";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let affinity = AffinityRouter::with_config(true, true);
+    let mut request = unparsed_chat_request(model);
+
+    let prepared = prepare_mesh_targets(
+        &mut request,
+        Some(model),
+        std::slice::from_ref(&peer_id),
+        &affinity,
+    );
+
+    assert!(request.body_json_attempted);
+    assert!(request.body_json.is_some());
+    assert!(prepared.prefix_hash.is_some());
+}
+
+#[tokio::test]
+async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
+    use mesh_llm_routing::cache_inventory::{
+        CACHE_AFFINITY_SALT_BYTES, CacheAffinityAdvertisement, CacheAffinityEntry, CacheTier,
+        prefix_digest,
+    };
+
+    let model = "acme/code-model:Q4_K_M";
+    let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+    let node = test_node_with_remote_models(&[(model, peer_id)]).await;
+    let affinity = AffinityRouter::with_config(false, true);
+    let mut request = unparsed_chat_request(model);
+    let mut prepared = prepare_mesh_targets(
+        &mut request,
+        Some(model),
+        std::slice::from_ref(&peer_id),
+        &affinity,
+    );
+    let prefix_hash = prepared.prefix_hash.expect("derived prefix");
+    let salt = [3; CACHE_AFFINITY_SALT_BYTES];
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.cache_affinity = Some(CacheAffinityAdvertisement {
+        salt,
+        epoch: 1,
+        generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+        ttl_ms: 120_000,
+        entries: vec![CacheAffinityEntry {
+            model: model.to_string(),
+            prefix_digest: prefix_digest(&salt, model, prefix_hash),
+            matched_tokens: 512,
+            suffix_prefill_tokens: 32,
+            tier: CacheTier::L1,
+            restore_micros: 0,
+            queue_delay_micros: 0,
+        }],
+    });
+    node.insert_test_peer(peer).await;
+
+    let ordered = order_mesh_target_hosts(&node, Some(model), None, &mut prepared, &affinity).await;
+
+    assert_eq!(ordered, vec![peer_id]);
+    assert!(prepared.cache_target.is_none());
+    assert_eq!(affinity.stats_snapshot().prefix_lookups, 0);
+    Ok(())
 }
 
 #[tokio::test]
@@ -323,4 +458,138 @@ fn test_capture_path_for_request_uses_client_path() {
     };
 
     assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");
+}
+
+#[tokio::test]
+async fn routed_completion_http_boundary_preserves_configured_served_alias() -> Result<()> {
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let backend_port = backend.local_addr()?.port();
+    let backend_task = tokio::spawn(async move {
+        let (mut stream, _) = backend.accept().await.expect("backend connection");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).await.expect("backend request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&request);
+        assert!(request.contains(r#""model":"public-model""#));
+        let body = r#"{"id":"completion-1","model":"public-model","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("backend response");
+        stream.shutdown().await.expect("backend shutdown");
+    });
+
+    let downstream = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let downstream_address = downstream.local_addr()?;
+    let client = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(downstream_address)
+            .await
+            .expect("downstream connection");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("downstream response");
+        String::from_utf8(response).expect("utf-8 response")
+    });
+    let (downstream_stream, _) = downstream.accept().await?;
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+    let request_body = r#"{"model":"public-model","messages":[{"role":"user","content":"hello"}]}"#;
+    let prefetched = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        request_body.len(),
+        request_body
+    );
+
+    let outcome = route_to_target(
+        node,
+        downstream_stream.into(),
+        Some("public-model"),
+        election::InferenceTarget::Local(backend_port),
+        prefetched.as_bytes(),
+        RouteTargetContext {
+            request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
+            response_adapter: ResponseAdapter::None,
+            route_observer: OpenAiRouteObserver::default(),
+        },
+    )
+    .await;
+
+    assert!(matches!(
+        outcome,
+        RouteDispatchOutcome::RespondedWithUsage {
+            status_code: 200,
+            ..
+        }
+    ));
+    let response = client.await.expect("downstream client task");
+    assert!(response.contains(r#""model":"public-model""#));
+    backend_task.await.expect("backend task");
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_model_route_records_prompt_shape_from_usage() -> Result<()> {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+    let sink = std::sync::Arc::new(PromptShapeSink::default());
+    node.set_routing_telemetry_sink(Some(sink.clone()));
+    let request = text_auto_request();
+
+    let outcome = finalize_route_model_result(
+        &node,
+        "public-model",
+        &request,
+        std::time::Instant::now(),
+        1,
+        RouteDispatchOutcome::RespondedWithUsage {
+            status_code: 200,
+            usage: TokenUsage {
+                prompt_tokens: Some(13),
+                completion_tokens: Some(5),
+                ..Default::default()
+            },
+        },
+        &election::InferenceTarget::Local(9337),
+    );
+
+    assert!(matches!(
+        outcome,
+        RouteDispatchOutcome::RespondedWithUsage { .. }
+    ));
+    assert_eq!(
+        sink.observations
+            .lock()
+            .expect("prompt-shape lock")
+            .as_slice(),
+        &[(Some("public-model".to_string()), Some(13), Some(5))]
+    );
+    Ok(())
 }

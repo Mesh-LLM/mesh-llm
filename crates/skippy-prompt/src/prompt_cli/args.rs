@@ -70,8 +70,6 @@ pub struct PromptArgs {
     pub n_gpu_layers: i32,
     #[arg(long, default_value_t = 2048)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 128)]
     pub prefill_chunk_size: usize,
     #[arg(
@@ -155,8 +153,6 @@ pub struct BinaryReplArgs {
     pub n_gpu_layers: i32,
     #[arg(long, default_value_t = 2048)]
     pub activation_width: i32,
-    #[arg(long, default_value = "f16")]
-    pub activation_wire_dtype: String,
     #[arg(long, default_value_t = 128)]
     pub prefill_chunk_size: usize,
     #[arg(

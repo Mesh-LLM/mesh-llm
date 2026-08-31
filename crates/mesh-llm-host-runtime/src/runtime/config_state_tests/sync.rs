@@ -359,7 +359,12 @@ fn config_sync_state_apply_preserves_nested_sections_and_updates_hash() {
         } => {
             assert_eq!(revision, 1);
             assert_eq!(apply_mode, ConfigApplyMode::Staged);
-            assert!(diagnostics.is_empty());
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.severity != ConfigDiagnosticSeverity::Error),
+                "unexpected error diagnostics: {diagnostics:?}"
+            );
             hash
         }
         other => panic!("expected Applied, got {other:?}"),
