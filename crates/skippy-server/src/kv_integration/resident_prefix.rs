@@ -30,6 +30,22 @@ pub(crate) struct ResidentCapacityReservations {
     entries: Arc<Mutex<BTreeMap<String, ResidentCapacityReservationEntry>>>,
 }
 
+impl ResidentCapacityReservations {
+    pub(crate) fn stats(&self) -> (usize, u64) {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            entries.len(),
+            entries
+                .values()
+                .map(|entry| entry.target_session_tokens)
+                .fold(0, u64::saturating_add),
+        )
+    }
+}
+
 /// Keeps one request's projected KV demand visible until its runtime session
 /// has either materialized those cells or completed cleanup.
 pub(crate) struct ResidentCapacityReservation {
@@ -166,13 +182,15 @@ impl KvStageIntegration {
         if capacity_tokens == 0 {
             return Ok(ResidentCapacityDecision {
                 enabled: true,
-                admitted: true,
+                capacity_known: false,
+                admitted: false,
                 active_tokens,
                 request_tokens,
                 inflight_reservations,
                 inflight_outstanding_tokens,
                 minimum_free_tokens,
                 target_free_tokens,
+                admission_deficit_tokens: request_tokens,
                 ..ResidentCapacityDecision::default()
             });
         }
@@ -272,7 +290,7 @@ impl KvStageIntegration {
                         victim.value.seq_id
                     )
                 })?;
-            sequences.release(removed.value.seq_id);
+            sequences.release(removed.value.seq_id)?;
             #[cfg(test)]
             let used_after = if runtime.is_modelless_for_test() {
                 active_tokens.saturating_add(radix.stats().resident_tokens)
@@ -300,6 +318,7 @@ impl KvStageIntegration {
             .saturating_add(minimum_free)
             .saturating_sub(capacity_tokens);
         decision.admitted = decision.admission_deficit_tokens == 0;
+        self.verify_resident_ownership(radix.stats().resident_entries, sequences.stats().0)?;
         Ok(decision)
     }
 
@@ -429,6 +448,7 @@ impl KvStageIntegration {
             evicted_entries = evicted_entries.saturating_add(1);
             evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
         }
+        self.verify_resident_ownership(radix.stats().resident_entries, sequences.stats().0)?;
         Ok(ResidentPrefixEviction {
             target_tokens,
             evicted_entries,
@@ -519,6 +539,7 @@ impl KvStageIntegration {
                 radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
             {
                 let stats = radix.stats();
+                self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
                 return Ok(Some(ResidentPrefixRecord {
                     page_id: existing.value.page_id,
                     token_count,
@@ -555,10 +576,18 @@ impl KvStageIntegration {
             sequences.allocate()?
         };
         if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
-            self.resident_sequences
+            if let Err(release_error) = self
+                .resident_sequences
                 .lock()
                 .expect("resident sequence pool lock poisoned")
-                .release(seq_id);
+                .release(seq_id)
+            {
+                return Err(error).with_context(|| {
+                    format!(
+                        "release resident sequence {seq_id} after native save failed: {release_error:#}"
+                    )
+                });
+            }
             return Err(error);
         }
         let mut radix = self
@@ -588,6 +617,7 @@ impl KvStageIntegration {
                 .resident_exact(&identity.namespace, &identity.token_ids[..token_count])
                 .context("occupied resident radix entry disappeared after rejected insert")?;
             let stats = radix.stats();
+            self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
             return Ok(Some(ResidentPrefixRecord {
                 page_id: existing.value.page_id,
                 token_count,
@@ -600,6 +630,7 @@ impl KvStageIntegration {
             }));
         }
         let stats = radix.stats();
+        self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
         Ok(Some(ResidentPrefixRecord {
             page_id: identity.page_id.clone(),
             token_count,
@@ -660,7 +691,7 @@ fn evict_one_resident(
         .evict_resident_candidate(&victim.namespace, &victim.tokens)
         .expect("selected radix resident victim should exist");
     debug_assert_eq!(removed.value.page_id, victim.value.page_id);
-    sequences.release(removed.value.seq_id);
+    sequences.release(removed.value.seq_id)?;
     Ok(Some(removed))
 }
 
@@ -686,19 +717,28 @@ fn insert_saved_resident(
     match radix.insert_resident_if_vacant(namespace, tokens, logical_bytes, entry) {
         Ok(None) => Ok(true),
         Ok(Some(rejected)) => {
-            drop_native(rejected.seq_id)?;
-            sequences.release(rejected.seq_id);
+            if let Err(error) = drop_native(rejected.seq_id) {
+                sequences.quarantine(rejected.seq_id)?;
+                return Err(error).with_context(|| {
+                    format!(
+                        "quarantine native resident sequence {} after duplicate radix insert",
+                        rejected.seq_id
+                    )
+                });
+            }
+            sequences.release(rejected.seq_id)?;
             Ok(false)
         }
         Err(error) => {
             if let Err(native_error) = drop_native(seq_id) {
+                sequences.quarantine(seq_id)?;
                 return Err(native_error).with_context(|| {
                     format!(
                         "roll back native resident sequence {seq_id} after radix insert failed: {error:#}"
                     )
                 });
             }
-            sequences.release(seq_id);
+            sequences.release(seq_id)?;
             Err(error)
         }
     }
@@ -955,6 +995,50 @@ mod proactive_eviction_tests {
         assert_eq!(dropped, Some(seq_id));
         assert_eq!(sequences.allocate().unwrap(), seq_id);
         assert_eq!(radix.stats().resident_entries, 0);
+    }
+
+    #[test]
+    fn failed_native_rollback_quarantines_sequence_capacity() {
+        let mut radix = skippy_cache::UnifiedRadixCache::new();
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+
+        let error = insert_saved_resident(
+            &mut radix,
+            &mut sequences,
+            "stage".to_string(),
+            &[],
+            0,
+            RadixResidentEntry {
+                page_id: "page".to_string(),
+                seq_id,
+                token_count: 0,
+                recompute_cost: 0,
+            },
+            |_| anyhow::bail!("native drop failed"),
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("native drop failed"));
+        assert!(sequences.quarantined_seq_ids.contains(&seq_id));
+        assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
+        assert_eq!(radix.stats().resident_entries, 0);
+    }
+
+    #[test]
+    fn duplicate_sequence_release_fails_without_free_list_corruption() {
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+
+        sequences.release(seq_id).unwrap();
+        let error = sequences.release(seq_id).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("resident prefix sequence id {seq_id} is not allocated")
+        );
+        assert_eq!(sequences.allocate().unwrap(), seq_id);
+        assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
     }
 
     #[test]

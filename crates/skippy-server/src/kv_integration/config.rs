@@ -16,6 +16,7 @@ use super::{
     EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
     ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
     model_capability::{ModelKvCapability, inspect_model_kv_capability},
+    output_tokens::OutputTokenCache,
 };
 
 #[cfg(test)]
@@ -78,29 +79,31 @@ impl KvStageIntegration {
         let worker_exact_state_records_dropped = exact_state_records_dropped.clone();
         let exact_state_records_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker_exact_state_records_pending = exact_state_records_pending.clone();
+        let exact_state_record_worker_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
+        let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
         std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
-                    let page_id = pending.page_id.clone();
-                    if store_exact_radix_record(
-                        &worker_radix,
-                        &worker_exact_blobs,
-                        exact_max_entries,
-                        exact_max_bytes,
+                    super::run_exact_state_record_job(
+                        &worker_inflight_records,
+                        &worker_exact_state_records_dropped,
+                        &worker_exact_state_records_pending,
+                        &worker_exact_state_record_worker_healthy,
+                        &worker_exact_state_record_worker_panics,
                         pending,
-                    )
-                    .is_err()
-                    {
-                        worker_exact_state_records_dropped
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    worker_inflight_records
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .remove(&page_id);
-                    worker_exact_state_records_pending
-                        .fetch_sub(1, std::sync::atomic::Ordering::Release);
+                        |pending| {
+                            store_exact_radix_record(
+                                &worker_radix,
+                                &worker_exact_blobs,
+                                exact_max_entries,
+                                exact_max_bytes,
+                                pending,
+                            )
+                        },
+                    );
                 }
             })?;
         Ok(Some(Self {
@@ -124,8 +127,10 @@ impl KvStageIntegration {
             exact_state_records_queued,
             exact_state_records_dropped,
             exact_state_records_pending,
-            first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
-            replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            exact_state_record_worker_healthy,
+            exact_state_record_worker_panics,
+            cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            output_tokens: Arc::new(Mutex::new(OutputTokenCache::new(exact_max_entries))),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         }))
     }
@@ -193,7 +198,7 @@ fn store_exact_radix_record(
             &mut blobs
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        )?;
         return Err(error);
     }
     if !released.is_empty() {
@@ -201,7 +206,7 @@ fn store_exact_radix_record(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for payload in released {
-            payload.release_from(&mut blobs);
+            payload.release_from(&mut blobs)?;
         }
     }
     while max_bytes > 0
@@ -222,7 +227,7 @@ fn store_exact_radix_record(
             &mut blobs
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        )?;
     }
     Ok(())
 }

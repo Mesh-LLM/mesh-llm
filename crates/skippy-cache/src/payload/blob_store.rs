@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
+use anyhow::{Result, bail};
+
 use super::CacheBytes;
 use super::bytes::{CacheBlockRef, CacheBytesRepr};
 
@@ -37,8 +39,31 @@ impl CacheBlobStore {
         let len = bytes.len;
         let bytes = match bytes.repr {
             CacheBytesRepr::Inline(bytes) => bytes,
-            repr @ CacheBytesRepr::Blocks(_) => {
-                return (CacheBytes { len, repr }, CacheDedupeStats::default());
+            CacheBytesRepr::Blocks(blocks) => {
+                let mut stats = CacheDedupeStats::default();
+                for block in blocks.iter() {
+                    stats.block_count = stats.block_count.saturating_add(1);
+                    let entry = self.blocks.entry(block.hash.clone()).or_insert_with(|| {
+                        self.physical_bytes =
+                            self.physical_bytes.saturating_add(block.bytes.len() as u64);
+                        stats.new_block_count = stats.new_block_count.saturating_add(1);
+                        CacheBlob {
+                            bytes: block.bytes.clone(),
+                            ref_count: 0,
+                        }
+                    });
+                    if entry.ref_count > 0 {
+                        stats.reused_block_count = stats.reused_block_count.saturating_add(1);
+                    }
+                    entry.ref_count = entry.ref_count.saturating_add(1);
+                }
+                return (
+                    CacheBytes {
+                        len,
+                        repr: CacheBytesRepr::Blocks(blocks),
+                    },
+                    stats,
+                );
             }
         };
         let mut blocks = Vec::new();
@@ -68,22 +93,55 @@ impl CacheBlobStore {
         (CacheBytes::blocks(bytes.len() as u64, blocks), stats)
     }
 
-    pub fn release_bytes(&mut self, bytes: &CacheBytes) {
-        let hashes = bytes.block_hashes().map(str::to_string).collect::<Vec<_>>();
-        for hash in hashes {
-            let mut remove = false;
-            if let Some(entry) = self.blocks.get_mut(&hash) {
-                entry.ref_count = entry.ref_count.saturating_sub(1);
-                if entry.ref_count == 0 {
-                    self.physical_bytes =
-                        self.physical_bytes.saturating_sub(entry.bytes.len() as u64);
-                    remove = true;
-                }
+    pub fn release_bytes(&mut self, bytes: &CacheBytes) -> Result<()> {
+        self.release_bytes_batch(&[bytes])
+    }
+
+    pub(crate) fn release_bytes_batch(&mut self, payloads: &[&CacheBytes]) -> Result<()> {
+        let mut releases = HashMap::<String, u64>::new();
+        for bytes in payloads {
+            for hash in bytes.block_hashes() {
+                let count = releases.entry(hash.to_string()).or_default();
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("cache blob release count overflow"))?;
             }
-            if remove {
+        }
+        let mut physical_bytes_to_remove = 0u64;
+        for (hash, count) in &releases {
+            let Some(entry) = self.blocks.get(hash) else {
+                bail!("cache blob release references missing block {hash}");
+            };
+            if entry.ref_count < *count {
+                bail!(
+                    "cache blob release underflow for block {hash}: refs={} releases={count}",
+                    entry.ref_count
+                );
+            }
+            if entry.ref_count == *count {
+                physical_bytes_to_remove = physical_bytes_to_remove
+                    .checked_add(entry.bytes.len() as u64)
+                    .ok_or_else(|| anyhow::anyhow!("cache blob physical byte count overflow"))?;
+            }
+        }
+        if physical_bytes_to_remove > self.physical_bytes {
+            bail!(
+                "cache blob physical byte accounting underflow: bytes={} releases={physical_bytes_to_remove}",
+                self.physical_bytes
+            );
+        }
+        for (hash, count) in releases {
+            let entry = self
+                .blocks
+                .get_mut(&hash)
+                .expect("release prevalidation guarantees block presence");
+            entry.ref_count -= count;
+            if entry.ref_count == 0 {
                 self.blocks.remove(&hash);
             }
         }
+        self.physical_bytes -= physical_bytes_to_remove;
+        Ok(())
     }
 
     pub fn physical_bytes(&self) -> u64 {
@@ -92,6 +150,13 @@ impl CacheBlobStore {
 
     pub fn block_count(&self) -> usize {
         self.blocks.len()
+    }
+
+    pub fn logical_ref_count(&self) -> u64 {
+        self.blocks
+            .values()
+            .map(|block| block.ref_count)
+            .fold(0, u64::saturating_add)
     }
 }
 
@@ -136,5 +201,79 @@ mod tests {
         assert_eq!(second_stats.reused_block_count, 1);
         assert_eq!(blobs.physical_bytes(), 12);
         assert_eq!(second.byte_len(), 8);
+    }
+
+    #[test]
+    fn rededuping_block_payload_retains_a_logical_owner() {
+        let mut blobs = CacheBlobStore::new(4);
+        let original = ExactStatePayload::full_state(b"aaaabbbb".to_vec());
+        let (first_owner, _) = original.dedupe_into(&mut blobs);
+        let (second_owner, stats) = first_owner.clone().dedupe_into(&mut blobs);
+
+        assert_eq!(stats.reused_block_count, 2);
+        assert_eq!(blobs.physical_bytes(), 8);
+        first_owner.release_from(&mut blobs).unwrap();
+        assert_eq!(blobs.physical_bytes(), 8);
+        assert_eq!(
+            second_owner.full_state_bytes_timed().unwrap().0.as_ref(),
+            b"aaaabbbb"
+        );
+        second_owner.release_from(&mut blobs).unwrap();
+        assert_eq!(blobs.physical_bytes(), 0);
+    }
+
+    #[test]
+    fn duplicate_release_is_reported_without_accounting_drift() {
+        let mut blobs = CacheBlobStore::new(4);
+        let (payload, _) =
+            ExactStatePayload::full_state(b"aaaabbbb".to_vec()).dedupe_into(&mut blobs);
+
+        payload.release_from(&mut blobs).unwrap();
+        let error = payload.release_from(&mut blobs).unwrap_err();
+
+        assert!(error.to_string().contains("missing block"));
+        assert_eq!(blobs.physical_bytes(), 0);
+        assert_eq!(blobs.block_count(), 0);
+    }
+
+    #[test]
+    fn composite_release_prevalidates_every_component() {
+        let mut blobs = CacheBlobStore::new(4);
+        let (payload, _) =
+            ExactStatePayload::kv_recurrent(b"aaaabbbb".to_vec(), b"ccccdddd".to_vec())
+                .dedupe_into(&mut blobs);
+        let ExactStatePayload::KvRecurrent { recurrent, .. } = &payload else {
+            panic!("expected composite payload");
+        };
+
+        blobs.release_bytes(recurrent).unwrap();
+        let physical_before = blobs.physical_bytes();
+        let refs_before = blobs.logical_ref_count();
+
+        let error = payload.release_from(&mut blobs).unwrap_err();
+
+        assert!(error.to_string().contains("missing block"));
+        assert_eq!(blobs.physical_bytes(), physical_before);
+        assert_eq!(blobs.logical_ref_count(), refs_before);
+        assert_eq!(blobs.block_count(), 2);
+    }
+
+    #[test]
+    fn physical_accounting_underflow_does_not_mutate_references() {
+        let mut blobs = CacheBlobStore::new(4);
+        let (payload, _) =
+            ExactStatePayload::full_state(b"aaaabbbb".to_vec()).dedupe_into(&mut blobs);
+        let refs_before = blobs.logical_ref_count();
+        blobs.physical_bytes = 0;
+
+        let error = payload.release_from(&mut blobs).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("physical byte accounting underflow")
+        );
+        assert_eq!(blobs.logical_ref_count(), refs_before);
+        assert_eq!(blobs.block_count(), 2);
     }
 }

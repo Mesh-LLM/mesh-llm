@@ -73,6 +73,23 @@ fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
 }
 
 #[test]
+fn resident_capacity_unknown_fails_closed() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
+
+    let decision = kv
+        .admit_resident_capacity(&mut runtime, "unknown", 1, 0, 0, None)
+        .unwrap();
+
+    assert!(!decision.capacity_known);
+    assert!(!decision.admitted);
+    assert_eq!(decision.admission_deficit_tokens, 1);
+}
+
+#[test]
 fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
     let config = StageConfig {
         ctx_size: 131_072,

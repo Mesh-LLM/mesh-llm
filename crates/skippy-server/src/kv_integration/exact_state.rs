@@ -163,7 +163,7 @@ impl KvStageIntegration {
                             &identity.namespace,
                             &lookup.stored_tokens,
                             &lookup.value.page_id,
-                        );
+                        )?;
                     }
                     return Err(error);
                 }
@@ -191,22 +191,27 @@ impl KvStageIntegration {
         Ok(None)
     }
 
-    fn quarantine_exact_state_entry(&self, namespace: &str, tokens: &[i32], page_id: &str) -> bool {
+    fn quarantine_exact_state_entry(
+        &self,
+        namespace: &str,
+        tokens: &[i32],
+        page_id: &str,
+    ) -> Result<bool> {
         let removed = self
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove_recurrent_if(namespace, tokens, |entry| entry.page_id == page_id);
         let Some(entry) = removed else {
-            return false;
+            return Ok(false);
         };
         entry.payload.release_from(
             &mut self
                 .exact_blobs
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        true
+        )?;
+        Ok(true)
     }
 
     pub fn record_exact_state(
