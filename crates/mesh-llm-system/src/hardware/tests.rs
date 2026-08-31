@@ -646,7 +646,7 @@ fn test_hardware_survey_default() {
 fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
 
-    apply_cpu_only_runtime_budget(&mut survey, &[Metric::VramBytes], 16_000_000_000);
+    apply_cpu_only_runtime_budget(&mut survey, &[Metric::VramBytes], || 16_000_000_000);
 
     assert_eq!(survey.vram_bytes, 12_000_000_000);
     assert!(survey.gpu_vram.is_empty());
@@ -658,7 +658,9 @@ fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
 fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     let mut survey = HardwareSurvey::default();
 
-    apply_cpu_only_runtime_budget(&mut survey, &[Metric::GpuName], 16_000_000_000);
+    apply_cpu_only_runtime_budget(&mut survey, &[Metric::GpuName], || {
+        panic!("system RAM must not be probed when VramBytes is not requested")
+    });
 
     assert_eq!(survey.vram_bytes, 0);
 }
@@ -671,7 +673,7 @@ fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
         &mut survey,
         &[Metric::VramBytes],
         Err::<Vec<GpuFacts>, ()>(()),
-        16_000_000_000,
+        || 16_000_000_000,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -683,7 +685,7 @@ fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
         &mut survey,
         &[Metric::GpuName],
         Err::<Vec<GpuFacts>, ()>(()),
-        16_000_000_000,
+        || 16_000_000_000,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
@@ -697,7 +699,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
         &mut survey,
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(Vec::new()),
-        16_000_000_000,
+        || 16_000_000_000,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 12_000_000_000);
@@ -709,7 +711,7 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
         &mut survey,
         &[Metric::GpuName],
         Ok::<Vec<GpuFacts>, ()>(Vec::new()),
-        16_000_000_000,
+        || 16_000_000_000,
     );
     assert!(handled);
     assert_eq!(survey.vram_bytes, 0);
@@ -723,7 +725,7 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
         &mut survey,
         &[Metric::VramBytes],
         Err::<Vec<GpuFacts>, ()>(()),
-        16_000_000_000,
+        || 16_000_000_000,
     ));
     assert_eq!(survey.vram_bytes, 0);
 
@@ -732,7 +734,7 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
         &mut survey,
         &[Metric::VramBytes],
         Ok::<Vec<GpuFacts>, ()>(Vec::new()),
-        16_000_000_000,
+        || 16_000_000_000,
     ));
     assert_eq!(survey.vram_bytes, 0);
 }

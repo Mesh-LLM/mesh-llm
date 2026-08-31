@@ -196,8 +196,16 @@ fn read_system_ram_bytes() -> u64 {
     any(target_os = "linux", target_os = "windows"),
     any(feature = "skippy-devices", test)
 ))]
-fn apply_cpu_only_runtime_budget(survey: &mut HardwareSurvey, metrics: &[Metric], system_ram: u64) {
-    if metrics.contains(&Metric::VramBytes) && system_ram > 0 {
+fn apply_cpu_only_runtime_budget(
+    survey: &mut HardwareSurvey,
+    metrics: &[Metric],
+    system_ram: impl FnOnce() -> u64,
+) {
+    if !metrics.contains(&Metric::VramBytes) {
+        return;
+    }
+    let system_ram = system_ram();
+    if system_ram > 0 {
         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
     }
 }
@@ -314,7 +322,7 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
         survey,
         metrics,
         skippy_devices::gpu_facts(),
-        cpu_only_budget_system_ram(),
+        cpu_only_budget_system_ram,
     )
 }
 
@@ -333,12 +341,14 @@ fn cpu_only_budget_system_ram() -> u64 {
 /// Applies a GPU probe outcome to the survey. The real probe (skippy device
 /// enumeration, /proc/meminfo, the Windows CIM query) stays in the callers so
 /// this decision can be exercised with injected values on every platform.
+/// The system RAM closure runs only on the CPU-only fallback branches, and
+/// only when VramBytes is requested, so a healthy GPU probe never pays for it.
 #[cfg(any(feature = "skippy-devices", test))]
 fn apply_gpu_probe_outcome_to_survey<E>(
     survey: &mut HardwareSurvey,
     metrics: &[Metric],
     probe: Result<Vec<GpuFacts>, E>,
-    cpu_only_system_ram: u64,
+    cpu_only_system_ram: impl FnOnce() -> u64,
 ) -> bool {
     let gpus = match probe {
         Ok(gpus) => gpus,
