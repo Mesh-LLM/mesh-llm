@@ -21,7 +21,7 @@
     "@tailwindcss/cli": "4.3.2",
     "markdown-it-anchor": "^9.2.0",
     "pagefind": "^1.5.2",
-    "playwright": "^1.61.1",
+    "playwright": "1.62.1",
     "tailwindcss": "4.3.2"
   },
   "dependencies": {
