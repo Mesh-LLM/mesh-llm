@@ -142,6 +142,14 @@ fn insert_resident_capacity_attrs(
         json!(decision.request_tokens),
     );
     attrs.insert(
+        "skippy.kv.capacity_inflight_reservations".to_string(),
+        json!(decision.inflight_reservations),
+    );
+    attrs.insert(
+        "skippy.kv.capacity_inflight_outstanding_tokens".to_string(),
+        json!(decision.inflight_outstanding_tokens),
+    );
+    attrs.insert(
         attr_key::KV_CAPACITY_MINIMUM_FREE_TOKENS.to_string(),
         json!(decision.minimum_free_tokens),
     );

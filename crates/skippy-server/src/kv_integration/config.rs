@@ -99,6 +99,7 @@ impl KvStageIntegration {
             checkpoint_policy,
             inflight_records,
             resident_config,
+            resident_capacity_reservations: Default::default(),
             resident_sequences: Arc::new(Mutex::new(ResidentSequencePool::new(
                 resident_config.reserved_seq_count,
             ))),
