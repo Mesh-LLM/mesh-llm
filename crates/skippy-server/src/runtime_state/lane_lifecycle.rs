@@ -1,6 +1,85 @@
 use super::*;
 
 impl RuntimeState {
+    /// Run a cache restore as a transaction over the native session.
+    ///
+    /// State imports are not guaranteed to be atomic at the C ABI boundary:
+    /// an import can populate one component and then fail while validating a
+    /// later component or its position.  The caller must therefore never
+    /// continue a cache-off prefill on the same session after an error.  Drop
+    /// the affected lane, reacquire a fresh/reset lane, and verify both the
+    /// Rust bookkeeping and native position before returning the original
+    /// error.  If any part of that rollback cannot be proven, return an error
+    /// that explicitly tells the caller not to continue on this lane.
+    pub fn restore_transaction<T>(
+        &mut self,
+        session_id: &str,
+        restore: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let result = restore(self);
+        let Err(restore_error) = result else {
+            return result;
+        };
+
+        let cleanup = self.drop_session_timed(session_id);
+        if let Err(cleanup_error) = cleanup {
+            // `drop_session_timed` currently contains its own discard path,
+            // but keep this fallback defensive: a future reset implementation
+            // may fail before removing the lane.  Do not leave a potentially
+            // dirty native session available to the cache-off fallback.
+            self.force_discard_session(session_id);
+            return Err(anyhow::anyhow!(
+                "cache restore failed ({restore_error:#}); could not clean native session {session_id}: {cleanup_error:#}"
+            ));
+        }
+
+        if let Err(reacquire_error) = self.ensure_session_active(session_id) {
+            self.force_discard_session(session_id);
+            return Err(anyhow::anyhow!(
+                "cache restore failed ({restore_error:#}); could not reacquire a clean native session {session_id}: {reacquire_error:#}"
+            ));
+        }
+
+        let native_position = match self
+            .active_session(session_id)
+            .and_then(|session| session.native_position())
+        {
+            Ok(position) => position,
+            Err(position_error) => {
+                self.force_discard_session(session_id);
+                return Err(anyhow::anyhow!(
+                    "cache restore failed ({restore_error:#}); could not verify clean native session {session_id}: {position_error:#}"
+                ));
+            }
+        };
+        if native_position != 0 || self.session_token_count(session_id).unwrap_or_default() != 0 {
+            self.force_discard_session(session_id);
+            return Err(anyhow::anyhow!(
+                "cache restore failed ({restore_error:#}); rollback left native session {session_id} at position {native_position}"
+            ));
+        }
+
+        Err(restore_error.context(format!(
+            "cache restore transaction rolled back for session {session_id}"
+        )))
+    }
+
+    /// Remove a session even when the normal reset path itself failed.  The
+    /// StageSession destructor is the native ABI's authoritative sequence
+    /// release, so dropping the lane is safer than allowing a dirty session to
+    /// be reused by a cache-off fallback.
+    fn force_discard_session(&mut self, session_id: &str) {
+        if let Some(lane_session) = self.sessions.remove(session_id) {
+            let lane_index = lane_session.index;
+            drop(lane_session);
+            if !self.free_lane_indices.contains(&lane_index) {
+                self.free_lane_indices.push(lane_index);
+            }
+        }
+        self.session_token_counts.remove(session_id);
+        self.session_resident_prefixes.remove(session_id);
+    }
+
     pub fn prewarm_idle_sessions(
         &mut self,
         target_idle_sessions: usize,

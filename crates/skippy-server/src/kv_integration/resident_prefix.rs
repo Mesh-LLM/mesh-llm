@@ -334,6 +334,18 @@ impl KvStageIntegration {
         identities: &[PrefillKvIdentity],
         token_ids: &[i32],
     ) -> Result<Option<ResidentPrefixRestore>> {
+        runtime.restore_transaction(session_id, |runtime| {
+            self.restore_resident_prefix_inner(runtime, session_id, identities, token_ids)
+        })
+    }
+
+    fn restore_resident_prefix_inner(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+        token_ids: &[i32],
+    ) -> Result<Option<ResidentPrefixRestore>> {
         if !self.should_lookup() || self.payload != StagePrefixCachePayload::ResidentKv {
             return Ok(None);
         }
