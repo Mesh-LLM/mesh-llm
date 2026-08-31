@@ -2789,11 +2789,11 @@
   ],
   "crates/mesh-llm/src/main.rs": [
     {
-      "line": 74,
+      "line": 75,
       "macro_name": "eprintln!"
     },
     {
-      "line": 81,
+      "line": 82,
       "macro_name": "eprintln!"
     }
   ],
@@ -3611,7 +3611,7 @@
   ],
   "crates/skippy-correctness/src/glm_dsa_trace.rs": [
     {
-      "line": 1432,
+      "line": 1436,
       "macro_name": "println!"
     }
   ],

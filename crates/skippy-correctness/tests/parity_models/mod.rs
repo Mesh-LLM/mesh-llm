@@ -988,11 +988,13 @@ fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame)
 
     source
         .payload
-        .chunks_exact(4)
-        .zip(restored.payload.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(restored.payload.as_chunks::<4>().0.iter())
         .all(|(lhs, rhs)| {
-            let lhs = f32::from_le_bytes(lhs.try_into().expect("chunks_exact"));
-            let rhs = f32::from_le_bytes(rhs.try_into().expect("chunks_exact"));
+            let lhs = f32::from_le_bytes(*lhs);
+            let rhs = f32::from_le_bytes(*rhs);
             if lhs.to_bits() == rhs.to_bits() {
                 return true;
             }

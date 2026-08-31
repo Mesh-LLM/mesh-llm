@@ -114,6 +114,12 @@ pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;
 pub const RELEASE_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
 pub const VERSION: &str = RELEASE_VERSION;
 
+/// Configure the Hugging Face TLS provider before any one-shot or runtime
+/// client is constructed.
+pub fn configure_hf_tls_provider() {
+    let _ = model_hf::configure_hf_tls_provider();
+}
+
 pub use runtime::{
     MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
 };
@@ -181,6 +187,7 @@ pub async fn shutdown_logging_for_one_shot_cli() -> bool {
 }
 
 pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Result<()> {
+    configure_hf_tls_provider();
     if options.plugin.is_some() {
         return Ok(());
     }
