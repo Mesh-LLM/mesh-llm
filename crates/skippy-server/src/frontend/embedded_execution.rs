@@ -588,18 +588,24 @@ mod tests {
     #[test]
     fn direct_return_fallback_timeout_restores_on_drop_after_early_exit() {
         let (stream, _peer) = connected_stream_pair();
-        let original = Some(Duration::from_millis(123));
-        stream.set_read_timeout(original).unwrap();
+        // Socket timeout readback may be rounded to the OS timer granularity.
+        // Capture the effective values so the test verifies install and restore
+        // without assuming the kernel preserves the requested duration exactly.
+        stream
+            .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
+            .unwrap();
+        let effective_poll = stream.read_timeout().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(123)))
+            .unwrap();
+        let effective_original = stream.read_timeout().unwrap();
 
         {
             let _restore = DirectReturnFallbackTimeout::install(&stream).unwrap();
-            assert_eq!(
-                stream.read_timeout().unwrap(),
-                Some(DIRECT_RETURN_FALLBACK_POLL)
-            );
+            assert_eq!(stream.read_timeout().unwrap(), effective_poll);
         }
 
-        assert_eq!(stream.read_timeout().unwrap(), original);
+        assert_eq!(stream.read_timeout().unwrap(), effective_original);
     }
 
     #[test]
