@@ -1753,7 +1753,8 @@ mod tests {
         let (outbound_tx, outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
             generation: 1,
-            _child: child,
+            _child: Some(child),
+            connection_task: tokio::spawn(std::future::pending::<()>()),
             outbound_tx: outbound_tx.clone(),
             pending: Arc::new(Mutex::new(HashMap::new())),
         });

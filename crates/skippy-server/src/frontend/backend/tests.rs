@@ -1,10 +1,9 @@
 use super::*;
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
-use crate::frontend::decode_batcher::DecodeBatcher;
 use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::runtime_state::RuntimeState;
 use futures_util::StreamExt;
 use openai_frontend::ChatCompletionChunk;
@@ -774,15 +773,19 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
     }))
     .expect("minimal stage config for hook lifecycle tests");
     let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let telemetry = crate::telemetry::Telemetry::new(
+        None,
+        1,
+        config.clone(),
+        crate::telemetry::TelemetryLevel::Off,
+    );
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())
+            .expect("iteration scheduler for hook lifecycle tests");
     StageOpenAiBackend {
         runtime: runtime.clone(),
         config: config.clone(),
-        telemetry: crate::telemetry::Telemetry::new(
-            None,
-            1,
-            config,
-            crate::telemetry::TelemetryLevel::Off,
-        ),
+        telemetry,
         model_id: "hooks-test-model".to_string(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
@@ -802,8 +805,7 @@ fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOp
         generation_receipt: None,
         linear_proposal_ingress: None,
         kv: None,
-        decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-        decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+        iteration_scheduler,
     }
 }
 

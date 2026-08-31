@@ -808,8 +808,19 @@ impl StageOpenAiBackend {
             // Captured now, before `dispatch` applies its own request
             // defaults — the same moment `HookedOpenAiBackend` captures its
             // `dispatched_request`, since it never sees a wrapped backend's
-            // internal mutations either.
-            let effective = request.clone();
+            // internal mutations either. Only pay the clone when a hook
+            // actually observes the post-dispatch request; otherwise hand the
+            // post-dispatch hooks a default/empty request, exactly as
+            // `HookedOpenAiBackend::chat_completion_with_context` does when
+            // `observes_dispatched_request()` is `false`. This is the path the
+            // flag was invented to protect — every completion, message content
+            // and inline media included — so cloning here regardless would
+            // defeat it.
+            let effective = if hooks.observes_dispatched_request() {
+                request.clone()
+            } else {
+                ChatCompletionRequest::default()
+            };
             if let Some(guard) = guard.as_mut() {
                 guard.set_request(effective.clone());
             }
