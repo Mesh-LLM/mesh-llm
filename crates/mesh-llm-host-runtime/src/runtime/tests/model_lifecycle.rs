@@ -29,7 +29,7 @@ fn reconciliation_target_with_required_bytes(
             eligible_node_count: 1,
             missing_capacity_node_count: 0,
             excluded_client_node_count: 0,
-            split_capable: false,
+            split_capable: Some(false),
         },
     }
 }
