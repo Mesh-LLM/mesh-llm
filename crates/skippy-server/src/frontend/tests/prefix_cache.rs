@@ -73,6 +73,83 @@ fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
 }
 
 #[test]
+fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
+    let config = StageConfig {
+        ctx_size: 131_072,
+        lane_count: 4,
+        kv_cache: Some(StageKvCacheConfig {
+            max_entries: 32,
+            min_tokens: 64,
+            ..prefix_cache_test_config()
+                .kv_cache
+                .expect("test cache config")
+        }),
+        ..prefix_cache_test_config()
+    };
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
+        config.lane_count,
+        config.ctx_size,
+    );
+
+    // The failed qualification's warm-up left 98,028 resident cells. Model
+    // that physical occupancy with sixteen independent resident paths.
+    for index in 0..16 {
+        let token_count = if index < 12 { 6_127 } else { 6_126 };
+        let mut base = prefix_cache_test_base();
+        base.chat_template_id = Some(format!("warm-family-{index}"));
+        let tokens = (0..token_count).collect::<Vec<_>>();
+        let identity = kv.prefill_identity(&config, &base, 0, &tokens);
+        seed_resident_prefix(&kv, &identity);
+    }
+    assert_eq!(kv.radix.lock().unwrap().stats().resident_tokens, 98_028);
+
+    // Four unrelated requests restore only the shared chat-template prefix.
+    // Their outstanding suffix plus bounded decode demand is 47,419 tokens.
+    let wave = [
+        ("measured-1", 147_u64, 9_209_u64),
+        ("measured-2", 81, 10_551),
+        ("measured-3", 146, 12_439),
+        ("measured-4", 146, 15_092),
+    ];
+    let mut reservations = Vec::new();
+    for (session_id, restored_tokens, suffix_tokens) in wave {
+        runtime.track_session_tokens_for_test(session_id, restored_tokens);
+        reservations.push(
+            kv.reserve_resident_capacity(
+                session_id,
+                restored_tokens
+                    .saturating_add(suffix_tokens)
+                    .saturating_add(32),
+            )
+            .unwrap()
+            .expect("resident reservation"),
+        );
+    }
+
+    let decision = kv
+        .admit_resident_capacity(&mut runtime, "measured-1", 9_241, 2_048, 2_080, None)
+        .unwrap();
+
+    assert_eq!(decision.inflight_reservations, 4);
+    assert_eq!(decision.inflight_outstanding_tokens, 47_419);
+    assert_eq!(decision.request_tokens, 47_419);
+    assert!(decision.admitted);
+    assert!(decision.evicted_entries >= 3);
+    assert!(decision.physical_evicted_tokens >= 16_455);
+    assert!(decision.projected_free_tokens >= 2_048);
+
+    drop(reservations);
+    let after_release = kv
+        .admit_resident_capacity(&mut runtime, "measured-1", 0, 0, 0, None)
+        .unwrap();
+    assert_eq!(after_release.inflight_reservations, 0);
+    assert_eq!(after_release.inflight_outstanding_tokens, 0);
+}
+
+#[test]
 fn openai_cache_stats_default_to_disabled() {
     let stats = GenerationCacheStats::default();
 

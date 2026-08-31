@@ -794,6 +794,40 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     );
 }
 
+/// Once streaming has committed HTTP 200, a native generation failure cannot
+/// be converted into a new HTTP status. It must remain an `Err` item on the
+/// backend stream so `openai-frontend` can frame an explicit SSE error event
+/// before `[DONE]` instead of making the response look like a zero-token
+/// success.
+#[test]
+fn backend_errors_are_delivered_as_terminal_stream_frames() {
+    let (tx, mut rx) = mpsc::channel(4);
+    let rt = Runtime::new().expect("tokio runtime for terminal-error test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    sender
+        .send_terminal(Err(OpenAiError::backend(
+            "native decode failed to find a memory slot",
+        )))
+        .expect("backend failure must reach a live stream receiver");
+
+    let error = match rx.try_recv().expect("backend failure must be enqueued") {
+        Ok(_) => panic!("terminal item must remain an error"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("native decode failed to find a memory slot")
+    );
+}
+
 /// Bounds the double-wait hazard: once an in-flight send has already proven
 /// the receiver unreachable (stalled past the timeout, here injected short),
 /// a subsequent terminal send must not wait out the same stall timeout a

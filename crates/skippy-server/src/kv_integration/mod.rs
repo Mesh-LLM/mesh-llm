@@ -137,6 +137,7 @@ pub struct KvStageIntegration {
     pub(crate) checkpoint_policy: SparseCheckpointPolicy,
     pub(crate) inflight_records: Arc<Mutex<BTreeSet<String>>>,
     pub(crate) resident_config: ResidentCacheConfig,
+    pub(crate) resident_capacity_reservations: resident_prefix::ResidentCapacityReservations,
     pub(crate) resident_sequences: Arc<Mutex<ResidentSequencePool>>,
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,
     pub(crate) radix: Arc<Mutex<UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>>>,

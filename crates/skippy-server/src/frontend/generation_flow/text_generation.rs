@@ -149,6 +149,15 @@ impl StageOpenAiBackend {
             token_admit_timer,
             token_admit_attrs,
         );
+        let _resident_capacity_reservation = match self.kv.as_ref() {
+            Some(kv) => kv
+                .reserve_resident_capacity(
+                    &ids.session_label,
+                    u64::try_from(token_budget_reservation.tokens()).unwrap_or(u64::MAX),
+                )
+                .map_err(openai_backend_error)?,
+            None => None,
+        };
         let chat_sampling_metadata = prompt.chat_parse_metadata.as_deref();
 
         let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);

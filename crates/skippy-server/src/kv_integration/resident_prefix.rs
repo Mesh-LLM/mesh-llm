@@ -3,6 +3,8 @@ use skippy_scheduler::{
     CapacityDemand, ComponentCapacitySnapshot, EvictableCacheEntry, plan_component_capacity,
     rank_eviction_candidates,
 };
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use crate::runtime_state::RuntimeState;
 
@@ -16,6 +18,33 @@ pub struct ResidentPrefixEviction {
     pub target_tokens: u64,
     pub evicted_entries: usize,
     pub evicted_tokens: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ResidentCapacityReservationEntry {
+    target_session_tokens: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResidentCapacityReservations {
+    entries: Arc<Mutex<BTreeMap<String, ResidentCapacityReservationEntry>>>,
+}
+
+/// Keeps one request's projected KV demand visible until its runtime session
+/// has either materialized those cells or completed cleanup.
+pub(crate) struct ResidentCapacityReservation {
+    reservations: ResidentCapacityReservations,
+    session_id: String,
+}
+
+impl Drop for ResidentCapacityReservation {
+    fn drop(&mut self) {
+        self.reservations
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.session_id);
+    }
 }
 
 struct ResidentRadixLease {
@@ -49,6 +78,8 @@ pub struct ResidentCapacityDecision {
     pub physical_used_tokens: u64,
     pub pinned_tokens: u64,
     pub request_tokens: u64,
+    pub inflight_reservations: usize,
+    pub inflight_outstanding_tokens: u64,
     pub minimum_free_tokens: u64,
     pub target_free_tokens: u64,
     pub projected_free_tokens: u64,
@@ -61,6 +92,52 @@ pub struct ResidentCapacityDecision {
 }
 
 impl KvStageIntegration {
+    pub(crate) fn reserve_resident_capacity(
+        &self,
+        session_id: &str,
+        target_session_tokens: u64,
+    ) -> Result<Option<ResidentCapacityReservation>> {
+        if self.payload != StagePrefixCachePayload::ResidentKv {
+            return Ok(None);
+        }
+        let mut entries = self
+            .resident_capacity_reservations
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.contains_key(session_id) {
+            anyhow::bail!("resident capacity reservation already exists for session {session_id}");
+        }
+        entries.insert(
+            session_id.to_string(),
+            ResidentCapacityReservationEntry {
+                target_session_tokens,
+            },
+        );
+        drop(entries);
+        Ok(Some(ResidentCapacityReservation {
+            reservations: self.resident_capacity_reservations.clone(),
+            session_id: session_id.to_string(),
+        }))
+    }
+
+    fn outstanding_resident_capacity_demand(&self, runtime: &RuntimeState) -> (usize, u64) {
+        let entries = self
+            .resident_capacity_reservations
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outstanding_tokens = entries
+            .iter()
+            .map(|(session_id, entry)| {
+                entry
+                    .target_session_tokens
+                    .saturating_sub(runtime.session_token_count(session_id).unwrap_or_default())
+            })
+            .fold(0, u64::saturating_add);
+        (entries.len(), outstanding_tokens)
+    }
+
     /// Admit one resident-KV operation against the native unified KV pool and
     /// release deterministic unreferenced prefixes needed to reach the healthy
     /// free-space watermark. Native sequence deletion always precedes radix
@@ -83,12 +160,17 @@ impl KvStageIntegration {
         }
         let capacity_tokens = u64::from(runtime.kv_pool_tokens());
         let active_tokens = runtime.session_stats().total_session_tokens;
+        let (inflight_reservations, inflight_outstanding_tokens) =
+            self.outstanding_resident_capacity_demand(runtime);
+        let request_tokens = request_tokens.max(inflight_outstanding_tokens);
         if capacity_tokens == 0 {
             return Ok(ResidentCapacityDecision {
                 enabled: true,
                 admitted: true,
                 active_tokens,
                 request_tokens,
+                inflight_reservations,
+                inflight_outstanding_tokens,
                 minimum_free_tokens,
                 target_free_tokens,
                 ..ResidentCapacityDecision::default()
@@ -150,6 +232,8 @@ impl KvStageIntegration {
             physical_used_tokens: initial_used_tokens,
             pinned_tokens: stats.resident_pinned_tokens,
             request_tokens,
+            inflight_reservations,
+            inflight_outstanding_tokens,
             minimum_free_tokens,
             target_free_tokens,
             required_eviction_tokens,
@@ -174,6 +258,11 @@ impl KvStageIntegration {
             else {
                 anyhow::bail!("capacity planner selected missing resident victim {victim_id}");
             };
+            #[cfg(test)]
+            if !runtime.is_modelless_for_test() {
+                runtime.drop_resident_prefix_sequence(session_id, victim.value.seq_id)?;
+            }
+            #[cfg(not(test))]
             runtime.drop_resident_prefix_sequence(session_id, victim.value.seq_id)?;
             let removed = radix
                 .evict_resident_candidate(&victim.namespace, &victim.tokens)
