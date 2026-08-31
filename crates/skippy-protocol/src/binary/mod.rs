@@ -8,11 +8,11 @@ pub use activation::{
     encode_f32_activation_payload_with_state_flags,
 };
 pub use codec::{
-    read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack,
+    read_stage_message, recv_ready, recv_reply, recv_transport_auth, send_ready, send_reply_ack,
     send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
     send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
     send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
-    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
+    send_reply_predicted_with_tokens_window_and_stats, send_transport_auth, write_stage_message,
 };
 pub use types::sampling_flags;
 pub use types::{
@@ -22,6 +22,7 @@ pub use types::{
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
+    TRANSPORT_AUTH_MAGIC,
     STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
     StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch, StageSamplingConfig,
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, WireStagePhase,
@@ -126,6 +127,44 @@ mod tests {
         let mut bytes = Vec::new();
         send_ready(&mut bytes).unwrap();
         recv_ready(Cursor::new(bytes)).unwrap();
+    }
+
+    #[test]
+    fn transport_auth_round_trips() {
+        let token = [0xA5_u8; 32];
+        let mut bytes = Vec::new();
+        send_transport_auth(&mut bytes, &token).unwrap();
+        recv_transport_auth(Cursor::new(bytes), &token).unwrap();
+    }
+
+    #[test]
+    fn transport_auth_rejects_wrong_token() {
+        let mut bytes = Vec::new();
+        send_transport_auth(&mut bytes, &[0xA5_u8; 32]).unwrap();
+        let error = recv_transport_auth(Cursor::new(bytes), &[0x5A_u8; 32]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn transport_auth_rejects_length_mismatch() {
+        let mut bytes = Vec::new();
+        send_transport_auth(&mut bytes, &[0xA5_u8; 32]).unwrap();
+        let error = recv_transport_auth(Cursor::new(bytes), &[0xA5_u8; 16]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn transport_auth_rejects_bad_magic() {
+        let mut bytes = Vec::new();
+        send_ready(&mut bytes).unwrap();
+        let error = recv_transport_auth(Cursor::new(bytes), &[0xA5_u8; 32]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn transport_auth_rejects_out_of_range_token_lengths() {
+        assert!(send_transport_auth(Vec::new(), &[]).is_err());
+        assert!(send_transport_auth(Vec::new(), &[0_u8; 65]).is_err());
     }
 
     #[test]

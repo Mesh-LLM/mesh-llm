@@ -128,7 +128,10 @@ fn load_request() -> StageLoadRequest {
             stage_index: 1,
             endpoint: "127.0.0.1:9001".to_string(),
             node_id: None,
+            direct: false,
         }),
+        transport_auth: None,
+        direct_bind: false,
     }
 }
 

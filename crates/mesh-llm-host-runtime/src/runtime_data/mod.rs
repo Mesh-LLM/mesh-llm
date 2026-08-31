@@ -545,6 +545,7 @@ pub(crate) mod tests {
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            stage_direct_transport_supported: false,
             advertised_model_throughput: vec![],
             cache_affinity: None,
             display_rtt: None,
@@ -682,6 +683,7 @@ pub(crate) mod tests {
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            stage_direct_transport_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,

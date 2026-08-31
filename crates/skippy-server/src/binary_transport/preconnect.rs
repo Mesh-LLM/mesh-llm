@@ -28,7 +28,11 @@ impl DownstreamPreconnector {
         warm_downstream: Arc<Mutex<Option<TcpStream>>>,
         shutdown: Arc<AtomicBool>,
     ) -> io::Result<Self> {
-        if config.downstream.is_none() {
+        // An auth-gated downstream reads the transport auth preamble on a
+        // bounded timeout at accept, so an idle warm socket would be closed
+        // before it is ever consumed. Skip preconnecting and let the normal
+        // acquisition path connect and authenticate in one step.
+        if config.downstream.is_none() || config.transport_auth.is_some() {
             return Ok(Self {
                 shutdown,
                 task: None,

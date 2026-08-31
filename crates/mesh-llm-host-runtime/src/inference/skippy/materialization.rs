@@ -368,6 +368,8 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
+            transport_auth: None,
+            direct_bind: false,
         }
     }
 
@@ -508,6 +510,8 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             upstream: None,
             downstream: None,
+            transport_auth: None,
+            direct_bind: false,
         };
 
         let resolved = resolve_stage_load_package(&load)

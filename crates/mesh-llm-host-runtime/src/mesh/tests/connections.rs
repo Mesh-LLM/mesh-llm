@@ -327,6 +327,8 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         upstream: None,
         downstream: None,
+        transport_auth: None,
+        direct_bind: false,
     }
 }
 
@@ -437,6 +439,7 @@ async fn make_test_node_with_requirements(
         stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
         stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
         stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
+        stage_direct: Arc::new(std::sync::OnceLock::new()),
         plugin_manager: Arc::new(Mutex::new(None)),
         display_name: Arc::new(Mutex::new(None)),
         owner_attestation: Arc::new(Mutex::new(None)),

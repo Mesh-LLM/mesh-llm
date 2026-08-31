@@ -85,6 +85,8 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         load_mode,
         upstream: None,
         downstream: None,
+        transport_auth: None,
+        direct_bind: false,
     }
 }
 
@@ -167,6 +169,7 @@ pub(super) fn split_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
 

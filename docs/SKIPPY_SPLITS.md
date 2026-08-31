@@ -337,6 +337,42 @@ MESH_LLM_ARTIFACT_TRANSFER=open mesh-llm serve --model hf://meshllm/<repo>@<revi
 Only immutable `hf://namespace/repo@revision` package refs are eligible for peer
 transfer. Received artifacts are size/SHA-256 verified and installed atomically.
 
+## Trusted-LAN direct stage transport
+
+By default, activation traffic between stages on different nodes rides the
+encrypted mesh QUIC connection through localhost bridges on both ends. On a
+trusted network segment — a dedicated LAN, VLAN, or cloud VPC where every
+split node can reach every other directly — the bridges and per-packet
+encryption can be skipped: stage runtimes bind routable TCP listeners and dial
+each other directly, in both the forward (activation) and return (predicted
+token) directions.
+
+Declaring `--trusted-lan` certifies that this node's network segment is a
+trust boundary you control. Opt in on **every** participating node:
+
+```bash
+mesh-llm serve --model <layer-package> --split --trusted-lan
+mesh-llm serve --join <token> --trusted-lan
+```
+
+Behavior and guarantees:
+
+- The coordinator uses direct transport only when every remote participant
+  advertises support; otherwise the whole run falls back to the mesh tunnel
+  path. Mixed-version meshes keep working.
+- Each direct run mints a random auth token, distributed over the encrypted
+  stage-control stream. Every stage connection must present it before the
+  ready handshake, so stage ports do not accept traffic from arbitrary LAN
+  processes. The check costs one comparison at connection setup and nothing
+  per token.
+- Activation payloads travel **unencrypted** between nodes. Use this only
+  inside a trust boundary you control (an isolated segment or VPC); on shared
+  or untrusted networks, keep the default mesh transport.
+- Listeners bind the interface routing toward the coordinator. Multi-homed
+  hosts can pin it explicitly with `--trusted-lan-ip <ip>`.
+- Control traffic, gossip, admission, and artifact transfer stay on the
+  encrypted mesh connection; only stage activation/return traffic goes direct.
+
 ## More details
 
 - [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) explains how to contribute packages.

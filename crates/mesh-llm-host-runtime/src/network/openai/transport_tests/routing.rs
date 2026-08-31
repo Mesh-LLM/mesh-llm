@@ -86,6 +86,7 @@ fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::Peer
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         display_rtt: None,

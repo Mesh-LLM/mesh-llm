@@ -252,6 +252,8 @@ pub(super) fn stage_load_to_proto(
         },
         upstream: load.upstream.map(stage_peer_to_proto),
         downstream: load.downstream.map(stage_peer_to_proto),
+        transport_auth: load.transport_auth,
+        direct_bind: load.direct_bind,
     }
 }
 
@@ -304,6 +306,7 @@ pub(super) fn stage_peer_to_proto(
         stage_index: peer.stage_index,
         endpoint: peer.endpoint,
         node_id: peer.node_id.map(|id| id.as_bytes().to_vec()),
+        direct: peer.direct,
     }
 }
 
@@ -457,6 +460,8 @@ pub(super) fn stage_load_from_proto(
         load_mode: stage_load_mode_from_proto(load.load_mode),
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
+        transport_auth: load.transport_auth,
+        direct_bind: load.direct_bind,
     })
 }
 
@@ -531,6 +536,7 @@ pub(super) fn stage_peer_from_proto(
             .map(endpoint_id_from_bytes)
             .transpose()
             .context("invalid stage peer node_id")?,
+        direct: peer.direct,
     })
 }
 

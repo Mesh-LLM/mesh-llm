@@ -137,6 +137,7 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         owner_summary: Default::default(),
         advertised_model_throughput: vec![],
         // Simulated peers advertise no cache affinity: these tests exercise

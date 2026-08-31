@@ -733,6 +733,9 @@ pub(super) async fn start_run_auto_node_and_plugins(
         startup_mesh_creation_state.requirements.clone(),
     )
     .await?;
+    if options.stage_direct_transport {
+        node.enable_stage_direct_transport(options.stage_direct_ip);
+    }
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
     node.set_stage_control_handle(skippy::spawn_stage_control_loop(

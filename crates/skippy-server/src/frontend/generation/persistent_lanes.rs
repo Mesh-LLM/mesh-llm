@@ -372,6 +372,10 @@ impl PersistentStageLanePool {
             "openai downstream lane waiting ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
             self.config.stage_id
         );
+        crate::binary_transport::send_transport_auth_if_configured(
+            &mut stream,
+            self.config.transport_auth.as_deref(),
+        )?;
         send_client_ready_hello_if_enabled(&mut stream)
             .context("send persistent downstream lane client ready hello")?;
         receive_persistent_lane_ready(&mut stream, ready_timeout)?;

@@ -15,6 +15,13 @@ pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
     STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
+/// Advertised only when the operator enabled direct stage transport on the
+/// node. Split planning requires every participating peer to advertise it
+/// before issuing loads that bind routable stage listeners.
+pub const STAGE_SUBPROTOCOL_FEATURE_DIRECT_TRANSPORT: &str = "direct-transport";
+/// Upper bound for the per-run stage transport auth token carried in
+/// `LoadStage.transport_auth` and presented as a connection preamble.
+pub const MAX_TRANSPORT_AUTH_BYTES: usize = 64;
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
@@ -31,6 +38,7 @@ pub enum StageFrameError {
     InvalidArtifactOffset,
     MissingStageControlCommand,
     MissingStageControlResponse,
+    InvalidTransportAuthLength { got: usize },
     MissingStageTransportTarget,
     MissingStageArtifactTarget,
 }
@@ -62,6 +70,10 @@ impl std::fmt::Display for StageFrameError {
             StageFrameError::MissingStageControlResponse => {
                 write!(f, "stage control response is required but missing")
             }
+            StageFrameError::InvalidTransportAuthLength { got } => write!(
+                f,
+                "invalid transport_auth length: expected 1..={MAX_TRANSPORT_AUTH_BYTES}, got {got}"
+            ),
             StageFrameError::MissingStageTransportTarget => {
                 write!(f, "stage transport target is required but missing")
             }
@@ -79,10 +91,27 @@ pub fn validate_stage_control_request(
 ) -> Result<(), StageFrameError> {
     validate_generation(frame.r#gen)?;
     validate_endpoint_id(frame.requester_id.len())?;
-    if frame.command.is_none() {
-        return Err(StageFrameError::MissingStageControlCommand);
+    match frame.command.as_ref() {
+        None => return Err(StageFrameError::MissingStageControlCommand),
+        Some(proto::stage::stage_control_request::Command::LoadStage(load)) => {
+            validate_transport_auth(load.transport_auth.as_deref())?;
+        }
+        Some(proto::stage::stage_control_request::Command::PrepareStage(prepare)) => {
+            if let Some(load) = prepare.load_stage.as_ref() {
+                validate_transport_auth(load.transport_auth.as_deref())?;
+            }
+        }
+        Some(_) => {}
     }
     Ok(())
+}
+
+fn validate_transport_auth(transport_auth: Option<&[u8]>) -> Result<(), StageFrameError> {
+    match transport_auth {
+        None => Ok(()),
+        Some(token) if (1..=MAX_TRANSPORT_AUTH_BYTES).contains(&token.len()) => Ok(()),
+        Some(token) => Err(StageFrameError::InvalidTransportAuthLength { got: token.len() }),
+    }
 }
 
 pub fn validate_stage_control_response(

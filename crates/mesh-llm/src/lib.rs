@@ -407,6 +407,8 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         disable_iroh_relays: cli.disable_iroh_relays,
         bind_port: cli.bind_port,
         bind_ip: cli.bind_ip,
+        stage_direct_transport: cli.trusted_lan,
+        stage_direct_ip: cli.trusted_lan_ip,
         listen_all: cli.listen_all,
         max_clients: cli.max_clients,
         nostr_relay: cli.nostr_relay,

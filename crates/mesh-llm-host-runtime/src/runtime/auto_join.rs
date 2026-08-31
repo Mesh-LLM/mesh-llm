@@ -911,6 +911,9 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
         MeshRequirements::unrestricted(),
     )
     .await?;
+    if options.stage_direct_transport {
+        node.enable_stage_direct_transport(options.stage_direct_ip);
+    }
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
     node.start_accepting();

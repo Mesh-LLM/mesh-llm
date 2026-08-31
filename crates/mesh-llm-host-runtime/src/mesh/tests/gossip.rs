@@ -55,6 +55,7 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

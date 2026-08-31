@@ -213,6 +213,7 @@ pub(crate) fn peer_capture_fields(
         "owner": &peer.owner_summary,
         "artifact_transfer_supported": peer.artifact_transfer_supported,
         "stage_status_list_supported": peer.stage_status_list_supported,
+        "stage_direct_transport_supported": peer.stage_direct_transport_supported,
         "first_joined_mesh_ts": peer.first_joined_mesh_ts,
     })
 }
@@ -880,7 +881,7 @@ impl Node {
         &self,
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
-        self.prepare_stage_control_request(&mut request).await?;
+        self.prepare_stage_control_request(&mut request, None).await?;
         if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;

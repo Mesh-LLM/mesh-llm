@@ -16,6 +16,7 @@ pub const MAX_STAGE_STATE_IMPORT_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
+pub const TRANSPORT_AUTH_MAGIC: i32 = 0x534b_5441; // "SKTA"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 9 * 4;
 pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;

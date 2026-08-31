@@ -145,6 +145,11 @@ pub struct StageConfig {
     pub upstream: Option<PeerConfig>,
     #[serde(default)]
     pub downstream: Option<PeerConfig>,
+    /// Per-run transport auth token. When set, inbound stage and prediction
+    /// return connections must present these bytes as a preamble before the
+    /// ready handshake, and outbound dials send them first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport_auth: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

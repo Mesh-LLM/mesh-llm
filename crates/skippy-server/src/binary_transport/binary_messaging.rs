@@ -12,7 +12,8 @@ use std::{
 };
 
 use super::stage_execution::{
-    consume_optional_client_ready_hello, prepare_binary_stage_connection, take_ready_downstream,
+    consume_optional_client_ready_hello, enforce_transport_auth, prepare_binary_stage_connection,
+    take_ready_downstream,
     warm_downstream_preconnect_enabled,
 };
 use super::{
@@ -414,6 +415,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         "binary sending ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
+                    enforce_transport_auth(&mut upstream, config.transport_auth.as_deref())
+                        .context("authenticate inbound stage connection")?;
                     consume_optional_client_ready_hello(&mut upstream)
                         .context("consume optional client ready hello")?;
                     send_ready(&mut upstream).context("failed to send binary ready")?;

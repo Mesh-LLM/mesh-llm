@@ -104,6 +104,15 @@ message LoadStage {
   optional uint32 generation_signal_window = 42;
   optional StageLoadRuntimeSettings runtime_settings = 43;
   optional bool continuous_batching = 44;
+  // Per-run stage transport auth token. When set, the stage requires these
+  // bytes as a preamble on every inbound transport connection and presents
+  // them when dialing peers. Distributed only over the admitted, encrypted
+  // stage-control stream.
+  optional bytes transport_auth = 45;
+  // When true, the stage binds its transport listener on the node's direct
+  // (routable) stage-transport IP instead of loopback, so upstream peers on
+  // other nodes can dial it without a mesh tunnel bridge.
+  bool direct_bind = 46;
 }
 
 message StageLoadRuntimeSettings {
@@ -296,6 +305,9 @@ message StagePeer {
   uint32 stage_index = 2;
   string endpoint = 3;
   optional bytes node_id = 4;
+  // The endpoint is directly routable; the receiving node must not rewrite it
+  // to a local mesh tunnel bridge.
+  bool direct = 5;
 }
 
 message StageDevice {

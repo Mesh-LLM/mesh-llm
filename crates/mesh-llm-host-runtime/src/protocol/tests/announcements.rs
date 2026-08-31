@@ -55,6 +55,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        stage_direct_transport_supported: true,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -84,6 +85,12 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     );
     assert!(skippy.features.iter().any(|feature| feature
         == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6));
+    assert!(
+        skippy
+            .features
+            .iter()
+            .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_TRANSPORT)
+    );
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -96,6 +103,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     assert!(roundtripped.artifact_transfer_supported);
     assert!(roundtripped.stage_status_list_supported);
     assert!(roundtripped.stage_protocol_generation_supported);
+    assert!(roundtripped.stage_direct_transport_supported);
     let roundtripped = roundtripped
         .owner_attestation
         .expect("owner attestation must round-trip");
@@ -181,6 +189,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -381,6 +390,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -486,6 +496,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        stage_direct_transport_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

@@ -23,7 +23,8 @@ pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_messa
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions};
 pub(crate) use self::stage_execution::{
     BinaryStageExecutionOptions, connect_binary_downstream, run_binary_stage_message,
-    send_client_ready_hello_if_enabled, stage_output_activation_capacity,
+    send_client_ready_hello_if_enabled, send_transport_auth_if_configured,
+    stage_output_activation_capacity,
 };
 pub use self::wire::WireCondition;
 pub(crate) use self::wire::write_stage_message_after_propagation;

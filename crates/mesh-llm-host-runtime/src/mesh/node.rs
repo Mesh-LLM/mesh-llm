@@ -64,6 +64,94 @@ pub struct RouteEntry {
     pub vram_gb: f64,
 }
 
+/// Operator opt-in for direct (bridge-free) TCP stage transport between split
+/// stages on mutually reachable networks. When `ip` is `None` the bind
+/// interface is derived from the route toward the requesting peer.
+#[derive(Clone, Debug)]
+pub struct StageDirectTransport {
+    pub ip: Option<std::net::IpAddr>,
+}
+
+impl Node {
+    /// Enable direct stage transport for this node. Call before serving starts;
+    /// later calls are ignored.
+    pub fn enable_stage_direct_transport(&self, ip: Option<std::net::IpAddr>) {
+        let _ = self.stage_direct.set(StageDirectTransport { ip });
+    }
+
+    pub(crate) fn stage_direct_transport(&self) -> Option<&StageDirectTransport> {
+        self.stage_direct.get()
+    }
+
+    /// Resolve the IP this node binds direct stage listeners on: the
+    /// configured `--trusted-lan-ip` when present, otherwise the local
+    /// interface routing toward `hint_peer` (the coordinator for workers, a
+    /// remote stage peer for the driver).
+    pub(crate) async fn stage_direct_bind_ip(
+        &self,
+        hint_peer: Option<EndpointId>,
+    ) -> anyhow::Result<std::net::IpAddr> {
+        let direct = self
+            .stage_direct_transport()
+            .context("direct stage transport is not enabled on this node")?;
+        if let Some(ip) = direct.ip {
+            return Ok(ip);
+        }
+        let hint_peer = hint_peer.context(
+            "direct stage transport needs --trusted-lan-ip or a peer to derive the interface from",
+        )?;
+        let remote_addr = self
+            .observed_direct_addr_for_peer(hint_peer)
+            .await
+            .with_context(|| {
+                format!(
+                    "no direct address known for peer {}; set --trusted-lan-ip explicitly",
+                    hint_peer.fmt_short()
+                )
+            })?;
+        local_ip_toward(remote_addr).with_context(|| {
+            format!("derive local interface toward {remote_addr}; set --trusted-lan-ip explicitly")
+        })
+    }
+
+    /// Best direct (non-relay) socket address known for a peer: the live QUIC
+    /// path's remote address when available, otherwise an advertised direct
+    /// candidate.
+    async fn observed_direct_addr_for_peer(
+        &self,
+        peer_id: EndpointId,
+    ) -> Option<std::net::SocketAddr> {
+        let state = self.state.lock().await;
+        if let Some(conn) = state.connections.get(&peer_id)
+            && let Some(observation) = super::stage_transport::selected_path_observation(conn)
+            && let Some(addr) = observation.observed_direct_remote_addr
+        {
+            return Some(addr);
+        }
+        state.peers.get(&peer_id).and_then(|peer| {
+            peer.addr.addrs.iter().find_map(|candidate| match candidate {
+                iroh::TransportAddr::Ip(addr) => Some(*addr),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// Which local interface routes toward `remote`? Uses a connected UDP socket
+/// purely for kernel route selection; no packets are sent.
+fn local_ip_toward(remote: std::net::SocketAddr) -> anyhow::Result<std::net::IpAddr> {
+    let bind_any: std::net::SocketAddr = if remote.is_ipv4() {
+        (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
+    } else {
+        (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
+    };
+    let socket = std::net::UdpSocket::bind(bind_any).context("bind route-probe socket")?;
+    socket
+        .connect(remote)
+        .context("connect route-probe socket")?;
+    Ok(socket.local_addr().context("read route-probe address")?.ip())
+}
+
 #[derive(Clone)]
 pub struct Node {
     pub(crate) endpoint: Endpoint,
@@ -140,6 +228,8 @@ pub struct Node {
     pub(crate) stage_transport_bridges: Arc<Mutex<HashMap<String, StageTransportBridge>>>,
     pub(crate) stage_transport_aliases: Arc<Mutex<HashMap<String, String>>>,
     pub(crate) stage_topologies: Arc<Mutex<StageTopologyState>>,
+    /// Set once at startup when the operator enabled direct stage transport.
+    pub(crate) stage_direct: Arc<std::sync::OnceLock<StageDirectTransport>>,
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
     pub(crate) owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
@@ -823,6 +913,7 @@ impl Node {
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
             stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
+            stage_direct: Arc::new(std::sync::OnceLock::new()),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
@@ -1003,6 +1094,7 @@ impl Node {
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
             stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
+            stage_direct: Arc::new(std::sync::OnceLock::new()),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(None)),

@@ -84,6 +84,8 @@ pub(crate) fn remote_stage_load_request(
         load_mode: LoadMode::LayerPackage,
         upstream: None,
         downstream,
+        transport_auth: None,
+        direct_bind: false,
     }
 }
 
@@ -154,6 +156,7 @@ pub(crate) fn stage0_config(
             stage_index: downstream_stage.stage_index,
             endpoint: downstream_endpoint,
         }),
+        transport_auth: None,
     };
     config.kv_cache = context
         .family_policy

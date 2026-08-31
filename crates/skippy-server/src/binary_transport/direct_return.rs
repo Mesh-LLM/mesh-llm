@@ -24,7 +24,8 @@ use skippy_protocol::{
 
 use super::socket::{connect_downstream_socket, downstream_source_ip, resolve_downstream_endpoint};
 use super::stage_execution::{
-    consume_optional_client_ready_hello, send_client_ready_hello_if_enabled,
+    consume_optional_client_ready_hello, enforce_transport_auth,
+    send_client_ready_hello_if_enabled, send_transport_auth_if_configured,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -68,12 +69,20 @@ pub struct PredictionReturnListener {
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     hub: Arc<PredictionReturnHub>,
+    bind_addr: SocketAddr,
 }
 
 impl PredictionReturnListener {
     pub fn start(bind_addr: SocketAddr) -> Result<Self> {
+        Self::start_with_auth(bind_addr, None)
+    }
+
+    pub fn start_with_auth(bind_addr: SocketAddr, auth: Option<Vec<u8>>) -> Result<Self> {
         let listener = TcpListener::bind(bind_addr)
             .with_context(|| format!("bind direct prediction return listener {bind_addr}"))?;
+        let bind_addr = listener
+            .local_addr()
+            .context("read direct prediction return listener address")?;
         listener
             .set_nonblocking(true)
             .context("set direct prediction return listener nonblocking")?;
@@ -81,6 +90,7 @@ impl PredictionReturnListener {
         let thread_shutdown = shutdown.clone();
         let hub = Arc::new(PredictionReturnHub::default());
         let thread_hub = hub.clone();
+        let auth = auth.map(Arc::new);
         let thread = thread::spawn(move || {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
@@ -92,8 +102,13 @@ impl PredictionReturnListener {
                             continue;
                         }
                         let hub = thread_hub.clone();
+                        let auth = auth.clone();
                         thread::spawn(move || {
-                            if let Err(error) = handle_prediction_return_connection(hub, stream) {
+                            if let Err(error) = handle_prediction_return_connection(
+                                hub,
+                                stream,
+                                auth.as_ref().map(|token| token.as_slice()),
+                            ) {
                                 eprintln!("direct prediction return connection failed: {error:#}");
                             }
                         });
@@ -113,11 +128,16 @@ impl PredictionReturnListener {
             shutdown,
             thread: Some(thread),
             hub,
+            bind_addr,
         })
     }
 
     pub fn hub(&self) -> Arc<PredictionReturnHub> {
         self.hub.clone()
+    }
+
+    pub fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
     }
 }
 
@@ -133,7 +153,10 @@ impl Drop for PredictionReturnListener {
 fn handle_prediction_return_connection(
     hub: Arc<PredictionReturnHub>,
     mut stream: TcpStream,
+    auth: Option<&[u8]>,
 ) -> Result<()> {
+    enforce_transport_auth(&mut stream, auth)
+        .context("authenticate direct prediction return connection")?;
     consume_optional_client_ready_hello(&mut stream)
         .context("consume optional direct prediction return client ready hello")?;
     send_ready(&mut stream).context("send direct prediction return ready")?;
@@ -357,6 +380,7 @@ const RETURN_SINK_READY_READ_TIMEOUT: Duration = Duration::from_secs(20);
 fn open_return_sink_once(
     return_addr: SocketAddr,
     source_ip: Option<IpAddr>,
+    auth: Option<&[u8]>,
     request_id: u64,
     session_id: u64,
     not_ready_context: &'static str,
@@ -364,6 +388,7 @@ fn open_return_sink_once(
     let mut stream = connect_downstream_socket(return_addr, source_ip, Duration::from_secs(2))
         .map_err(|error| anyhow!(error))?;
     stream.set_nodelay(true).ok();
+    send_transport_auth_if_configured(&mut stream, auth)?;
     send_client_ready_hello_if_enabled(&mut stream)
         .context("send prediction return client ready hello")?;
     // Bound the ready handshake read. `recv_ready` is a blocking `read_exact`;
@@ -402,6 +427,7 @@ pub(crate) fn open_prediction_return_stream(
     open_return_sink_once(
         return_addr,
         source_ip,
+        config.transport_auth.as_deref(),
         request_id,
         session_id,
         "prediction return sink did not become ready",
@@ -424,6 +450,7 @@ pub(crate) fn open_downstream_prediction_return_stream(
     open_return_sink_once(
         return_addr,
         source_ip,
+        config.transport_auth.as_deref(),
         request_id,
         session_id,
         "downstream prediction return sink did not become ready",
@@ -554,6 +581,55 @@ mod tests {
             .expect_err("closed prediction return must wake the waiter");
         assert!(error.to_string().contains("closed before the next reply"));
         handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn auth_gated_return_listener_accepts_matching_token() {
+        let token = vec![0x7E_u8; 32];
+        let listener =
+            PredictionReturnListener::start_with_auth("127.0.0.1:0".parse().unwrap(), Some(token.clone()))
+                .unwrap();
+        let addr = listener.bind_addr();
+        let hub = listener.hub();
+        let receiver = hub.register(71, 73).unwrap();
+
+        let mut sink = open_return_sink_once(
+            addr,
+            None,
+            Some(&token),
+            71,
+            73,
+            "auth-gated return sink did not become ready",
+        )
+        .unwrap();
+        skippy_protocol::binary::send_reply_predicted(&mut sink, 9).unwrap();
+
+        let reply = receiver
+            .recv_expected_timeout(WireReplyKind::PredictedToken, Duration::from_secs(2))
+            .unwrap()
+            .expect("reply should arrive through the auth-gated sink");
+        assert_eq!(reply.predicted, 9);
+    }
+
+    #[test]
+    fn auth_gated_return_listener_rejects_wrong_token() {
+        let listener = PredictionReturnListener::start_with_auth(
+            "127.0.0.1:0".parse().unwrap(),
+            Some(vec![0x7E_u8; 32]),
+        )
+        .unwrap();
+        let addr = listener.bind_addr();
+
+        let result = open_return_sink_once(
+            addr,
+            None,
+            Some(&[0x1F_u8; 32]),
+            71,
+            73,
+            "auth-gated return sink did not become ready",
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

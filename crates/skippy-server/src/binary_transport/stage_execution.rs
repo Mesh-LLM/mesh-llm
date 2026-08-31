@@ -40,6 +40,44 @@ use super::socket::{
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_OPT_IN_PEEK_MS: u64 = 500;
 const DOWNSTREAM_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
+const TRANSPORT_AUTH_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Dialer half of the transport auth handshake: written before any other
+/// bytes (including the optional client ready hello) when the run carries an
+/// auth token.
+pub(crate) fn send_transport_auth_if_configured(
+    stream: &mut TcpStream,
+    auth: Option<&[u8]>,
+) -> Result<()> {
+    if let Some(token) = auth {
+        skippy_protocol::binary::send_transport_auth(&mut *stream, token)
+            .context("send transport auth preamble")?;
+    }
+    Ok(())
+}
+
+/// Listener half of the transport auth handshake: reads and verifies the
+/// preamble before the ready handshake. No-op when the stage has no token.
+pub(in crate::binary_transport) fn enforce_transport_auth(
+    stream: &mut TcpStream,
+    auth: Option<&[u8]>,
+) -> Result<()> {
+    let Some(expected) = auth else {
+        return Ok(());
+    };
+    let previous_timeout = stream
+        .read_timeout()
+        .context("read transport auth timeout")?;
+    stream
+        .set_read_timeout(Some(TRANSPORT_AUTH_READ_TIMEOUT))
+        .context("set transport auth read timeout")?;
+    let result = skippy_protocol::binary::recv_transport_auth(&mut *stream, expected)
+        .context("verify transport auth preamble");
+    stream
+        .set_read_timeout(previous_timeout)
+        .context("restore stage connection timeout")?;
+    result
+}
 
 pub(in crate::binary_transport) fn warm_downstream_preconnect_enabled() -> bool {
     warm_downstream_preconnect_enabled_from(
@@ -121,7 +159,12 @@ pub(in crate::binary_transport) fn take_ready_downstream(
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
+                match complete_downstream_ready(
+                    &mut stream,
+                    deadline,
+                    shutdown,
+                    config.transport_auth.as_deref(),
+                ) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -156,6 +199,7 @@ fn complete_downstream_ready(
     stream: &mut TcpStream,
     deadline: Instant,
     shutdown: &AtomicBool,
+    auth: Option<&[u8]>,
 ) -> Result<()> {
     ensure_downstream_acquisition_active(shutdown)?;
     let timeout = deadline
@@ -167,8 +211,9 @@ fn complete_downstream_ready(
     stream
         .set_write_timeout(Some(timeout))
         .context("set downstream ready write timeout")?;
-    let hello_result =
-        send_client_ready_hello_if_enabled(stream).context("send downstream client ready hello");
+    let hello_result = send_transport_auth_if_configured(stream, auth).and_then(|()| {
+        send_client_ready_hello_if_enabled(stream).context("send downstream client ready hello")
+    });
     stream
         .set_write_timeout(None)
         .context("clear downstream ready write timeout")?;
@@ -1018,12 +1063,14 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        decode_record_tokens_sideband, enforce_transport_auth,
+        first_decode_message_with_full_prompt_sideband, is_decode_frame_batch_candidate,
+        prefix_cache_test_config, send_transport_auth_if_configured, split_native_mtp_reply,
         take_ready_downstream, take_warm_or_connect_downstream, token_sideband_or_fill,
         warm_downstream_is_healthy, warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
+    use std::io::Read as _;
     use std::{
         net::{Shutdown, TcpListener, TcpStream},
         sync::{
@@ -1142,6 +1189,61 @@ mod tests {
 
         assert!(ready.peer_addr().is_ok());
         server.join().unwrap();
+    }
+
+    #[test]
+    fn downstream_ready_sends_transport_auth_preamble() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let token = vec![0xC3_u8; 32];
+        let server_token = token.clone();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            enforce_transport_auth(&mut stream, Some(&server_token)).unwrap();
+            skippy_protocol::binary::send_ready(&mut stream).unwrap();
+        });
+        let mut config = prefix_cache_test_config();
+        config.downstream.as_mut().unwrap().endpoint = endpoint;
+        config.transport_auth = Some(token);
+        let warm = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        let shutdown = AtomicBool::new(false);
+        let ready = take_ready_downstream(&config, &warm, 2, &shutdown)
+            .unwrap()
+            .expect("downstream should be present");
+
+        assert!(ready.peer_addr().is_ok());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn transport_auth_enforcement_rejects_wrong_token() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            send_transport_auth_if_configured(&mut stream, Some(&[0x11_u8; 32])).unwrap();
+            // Hold the socket open so the server observes the bad token, not EOF.
+            let mut byte = [0_u8; 1];
+            let _ = stream.read(&mut byte);
+        });
+        let (mut accepted, _) = listener.accept().unwrap();
+
+        let error = enforce_transport_auth(&mut accepted, Some(&[0x22_u8; 32])).unwrap_err();
+
+        assert!(error.to_string().contains("transport auth"));
+        drop(accepted);
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn transport_auth_enforcement_is_noop_without_token() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+
+        enforce_transport_auth(&mut accepted, None).unwrap();
     }
 
     #[test]

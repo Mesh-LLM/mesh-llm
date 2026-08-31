@@ -900,8 +900,9 @@ impl SkippyModelHandle {
         );
         let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
         let prediction_return_listener = if runtime_config.downstream.is_some() {
-            Some(PredictionReturnListener::start(
+            Some(PredictionReturnListener::start_with_auth(
                 runtime_config.bind_addr.parse()?,
+                runtime_config.transport_auth.clone(),
             )?)
         } else {
             None
@@ -1005,8 +1006,9 @@ impl SkippyModelHandle {
         );
         let serving_hooks = resolve_serving_hooks(serving_hooks_factory.as_ref(), &runtime)?;
         let prediction_return_listener = if runtime_config.downstream.is_some() {
-            Some(PredictionReturnListener::start(
+            Some(PredictionReturnListener::start_with_auth(
                 runtime_config.bind_addr.parse()?,
+                runtime_config.transport_auth.clone(),
             )?)
         } else {
             None
@@ -1282,6 +1284,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: None,
+        transport_auth: None,
     };
     config.kv_cache = options
         .kv_cache

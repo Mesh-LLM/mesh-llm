@@ -29,6 +29,73 @@ const DEFAULT_STAGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_STAGE_READINESS_INTERVAL: Duration = Duration::from_secs(2);
 pub(super) const DEFAULT_STAGE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Direct (bridge-free) TCP stage transport for one split run: present when
+/// the operator enabled it and every remote participant advertises support.
+pub(super) struct SplitDirectTransport {
+    pub(super) token: Vec<u8>,
+}
+
+pub(super) async fn split_direct_transport(
+    spec: &SplitGenerationLoadSpec<'_>,
+) -> Option<SplitDirectTransport> {
+    spec.node.stage_direct_transport()?;
+    let remote_nodes: std::collections::HashSet<iroh::EndpointId> = spec
+        .generation
+        .stages
+        .iter()
+        .map(|stage| stage.node_id)
+        .filter(|node_id| *node_id != spec.node.id())
+        .collect();
+    if remote_nodes.is_empty() {
+        return None;
+    }
+    for node_id in &remote_nodes {
+        if !spec
+            .node
+            .peer_supports_skippy_subprotocol_feature(
+                *node_id,
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_TRANSPORT,
+            )
+            .await
+        {
+            tracing::info!(
+                peer = %node_id.fmt_short(),
+                "split uses mesh stage transport: peer does not advertise direct transport"
+            );
+            return None;
+        }
+    }
+    let token: [u8; 32] = rand::random();
+    Some(SplitDirectTransport {
+        token: token.to_vec(),
+    })
+}
+
+async fn alloc_port_on(ip: std::net::IpAddr) -> Result<u16> {
+    let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::new(ip, 0)).await?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
+/// Does `stage`'s transport listener need to be reachable from another node?
+/// True when the stage that dials into it (its pipeline predecessor) runs
+/// elsewhere.
+fn stage_needs_direct_bind(
+    spec: &SplitGenerationLoadSpec<'_>,
+    stage: &RuntimeSliceStagePlan,
+) -> bool {
+    let Some(previous) = spec
+        .generation
+        .stages
+        .iter()
+        .find(|candidate| candidate.stage_index + 1 == stage.stage_index)
+    else {
+        return false;
+    };
+    previous.node_id != stage.node_id
+}
+
 pub(super) async fn await_stage_startup<F, T>(
     timeout: Duration,
     future: F,
@@ -186,8 +253,20 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await;
     }
 
-    let stage0_return_port = alloc_local_port().await?;
-    let stage0_return_endpoint = format!("127.0.0.1:{stage0_return_port}");
+    let direct = split_direct_transport(spec).await;
+    let stage0_return_endpoint = if direct.is_some() {
+        let hint = spec
+            .generation
+            .stages
+            .iter()
+            .rev()
+            .map(|stage| stage.node_id)
+            .find(|node_id| *node_id != spec.node.id());
+        let ip = spec.node.stage_direct_bind_ip(hint).await?;
+        std::net::SocketAddr::new(ip, alloc_port_on(ip).await?).to_string()
+    } else {
+        format!("127.0.0.1:{}", alloc_local_port().await?)
+    };
     spec.node
         .register_stage_transport_alias(
             &spec.generation.topology_id,
@@ -203,9 +282,10 @@ pub(super) async fn load_split_runtime_generation_inner(
         &mut ready_by_stage,
         &mut downstream,
         &stage0_return_endpoint,
+        direct.as_ref(),
     ))
     .await?;
-    let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
+    let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) || direct.is_some() {
         downstream.endpoint
     } else {
         spec.node
@@ -252,6 +332,7 @@ pub(super) async fn load_split_runtime_generation_inner(
         spec.device_override,
     );
     runtime_options.config.load_mode = settings.load_mode.clone();
+    runtime_options.config.transport_auth = direct.as_ref().map(|direct| direct.token.clone());
     runtime_options.config.bind_addr = stage0_return_endpoint;
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = Some(PeerConfig {
@@ -345,6 +426,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
     ready_by_stage: &mut HashMap<String, skippy::StageStatusSnapshot>,
     downstream: &mut Option<skippy::StagePeerDescriptor>,
     stage0_return_endpoint: &str,
+    direct: Option<&SplitDirectTransport>,
 ) -> Result<skippy::StagePeerDescriptor> {
     for stage in spec.generation.stages.iter().skip(1).rev() {
         *cleanup_on_error = true;
@@ -354,6 +436,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
             stage,
             downstream.clone(),
             stage0_return_endpoint,
+            direct,
         );
         prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
         wait_for_split_stage_source(
@@ -413,6 +496,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
             stage_index: stage.stage_index,
             endpoint: ready.status.bind_addr.clone(),
             node_id: Some(stage.node_id),
+            direct: direct.is_some() && stage_needs_direct_bind(spec, stage),
         });
         ready_by_stage.insert(stage.stage_id.clone(), ready.status);
     }
@@ -469,10 +553,11 @@ pub(super) fn split_runtime_stage_load_request(
     stage: &RuntimeSliceStagePlan,
     downstream: Option<skippy::StagePeerDescriptor>,
     stage0_return_endpoint: &str,
+    direct: Option<&SplitDirectTransport>,
 ) -> skippy::StageLoadRequest {
     let resolved_config = &settings.runtime_options.config;
     let upstream = if downstream.is_none() {
-        split_runtime_stage_upstream(spec, stage0_return_endpoint)
+        split_runtime_stage_upstream(spec, stage0_return_endpoint, direct.is_some())
     } else {
         None
     };
@@ -536,12 +621,15 @@ pub(super) fn split_runtime_stage_load_request(
         load_mode: settings.load_mode.clone(),
         upstream,
         downstream,
+        transport_auth: direct.map(|direct| direct.token.clone()),
+        direct_bind: direct.is_some() && stage_needs_direct_bind(spec, stage),
     }
 }
 
 pub(super) fn split_runtime_stage_upstream(
     spec: &SplitGenerationLoadSpec<'_>,
     stage0_return_endpoint: &str,
+    direct: bool,
 ) -> Option<skippy::StagePeerDescriptor> {
     let stage0 = spec.generation.stages.first()?;
     Some(skippy::StagePeerDescriptor {
@@ -549,6 +637,7 @@ pub(super) fn split_runtime_stage_upstream(
         stage_index: stage0.stage_index,
         endpoint: stage0_return_endpoint.to_string(),
         node_id: Some(stage0.node_id),
+        direct,
     })
 }
 

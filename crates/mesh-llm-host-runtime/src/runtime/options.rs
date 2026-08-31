@@ -80,6 +80,10 @@ pub struct RuntimeOptions {
     pub disable_iroh_relays: bool,
     pub bind_port: Option<u16>,
     pub bind_ip: Option<IpAddr>,
+    /// Opt in to direct (bridge-free) TCP transport between split stages.
+    pub stage_direct_transport: bool,
+    /// Interface direct stage listeners bind on; derived per-peer when unset.
+    pub stage_direct_ip: Option<IpAddr>,
     pub listen_all: bool,
     pub max_clients: Option<usize>,
     pub nostr_relay: Vec<String>,
@@ -157,6 +161,8 @@ impl Default for RuntimeOptions {
             disable_iroh_relays: false,
             bind_port: None,
             bind_ip: None,
+            stage_direct_transport: false,
+            stage_direct_ip: None,
             listen_all: false,
             max_clients: None,
             nostr_relay: Vec::new(),

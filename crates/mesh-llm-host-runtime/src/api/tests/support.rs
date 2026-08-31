@@ -646,6 +646,7 @@ fn make_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        stage_direct_transport_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         cache_affinity: None,

@@ -233,6 +233,7 @@ pub(crate) struct LocalAnnouncementData {
     served_model_runtime: Vec<ModelRuntimeDescriptor>,
     owner_attestation: Option<SignedNodeOwnership>,
     artifact_transfer_supported: bool,
+    stage_direct_transport_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
@@ -284,6 +285,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
+        || old.stage_direct_transport_supported != new.stage_direct_transport_supported
         || cache_affinity_gossip::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
@@ -365,6 +367,7 @@ pub(super) fn apply_transitive_ann(
     existing.artifact_transfer_supported = ann.artifact_transfer_supported;
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
+    existing.stage_direct_transport_supported = ann.stage_direct_transport_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     cache_affinity_gossip::merge_advertisement(
         &mut existing.cache_affinity,
@@ -814,6 +817,7 @@ impl Node {
         existing.artifact_transfer_supported = ann.artifact_transfer_supported;
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
+        existing.stage_direct_transport_supported = ann.stage_direct_transport_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
         cache_affinity_gossip::merge_advertisement(
             &mut existing.cache_affinity,
@@ -1114,6 +1118,7 @@ impl Node {
             owner_attestation: self.owner_attestation.lock().await.clone(),
             artifact_transfer_supported:
                 crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
+            stage_direct_transport_supported: self.stage_direct_transport().is_some(),
             advertised_model_throughput,
             cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
@@ -1184,6 +1189,7 @@ impl Node {
             artifact_transfer_supported: peer.artifact_transfer_supported,
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
+            stage_direct_transport_supported: peer.stage_direct_transport_supported,
             advertised_model_throughput: peer.advertised_model_throughput.clone(),
             cache_affinity: peer.cache_affinity.clone(),
             latency_ms: latency.latency_ms,
@@ -1250,6 +1256,7 @@ impl Node {
             artifact_transfer_supported: data.artifact_transfer_supported,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
+            stage_direct_transport_supported: data.stage_direct_transport_supported,
             advertised_model_throughput: data.advertised_model_throughput,
             cache_affinity: data.cache_affinity,
             latency_ms: None,

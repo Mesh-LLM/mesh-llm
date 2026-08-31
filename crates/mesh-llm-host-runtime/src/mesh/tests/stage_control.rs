@@ -98,7 +98,10 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             stage_index: 2,
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
+            direct: true,
         }),
+        transport_auth: Some(vec![0xAB; 32]),
+        direct_bind: true,
     }
 }
 
@@ -186,6 +189,24 @@ fn stage_control_prepare_request_round_trips_proto() {
         prepare.load.downstream.and_then(|peer| peer.node_id),
         Some(make_test_endpoint_id(0x80))
     );
+}
+
+#[test]
+fn stage_control_load_request_round_trips_direct_transport_fields() {
+    let requester = make_test_endpoint_id(0x84);
+    let request =
+        crate::inference::skippy::StageControlRequest::Load(test_stage_load_request());
+
+    let decoded =
+        stage_control_request_from_proto(stage_control_request_to_proto(requester, request))
+            .unwrap();
+
+    let crate::inference::skippy::StageControlRequest::Load(load) = decoded else {
+        panic!("expected load request");
+    };
+    assert_eq!(load.transport_auth.as_deref(), Some(&[0xAB_u8; 32][..]));
+    assert!(load.direct_bind);
+    assert!(load.downstream.is_some_and(|peer| peer.direct));
 }
 
 #[test]

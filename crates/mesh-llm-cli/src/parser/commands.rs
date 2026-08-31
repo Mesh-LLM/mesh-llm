@@ -718,6 +718,21 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub bind_ip: Option<IpAddr>,
 
+    /// Declare this node's network a trusted segment (an isolated LAN, VLAN,
+    /// or VPC). Split stages then use direct plain-TCP transport between
+    /// mutually reachable nodes that also declare it: activation traffic
+    /// skips the encrypted mesh tunnel and travels unencrypted inside the
+    /// segment; peers still authenticate per run. Runs fall back to the mesh
+    /// tunnel when any participant has not opted in.
+    #[arg(long, hide = true)]
+    pub trusted_lan: bool,
+
+    /// Interface IP of the trusted segment (with --trusted-lan), for
+    /// multi-homed hosts. Derived from the route toward the coordinator when
+    /// unset.
+    #[arg(long, hide = true)]
+    pub trusted_lan_ip: Option<IpAddr>,
+
     /// Bind to 0.0.0.0 (for containers/Fly.io).
     #[arg(long, hide = true)]
     pub listen_all: bool,

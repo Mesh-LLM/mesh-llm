@@ -26,9 +26,11 @@ where
 
     // Skip leading global flags to find the pseudo-subcommand position.
     // Recognized value-taking flags: --log-format, --mesh-discovery-mode, --max-vram,
-    // --llama-flavor, --device, --tensor-split, --bind-port, --bind-ip, --max-clients,
+    // --llama-flavor, --device, --tensor-split, --bind-port, --bind-ip, --trusted-lan-ip,
+    // --max-clients,
     // --port, --console, --swarm-capture, --draft-max, --ctx-size.
     // Boolean flags: --help-advanced, --auto, --client, --local-model-only, --headless, --publish,
+    // --trusted-lan,
     // --plugin, --auto-update, --no-draft, --split, --no-enumerate-host, --listen-all,
     // --no-console, --owner-required.
     let value_taking_flags = [
@@ -40,6 +42,7 @@ where
         "--tensor-split",
         "--bind-port",
         "--bind-ip",
+        "--trusted-lan-ip",
         "--max-clients",
         "--port",
         "--console",

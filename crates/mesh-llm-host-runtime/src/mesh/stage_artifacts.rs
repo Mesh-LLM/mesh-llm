@@ -214,7 +214,7 @@ impl Node {
         );
 
         let mut request = stage_control_request_from_proto(frame)?;
-        self.prepare_stage_control_request(&mut request)
+        self.prepare_stage_control_request(&mut request, Some(remote))
             .await
             .map_err(|e| {
                 tracing::warn!(
@@ -246,6 +246,7 @@ impl Node {
     pub(crate) async fn prepare_stage_control_request(
         &self,
         request: &mut crate::inference::skippy::StageControlRequest,
+        requester: Option<EndpointId>,
     ) -> anyhow::Result<()> {
         match request {
             crate::inference::skippy::StageControlRequest::Claim(_) => {}
@@ -271,6 +272,11 @@ impl Node {
                             break;
                         }
                     }
+                }
+                if load.direct_bind && load.bind_addr == "127.0.0.1:0" {
+                    let hint = requester.or(load.coordinator_id);
+                    let ip = self.stage_direct_bind_ip(hint).await?;
+                    load.bind_addr = std::net::SocketAddr::new(ip, 0).to_string();
                 }
                 let topology_id = load.topology_id.clone();
                 let run_id = load.run_id.clone();
@@ -302,6 +308,9 @@ impl Node {
         run_id: &str,
         peer: &mut crate::inference::skippy::StagePeerDescriptor,
     ) -> anyhow::Result<()> {
+        if peer.direct {
+            return Ok(());
+        }
         let Some(peer_node) = peer.node_id else {
             return Ok(());
         };
@@ -366,6 +375,9 @@ impl Node {
             }
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST => {
                 peer.stage_status_list_supported
+            }
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_TRANSPORT => {
+                peer.stage_direct_transport_supported
             }
             _ => false,
         }

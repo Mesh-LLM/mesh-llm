@@ -5,6 +5,7 @@ use super::{
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
+    TRANSPORT_AUTH_MAGIC,
     StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
     StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{
@@ -21,6 +22,42 @@ pub fn recv_ready(mut reader: impl Read) -> io::Result<()> {
     let magic = read_i32(&mut reader)?;
     if magic != READY_MAGIC {
         return Err(invalid_data("stage ready magic mismatch"));
+    }
+    Ok(())
+}
+
+/// Write the transport auth preamble: magic, one length byte, token bytes.
+/// Sent by dialers before any other traffic when the run carries an auth token.
+pub fn send_transport_auth(mut writer: impl Write, token: &[u8]) -> io::Result<()> {
+    if token.is_empty() || token.len() > crate::MAX_TRANSPORT_AUTH_BYTES {
+        return Err(invalid_input("transport auth token length out of range"));
+    }
+    write_i32(&mut writer, TRANSPORT_AUTH_MAGIC)?;
+    writer.write_all(&[token.len() as u8])?;
+    writer.write_all(token)
+}
+
+/// Read and verify the transport auth preamble against the expected token.
+/// The comparison does not shortcut on the first mismatching byte.
+pub fn recv_transport_auth(mut reader: impl Read, expected: &[u8]) -> io::Result<()> {
+    let magic = read_i32(&mut reader)?;
+    if magic != TRANSPORT_AUTH_MAGIC {
+        return Err(invalid_data("transport auth magic mismatch"));
+    }
+    let mut len = [0_u8; 1];
+    reader.read_exact(&mut len)?;
+    let len = len[0] as usize;
+    if len == 0 || len > crate::MAX_TRANSPORT_AUTH_BYTES {
+        return Err(invalid_data("transport auth token length out of range"));
+    }
+    let mut token = vec![0_u8; len];
+    reader.read_exact(&mut token)?;
+    let mut diff = usize::from(len != expected.len());
+    for (index, byte) in token.iter().enumerate() {
+        diff |= usize::from(*byte != *expected.get(index).unwrap_or(&0));
+    }
+    if diff != 0 {
+        return Err(invalid_data("transport auth token mismatch"));
     }
     Ok(())
 }

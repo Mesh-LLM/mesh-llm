@@ -87,6 +87,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) load_mode: LoadMode,
     pub(crate) upstream: Option<StagePeerDescriptor>,
     pub(crate) downstream: Option<StagePeerDescriptor>,
+    pub(crate) transport_auth: Option<Vec<u8>>,
+    pub(crate) direct_bind: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -176,6 +178,9 @@ pub(crate) struct StagePeerDescriptor {
     pub(crate) stage_index: u32,
     pub(crate) endpoint: String,
     pub(crate) node_id: Option<iroh::EndpointId>,
+    /// The endpoint is directly routable; the receiving node must not rewrite
+    /// it to a local mesh tunnel bridge.
+    pub(crate) direct: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
