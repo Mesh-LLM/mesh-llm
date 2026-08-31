@@ -1,8 +1,8 @@
-From 507b9515fd39c4bcc60a25e1fa82238d3fe04c9e Mon Sep 17 00:00:00 2001
+From b21f5aae7ffcdc79c61897dcd924cb7adf222d98 Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 01:46:31 +1000
-Subject: [PATCH 28/32] skippy: allow Qwen4Exp runtime slices
+Subject: [PATCH 28/34] skippy: allow Qwen4Exp runtime slices
 
 Co-authored-by: michaelneale <14976+michaelneale@users.noreply.github.com>
 

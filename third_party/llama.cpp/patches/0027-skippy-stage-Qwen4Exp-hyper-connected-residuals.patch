@@ -1,8 +1,8 @@
-From 11075272839ac3c4d7fc650e97dcba4001b978a6 Mon Sep 17 00:00:00 2001
+From 7d294542abe4f1c44a60a50122576031f69992a9 Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 01:06:43 +1000
-Subject: [PATCH 27/32] skippy: stage Qwen4Exp hyper-connected residuals
+Subject: [PATCH 27/34] skippy: stage Qwen4Exp hyper-connected residuals
 
 Carry Qwen4Exp's hyper-connected residual through an explicit wide graph input, retain token sidebands for PLE history, and limit graph execution to the selected layer range.
 
@@ -24,7 +24,7 @@ Signed-off-by: Jimmy <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a0
  create mode 100644 tests/test-skippy-activation-layout.cpp
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index df0c3019b..33d933c3f 100644
+index 4bbb6bbd7..aa6a1feb6 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -28,6 +28,7 @@ static thread_local skippy_graph_filter g_skippy_graph_filter;
@@ -133,10 +133,10 @@ index 15fc4fa83..3a00c0e93 100644
  public:
      llm_graph_input_stage_tokens() = default;
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 4e7bca8ea..4eac8bb40 100644
+index 362e2b914..9fbcd8a39 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1223,6 +1223,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1264,6 +1264,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     (tn.tensor == LLM_TENSOR_ALTUP_PROJ && g_skippy_filter.include_embeddings) ||
                     (tn.tensor == LLM_TENSOR_ALTUP_UNEMBD_PROJ && g_skippy_filter.include_output);
          }

@@ -1,15 +1,15 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From dea737808abcb236db40aa72fac87f33331094e7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 27 Aug 2026 22:13:39 -0400
-Subject: [PATCH] skippy: wire sampling and chat request defaults
+Subject: [PATCH 34/34] skippy: wire sampling and chat request defaults
 
 ---
  common/stage-chat.cpp         |  29 ++++-
  include/skippy/common.h       |   2 +-
  include/skippy/sampling.h     |  33 +++++
  include/skippy/tokenization.h |   5 +
- src/skippy/sampling.cpp       | 227 +++++++++++++++++++++++++++++-----
- 5 files changed, 263 insertions(+), 33 deletions(-)
+ src/skippy/sampling.cpp       | 231 +++++++++++++++++++++++++++++-----
+ 5 files changed, 267 insertions(+), 33 deletions(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 index 8aa563bef..f40132f42 100644
@@ -171,7 +171,7 @@ index ccf3d020c..80b91879d 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 49d4eaa59..1bb2c6129 100644
+index 49d4eaa59..9f95898b3 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -12,6 +12,7 @@
@@ -445,4 +445,5 @@ index 49d4eaa59..1bb2c6129 100644
  }
  
 -- 
-2.50.1 (Apple Git-155)
+2.55.0
+
