@@ -55,6 +55,15 @@ impl ModelTargetSizeLookup {
                     .packages
                     .iter()
                     .any(|package| package.package_type == "layer-package");
+                if split_capable {
+                    lookup.insert_split_capability_aliases(
+                        variant_name,
+                        &variant.curated.name,
+                        &variant.source.repo,
+                        variant.source.revision.as_deref(),
+                        source_file,
+                    );
+                }
                 if let Some(model_bytes) = variant
                     .curated
                     .size
@@ -164,6 +173,40 @@ impl ModelTargetSizeLookup {
     fn insert_split_capability(&mut self, alias: &str, split_capable: bool) {
         self.split_capable_by_key
             .insert(normalize_match_key(alias), split_capable);
+    }
+
+    fn insert_split_capability_aliases(
+        &mut self,
+        variant_name: &str,
+        curated_name: &str,
+        repo: &str,
+        revision: Option<&str>,
+        source_file: &str,
+    ) {
+        let basename = source_file.rsplit('/').next().unwrap_or(source_file);
+        let selector = model_ref::quant_selector_from_gguf_file(source_file);
+        let model_ref_with_revision =
+            model_ref::format_model_ref(repo, revision, selector.as_deref());
+        let model_ref_without_revision =
+            model_ref::format_model_ref(repo, None, selector.as_deref());
+        let canonical_ref =
+            revision.map(|revision| model_ref::format_canonical_ref(repo, revision, source_file));
+
+        for alias in [
+            variant_name,
+            curated_name,
+            repo,
+            source_file,
+            basename,
+            basename.trim_end_matches(".gguf"),
+            model_ref_with_revision.as_str(),
+            model_ref_without_revision.as_str(),
+        ] {
+            self.insert_split_capability(alias, true);
+        }
+        if let Some(canonical_ref) = canonical_ref {
+            self.insert_split_capability(&canonical_ref, true);
+        }
     }
 }
 
@@ -460,6 +503,11 @@ mod tests {
             lookup.split_capable("meshllm/model-q4_k_m-layers@rev-a"),
             Some(true)
         );
+        assert_eq!(
+            lookup.split_capable("hf://example/source@rev-a:Q4_K_M"),
+            Some(true)
+        );
+        assert_eq!(lookup.split_capable("Model-Q4_K_M"), Some(true));
     }
 
     #[test]
