@@ -641,7 +641,7 @@ fn test_hardware_survey_default() {
     assert!(s.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
@@ -653,7 +653,7 @@ fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     assert!(survey.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     let mut survey = HardwareSurvey::default();

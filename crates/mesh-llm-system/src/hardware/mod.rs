@@ -187,7 +187,15 @@ fn read_system_ram_bytes() -> u64 {
     .unwrap_or(0)
 }
 
-#[cfg(all(target_os = "linux", any(feature = "skippy-devices", test)))]
+#[cfg(target_os = "windows")]
+fn read_system_ram_bytes() -> u64 {
+    read_windows_total_ram_bytes().unwrap_or(0)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    any(feature = "skippy-devices", test)
+))]
 fn apply_cpu_only_runtime_budget(survey: &mut HardwareSurvey, metrics: &[Metric], system_ram: u64) {
     if metrics.contains(&Metric::VramBytes) && system_ram > 0 {
         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
@@ -305,13 +313,13 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
     let gpus = match skippy_devices::gpu_facts() {
         Ok(gpus) => gpus,
         Err(_) => {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
             return true;
         }
     };
     if gpus.is_empty() {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
         return true;
     }
