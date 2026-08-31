@@ -43,6 +43,7 @@ mod summary;
 mod telemetry;
 
 use self::connection::handle_binary_connection;
+use self::session_tracker::ConnectionSessionOwnership;
 
 #[derive(Default)]
 struct ConnectionWorkerControl {
@@ -239,6 +240,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
+    let session_ownership = Arc::new(ConnectionSessionOwnership::default());
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
@@ -336,6 +338,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
+            let session_ownership = session_ownership.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
             worker_control
                 .track(&upstream)
@@ -394,6 +397,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         downstream_connect_timeout_secs,
                         native_mtp_enabled,
                         &prediction_return_sinks,
+                        session_ownership,
                         first_message,
                     )
                 })()
