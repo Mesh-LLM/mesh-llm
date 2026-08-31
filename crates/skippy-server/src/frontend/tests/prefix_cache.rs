@@ -199,6 +199,37 @@ fn resident_prefix_cache_hits_radix_common_prefix_without_a_record_ladder() {
 }
 
 #[test]
+fn resident_prefix_cache_rejects_common_prefix_below_configured_minimum() {
+    let config = StageConfig {
+        kv_cache: Some(StageKvCacheConfig {
+            min_tokens: 64,
+            ..prefix_cache_test_config()
+                .kv_cache
+                .expect("test cache config")
+        }),
+        ..prefix_cache_test_config()
+    };
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let donor = prefix_cache_base_with_request("donor-request", "donor-session");
+    let receiver = prefix_cache_base_with_request("receiver-request", "receiver-session");
+    let recorded_tokens = (0..20_751).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens[..27].to_vec();
+    lookup_tokens.extend(100_000..128_065);
+    let recorded = kv.prefill_identity(&config, &donor, 0, &recorded_tokens);
+    let lookup = kv.prefill_identity(&config, &receiver, 0, &lookup_tokens);
+
+    seed_resident_prefix(&kv, &recorded);
+
+    assert!(kv.probe_resident_prefix(&lookup).is_none());
+    assert_eq!(
+        kv.peek_cache_affinity(&config, &[lookup]),
+        skippy_scheduler::CacheAffinity::default()
+    );
+}
+
+#[test]
 fn stage0_full_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)

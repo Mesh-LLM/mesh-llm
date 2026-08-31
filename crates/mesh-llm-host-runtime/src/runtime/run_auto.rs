@@ -23,7 +23,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -1125,6 +1126,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
+    let primary_device_override =
+        primary_startup_model.and_then(|model| startup_device_override(model.gpu_id.as_deref()));
     let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
     let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
@@ -1162,6 +1165,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
+        device_override: primary_device_override,
         runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,

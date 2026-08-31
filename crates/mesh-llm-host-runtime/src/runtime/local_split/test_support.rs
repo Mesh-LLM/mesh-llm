@@ -88,6 +88,36 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
     }
 }
 
+#[test]
+fn split_generation_cli_device_override_survives_pinned_stage_selection() {
+    let mut config = skippy_protocol::StageConfig {
+        selected_device: Some(skippy_protocol::StageDevice {
+            backend_device: "CPU".to_string(),
+            stable_id: None,
+            index: None,
+            vram_bytes: None,
+        }),
+        ..Default::default()
+    };
+    let pinned_gpu = crate::runtime::StartupPinnedGpuTarget {
+        index: 0,
+        stable_id: "pci:0000:65:00.0".to_string(),
+        backend_device: "CUDA0".to_string(),
+        vram_bytes: 24_000_000_000,
+        reserved_bytes: None,
+    };
+
+    apply_split_generation_pinned_device(&mut config, Some(&pinned_gpu), Some("CPU"));
+
+    assert_eq!(
+        config
+            .selected_device
+            .as_ref()
+            .map(|device| device.backend_device.as_str()),
+        Some("CPU")
+    );
+}
+
 pub(super) fn split_test_peer(
     seed: u8,
     model_name: &str,
@@ -427,6 +457,7 @@ stop = ["END"]
         ctx_size: 8192,
         compact_meta: &compact_meta,
         pinned_gpu: None,
+        device_override: None,
         slots: 4,
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -554,6 +585,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
         pinned_gpu: None,
+        device_override: None,
         slots: 1,
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -601,7 +633,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
 }
 
 #[tokio::test]
-async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
+async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
@@ -615,6 +647,7 @@ model = "other/model-ref"
 
 [models.hardware]
 model_path = "{model_path}"
+device = "CUDA1"
 
 [models.throughput]
 threads = 17
@@ -645,6 +678,7 @@ max_tokens = 222
         mmproj_override: None,
         ctx_size_override: None,
         pinned_gpu: None,
+        device_override: Some("CPU".to_string()),
         capacity_budget_bytes: node.vram_bytes(),
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -680,6 +714,55 @@ max_tokens = 222
     assert_eq!(resolved.request_defaults.max_tokens, 222);
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
+    assert_eq!(resolved.hardware.device.as_deref(), Some("CPU"));
+    // An explicit CLI artifact may use the same served name as a configured
+    // model, but must not inherit that entry's path or runtime tuning.
+    let cli_model_path = temp_dir.path().join("cli-selected.gguf");
+    write_fake_gguf_model(&cli_model_path);
+    let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
+    let cli_spec = LocalOpenAiModelStartSpec {
+        mesh_config: &mesh_config,
+        config_model_id: None,
+        model_path: &cli_model_path,
+        model_bytes: cli_model_bytes,
+        mmproj_override: None,
+        ctx_size_override: None,
+        pinned_gpu: None,
+        device_override: None,
+        capacity_budget_bytes: node.vram_bytes(),
+        cache_type_k_override: None,
+        cache_type_v_override: None,
+        n_batch_override: None,
+        n_ubatch_override: None,
+        flash_attention_override: FlashAttentionType::Auto,
+        parallel_override: None,
+        planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            openai_frontend::GuardrailMode::Disabled,
+        ),
+        skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        hook_policy: None,
+        serving_hooks_factory: None,
+        http_bind_addr: "127.0.0.1:0".parse().expect("valid loopback address"),
+    };
+    let cli_resolved = resolve_local_openai_skippy_config(
+        &cli_spec,
+        "configured/model-ref",
+        cli_model_bytes,
+        4096,
+        3,
+        None,
+        None,
+    )
+    .expect("explicit CLI runtime config should not consult model entries");
+    assert_eq!(cli_resolved.hardware.resolved_model_path, cli_model_path);
+    assert_eq!(cli_resolved.throughput.threads, None);
+    assert_eq!(cli_resolved.throughput.threads_batch, None);
+    assert_eq!(
+        cli_resolved.request_defaults.max_tokens,
+        skippy_server::CONTEXT_BUDGET_MAX_TOKENS
+    );
 }
 
 #[test]

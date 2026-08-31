@@ -139,6 +139,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             mmproj_override: None,
             ctx_size_override,
             pinned_gpu: None,
+            device_override: None,
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),

@@ -1156,6 +1156,9 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             mmproj_path: extra_model.mmproj_path.clone(),
             ctx_size: extra_model.ctx_size,
             pinned_gpu: extra_model.pinned_gpu.clone(),
+            device_override: super::startup_models::startup_device_override(
+                extra_model.gpu_id.as_deref(),
+            ),
             runtime_capacity_ledger: ctx.runtime_capacity_ledger.clone(),
             cache_type_k: extra_model.cache_type_k.clone(),
             cache_type_v: extra_model.cache_type_v.clone(),
