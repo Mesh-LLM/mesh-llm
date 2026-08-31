@@ -60,6 +60,15 @@ impl DriverReturnListener {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Accepted sockets inherit O_NONBLOCK from the listener
+                        // on BSD/macOS (Linux clears it); restore blocking mode
+                        // so the framed reads below don't fail with EAGAIN.
+                        if let Err(error) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "driver prediction return accept failed to restore blocking mode: {error}"
+                            );
+                            continue;
+                        }
                         let waiters = thread_waiters.clone();
                         thread::spawn(move || {
                             if let Err(error) = handle_return_connection(&waiters, stream) {
