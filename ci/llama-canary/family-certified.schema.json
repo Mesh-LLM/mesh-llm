@@ -114,6 +114,7 @@
         },
         "artifact": {"$ref": "#/$defs/artifact"},
         "draft_artifact": {"$ref": "#/$defs/artifact"},
+        "mmproj_artifact": {"$ref": "#/$defs/artifact"},
         "execution": {
           "type": "object",
           "additionalProperties": false,

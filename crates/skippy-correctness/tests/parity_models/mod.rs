@@ -988,11 +988,13 @@ fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame)
 
     source
         .payload
-        .chunks_exact(4)
-        .zip(restored.payload.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(restored.payload.as_chunks::<4>().0.iter())
         .all(|(lhs, rhs)| {
-            let lhs = f32::from_le_bytes(lhs.try_into().expect("chunks_exact"));
-            let rhs = f32::from_le_bytes(rhs.try_into().expect("chunks_exact"));
+            let lhs = f32::from_le_bytes(*lhs);
+            let rhs = f32::from_le_bytes(*rhs);
             if lhs.to_bits() == rhs.to_bits() {
                 return true;
             }
@@ -1090,16 +1092,32 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             n_gpu_layers,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_runtime::SplitMode::Auto,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
             load_mode: path.load_mode,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             include_embeddings: shape.include_embeddings,
             include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: path.filter_tensors_on_load,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     )
     .with_context(|| {

@@ -49,6 +49,15 @@ pub(crate) fn configured_disabled_installed_plugin_summary(
 pub(crate) fn configured_external_plugin_spec(
     entry: &PluginConfigEntry,
 ) -> Result<ConfiguredExternalPlugin> {
+    let url = entry.url.as_deref().map(str::trim);
+    if url == Some("") {
+        bail!("plugin URL must not be empty");
+    }
+    if url.is_some_and(|url| url::Url::parse(url).is_ok_and(|url| url.scheme() == "tcp")) {
+        anyhow::bail!(
+            "tcp:// plugin control is unsupported because it has no authenticated capability handshake"
+        );
+    }
     let startup = PluginStartupOptions::from_config(&entry.startup);
     let command = entry
         .command
@@ -74,7 +83,7 @@ pub(crate) fn configured_external_plugin_spec(
         name: entry.name.clone(),
         command,
         args: entry.args.clone(),
-        url: entry.url.clone(),
+        url: url.map(str::to_owned),
         env: BTreeMap::new(),
         startup,
         web_ui_enabled: entry.web_ui_enabled,

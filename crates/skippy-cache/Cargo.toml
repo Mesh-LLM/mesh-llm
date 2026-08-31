@@ -16,4 +16,4 @@ anyhow.workspace = true
 blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc7"  }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc8"  }

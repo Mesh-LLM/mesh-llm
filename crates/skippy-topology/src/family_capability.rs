@@ -251,6 +251,11 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
         recurrent_or_hybrid: true,
     },
     StageRuntimeFamilyExpectation {
+        llama_architecture: "qwen4exp",
+        family_id: "qwen4exp",
+        recurrent_or_hybrid: true,
+    },
+    StageRuntimeFamilyExpectation {
         llama_architecture: "qwen3vl",
         family_id: "qwen3vl",
         recurrent_or_hybrid: false,
@@ -775,6 +780,30 @@ pub fn qwen3next_capability(
     }
 }
 
+/// Conservative Qwen4 experimental / Qwen3.8 Flash-Next capability.
+///
+/// QWEN4EXP combines indexed attention with recurrent Gated DeltaNet state.
+/// Until per-layer ownership is derived from artifact metadata and certified,
+/// keep the complete trunk sticky and reject exact state mobility.
+pub fn qwen4exp_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    FamilyCapabilityRecord {
+        family_id: "qwen4exp".to_string(),
+        layer_count,
+        activation_width,
+        exact_state_mobility: ExactStateMobility::RejectedTooLarge,
+        recurrent_ranges: vec![LayerRange {
+            start: 0,
+            end: layer_count,
+        }],
+        split_constraints: Vec::new(),
+        sidebands: vec![SidebandRequirement {
+            kind: SidebandKind::TokenIds,
+            first_required_layer: 1,
+            reason: "Qwen4Exp downstream PLE layers require original token ids to compute n-gram rows and preserve token history in attention cache cells".to_string(),
+        }],
+    }
+}
+
 pub fn kimi_linear_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
     let mut recurrent_ranges = Vec::new();
     let mut start = 0;
@@ -1175,6 +1204,15 @@ fn infer_qwen_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    // Flash-Next's GGUF metadata names the upstream llama.cpp architecture
+    // explicitly. Check it before release-name routing: other Qwen3.8 models
+    // still load as qwen35/qwen35moe and must retain that separate policy.
+    if compact.contains("qwen4exp")
+        || compact.contains("qwen3.8flashnext")
+        || compact.contains("qwen38flashnext")
+    {
+        return Some(qwen4exp_capability(layer_count, activation_width));
+    }
     if compact.contains("qwen2moe") {
         return Some(qwen2moe_capability(layer_count, activation_width));
     }

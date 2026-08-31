@@ -120,6 +120,37 @@ describe('runtime-control configuration merges', () => {
     expect(values['telemetry.headers']).toBe('')
   })
 
+  it('hydrates and merges typed topology stage arrays as JSON', () => {
+    const topologyStageSchema = {
+      kind: 'array' as const,
+      items: {
+        kind: 'object' as const,
+        properties: [
+          { name: 'node', label: 'Node', required: true, value_schema: { kind: 'object' as const } },
+          { name: 'layer_start', label: 'Layer start', required: true, value_schema: { kind: 'integer' as const } },
+          { name: 'layer_end', label: 'Layer end', required: true, value_schema: { kind: 'integer' as const } }
+        ]
+      }
+    }
+    const schema: RuntimeConfigSchemaReference = {
+      settings: [schemaSetting('defaults.topology.stages', 'topology-stages', topologyStageSchema)]
+    }
+    const stages = [
+      { node: { endpoint_id: 'endpoint-a' }, layer_start: 0, layer_end: 16 },
+      { node: { hostname: 'worker-b' }, layer_start: 16, layer_end: 32 }
+    ]
+
+    const values = createConfigurationDefaultsValuesFromMeshConfig({ defaults: { topology: { stages } } }, schema)
+    const merged = mergeConfigurationDefaultsIntoMeshConfig(
+      { version: 1 },
+      { 'defaults.topology.stages': JSON.stringify(stages) },
+      schema
+    )
+
+    expect(values['defaults.topology.stages']).toBe(JSON.stringify(stages))
+    expect(merged.defaults).toEqual({ topology: { stages } })
+  })
+
   it('preserves dotted plugin names and literal dotted plugin setting keys in runtime-control merges', () => {
     const dottedPluginSchema: RuntimeConfigSchemaReference = {
       ...SCHEMA_REFERENCE,

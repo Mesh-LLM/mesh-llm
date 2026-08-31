@@ -430,3 +430,15 @@ mod usage_tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "fleet_sim_tests.rs"]
+mod fleet_sim_tests;
+
+#[cfg(test)]
+#[path = "fleet_fairness_tests.rs"]
+mod fleet_fairness_tests;
+
+#[cfg(test)]
+#[path = "fleet_scale_tests.rs"]
+mod fleet_scale_tests;

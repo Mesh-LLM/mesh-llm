@@ -406,8 +406,10 @@ fn read_gguf_f32_tensor(
         tensor.name
     );
     bytes[offset..end]
-        .chunks_exact(4)
-        .map(|chunk| Ok(f32::from_le_bytes(chunk.try_into()?)))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| Ok(f32::from_le_bytes(*chunk)))
         .collect::<Result<Vec<_>>>()
 }
 

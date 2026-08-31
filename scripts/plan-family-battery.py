@@ -104,13 +104,22 @@ def _gguf_dimensions(path: Path) -> tuple[int, int] | None:
         kv_count = reader.u64()
         block_counts: list[int] = []
         embedding_lengths: list[int] = []
+        architecture: str | None = None
+        hyper_connection_counts: list[int] = []
+        embedding_lengths_out: list[int] = []
         for _ in range(kv_count):
             key = reader.string()
             value = reader.value(reader.u32())
+            if key == "general.architecture" and isinstance(value, str):
+                architecture = value
             if key.endswith(".block_count") and type(value) is int:
                 block_counts.append(value)
             if key.endswith(".embedding_length") and type(value) is int:
                 embedding_lengths.append(value)
+            if key.endswith(".hyper_connection.count") and type(value) is int:
+                hyper_connection_counts.append(value)
+            if key.endswith(".embedding_length_out") and type(value) is int:
+                embedding_lengths_out.append(value)
         if not block_counts and not embedding_lengths:
             return None
         if len(block_counts) != 1 or block_counts[0] < 1:
@@ -119,7 +128,24 @@ def _gguf_dimensions(path: Path) -> tuple[int, int] | None:
             raise PlanError(
                 f"GGUF must contain exactly one positive *.embedding_length: {path}"
             )
-        return block_counts[0], embedding_lengths[0]
+        activation_width = embedding_lengths[0]
+        if architecture == "qwen4exp":
+            if len(hyper_connection_counts) != 1 or hyper_connection_counts[0] < 1:
+                raise PlanError(
+                    "qwen4exp GGUF must contain exactly one positive "
+                    f"*.hyper_connection.count: {path}"
+                )
+            activation_width *= hyper_connection_counts[0]
+            if activation_width > 0x7FFFFFFF:
+                raise PlanError(f"qwen4exp activation width exceeds i32: {path}")
+            if len(embedding_lengths_out) > 1 or (
+                embedding_lengths_out and embedding_lengths_out[0] != activation_width
+            ):
+                raise PlanError(
+                    "qwen4exp *.embedding_length_out disagrees with "
+                    f"hyper-connected activation width {activation_width}: {path}"
+                )
+        return block_counts[0], activation_width
     finally:
         reader.close()
 
@@ -305,6 +331,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "cadences",
                 "artifact",
                 "draft_artifact",
+                "mmproj_artifact",
                 "execution",
                 "resources",
                 "notes",
@@ -325,6 +352,11 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
         draft = None
         if "draft_artifact" in model:
             draft = _artifact(model["draft_artifact"], f"{field}.draft_artifact")
+        mmproj = None
+        if "mmproj_artifact" in model:
+            mmproj = _artifact(model["mmproj_artifact"], f"{field}.mmproj_artifact")
+        if mmproj is not None and len(mmproj["files"]) != 1:
+            raise PlanError(f"{field}.mmproj_artifact.files must name exactly one projector GGUF")
 
         execution = _object(model.get("execution"), f"{field}.execution")
         _exact_keys(
@@ -408,6 +440,7 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
                 "cadences": cadences,
                 "artifact": artifact,
                 "draft_artifact": draft,
+                "mmproj_artifact": mmproj,
                 "execution": {
                     "trunk_layers": trunk_layers,
                     "mtp_layers": mtp_layers,
@@ -481,6 +514,8 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         artifacts = [("target", model["artifact"])]
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
+        if model["mmproj_artifact"] is not None:
+            artifacts.append(("mmproj", model["mmproj_artifact"]))
         for kind, artifact in artifacts:
             repo_dir = "models--" + artifact["repo"].replace("/", "--")
             blob_dir = (_cache_hub(cache_root) / repo_dir / "blobs").resolve()
@@ -514,6 +549,9 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
         artifacts = [("target", model["artifact"])]
         if model["draft_artifact"] is not None:
             artifacts.append(("draft", model["draft_artifact"]))
+        # A projector GGUF (mmproj_artifact) is deliberately excluded from
+        # this pass: it is a sidecar encoder, not a trunk model, so it carries
+        # no *.block_count / *.embedding_length trunk dimensions to check.
         for kind, artifact in artifacts:
             found_dimensions = False
             for target in _artifact_cache_paths(cache_root, artifact):

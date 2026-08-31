@@ -83,10 +83,7 @@ fn mesh_config_proto_roundtrip_preserves_nested_sections() {
     assert_eq!(json["models"][0]["model_fit"]["ctx_size"], 16384);
     assert_eq!(json["models"][0]["hardware"]["gpu_layers"], 99);
     assert_eq!(json["models"][0]["throughput"]["parallel"], 4);
-    assert_eq!(
-        json["models"][0]["skippy"]["binary_stage_transport"],
-        "auto"
-    );
+    assert!(json["models"][0]["skippy"].is_null());
     assert_eq!(
         json["models"][0]["speculative"]["draft_selection_policy"],
         "auto"

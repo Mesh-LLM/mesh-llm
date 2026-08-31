@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 mod fused_decode;
 mod lifecycle;
+mod speculative_policy;
 
 use super::*;
 use crate::binary_transport::{
@@ -11,7 +12,7 @@ use crate::binary_transport::{
 use crate::frontend::embedded_execution::VerifyRetirement;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
-    OpenAiSpeculativeStats, classify_verify_window, propose_configured_ngram_tokens,
+    OpenAiSpeculativeStats, classify_verify_window_with_threshold, propose_configured_ngram_tokens,
     verify_checkpoint_no_longer_needed, verify_inputs_for_proposals,
 };
 use crate::frontend::util::{ms_to_us, openai_backend_error, openai_io_error, saturating_u32};
@@ -972,7 +973,13 @@ impl StageOpenAiBackend {
                     }
                     if let Some(pipeline) = pipelined.as_mut() {
                         let pipeline_in_flight_limit = verify_window_scheduler.depth();
-                        let chunk_width = native_mtp_options.verify_window_max_tokens.max(1);
+                        let chunk_width = speculative_policy::pipeline_chunk_width(
+                            native_mtp_options.verify_window_max_tokens,
+                            effective_speculative.draft_split_probability,
+                            decoded_tokens.saturating_add(
+                                usize::try_from(pipeline_epoch).unwrap_or(usize::MAX),
+                            ),
+                        );
                         while verify_window_scheduler.has_capacity()
                             && verify_window_scheduler.in_flight_len() < pipeline_in_flight_limit
                             && decoded_tokens + queued_active_tokens(&pipelined_windows)
@@ -1119,12 +1126,15 @@ impl StageOpenAiBackend {
                                 )
                             },
                         )?;
-                        let fully_accepted_window = !native_mtp_verify_decision.rejected
-                            && native_mtp_verify_decision.accepted_proposal_tokens
-                                == window.proposal_tokens.len();
+                        let acceptance = speculative_policy::pipeline_acceptance_policy(
+                            native_mtp_verify_decision.accepted_proposal_tokens,
+                            window.proposal_tokens.len(),
+                            native_mtp_verify_decision.rejected,
+                            effective_speculative.draft_acceptance_threshold,
+                        );
+                        let fully_accepted_window = acceptance.fully_accepted;
                         let pipeline_continues = fully_accepted_window;
-                        let accepted_candidate_tokens =
-                            native_mtp_verify_decision.accepted_proposal_tokens;
+                        let accepted_candidate_tokens = acceptance.accepted_candidate_tokens;
                         if window.native_mtp_token_count > 0 {
                             let pipeline = pipelined.as_ref().expect("pipeline retained");
                             let span = native_mtp.observe_taken_draft_span(
@@ -1215,9 +1225,10 @@ impl StageOpenAiBackend {
                         let undispatched_candidates = pipelined
                             .as_ref()
                             .is_some_and(CompositeProposalPipeline::has_remaining_candidates);
-                        let commit_count = pipelined_target_commit_count(
+                        let commit_count = speculative_policy::pipeline_commit_count(
                             window.planned_advance_tokens,
                             native_mtp_verify_decision.commit_count,
+                            acceptance.threshold_met,
                             fully_accepted_window,
                             later_active_window || undispatched_candidates,
                         );
@@ -1385,6 +1396,12 @@ impl StageOpenAiBackend {
                     let draft_propose_ms = propose_timer.elapsed_ms();
                     speculative_stats.draft_propose_ms += draft_propose_ms;
                     if !draft_tokens.is_empty() {
+                        let split_len = speculative_policy::draft_split_len(
+                            draft_tokens.len(),
+                            effective_speculative.draft_split_probability,
+                            decoded_tokens,
+                        );
+                        draft_tokens.truncate(split_len);
                         let verify_inputs = verify_inputs_for_proposals(current, &draft_tokens);
                         let message = embedded_verify_window_message(VerifyWindowMessageArgs {
                             window_id: i32::try_from(decoded_tokens)
@@ -1445,11 +1462,12 @@ impl StageOpenAiBackend {
                             .saturating_add(verify.stats.forward_activation_bytes);
                         decode_forward_write_ms += verify.stats.forward_write_ms;
                         decode_downstream_wait_ms += verify.stats.downstream_wait_ms;
-                        let decision = classify_verify_window(
+                        let decision = classify_verify_window_with_threshold(
                             &draft_tokens,
                             &verify.reply.predicted_tokens,
                             decoded_tokens,
                             request.max_tokens as usize,
+                            effective_speculative.draft_acceptance_threshold,
                             |token| {
                                 self.iteration_scheduler.execute_runtime(
                                     "embedded-token-eog",

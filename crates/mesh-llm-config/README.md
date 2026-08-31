@@ -50,13 +50,11 @@ Configure a local serving node from an SDK or desktop app:
 
 ```rust
 use mesh_llm_config::{ConfigStore, GpuAssignment, LocalServingNodeConfig};
-use mesh_llm_types::runtime::ModelRuntimeKind;
 
 let store = ConfigStore::default_path()?;
 store.update(|config| {
     config.configure_local_serving_node(LocalServingNodeConfig {
         model: "Qwen/Qwen3-8B-GGUF:Q4_K_M".into(),
-        runtime: Some(ModelRuntimeKind::Metal),
         device: Some("metal:0".into()),
         context_size: Some(8192),
         parallel: Some(2),

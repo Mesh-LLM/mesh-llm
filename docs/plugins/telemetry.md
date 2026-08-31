@@ -100,6 +100,8 @@ Histograms:
 
 - `mesh_llm_model_launch_duration_ms`
 - `mesh_llm_model_uptime_s`
+- `mesh_llm_prompt_tokens` (only when `telemetry.prompt_shape_metrics = true`)
+- `mesh_llm_completion_tokens` (only when `telemetry.prompt_shape_metrics = true`)
 
 ## Privacy Boundary
 
@@ -107,6 +109,13 @@ Runtime telemetry exports metrics only. The external metrics plugin advertises a
 capability only. Neither path exports prompts, completions, logs, traces,
 hostnames, mesh gossip, relay messages, raw node IDs, raw GPU stable IDs,
 endpoint URLs, or prompt hashes.
+
+Prompt-shape telemetry is a separate, default-off opt-in. It records exact
+prompt and completion token counts as histogram values, never as attributes.
+Its attributes are restricted to the finite `mesh_llm.route_service` and
+`mesh_llm.request_outcome` enums. It does not inspect or export model or node
+identities, prompt text, completion text, token IDs, request IDs, endpoint URLs,
+local paths, or content hashes.
 
 Guardrail telemetry follows the same boundary. It exports only bounded labels for
 guardrail mode, contract kind, decision, bypass reason, outcome, and retry
@@ -130,12 +139,21 @@ pass-through, no tool execution happens inside the guardrail layer, and real
 tools plus strict structured output stays unsupported in v1. See
 `docs/design/OPENAI_GUARDRAILS.md` for the rollout contract and evidence path.
 
-Local absolute and path-like model labels are reduced to filenames before export.
-Hugging Face refs are preserved. GPU stable IDs and node IDs are exported as
-stable pseudonymous hashes, not raw identifiers. Route-attempt metrics label
-local, remote, and endpoint target kinds; remote target IDs are exported only as
-stable hashes so collectors can aggregate node-to-node traffic without exposing
-raw peer IDs.
+External request model values are not exported by lifecycle, request, route, or
+prompt-shape metrics. Configured model lifecycle metrics use a stable
+pseudonymous identifier derived from the canonical configured model selector.
+The identifier correlates launch, loaded-state, unload, and unexpected-exit
+records for one selector without exporting the raw selector, repository name,
+filename, path, alias, or profile. It is a domain-separated, deterministic
+128-bit SHA-256 prefix rendered as fixed-length lowercase hex. It is
+pseudonymous rather than anonymous metadata: a collector can correlate the
+same configured selector across events and process restarts. Its fixed width
+bounds label size, while per-process series cardinality is bounded by the
+configured models represented in lifecycle telemetry. GPU stable IDs and node
+IDs are likewise exported as stable pseudonymous hashes, not raw identifiers.
+Route-attempt metrics label local, remote, and endpoint target kinds; remote
+target IDs are exported only as stable hashes so collectors can aggregate
+node-to-node traffic without exposing raw peer IDs.
 
 Telemetry attributes are intentionally allowlisted in code. Any new exported
 attribute must update the allowlist, tests, and this document before it is added
@@ -143,8 +161,8 @@ to an OTLP record.
 
 | Attribute | Used by | Privacy handling |
 |---|---|---|
-| `mesh_llm.model` | lifecycle, request, route | Local/path-like labels are reduced to filenames; Hugging Face refs are preserved. |
 | `mesh_llm.launch_kind` | lifecycle | Bounded enum. |
+| `mesh_llm.model_selector_id` | lifecycle | Stable pseudonymous identifier for the canonical configured model selector; `sha256:` plus 32 lowercase hex characters. Correlates launch, loaded-state, unload, and unexpected-exit series without exporting selector components. Cardinality is bounded by configured models represented in lifecycle telemetry. |
 | `mesh_llm.gpu_count` | lifecycle | Count only. |
 | `mesh_llm.is_soc` | lifecycle | Boolean only. |
 | `mesh_llm.service_version` | lifecycle, request, route, in-flight | Build version only. |
@@ -158,8 +176,8 @@ to an OTLP record.
 | `mesh_llm.failure_reason` | lifecycle | Bounded enum. |
 | `mesh_llm.source_node_role` | request, route, in-flight | Bounded node role label such as `client` or `worker`. |
 | `mesh_llm.source_node_id` | request, route, in-flight | Stable pseudonymous hash of the source node ID. |
-| `mesh_llm.route_service` | request | Bounded service label: `local`, `remote`, `endpoint`, or `unavailable`. |
-| `mesh_llm.request_outcome` | request | Bounded enum. |
+| `mesh_llm.route_service` | request, prompt shape | Bounded service label: `local`, `remote`, `endpoint`, or `unavailable`. |
+| `mesh_llm.request_outcome` | request, prompt shape | Bounded enum: `success`, `rejected`, or `unavailable`. |
 | `mesh_llm.route_attempt_bucket` | request | Bounded retry bucket: `1`, `2`, `3_4`, or `5_plus`. |
 | `mesh_llm.target_kind` | route | Bounded target kind: `local`, `remote`, or `endpoint`. |
 | `mesh_llm.target_node_id` | route | Stable pseudonymous hash for local/remote node targets; omitted for endpoint targets. |
@@ -193,7 +211,9 @@ Before adding, renaming, or removing OTLP metrics or attributes:
    `crates/mesh-llm-host-runtime/src/runtime/survey.rs`.
 4. Update the attribute inventory above.
 5. Add or update focused tests proving private paths, raw node IDs, raw GPU
-   stable IDs, endpoint URLs, prompts, and completions are not exported.
+   stable IDs, endpoint URLs, prompts, and completions are not exported. Prompt
+   shape changes must also capture the actual exported histograms and assert the
+   bounded service/outcome labels at the exporter boundary.
 6. Keep guardrail corpus evidence under `.sisyphus/evidence/`, separate from
    OTLP export and from the telemetry metric payloads themselves.
 

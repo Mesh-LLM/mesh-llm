@@ -477,4 +477,57 @@ describe('buildTOML defaults and scalar serialization', () => {
     expect(toml).toContain('[defaults]')
     expect(toml).toContain('gpu_id = "0"')
   })
+
+  it('serializes schema-defined object arrays as TOML inline tables', () => {
+    const setting = {
+      id: 'topology-stages',
+      categoryId: 'runtime',
+      canonicalPath: 'defaults.topology.stages',
+      icon: 'layers',
+      label: 'Topology stages',
+      description: 'Schema-defined topology stages.',
+      inheritedLabel: 'Inherited by model placements',
+      valueSchema: {
+        kind: 'array',
+        items: {
+          kind: 'object',
+          properties: [
+            {
+              name: 'node',
+              label: 'Node',
+              required: true,
+              value_schema: {
+                kind: 'object',
+                properties: [
+                  {
+                    name: 'endpoint_id',
+                    label: 'Endpoint ID',
+                    required: false,
+                    value_schema: { kind: 'string' }
+                  }
+                ]
+              }
+            },
+            {
+              name: 'layer_start',
+              label: 'Layer start',
+              required: true,
+              value_schema: { kind: 'integer' }
+            },
+            {
+              name: 'layer_end',
+              label: 'Layer end',
+              required: true,
+              value_schema: { kind: 'integer' }
+            }
+          ]
+        }
+      },
+      control: { kind: 'text', name: 'stages', value: '' }
+    } satisfies ConfigurationDefaultsHarnessData['settings'][number]
+
+    expect(
+      defaultSettingTomlScalar(setting, '[{"node":{"endpoint_id":"endpoint-a"},"layer_start":0,"layer_end":16}]')
+    ).toBe('[{ node = { endpoint_id = "endpoint-a" }, layer_start = 0, layer_end = 16 }]')
+  })
 })

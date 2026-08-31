@@ -297,8 +297,10 @@ fn family_policy_for_normalized_family_id(family_id: &str) -> FamilyPolicy {
         | "openai_moe" | "ernie4_5_moe" | "llama4" | "mistral4" | "seed_oss" | "muse_glimmer" => {
             resident_kv_policy()
         }
-        "qwen3next" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2" | "rwkv6" | "rwkv7"
-        | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => kv_recurrent_policy(),
+        "qwen3next" | "qwen4exp" | "falcon_h1" | "jamba" | "lfm2" | "mamba" | "mamba2"
+        | "rwkv6" | "rwkv7" | "granite_hybrid" | "qwen35" | "qwen35moe" | "nemotron_h_moe" => {
+            kv_recurrent_policy()
+        }
         _ => unknown_family_policy(),
     }
 }
@@ -495,6 +497,13 @@ mod tests {
             materialized_pinned: false,
             model_path: None,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             layer_start: 0,
@@ -506,9 +515,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "q8_0".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -830,6 +850,8 @@ mod tests {
             "unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M",
             "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
             "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
+            "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ1_S",
+            "qwen4exp",
         ] {
             let policy = family_policy_for_model_id(model_id);
             assert!(

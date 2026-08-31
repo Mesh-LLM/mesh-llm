@@ -48,6 +48,11 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertIn('CERTIFIED_SHA="$(git rev-parse HEAD)"', wrapper)
         # Success requires the remote PR head to equal the certified commit.
         self.assertIn("verify_pr_head_is_certified", wrapper)
+        # The PR must exist before apply_pr_body runs: on a first run the PR
+        # is created lazily, and applying the agent's draft body before
+        # ensure_pr silently no-ops, leaving the generic body on the PR
+        # (live: run 33163990453 — the agent's full analysis never showed).
+        self.assertIn("ensure_pr >/dev/null\n  apply_pr_body", wrapper)
         self.assertIn("report_success", wrapper)
         # The PR-body agent turn runs only before certification; after a green
         # battery only the deterministic apply_pr_body may run.
@@ -56,6 +61,32 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         first_certify = wrapper.index("certification attempt")
         self.assertLess(wrapper.index("draft_pr_body()"), first_certify)
         self.assertNotIn("write_pr_body", wrapper)
+
+    def test_post_green_review_may_modify_the_certified_repair(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # Even a green, certified repair gets one fresh-context review turn:
+        # the reviewer is told it did NOT author the repair, and it may fix
+        # what parity certification cannot see (dropped patch intent, rebase
+        # leftovers, ABI mirror drift). Its changes ride as a separate
+        # review(llama): commit pushed by the wrapper to the same branch.
+        self.assertIn("post_green_review_turn() {", wrapper)
+        self.assertIn("  apply_pr_body\n  post_green_review_turn\n", wrapper)
+        self.assertIn("review(llama): agent review fixes at upstream", wrapper)
+        # The review is opt-out and fail-open: a disabled or crashed review
+        # never fails a green repair.
+        self.assertIn('if [[ "${CANARY_AGENT_REVIEW:-true}" != "true" ]]', wrapper)
+        self.assertIn("post-green agent review disabled", wrapper)
+        self.assertIn("continuing with the certified tree", wrapper)
+        # The success comment must report the review outcome honestly.
+        self.assertIn("REVIEW_STATUS=", wrapper)
+        self.assertIn("Post-green agent review made modifications", wrapper)
+        # The review runs BEFORE the PR-head verification, and the verified
+        # head is the last wrapper-published commit (certified, or the
+        # review head when the review modified the tree) — never a stale
+        # certified SHA that a review commit would strand behind.
+        self.assertIn('expected="${REVIEW_HEAD:-${CERTIFIED_SHA:?}}"', wrapper)
+        # The review report is run-scoped persistent-runner state.
+        self.assertIn('rm -f "$ROOT/.deps/llama-canary-review-report.md"', wrapper)
 
     def test_battery_mode_reuses_workflow_evidence_without_rerunning(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")

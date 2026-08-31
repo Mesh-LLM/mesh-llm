@@ -1,5 +1,6 @@
 import { CFG_CATALOG } from '@/features/app-tabs/data'
 import { isUnifiedMemoryNode } from '@/features/configuration/lib/config-math'
+import { objectArrayItemSchema, parseSchemaObjectArrayValue } from '@/features/configuration/lib/schema-object-array'
 import {
   evaluateSettingControlState,
   getSettingBaselineValue,
@@ -79,7 +80,12 @@ function tomlInlineValue(value: unknown): string {
   return tomlString(String(value ?? ''))
 }
 
-function arrayTomlScalar(value: string): string {
+function arrayTomlScalar(setting: ConfigurationDefaultsSetting, value: string): string {
+  if (objectArrayItemSchema(setting.valueSchema)) {
+    const parsed = parseSchemaObjectArrayValue(value)
+    return parsed ? tomlInlineValue(parsed) : tomlString(value)
+  }
+
   const items = value
     .split(',')
     .map((item) => item.trim())
@@ -183,7 +189,7 @@ export function defaultSettingTomlScalar(setting: ConfigurationDefaultsSetting, 
     const numericValue = numericSchemaTomlScalar(setting, value)
     return numericValue ?? tomlScalar(value)
   }
-  if (setting.control.kind === 'text' && setting.valueSchema?.kind === 'array') return arrayTomlScalar(value)
+  if (setting.control.kind === 'text' && setting.valueSchema?.kind === 'array') return arrayTomlScalar(setting, value)
   if (setting.control.kind === 'text' && setting.valueSchema?.kind === 'object') return objectTomlScalar(value)
   if (setting.control.kind === 'text') {
     const numericValue = numericSchemaTomlScalar(setting, value)

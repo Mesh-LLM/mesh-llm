@@ -1,6 +1,6 @@
 [package]
 name = "skippy-scheduler"
-version = { workspace = true }
+version.workspace = true
 edition = { workspace = true }
 license = { workspace = true }
 description = "Iteration-level scheduler for concurrent staged serving with unified KV"
@@ -12,13 +12,13 @@ categories = ["concurrency", "artificial-intelligence"]
 scheduler-lab = ["skippy-runtime/dynamic-native-runtime"]
 
 [dependencies]
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc8" }
 thiserror = "2"
 
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc7" }
+skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc8" }
 
 [[bench]]
 name = "scheduler_lab"

@@ -34,11 +34,11 @@ inputs:
     required: false
     default: ""
   pr_approved_ref:
-    description: Maintainer-approved exact pull-request merge ref for the bounded risk exception.
+    description: Deprecated compatibility input; the bounded repository-wide PR gate no longer uses an exact ref approval.
     required: false
     default: ""
   pr_approved_sha:
-    description: Maintainer-approved exact pull-request head SHA for the bounded risk exception.
+    description: Deprecated compatibility input; the bounded repository-wide PR gate no longer uses an exact SHA approval.
     required: false
     default: ""
   force_hosted:
@@ -111,8 +111,6 @@ runs:
         INPUT_DEPOT_MAIN_ENABLED: ${{ inputs.depot_main_enabled }}
         INPUT_DEPOT_PR_ENABLED: ${{ inputs.depot_pr_enabled }}
         INPUT_PR_CANARY_REF: ${{ inputs.pr_canary_ref }}
-        INPUT_PR_APPROVED_REF: ${{ inputs.pr_approved_ref }}
-        INPUT_PR_APPROVED_SHA: ${{ inputs.pr_approved_sha }}
         INPUT_FORCE_HOSTED: ${{ inputs.force_hosted }}
         INPUT_MANUAL_USE_DEPOT: ${{ inputs.manual_use_depot }}
       run: |
@@ -138,19 +136,6 @@ runs:
           exit 1
         fi
 
-        pr_approved_ref="${INPUT_PR_APPROVED_REF:-}"
-        if [[ -n "$pr_approved_ref" &&
-          ! "$pr_approved_ref" =~ ^refs/pull/[0-9]+/merge$ ]]; then
-          echo "INPUT_PR_APPROVED_REF must be an exact pull-request merge ref" >&2
-          exit 1
-        fi
-        pr_approved_sha="${INPUT_PR_APPROVED_SHA:-}"
-        if [[ -n "$pr_approved_sha" &&
-          ! "$pr_approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-          echo "INPUT_PR_APPROVED_SHA must be an exact lowercase commit SHA" >&2
-          exit 1
-        fi
-
         # This checked-in deadline makes the accepted repository-wide cache
         # risk self-expiring. Extending it requires a reviewed source change.
         depot_pr_exception_expires="2026-09-14"
@@ -161,18 +146,17 @@ runs:
           depot_pr_exception_active=true
         fi
 
-        # A direct PR may opt into Depot only when this protected repository
-        # explicitly enables the feature, or when one exact merge ref is
-        # selected for the protected canary. Both the base and PR-head
-        # repository comparisons remain exact so a fork, mirror, or similarly
-        # named repository cannot opt in.
+        # A direct PR may opt into Depot only while this protected repository's
+        # bounded gate is active, or when one exact merge ref is selected for
+        # the protected canary. Both the base and PR-head repository
+        # comparisons remain exact so a fork, mirror, or similarly named
+        # repository cannot opt in.
         trusted_repository="Mesh-LLM/mesh-llm"
         depot_enabled=false
         allow_depot_remote_cache=false
         allow_native_github_cache=true
         allow_trusted_sccache_seed=true
         is_direct_pull_request=false
-        risk_exception_selected=false
         is_dispatched_pull_request=false
         dispatch_original_event="${INPUT_ORIGINAL_EVENT_NAME:-}"
         if [[ -z "$dispatch_original_event" ]]; then
@@ -187,19 +171,10 @@ runs:
               "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" && \
               "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ && \
               "$INPUT_FORCE_HOSTED" == "false" && \
-              ( ( "$depot_pr_exception_active" == "true" &&
-                  -n "$pr_approved_ref" &&
-                  "$INPUT_REF" == "$pr_approved_ref" &&
-                  -n "$pr_approved_sha" &&
-                  "$INPUT_HEAD_SHA" == "$pr_approved_sha" ) ||
+              ( "$depot_pr_exception_active" == "true" ||
                 ( -n "$pr_canary_ref" && "$INPUT_REF" == "$pr_canary_ref" ) ) ]]; then
               is_direct_pull_request=true
               depot_enabled=true
-              if [[ "$depot_pr_exception_active" == "true" &&
-                "$INPUT_REF" == "$pr_approved_ref" &&
-                "$INPUT_HEAD_SHA" == "$pr_approved_sha" ]]; then
-                risk_exception_selected=true
-              fi
             fi
             ;;
           pull_request_target)
@@ -255,7 +230,8 @@ runs:
           allow_native_github_cache=false
           allow_trusted_sccache_seed=false
           if [[ "$depot_pr_exception_active" == "true" &&
-            ( "$risk_exception_selected" == "true" ||
+            ( ( "$INPUT_EVENT_NAME" == "pull_request" &&
+                "$is_direct_pull_request" == "true" ) ||
               ( "$INPUT_EVENT_NAME" == "push" &&
                 "$INPUT_REF" == "refs/heads/main" ) ||
               ( "$INPUT_EVENT_NAME" == "workflow_dispatch" &&

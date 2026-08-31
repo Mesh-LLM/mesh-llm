@@ -13,10 +13,10 @@ host = []
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc7" }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc7" }
-model-hf = { path = "../model-hf", version = "0.76.0-rc7" }
-model-ref = { path = "../model-ref", version = "0.76.0-rc7" }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc8" }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc8" }
+model-hf = { path = "../model-hf", version = "0.76.0-rc8" }
+model-ref = { path = "../model-ref", version = "0.76.0-rc8" }
 serde.workspace = true
 serde_json.workspace = true
 

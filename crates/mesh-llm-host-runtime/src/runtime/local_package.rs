@@ -93,9 +93,21 @@ pub(super) fn split_effective_kv_cache_quant(
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> models::gguf::GgufKvCacheQuant {
-    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
-    let family_default =
-        skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref)).default_kv_cache_type;
+    // Guard the size-tiered default against the model's quantised-KV
+    // compatibility (Flash Attention / block alignment) so planning budgets for
+    // the same cache the stage load can actually allocate. The family default
+    // gets the same metadata guard: a family that defaults to quantised K/V
+    // (Inkling -> q4_0) must fall back to f16 when the actual GGUF metadata
+    // cannot load it, or planning and load both select an unloadable cache.
+    // Explicit overrides below are never guarded — an override that cannot
+    // load must fail loudly.
+    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
+        .guarded_for_model(Some(compact_meta));
+    let family_default = skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref))
+        .default_kv_cache_type
+        .and_then(|default| models::gguf::GgufKvCacheQuant::from_llama_args(default, default))
+        .map(|quant| compact_meta.compatible_default_kv_cache_quant(quant))
+        .map(|quant| quant.k.as_llama_arg());
 
     // Explicit user overrides win, then the family default, then model size.
     let effective_k = cache_type_k_override

@@ -1,7 +1,7 @@
 {
   "name": "mesh-llm-ui",
   "private": true,
-  "version": "0.76.0-rc7",
+  "version": "0.76.0-rc8",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
   "engines": {

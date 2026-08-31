@@ -234,6 +234,12 @@ jobs:
         env:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Post-green review: after a certified repair, a fresh-context
+          # agent turn reviews the repair PR content and may modify it
+          # (separate review(llama): commit; see
+          # scripts/llama-canary-agent-repair.sh). Opt out repo-wide by
+          # setting LLAMA_CANARY_AGENT_REVIEW=false.
+          CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}
           # Untrusted dispatch values reach Bash only as environment
           # variables, never through inline interpolation.
           UPSTREAM_SHA_INPUT: ${{ github.event.inputs.upstream_sha || 'latest' }}
@@ -254,6 +260,8 @@ jobs:
         env:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Post-green review: same opt-out var as the patch-queue step.
+          CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}
           # Untrusted dispatch values reach Bash only as environment
           # variables, never through inline interpolation.
           UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}

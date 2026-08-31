@@ -21,14 +21,7 @@ pub(super) fn apply_request_defaults_behavior(
             set_numeric(setting, Some(0.0), None, Some(0.01), None);
         }
         "repeat_last_n" => set_numeric(setting, Some(-1.0), None, Some(1.0), None),
-        "dry" => set_static_unavailable(
-            setting,
-            "Reserved sampler object is accepted for compatibility but not wired into the current runtime.",
-        ),
-        "xtc" => set_static_unavailable(
-            setting,
-            "Reserved sampler object is accepted for compatibility but not wired into the current runtime.",
-        ),
+        "dry" | "xtc" => {}
         "adaptive" => set_static_unavailable(
             setting,
             "Reserved sampler object is accepted for compatibility but not wired into the current runtime.",
@@ -55,14 +48,8 @@ pub(super) fn apply_request_defaults_behavior(
             setting,
             "Backend-owned sampler blocks are explicitly rejected from the built-in control surface.",
         ),
-        "grammar" => set_static_unavailable(
-            setting,
-            "Grammar injection is explicitly rejected on the built-in config surface.",
-        ),
-        "json_schema" => set_static_unavailable(
-            setting,
-            "JSON schema response shaping is intentionally rejected until a stable runtime contract exists.",
-        ),
+        "grammar" => push_non_empty_constraint(setting),
+        "json_schema" => {}
         "logprobs" => set_static_unavailable(
             setting,
             "Logprobs request defaults are explicitly rejected from persisted config.",

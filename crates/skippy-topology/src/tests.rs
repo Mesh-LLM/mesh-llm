@@ -1560,6 +1560,38 @@ fn qwen35_series_inference_covers_qwen36_release_names() {
 }
 
 #[test]
+fn qwen4exp_flash_next_has_its_own_fail_closed_hybrid_policy() {
+    for identity in [
+        "qwen4exp",
+        "qwen4_exp",
+        "Qwen/Qwen3.8-Flash-Next",
+        "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ1_S",
+    ] {
+        let family = infer_family_capability(identity, 48, 2560)
+            .unwrap_or_else(|| panic!("expected qwen4exp capability for {identity}"));
+        assert_eq!(family.family_id, "qwen4exp", "wrong family for {identity}");
+        assert_eq!(family.activation_width, 2560);
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 48 }],
+            "QWEN4EXP state ownership stays sticky until per-layer certification"
+        );
+        assert_eq!(
+            family.exact_state_mobility,
+            ExactStateMobility::RejectedTooLarge,
+            "QWEN4EXP must not advertise recurrent/indexer state mobility"
+        );
+        assert_eq!(family.sidebands.len(), 1);
+        assert_eq!(family.sidebands[0].kind, SidebandKind::TokenIds);
+        assert_eq!(family.sidebands[0].first_required_layer, 1);
+    }
+
+    let legacy = infer_family_capability("unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL", 32, 2560)
+        .expect("legacy Qwen3.8 capability");
+    assert_eq!(legacy.family_id, "qwen35");
+}
+
+#[test]
 fn unknown_qwen3_point_releases_resolve_to_no_family() {
     // A Qwen3 point release we have no evidence for must not be guessed into
     // the non-recurrent `qwen3moe`/`qwen3_dense` families. Qwen3.5, 3.6 and

@@ -3,9 +3,9 @@ use std::ffi::{c_char, c_int, c_void};
 use crate::{
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
     LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
-    MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
-    TensorInfo, TokenSignal,
+    MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
+    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque,
+    RuntimeConfig, SamplingConfig, Session, SlicePlan, Status, TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -511,6 +511,11 @@ unsafe extern "C" {
         parallel_tool_calls: bool,
         reasoning_format: *const c_char,
         chat_template_kwargs: *const c_char,
+        chat_template: *const c_char,
+        use_jinja: bool,
+        grammar: *const c_char,
+        json_schema: *const c_char,
+        skip_chat_parsing: bool,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -566,6 +571,7 @@ unsafe extern "C" {
         layer_end: i32,
         include_embeddings: bool,
         include_output: bool,
+        include_per_layer_token_embd: bool,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -598,11 +604,17 @@ unsafe extern "C" {
 
     pub fn mtmd_free(ctx: *mut MtmdContext);
 
+    pub fn mtmd_helper_init_opt_default() -> MtmdHelperInitOpt;
+
     pub fn mtmd_helper_bitmap_init_from_buf(
         ctx: *mut MtmdContext,
         buf: *const u8,
         len: usize,
-    ) -> *mut MtmdBitmap;
+        placeholder: bool,
+        opt: MtmdHelperInitOpt,
+    ) -> MtmdHelperBitmapWrapper;
+
+    pub fn mtmd_helper_video_free(video: *mut MtmdHelperVideo);
 
     pub fn mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
 

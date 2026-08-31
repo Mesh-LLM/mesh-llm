@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "package-native-runtime.sh"
 
 
+def write_failing_nvcc(path: Path) -> None:
+    path.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
 class PackageNativeRuntimeTests(unittest.TestCase):
     def test_cpu_package_with_no_tools_is_safe_under_macos_bash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,25 +145,48 @@ class PackageNativeRuntimeTests(unittest.TestCase):
 
     def test_cuda_flavor_uses_mesh_cuda_version_major(self) -> None:
         self.assertEqual(
-            self.backend_flavor("cuda", mesh_cuda_version="13.1.2"),
+            self.backend_flavor(
+                "cuda", mesh_cuda_version="13.1.2", compiler_version="13.1"
+            ),
             "cuda13",
         )
 
-    def test_explicit_cuda_toolkit_major_wins(self) -> None:
+    def test_cuda_flavor_accepts_major_only_mesh_cuda_version(self) -> None:
         self.assertEqual(
             self.backend_flavor(
-                "cuda",
-                mesh_cuda_version="13.1.2",
-                toolkit_major="12",
+                "cuda", mesh_cuda_version="13", compiler_version="13.0"
             ),
-            "cuda12",
+            "cuda13",
         )
 
-    def test_cuda_flavor_defaults_to_cuda_12(self) -> None:
-        self.assertEqual(self.backend_flavor("cuda"), "cuda12")
+    def test_cuda_flavor_rejects_mesh_cuda_version_minor_mismatch(self) -> None:
+        result = self.backend_flavor_process(
+            "cuda", mesh_cuda_version="13.1.2", compiler_version="13.0"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "does not match the selected CUDA compiler/toolkit version 13.0",
+            result.stderr,
+        )
 
-    def test_cuda_blackwell_flavor_defaults_to_cuda13_sm120(self) -> None:
-        self.assertEqual(self.backend_flavor("cuda-blackwell"), "cuda13-sm120")
+    def test_explicit_cuda_toolkit_major_wins(self) -> None:
+        result = self.backend_flavor_process(
+            "cuda",
+            toolkit_major="12",
+            compiler_version="13.0",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match the selected CUDA compiler", result.stderr)
+
+    def test_cuda_flavor_requires_compiler_or_toolkit_evidence(self) -> None:
+        result = self.backend_flavor_process("cuda")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CUDA toolkit version could not be detected", result.stderr)
+
+    def test_cuda_blackwell_requires_compiler_or_toolkit_evidence(self) -> None:
+        result = self.backend_flavor_process("cuda-blackwell")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CUDA toolkit version could not be detected", result.stderr)
 
     def test_explicit_cuda_toolkit_major_rejects_non_digits(self) -> None:
         for toolkit_major in ("12.1", "cuda12"):
@@ -173,17 +201,108 @@ class PackageNativeRuntimeTests(unittest.TestCase):
                     result.stderr,
                 )
 
+    def test_cuda13_compiler_cannot_be_labeled_cuda12(self) -> None:
+        result, _ = self.package_cuda_fixture(
+            compiler_version="13.0",
+            toolkit_major="12",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match the selected CUDA compiler", result.stderr)
+
+    def test_explicit_cuda_toolkit_major_is_accepted_when_compiler_matches(self) -> None:
+        result, manifest = self.package_cuda_fixture(
+            compiler_version="12.9",
+            toolkit_major="12",
+        )
+        result.check_returncode()
+        self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 12)
+
+    def test_cuda13_compiler_derives_manifest_major_without_declaration(self) -> None:
+        result, manifest = self.package_cuda_fixture(compiler_version="13.0")
+        result.check_returncode()
+        self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 13)
+
+    def test_cuda_version_declaration_must_match_compiler_major(self) -> None:
+        result, _ = self.package_cuda_fixture(
+            compiler_version="13.0",
+            mesh_cuda_version="12.9.2",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match the selected CUDA compiler", result.stderr)
+
+    def test_cuda_version_declaration_is_validated_against_compiler(self) -> None:
+        result, manifest = self.package_cuda_fixture(
+            compiler_version="13.1",
+            mesh_cuda_version="13.1.2",
+        )
+        result.check_returncode()
+        self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 13)
+
+    def test_cuda_major_only_version_declaration_is_accepted(self) -> None:
+        result, manifest = self.package_cuda_fixture(
+            compiler_version="13.0",
+            mesh_cuda_version="13",
+        )
+        result.check_returncode()
+        self.assertEqual(manifest["runtime"]["backend"]["cuda"]["toolkit_major"], 13)
+
+    def test_cuda_version_declaration_rejects_compiler_minor_mismatch(self) -> None:
+        result, _ = self.package_cuda_fixture(
+            compiler_version="13.0",
+            mesh_cuda_version="13.1.2",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "does not match the selected CUDA compiler/toolkit version 13.0",
+            result.stderr,
+        )
+
+    def test_cuda_packaging_without_toolkit_evidence_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build_dir = root / "build"
+            build_dir.mkdir()
+            (build_dir / "libllama.so").write_bytes(b"test native runtime")
+            tool_dir = root / "bin"
+            tool_dir.mkdir()
+            write_failing_nvcc(tool_dir / "nvcc")
+            patchelf = tool_dir / "patchelf"
+            patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            patchelf.chmod(0o755)
+            env = self.clean_package_env(tool_dir)
+            env["LLAMA_STAGE_BUILD_DIR"] = str(build_dir)
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    str(SCRIPT),
+                    "--backend",
+                    "cuda",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--out",
+                    str(root / "output"),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("CUDA toolkit version could not be detected", result.stderr)
+
     def backend_flavor(
         self,
         backend: str,
         *,
         mesh_cuda_version: str | None = None,
         toolkit_major: str | None = None,
+        compiler_version: str | None = None,
     ) -> str:
         result = self.backend_flavor_process(
             backend,
             mesh_cuda_version=mesh_cuda_version,
             toolkit_major=toolkit_major,
+            compiler_version=compiler_version,
         )
         result.check_returncode()
         return result.stdout.strip()
@@ -194,6 +313,7 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         *,
         mesh_cuda_version: str | None = None,
         toolkit_major: str | None = None,
+        compiler_version: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         script = SCRIPT.read_text(encoding="utf-8")
         start = script.index("backend_flavor()")
@@ -201,6 +321,15 @@ class PackageNativeRuntimeTests(unittest.TestCase):
         helpers = script[start:end]
         env = os.environ.copy()
         env["BACKEND"] = backend
+        for name in (
+            "CUDACXX",
+            "CMAKE_CUDA_COMPILER",
+            "NVCC",
+            "CUDAToolkit_ROOT",
+            "CUDA_HOME",
+            "CUDA_PATH",
+        ):
+            env.pop(name, None)
         for name, value in (
             ("MESH_CUDA_VERSION", mesh_cuda_version),
             ("MESH_LLM_CUDA_TOOLKIT_MAJOR", toolkit_major),
@@ -209,13 +338,125 @@ class PackageNativeRuntimeTests(unittest.TestCase):
                 env.pop(name, None)
             else:
                 env[name] = value
+        with tempfile.TemporaryDirectory() as directory:
+            if compiler_version is not None:
+                compiler = Path(directory) / "nvcc"
+                compiler.write_text(
+                    "#!/bin/bash\n"
+                    'if [[ "${1:-}" == "--version" ]]; then\n'
+                    f'  printf "Cuda compilation tools, release {compiler_version}, V{compiler_version}.0\\n"\n'
+                    "  exit 0\n"
+                    "fi\n",
+                    encoding="utf-8",
+                )
+                compiler.chmod(0o755)
+            else:
+                write_failing_nvcc(Path(directory) / "nvcc")
+            env["PATH"] = f"{directory}{os.pathsep}{env['PATH']}"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    f"source {SCRIPT.parent / 'lib' / 'cuda-toolkit.sh'}\n"
+                    f"{helpers}\nbackend_flavor",
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+        return result
+
+    def package_cuda_fixture(
+        self,
+        *,
+        compiler_version: str,
+        mesh_cuda_version: str | None = None,
+        toolkit_major: str | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], dict]:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        build_dir = root / "build"
+        build_dir.mkdir()
+        (build_dir / "libllama.so").write_bytes(b"test native runtime")
+
+        tool_dir = root / "bin"
+        tool_dir.mkdir()
+        nvcc = tool_dir / "nvcc"
+        nvcc.write_text(
+            "#!/bin/bash\n"
+            'if [[ "${1:-}" == "--version" ]]; then\n'
+            f'  printf "Cuda compilation tools, release {compiler_version}, V{compiler_version}.0\\n"\n'
+            "  exit 0\n"
+            "fi\n"
+            "output=\n"
+            "previous=\n"
+            "for argument in \"$@\"; do\n"
+            '  if [[ "$previous" == "-o" ]]; then output="$argument"; fi\n'
+            '  previous="$argument"\n'
+            "done\n"
+            '[[ -n "$output" ]] && : > "$output"\n',
+            encoding="utf-8",
+        )
+        nvcc.chmod(0o755)
+        patchelf = tool_dir / "patchelf"
+        patchelf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        patchelf.chmod(0o755)
+
+        inherited_env = os.environ.copy()
+        inherited_env["CMAKE_CUDA_COMPILER"] = str(root / "inherited-cmake-nvcc")
+        env = self.clean_package_env(tool_dir, inherited_env)
+        env["LLAMA_STAGE_BUILD_DIR"] = str(build_dir)
+        if mesh_cuda_version is not None:
+            env["MESH_CUDA_VERSION"] = mesh_cuda_version
+        if toolkit_major is not None:
+            env["MESH_LLM_CUDA_TOOLKIT_MAJOR"] = toolkit_major
         result = subprocess.run(
-            ["bash", "-c", f"set -euo pipefail\n{helpers}\nbackend_flavor"],
+            [
+                "/bin/bash",
+                str(SCRIPT),
+                "--backend",
+                "cuda",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--out",
+                str(root / "output"),
+            ],
             env=env,
             text=True,
             capture_output=True,
         )
-        return result
+        manifest_path = (
+            root
+            / "output"
+            / f"meshllm-native-runtime-linux-x86_64-cuda{compiler_version.split('.', 1)[0]}"
+            / "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+        return result, manifest
+
+    @staticmethod
+    def clean_package_env(
+        tool_dir: Path, base_env: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        env = (base_env if base_env is not None else os.environ).copy()
+        for name in (
+            "CUDACXX",
+            "CMAKE_CUDA_COMPILER",
+            "CUDAToolkit_ROOT",
+            "CUDA_HOME",
+            "CUDA_PATH",
+            "CUDA_LIBRARY_PATH",
+            "LIBRARY_PATH",
+            "LD_LIBRARY_PATH",
+            "NVCC",
+            "MESH_CUDA_VERSION",
+            "MESH_LLM_CUDA_TOOLKIT_MAJOR",
+        ):
+            env.pop(name, None)
+        env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+        return env
 
 
 if __name__ == "__main__":

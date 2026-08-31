@@ -297,10 +297,17 @@ impl moa::ModelBackend for LocalModelBackend {
     }
 }
 
-/// Backend that calls a remote model over the QUIC tunnel.
+/// Maximum number of physical replicas one logical MoA worker may try.
+///
+/// One primary plus one standby closes the single-peer robustness gap without
+/// multiplying fan-out or letting retries consume the whole turn deadline.
+pub(super) const MAX_REMOTE_REPLICAS_PER_WORKER: usize = 2;
+
+/// Backend that calls a remote model over the QUIC tunnel. Replica order is the
+/// origin-stable order produced by `Node::hosts_for_model`.
 pub(super) struct RemoteModelBackend {
     pub(super) node: mesh::Node,
-    pub(super) peer_id: iroh::EndpointId,
+    pub(super) peer_ids: Vec<iroh::EndpointId>,
 }
 
 #[async_trait::async_trait]
@@ -341,25 +348,116 @@ impl moa::ModelBackend for RemoteModelBackend {
         let mut raw = http_request.into_bytes();
         raw.extend_from_slice(&body_bytes);
 
-        tokio::time::timeout(timeout, async {
-            let (mut send, mut recv) = self
-                .node
-                .open_http_tunnel(self.peer_id)
-                .await
-                .map_err(|e| format!("tunnel: {e}"))?;
-            send.write_all(&raw)
-                .await
-                .map_err(|e| format!("send: {e}"))?;
-            send.finish().map_err(|e| format!("finish: {e}"))?;
-            let response = recv
-                .read_to_end(4 * 1024 * 1024)
-                .await
-                .map_err(|e| format!("recv: {e}"))?;
-            parse_quic_http_response(&response)
-        })
+        let total_replicas = self.peer_ids.len();
+        try_with_replica_failover(
+            &self.peer_ids,
+            timeout,
+            |index, peer_id, attempt_timeout| {
+                let node = self.node.clone();
+                let raw = raw.clone();
+                async move {
+                    let result = call_remote_replica(&node, peer_id, &raw, attempt_timeout).await;
+                    if let Err(error) = &result {
+                        if index + 1 < total_replicas && is_retryable_replica_error(error) {
+                            tracing::warn!(
+                                model,
+                                peer = %peer_id.fmt_short(),
+                                attempt = index + 1,
+                                replicas = total_replicas,
+                                "MoA remote replica failed; trying standby"
+                            );
+                        } else {
+                            tracing::warn!(
+                                model,
+                                peer = %peer_id.fmt_short(),
+                                attempt = index + 1,
+                                replicas = total_replicas,
+                                "MoA remote replica failed"
+                            );
+                        }
+                    }
+                    result
+                }
+            },
+        )
         .await
-        .map_err(|_| format!("remote timeout after {}s", timeout.as_secs()))?
     }
+}
+
+async fn try_with_replica_failover<T, F, Fut>(
+    replicas: &[iroh::EndpointId],
+    timeout: std::time::Duration,
+    mut attempt: F,
+) -> Result<T, String>
+where
+    F: FnMut(usize, iroh::EndpointId, std::time::Duration) -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut last_error = "no eligible remote replicas".to_string();
+    for (index, peer_id) in replicas.iter().copied().enumerate() {
+        let Some(attempt_timeout) = replica_attempt_timeout(deadline) else {
+            break;
+        };
+        match attempt(index, peer_id, attempt_timeout).await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let retryable = is_retryable_replica_error(&error);
+                last_error = error;
+                if !retryable {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// Whether a remote failure is safe to retry on a same-model standby.
+fn is_retryable_replica_error(error: &str) -> bool {
+    if !error.starts_with("HTTP ") {
+        return true;
+    }
+    error
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.trim_end_matches(':').parse::<u16>().ok())
+        .is_none_or(|status| status == 0 || matches!(status, 408 | 429 | 500 | 502 | 503 | 504))
+}
+
+/// Return the remaining shared worker deadline for each replica attempt.
+///
+/// A connected-but-silent primary retains the full timeout it had before
+/// failover support. Explicit transport, protocol, or retryable HTTP failures
+/// can still hand the unused remainder to a standby without extending the
+/// worker deadline.
+fn replica_attempt_timeout(deadline: tokio::time::Instant) -> Option<std::time::Duration> {
+    deadline.checked_duration_since(tokio::time::Instant::now())
+}
+
+async fn call_remote_replica(
+    node: &mesh::Node,
+    peer_id: iroh::EndpointId,
+    raw: &[u8],
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
+    tokio::time::timeout(timeout, async {
+        let (mut send, mut recv) = node
+            .open_http_tunnel(peer_id)
+            .await
+            .map_err(|e| format!("tunnel: {e}"))?;
+        send.write_all(raw)
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+        send.finish().map_err(|e| format!("finish: {e}"))?;
+        let response = recv
+            .read_to_end(4 * 1024 * 1024)
+            .await
+            .map_err(|e| format!("recv: {e}"))?;
+        parse_quic_http_response(&response)
+    })
+    .await
+    .map_err(|_| format!("remote replica timeout after {}ms", timeout.as_millis()))?
 }
 
 fn parse_quic_http_response(response: &[u8]) -> Result<serde_json::Value, String> {
@@ -522,6 +620,143 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "x"}}],
         });
         assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replica_failover_preserves_order_and_succeeds_on_standby() {
+        let replicas = vec![
+            iroh::SecretKey::generate().public(),
+            iroh::SecretKey::generate().public(),
+        ];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+
+        let result = try_with_replica_failover(
+            &replicas,
+            std::time::Duration::from_secs(10),
+            move |index, peer, _| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(peer);
+                    if index == 0 {
+                        Err("tunnel: primary unavailable".to_string())
+                    } else {
+                        Ok("standby answer")
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok("standby answer"));
+        assert_eq!(*calls.lock().unwrap(), replicas);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replica_failover_stops_after_success() {
+        let replicas = vec![
+            iroh::SecretKey::generate().public(),
+            iroh::SecretKey::generate().public(),
+        ];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let seen = calls.clone();
+
+        let result = try_with_replica_failover(
+            &replicas,
+            std::time::Duration::from_secs(10),
+            move |_, _, _| {
+                let seen = seen.clone();
+                async move {
+                    *seen.lock().unwrap() += 1;
+                    Ok::<_, String>("primary answer")
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok("primary answer"));
+        assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replica_failover_preserves_primary_timeout_and_shares_deadline() {
+        let replicas = vec![
+            iroh::SecretKey::generate().public(),
+            iroh::SecretKey::generate().public(),
+        ];
+        let budgets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = budgets.clone();
+
+        let _ = try_with_replica_failover(
+            &replicas,
+            std::time::Duration::from_secs(10),
+            move |index, _, budget| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(budget);
+                    if index == 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                    }
+                    Err::<(), _>("tunnel: failed".to_string())
+                }
+            },
+        )
+        .await;
+
+        let budgets = budgets.lock().unwrap();
+        assert_eq!(budgets.len(), 2);
+        assert_eq!(budgets[0], std::time::Duration::from_secs(10));
+        assert_eq!(budgets[1], std::time::Duration::from_secs(4));
+    }
+
+    #[test]
+    fn replica_failover_retries_only_transient_failures() {
+        for error in [
+            "tunnel: closed",
+            "send: reset",
+            "recv: reset",
+            "parse: eof",
+            "remote replica timeout after 100ms",
+            "HTTP 0: malformed status line",
+            "HTTP malformed: bad framing",
+            "HTTP 429: busy",
+            "HTTP 503: unavailable",
+        ] {
+            assert!(is_retryable_replica_error(error), "must retry {error}");
+        }
+        for error in [
+            "HTTP 400: bad request",
+            "HTTP 401: unauthorized",
+            "HTTP 404: missing",
+        ] {
+            assert!(!is_retryable_replica_error(error), "must not retry {error}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replica_failover_stops_after_non_retryable_response() {
+        let replicas = vec![
+            iroh::SecretKey::generate().public(),
+            iroh::SecretKey::generate().public(),
+        ];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let seen = calls.clone();
+
+        let result = try_with_replica_failover(
+            &replicas,
+            std::time::Duration::from_secs(10),
+            move |_, _, _| {
+                let seen = seen.clone();
+                async move {
+                    *seen.lock().unwrap() += 1;
+                    Err::<(), _>("HTTP 400: bad request".to_string())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Err("HTTP 400: bad request".to_string()));
+        assert_eq!(*calls.lock().unwrap(), 1);
     }
 
     /// Public meshes are a pathological availability case: unknown peers,

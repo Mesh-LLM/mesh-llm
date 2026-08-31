@@ -59,6 +59,7 @@ pub use usage::{
 pub use model_hf::{PreparedDownloadDirectories, prepare_download_directories};
 
 pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {
+    let _ = model_hf::configure_hf_tls_provider();
     let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
         let endpoint = endpoint.trim();
@@ -94,6 +95,7 @@ where
 }
 
 pub(crate) fn build_hf_tokio_api(_progress: bool) -> Result<HFClient> {
+    let _ = model_hf::configure_hf_tls_provider();
     let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
         let endpoint = endpoint.trim();
