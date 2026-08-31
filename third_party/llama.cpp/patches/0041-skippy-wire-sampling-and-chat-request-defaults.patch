@@ -12,7 +12,7 @@ Subject: [PATCH] skippy: wire sampling and chat request defaults
  5 files changed, 288 insertions(+), 60 deletions(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
-index 8ca0974d3..aa06561d1 100644
+index 02492ad81..aa06561d1 100644
 --- a/common/stage-chat.cpp
 +++ b/common/stage-chat.cpp
 @@ -131,7 +131,8 @@ static json skippy_common_grammar_triggers_to_json(const std::vector<common_gram
@@ -64,7 +64,7 @@ index 8ca0974d3..aa06561d1 100644
          json chat_template_kwargs = skippy_common_parse_json_or_null(chat_template_kwargs_json);
          if (!chat_template_kwargs.is_null()) {
              if (!chat_template_kwargs.is_object()) {
-@@ -228,19 +238,35 @@ enum skippy_status skippy_apply_chat_template_json(
+@@ -244,20 +253,36 @@ enum skippy_status skippy_apply_chat_template_json(
              inputs.chat_template_kwargs["reasoning_effort"] = "0";
          }
  
@@ -88,6 +88,7 @@ index 8ca0974d3..aa06561d1 100644
          if (tmpls == nullptr) {
              throw std::runtime_error("failed to initialize model chat templates");
          }
+         skippy_chat_templates_lock_guard templates_lock(model);
          common_chat_params params = common_chat_templates_apply(tmpls, inputs);
 +        if (grammar != nullptr && grammar[0] != '\0') {
 +            params.grammar = grammar;

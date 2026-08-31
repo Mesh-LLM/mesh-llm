@@ -1,6 +1,7 @@
 use crate::frontend::generation::ChatOutputStreamParser;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationActiveWorkReservation;
+use crate::frontend::generation::GenerationAdmissionClaim;
 use crate::frontend::generation::GenerationAdmissionScheduling;
 use crate::frontend::generation::GenerationAdmissionWork;
 use crate::frontend::generation::GenerationConcurrencyController;
@@ -18,7 +19,6 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::PreparedTextPrompt;
 use crate::frontend::generation::StageOpenAiBackend;
-use crate::frontend::generation::acquire_generation_permit_with_scheduling;
 use crate::frontend::generation::apply_reasoning_visibility;
 use crate::frontend::generation::chat_output_parser_required;
 use crate::frontend::generation::chat_response_from_generated_text;
@@ -27,9 +27,7 @@ use crate::frontend::generation::ensure_requested_model;
 use crate::frontend::generation::generation_event_to_chat_chunk;
 use crate::frontend::generation::generation_event_to_completion_chunk;
 use crate::frontend::generation::generation_predicted_wait_error;
-use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::generation::generation_queue_timeout_error;
-use crate::frontend::generation::reserve_generation_queue;
 use crate::frontend::generation::template_exposes_reasoning;
 use crate::frontend::request::{
     apply_chat_request_defaults, apply_completion_request_defaults, chat_sampling_config,
@@ -488,12 +486,14 @@ impl GenerationAdmissionController {
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
         }
-        match self
-            .generation_limit
-            .admission_queue()
-            .try_acquire_lane_if_idle(self.generation_limit.semaphore())
-        {
-            Ok(Some(permit)) => {
+        let claim = self.generation_limit.admission_queue().claim_or_enqueue(
+            self.generation_limit.semaphore(),
+            scheduling,
+            self.generation_queue_depth.clone(),
+            self.generation_queue_limit,
+        )?;
+        match claim {
+            GenerationAdmissionClaim::Acquired(permit) => {
                 return Ok(GenerationAdmissionPermit {
                     _lane: self.generation_limit.wrap_permit(permit),
                     _active_work: self.generation_service_estimator.start_active(work),
@@ -505,46 +505,37 @@ impl GenerationAdmissionController {
                     started_at: Instant::now(),
                 });
             }
-            Ok(None) | Err(TryAcquireError::NoPermits) => {}
-            Err(TryAcquireError::Closed) => {
-                return Err(OpenAiError::backend("generation lanes closed"));
+            GenerationAdmissionClaim::Queued(lease) => {
+                self.generation_limit.note_queued_demand();
+                self.generation_service_estimator
+                    .set_concurrency(self.generation_limit.current_limit());
+                let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
+                let queued_work = self
+                    .generation_service_estimator
+                    .reserve_queued(work, admission_timeout)
+                    .map_err(|predicted_wait_ms| {
+                        generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
+                    })?;
+                let lane = lease
+                    .acquire(
+                        self.generation_limit.semaphore(),
+                        admission_timeout,
+                        deadline,
+                        cancellation,
+                    )
+                    .await?;
+                return Ok(GenerationAdmissionPermit {
+                    _lane: self.generation_limit.wrap_permit(lane),
+                    _active_work: queued_work.promote(),
+                    predicted_wait_ms,
+                    demand_epoch: self.generation_limit.demand_epoch(),
+                    queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
+                    waited_for_lane: true,
+                    at_capacity_at_start: self.generation_limit.is_at_capacity(),
+                    started_at: Instant::now(),
+                });
             }
         }
-        let reservation = reserve_generation_queue(
-            self.generation_queue_depth.clone(),
-            self.generation_queue_limit,
-        )
-        .ok_or_else(generation_queue_full_error)?;
-        self.generation_limit.note_queued_demand();
-        self.generation_service_estimator
-            .set_concurrency(self.generation_limit.current_limit());
-        let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-        let queued_work = self
-            .generation_service_estimator
-            .reserve_queued(work, admission_timeout)
-            .map_err(|predicted_wait_ms| {
-                generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
-            })?;
-        let lane = acquire_generation_permit_with_scheduling(
-            self.generation_limit.semaphore(),
-            self.generation_limit.admission_queue(),
-            reservation,
-            scheduling,
-            admission_timeout,
-            deadline,
-            cancellation,
-        )
-        .await?;
-        Ok(GenerationAdmissionPermit {
-            _lane: self.generation_limit.wrap_permit(lane),
-            _active_work: queued_work.promote(),
-            predicted_wait_ms,
-            demand_epoch: self.generation_limit.demand_epoch(),
-            queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
-            waited_for_lane: true,
-            at_capacity_at_start: self.generation_limit.is_at_capacity(),
-            started_at: Instant::now(),
-        })
     }
 }
 

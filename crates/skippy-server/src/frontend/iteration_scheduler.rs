@@ -1,9 +1,14 @@
 mod cache_runtime;
+mod direct_batch;
 
 use self::cache_runtime::{
     CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
     should_coalesce_direct_iterations, should_fill_cache_runtime_wave, should_serve_cache_runtime,
     should_suppress_cache_runtime,
+};
+use self::direct_batch::{
+    direct_coalesce_target, effective_scheduler_lane_count, scheduler_safe_mode_from_value,
+    should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
@@ -1572,100 +1577,6 @@ impl SchedulerWorker {
             }
         }
     }
-}
-
-fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: bool) -> bool {
-    if has_direct && has_planned {
-        !last_served_direct
-    } else {
-        has_direct
-    }
-}
-
-fn direct_coalesce_target(
-    active_runtime_sessions: usize,
-    queued_direct_iterations: usize,
-    max_direct_batch_size: usize,
-) -> usize {
-    active_runtime_sessions
-        .max(queued_direct_iterations)
-        .min(max_direct_batch_size)
-}
-
-fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-const fn effective_scheduler_lane_count(
-    lane_count: usize,
-    safe_mode: bool,
-    continuous_batching: bool,
-) -> usize {
-    if safe_mode || !continuous_batching {
-        1
-    } else {
-        lane_count
-    }
-}
-
-fn take_direct_iteration_batch(
-    queue: &mut VecDeque<DirectIteration>,
-    max_batch_size: usize,
-    mut token_budget: usize,
-) -> Vec<DirectIteration> {
-    let mut batch = Vec::new();
-    let mut batched_sessions = BTreeSet::new();
-    let mut deferred = VecDeque::new();
-    let queued = queue.len();
-    for _ in 0..queued {
-        if batch.len() >= max_batch_size {
-            break;
-        }
-        let Some(request) = queue.pop_front() else {
-            break;
-        };
-        if batched_sessions.contains(&request.session_id) {
-            deferred.push_back(request);
-            continue;
-        }
-        if request.token_ids.len() > token_budget {
-            deferred.push_back(request);
-            break;
-        }
-        token_budget = token_budget.saturating_sub(request.token_ids.len());
-        batched_sessions.insert(request.session_id.clone());
-        batch.push(request);
-        if token_budget == 0 {
-            break;
-        }
-    }
-    deferred.append(queue);
-    *queue = deferred;
-    batch
-}
-
-fn validate_direct_iteration(token_ids: &[i32], positions: &[i32]) -> OpenAiResult<()> {
-    if token_ids.is_empty() {
-        return Err(OpenAiError::invalid_request(
-            "scheduler iteration requires at least one token",
-        ));
-    }
-    if token_ids.len() > MAX_NATIVE_ITERATION_TOKENS {
-        return Err(OpenAiError::invalid_request(format!(
-            "scheduler iteration exceeds the {MAX_NATIVE_ITERATION_TOKENS}-token limit"
-        )));
-    }
-    if !positions.is_empty() && !positions.len().is_multiple_of(token_ids.len()) {
-        return Err(OpenAiError::invalid_request(
-            "scheduler iteration positions must be empty or token-major",
-        ));
-    }
-    Ok(())
 }
 
 fn build_scheduler_config(
