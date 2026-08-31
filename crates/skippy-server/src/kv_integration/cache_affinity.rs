@@ -30,6 +30,7 @@ impl KvStageIntegration {
                     .map(|hit| hit.matched_tokens),
                 StagePrefixCachePayload::Disabled => None,
             })
+            .filter(|matched_tokens| self.meets_shared_prefix_min_tokens(*matched_tokens))
             .max()
             .unwrap_or(0);
         if matched_tokens == 0 {
