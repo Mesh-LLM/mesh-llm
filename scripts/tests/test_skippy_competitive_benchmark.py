@@ -29,6 +29,16 @@ BENCH = load_module()
 
 
 class CompetitiveBenchmarkTest(unittest.TestCase):
+    def test_nightly_workflow_is_schedule_only_and_capacity_matched(self) -> None:
+        workflow = (
+            REPO / ".github" / "workflows" / "nightly-competitive-benchmark.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("workflow_dispatch:", workflow)
+        self.assertIn("github.event_name == 'schedule'", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("--capacity-match-comparison-kv", workflow)
+
     def test_checked_in_plan_covers_both_platforms_all_models_and_full_ladder(self) -> None:
         config = BENCH.load_config(CONFIG)
         plan = BENCH.build_plan(
@@ -106,6 +116,15 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
     def test_config_rejects_nonpositive_model_trace_shape(self) -> None:
         document = json.loads(CONFIG.read_text(encoding="utf-8"))
         document["models"][0]["thoughtworks_active_lanes"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "positive thoughtworks_active_lanes"):
+                BENCH.load_config(path)
+
+    def test_config_rejects_boolean_model_trace_shape(self) -> None:
+        document = json.loads(CONFIG.read_text(encoding="utf-8"))
+        document["models"][0]["thoughtworks_active_lanes"] = True
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
             path.write_text(json.dumps(document), encoding="utf-8")
@@ -693,6 +712,57 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertTrue(args.require_comparison_backends)
         self.assertTrue(args.capacity_match_comparison_kv)
 
+    def test_parity_rejects_empty_or_short_success_responses(self) -> None:
+        empty = {
+            "status": 200,
+            "content": "",
+            "content_sha256": BENCH.hashlib.sha256(b"").hexdigest(),
+            "completion_tokens": 0,
+            "requested_completion_tokens": 32,
+            "error": None,
+        }
+        short = {
+            **empty,
+            "content": "partial",
+            "completion_tokens": 31,
+        }
+        valid = {
+            **empty,
+            "content": "complete",
+            "completion_tokens": 32,
+        }
+
+        self.assertFalse(BENCH.parity_result_valid(empty))
+        self.assertFalse(BENCH.parity_result_valid(short))
+        self.assertTrue(BENCH.parity_result_valid(valid))
+
+    def test_loaders_ignore_results_without_matching_completion_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_dir = root / "data" / "cuda" / "model" / "mesh"
+            arm_dir.mkdir(parents=True)
+            (arm_dir / "tg-8-c-1.json").write_text("{}", encoding="utf-8")
+            trace_dir = root / "trace" / "cuda" / "model" / "c-1" / "mesh"
+            trace_dir.mkdir(parents=True)
+            (trace_dir / "result.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual(BENCH.load_synthetic_rows(root), [])
+            self.assertEqual(BENCH.load_trace_rows(root), [])
+
+    def test_forced_rerun_quarantines_the_previous_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "data" / "cuda" / "model" / "mesh"
+            output_dir.mkdir(parents=True)
+            (output_dir / "result.json").write_text("stale", encoding="utf-8")
+
+            BENCH.quarantine_cell(output_dir, root)
+
+            self.assertFalse(output_dir.exists())
+            quarantined = list((root / "quarantine").glob("*/data/cuda/model/mesh/result.json"))
+            self.assertEqual(len(quarantined), 1)
+            self.assertEqual(quarantined[0].read_text(encoding="utf-8"), "stale")
+
     def test_report_writes_csv_svg_markdown_and_hash_manifest(self) -> None:
         config = BENCH.load_config(CONFIG)
         with tempfile.TemporaryDirectory() as directory:
@@ -736,11 +806,30 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
                                         {
                                             "request_index": 0,
                                             "status": 200,
+                                            "content": "same",
                                             "content_sha256": "same",
+                                            "completion_tokens": 32,
+                                            "requested_completion_tokens": 32,
+                                            "error": None,
                                         }
                                     ],
                                 }
                             ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                synthetic_cell = {
+                    "platform": "metal",
+                    "model": "llama32-dense",
+                    "arm": arm,
+                    "workload": "synthetic",
+                }
+                (arm_dir / "complete.json").write_text(
+                    json.dumps(
+                        {
+                            "cell": synthetic_cell,
+                            "cell_sha256": BENCH.stable_hash(synthetic_cell),
                         }
                     ),
                     encoding="utf-8",
@@ -757,6 +846,22 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
                             "successful_requests": 60,
                             "failed_requests": 0,
                             "output_tokens_per_second": throughput,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                trace_cell = {
+                    "platform": "metal",
+                    "model": "llama32-dense",
+                    "arm": arm,
+                    "workload": "thoughtworks",
+                    "concurrency": 1,
+                }
+                (trace_dir / "complete.json").write_text(
+                    json.dumps(
+                        {
+                            "cell": trace_cell,
+                            "cell_sha256": BENCH.stable_hash(trace_cell),
                         }
                     ),
                     encoding="utf-8",
