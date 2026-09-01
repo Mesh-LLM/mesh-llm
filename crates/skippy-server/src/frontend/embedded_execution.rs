@@ -396,11 +396,12 @@ fn poll_direct_or_downstream_reply(
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
 ) -> OpenAiResult<StageReply> {
-    poll_direct_or_downstream_reply_with_fallback_poll(
+    poll_direct_or_downstream_reply_with_timeouts(
         downstream,
         prediction_return,
         expected_replies,
         DIRECT_RETURN_FALLBACK_POLL,
+        stage_reply_timeout(),
     )
 }
 
@@ -409,15 +410,20 @@ fn poll_direct_or_downstream_reply(
 // event-driven rather than quantized to the poll — without depending on
 // sub-poll scheduler latency, which a loaded or virtualized CI runner cannot
 // guarantee.
-fn poll_direct_or_downstream_reply_with_fallback_poll(
+fn poll_direct_or_downstream_reply_with_timeouts(
     downstream: &mut TcpStream,
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
     fallback_poll: Duration,
+    reply_timeout: Duration,
 ) -> OpenAiResult<StageReply> {
     let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
     let started = Instant::now();
-    let reply_timeout = stage_reply_timeout();
+    let timeout_error = || {
+        OpenAiError::backend(format!(
+            "timed out waiting for one of {expected_replies:?} from direct return or downstream"
+        ))
+    };
     // The direct-return sink is the standard reply path, so block on its
     // channel and wake the moment the reply lands instead of sampling it
     // between bounded peeks: sampling quantized every reply wait to the poll
@@ -425,8 +431,12 @@ fn poll_direct_or_downstream_reply_with_fallback_poll(
     // tunnelled downstream fallback is checked without blocking each slice,
     // so a fallback reply is still detected within one poll interval.
     let result = loop {
+        let remaining = reply_timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break Err(timeout_error());
+        }
         if let Some(reply) = prediction_return
-            .recv_one_of_timeout(expected_replies, fallback_poll)
+            .recv_one_of_timeout(expected_replies, remaining.min(fallback_poll))
             .map_err(openai_backend_error)?
         {
             break Ok(reply);
@@ -437,16 +447,14 @@ fn poll_direct_or_downstream_reply_with_fallback_poll(
             // the remainder of the bounded fallback deadline rather than the
             // nonblocking mode used for the availability check.
             let remaining = reply_timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break Err(timeout_error());
+            }
             timeout_restore.prepare_blocking_read()?;
             downstream
-                .set_read_timeout(Some(remaining.max(fallback_poll)))
+                .set_read_timeout(Some(remaining))
                 .map_err(openai_io_error)?;
             break receive_downstream_stage_reply_one_of(downstream, expected_replies);
-        }
-        if started.elapsed() >= reply_timeout {
-            break Err(OpenAiError::backend(format!(
-                "timed out waiting for one of {expected_replies:?} from direct return or downstream"
-            )));
         }
     };
     timeout_restore.restore()?;
@@ -703,11 +711,12 @@ mod tests {
             // delivery. Asserting the wake lands well inside that interval proves
             // it is event-driven without pinning an absolute sub-poll latency
             // that a loaded CI runner cannot honour.
-            let reply = poll_direct_or_downstream_reply_with_fallback_poll(
+            let reply = poll_direct_or_downstream_reply_with_timeouts(
                 &mut downstream,
                 &receiver,
                 &[WireReplyKind::PredictedToken],
                 WIDE_FALLBACK_POLL,
+                stage_reply_timeout(),
             )
             .unwrap();
             let received_at = Instant::now();
@@ -729,6 +738,34 @@ mod tests {
             "direct return wake took {max_wake_ms:.2}ms with a {}ms fallback poll; reply wait is polling, not event-driven",
             WIDE_FALLBACK_POLL.as_millis()
         );
+    }
+
+    #[test]
+    fn direct_return_fallback_wait_stays_within_reply_deadline() {
+        const REPLY_TIMEOUT: Duration = Duration::from_millis(50);
+        const WIDE_FALLBACK_POLL: Duration = Duration::from_secs(2);
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(81, 83).unwrap();
+        let (mut downstream, _peer) = connected_stream_pair();
+
+        let started = Instant::now();
+        let error = poll_direct_or_downstream_reply_with_timeouts(
+            &mut downstream,
+            &receiver,
+            &[WireReplyKind::PredictedToken],
+            WIDE_FALLBACK_POLL,
+            REPLY_TIMEOUT,
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(error.to_string().contains("timed out waiting for one of"));
+        assert!(elapsed >= REPLY_TIMEOUT);
+        assert!(
+            elapsed < Duration::from_millis(750),
+            "reply wait took {elapsed:?} with a {REPLY_TIMEOUT:?} deadline and {WIDE_FALLBACK_POLL:?} fallback poll"
+        );
+        assert_eq!(downstream.read_timeout().unwrap(), None);
     }
 
     #[test]
