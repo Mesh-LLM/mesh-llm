@@ -331,6 +331,17 @@ class AgenticReplayTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing cohorts"):
                 BENCH.load_trajectory_cohorts(manifest, ["warmup", "1"])
 
+    def test_manifest_rejects_non_object_trajectory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(
+                json.dumps({"cohorts": {"warmup": ["not-an-object"]}}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "non-object trajectory"):
+                BENCH.load_trajectory_cohorts(manifest, ["warmup"])
+
     def test_manifest_allows_dataset_null_recorded_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"

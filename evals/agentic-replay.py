@@ -372,6 +372,8 @@ def load_trajectory_cohorts(
         if not isinstance(name, str) or not isinstance(trajectories, list) or not trajectories:
             raise ValueError("each trajectory cohort must be a nonempty list")
         for trajectory in trajectories:
+            if not isinstance(trajectory, dict):
+                raise ValueError(f"cohort {name} contains a non-object trajectory")
             session_id = trajectory.get("session_id")
             if not isinstance(session_id, str) or not session_id:
                 raise ValueError(f"cohort {name} contains a trajectory without session_id")
