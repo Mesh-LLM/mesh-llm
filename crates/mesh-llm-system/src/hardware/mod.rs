@@ -377,14 +377,18 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     if metrics.contains(&Metric::GpuCount) {
         survey.gpu_count = u8::try_from(gpus.len()).unwrap_or(u8::MAX);
     }
+    // Decided from the probe itself, not from the requested metrics: a
+    // VramBytes-only query must still route unified memory through the
+    // reserved-bytes path instead of crediting system RAM as offload.
+    let unified_memory = gpus.iter().any(|gpu| gpu.unified_memory);
     if metrics.contains(&Metric::IsSoc) {
-        survey.is_soc = gpus.iter().any(|gpu| gpu.unified_memory);
+        survey.is_soc = unified_memory;
     }
     if metrics.contains(&Metric::VramBytes) {
         survey.gpu_vram = gpus.iter().map(|gpu| gpu.vram_bytes).collect();
         survey.gpu_reserved = gpus.iter().map(|gpu| gpu.reserved_bytes).collect();
         let vram: u64 = survey.gpu_vram.iter().sum();
-        if survey.is_soc {
+        if unified_memory {
             let reserved: u64 = survey.gpu_reserved.iter().flatten().copied().sum();
             survey.vram_bytes = vram.saturating_sub(reserved);
         } else {

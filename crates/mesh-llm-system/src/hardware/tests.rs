@@ -786,6 +786,24 @@ fn test_healthy_soc_probe_does_not_probe_system_ram() {
 }
 
 #[test]
+fn test_healthy_soc_probe_without_is_soc_metric_still_skips_ram_offload() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 16_000_000_000;
+    gpu.reserved_bytes = Some(2_000_000_000);
+    gpu.unified_memory = true;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || panic!("system RAM must not be probed for unified memory, even without IsSoc"),
+    );
+    assert!(handled);
+    assert!(!survey.is_soc);
+    assert_eq!(survey.vram_bytes, 14_000_000_000);
+}
+
+#[test]
 fn test_healthy_gpu_probe_without_vram_metric_does_not_probe_system_ram() {
     let mut survey = HardwareSurvey::default();
     let handled = apply_gpu_probe_outcome_to_survey(
