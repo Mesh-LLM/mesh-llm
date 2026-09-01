@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 6 ]; then
-    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift>" >&2
+SKIP_BUILD=0
+if [[ "$#" -eq 7 ]]; then
+    if [[ "$7" != "--skip-build" ]]; then
+        echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift> [--skip-build]" >&2
+        exit 1
+    fi
+    SKIP_BUILD=1
+elif [[ "$#" -ne 6 ]]; then
+    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift> [--skip-build]" >&2
     exit 1
 fi
 
@@ -21,7 +28,11 @@ install -m 0644 "$SWIFT_INPUT_BINDING" "$SWIFT_TRACKED_BINDING"
 cmp "$SWIFT_INPUT_BINDING" "$SWIFT_TRACKED_BINDING"
 
 scripts/check-sdk-contract.sh
-scripts/package-sdk-console-assets.sh --sdk swift
+if [[ "$SKIP_BUILD" == "1" ]]; then
+    scripts/package-sdk-console-assets.sh --sdk swift --skip-build
+else
+    scripts/package-sdk-console-assets.sh --sdk swift
+fi
 scripts/verify-sdk-console-assets.sh --sdk swift
 
 scripts/verify-swift-release-artifact.sh \

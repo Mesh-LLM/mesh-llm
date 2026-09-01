@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     future::Future,
     io::{self, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -44,6 +44,11 @@ mod summary;
 mod telemetry;
 
 use self::connection::handle_binary_connection;
+use self::session_tracker::ConnectionSessionOwnership;
+
+/// How often a waiting connection worker rechecks the shutdown flag, matching
+/// the downstream DOWNSTREAM_SHUTDOWN_POLL cadence in stage_execution.
+const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 struct ConnectionWorkerControl {
@@ -81,6 +86,41 @@ impl ConnectionWorkerControl {
             .lock()
             .expect("connection sockets lock poisoned")
             .clear();
+    }
+
+    fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
+    }
+
+    /// Block until `stream` has readable data (or EOF), returning false when
+    /// shutdown is requested instead. Peeks under a short read timeout so no
+    /// message bytes are consumed and the worker never sits in an
+    /// uninterruptible blocking read: `TcpStream::shutdown` on a tracked
+    /// clone does not unblock an in-flight `read` on Windows (#1538).
+    fn wait_for_readable(&self, stream: &TcpStream) -> io::Result<bool> {
+        stream.set_read_timeout(Some(WORKER_SHUTDOWN_POLL))?;
+        let mut probe = [0u8; 1];
+        let ready = loop {
+            if self.is_shutting_down() {
+                break false;
+            }
+            match stream.peek(&mut probe) {
+                Ok(_) => break true,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => {
+                    let _ = stream.set_read_timeout(None);
+                    return Err(error);
+                }
+            }
+        };
+        stream.set_read_timeout(None)?;
+        Ok(ready)
     }
 }
 
@@ -245,6 +285,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
+    let session_ownership = Arc::new(ConnectionSessionOwnership::default());
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
@@ -361,6 +402,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
+            let session_ownership = session_ownership.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
             worker_control
                 .track(&upstream)
@@ -380,6 +422,12 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
+                    if !task_control
+                        .wait_for_readable(&upstream)
+                        .context("wait for the first binary stage message")?
+                    {
+                        return Ok(());
+                    }
                     let first_message = match read_stage_message(&mut upstream, activation_width) {
                         Ok(message) => message,
                         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
@@ -419,6 +467,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         downstream_connect_timeout_secs,
                         native_mtp_enabled,
                         &prediction_return_sinks,
+                        session_ownership,
+                        &task_control,
                         first_message,
                     )
                 })()
@@ -472,8 +522,10 @@ mod shutdown_tests {
         control.track(&server).unwrap();
         let task_control = control.clone();
         let task = thread::spawn(move || {
-            let mut byte = [0u8; 1];
-            let _ = server.read(&mut byte);
+            if let Ok(true) = task_control.wait_for_readable(&server) {
+                let mut byte = [0u8; 1];
+                let _ = server.read(&mut byte);
+            }
             task_control.clear();
         });
         let mut workers = ConnectionWorkers::default();
@@ -501,8 +553,10 @@ mod shutdown_tests {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let task = thread::spawn(move || {
-            let mut byte = [0u8; 1];
-            let _ = server.read(&mut byte);
+            if let Ok(true) = task_control.wait_for_readable(&server) {
+                let mut byte = [0u8; 1];
+                let _ = server.read(&mut byte);
+            }
             task_control.clear();
             task_finished.store(true, Ordering::Release);
         });

@@ -19,3 +19,4 @@ clap.workspace = true
 mesh-llm-build-info.workspace = true
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc8" }
 serde.workspace = true
+serde_json.workspace = true

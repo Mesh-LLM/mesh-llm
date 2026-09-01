@@ -524,6 +524,7 @@ fn event_to_span(event: &TelemetryEvent, stats: &TelemetryCounters) -> Span {
             .map(|(key, value)| KeyValue {
                 key,
                 value: Some(json_to_any_value(value)),
+                ..Default::default()
             })
             .collect(),
         dropped_attributes_count: 0,
@@ -541,6 +542,7 @@ fn resource_attributes(config: &StageConfig) -> Vec<KeyValue> {
         .map(|(key, value)| KeyValue {
             key,
             value: Some(json_to_any_value(value)),
+            ..Default::default()
         })
         .collect()
 }
@@ -568,6 +570,7 @@ fn json_to_any_value(value: Value) -> AnyValue {
                     .map(|(key, value)| KeyValue {
                         key,
                         value: Some(json_to_any_value(value)),
+                        ..Default::default()
                     })
                     .collect(),
             })

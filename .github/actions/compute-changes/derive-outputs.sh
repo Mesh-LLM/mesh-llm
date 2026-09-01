@@ -65,11 +65,12 @@ elif [[ $(echo "$AFFECTED_CRATES" | jq 'length') -gt 0 ]]; then
 fi
 
 # CLI surface definitions are public documentation inputs. Keep this
-# limited to Clap/parser sources, not the React console UI or command
-# handler internals, so website docs sync is precise and explainable.
+# limited to the CLI crate. The inventory is generated from the complete
+# crate, so nested parser modules and metadata/feature changes must select the
+# same validation path as the top-level command definitions.
 CLI_SURFACE_CHANGED="false"
 if [[ -n "$CHANGED_FILES" ]]; then
-  CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/src/(parser|models|runtime|benchmark)\.rs$' || true)
+  CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/' || true)
   if [[ -n "$CLI_SURFACE_INPUTS" ]]; then
     CLI_SURFACE_CHANGED="true"
   fi

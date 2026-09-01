@@ -240,9 +240,9 @@ runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
 - `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
-  bounded Clippy batches and CLI documentation synchronization.
-- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, and
-  public website build.
+  bounded Clippy batches and generated CLI inventory freshness.
+- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
+  website build, and CLI explorer browser validation.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
@@ -274,9 +274,11 @@ runtime producers are not duplicated.
   ROCm and Vulkan products remain package-verified until eligible inference
   runners are registered.
 - `ci-linux-sdk-slice.yml` and `ci-macos-sdk-slice.yml` — platform-local
-  Rust, Kotlin and Swift consumers. Swift production starts from the plan and
-  Kotlin production from the shared static ABI; only smoke consumers wait for
-  the matching product lane.
+  Rust, Kotlin and Swift consumers. Each smoke downloads the matching
+  platform lane's immutable UI artifact before packaging SDK resources;
+  Rust's smoke also uses the exact main-seeded Cargo/target cache. Swift
+  production starts from the plan and Kotlin production from the shared
+  static ABI; only smoke consumers wait for the matching product lane.
 - `ci-runner-contract-slice.yml` — plan/provider/PR cache-boundary checks and
   trusted-main runner-image contracts.
 
@@ -500,6 +502,7 @@ The implemented policy uses that isolation selectively:
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
+| SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
 Outside the bounded exception, a Depot-selected run emits
