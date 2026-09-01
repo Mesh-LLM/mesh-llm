@@ -527,8 +527,7 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
     let info = skippy_runtime::package::inspect_layer_package(&local_ref)
         .with_context(|| format!("inspect layer package {package_ref}"))?;
 
-    let activation_width =
-        required_layer_package_activation_width(package_ref, info.activation_width)?;
+    let activation_width = layer_package_activation_width_hint(info.activation_width);
     let source_model_bytes = info
         .source_model_bytes
         .unwrap_or_else(|| info.layers.iter().map(|l| l.artifact_bytes).sum::<u64>());
@@ -625,15 +624,10 @@ fn canonical_layer_package_ref(package_ref: &str, local_ref: &str) -> String {
         .unwrap_or_else(|| package_ref.to_string())
 }
 
-fn required_layer_package_activation_width(
-    package_ref: &str,
-    activation_width: Option<u32>,
-) -> Result<u32> {
-    activation_width.with_context(|| {
-        format!(
-            "layer package {package_ref} is missing activation_width; rebuild the package manifest"
-        )
-    })
+fn layer_package_activation_width_hint(activation_width: Option<u32>) -> u32 {
+    // Deprecated planning hint only. A missing value must not prevent loading;
+    // stage bring-up obtains the authoritative boundary from the GGML graph.
+    activation_width.unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -866,14 +860,9 @@ mod tests {
     }
 
     #[test]
-    fn layer_package_activation_width_is_required() {
-        let error =
-            required_layer_package_activation_width("hf://meshllm/Qwen3-layers@abc123", None)
-                .unwrap_err()
-                .to_string();
-
-        assert!(error.contains("missing activation_width"));
-        assert!(error.contains("rebuild the package manifest"));
+    fn layer_package_activation_width_is_an_optional_hint() {
+        assert_eq!(layer_package_activation_width_hint(None), 0);
+        assert_eq!(layer_package_activation_width_hint(Some(1024)), 1024);
     }
 
     #[test]

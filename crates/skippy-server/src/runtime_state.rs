@@ -7,11 +7,12 @@ use std::{
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
-    ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
-    GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput, IterationBatchPhase,
-    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, ModelStateKind, MtpSource,
-    NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode,
+    ActivationBoundaryDesc, ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput,
+    DecodeFrameBatchRequest, FlashAttentionType as RuntimeFlashAttentionType,
+    GenerationSignalWindow, GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput,
+    IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
+    ModelStateKind, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc,
+    RuntimeLoadMode,
     SamplingConfig, SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal,
     parse_cache_type,
 };
@@ -142,6 +143,13 @@ struct ResidentLanePrefix {
 }
 
 impl RuntimeState {
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.input_activation_boundary()
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.output_activation_boundary()
+    }
     /// A runtime with no model behind it, for tests that exercise code paths
     /// which never touch the model.
     ///

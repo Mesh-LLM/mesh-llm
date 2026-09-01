@@ -26,6 +26,8 @@ fn test_stage_status(
         state,
         bind_addr: bind_addr.to_string(),
         activation_width: 896,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,

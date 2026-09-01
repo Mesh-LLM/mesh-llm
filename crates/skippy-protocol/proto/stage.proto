@@ -202,6 +202,14 @@ message CoordinatorClaimAccepted {
   optional string error = 3;
 }
 
+message ActivationBoundaryDescriptor {
+  uint32 version = 1;
+  uint32 ggml_type = 2;
+  uint32 layout = 3;
+  uint64 elements_per_token = 4;
+  uint64 bytes_per_token = 5;
+}
+
 message StageStatus {
   string topology_id = 1;
   string run_id = 2;
@@ -235,6 +243,8 @@ message StageStatus {
   uint64 coordinator_term = 29;
   optional string coordinator_id = 30;
   uint64 lease_until_unix_ms = 31;
+  optional ActivationBoundaryDescriptor input_activation_boundary = 32;
+  optional ActivationBoundaryDescriptor output_activation_boundary = 33;
 }
 
 message StageStatusList {

@@ -1051,6 +1051,8 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             state: crate::inference::skippy::StageRuntimeState::Ready,
             bind_addr: "127.0.0.1:39100".into(),
             activation_width: 4096,
+            input_activation_boundary: None,
+            output_activation_boundary: None,
             selected_device: Some(skippy_protocol::StageDevice {
                 backend_device: "Metal0".into(),
                 stable_id: Some("metal:0".into()),

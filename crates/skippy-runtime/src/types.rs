@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use skippy_ffi::{
-    ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
+    ActivationBoundaryDesc as RawActivationBoundaryDesc, ActivationDType,
+    ActivationDesc as RawActivationDesc, ActivationLayout,
     GenerationSignalWindow as RawGenerationSignalWindow,
     KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
     LogitBias as RawLogitBias, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
@@ -25,6 +26,27 @@ pub enum ModelStateKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActivationBoundaryDesc {
+    pub version: u32,
+    pub ggml_type: u32,
+    pub layout: u32,
+    pub elements_per_token: u64,
+    pub bytes_per_token: u64,
+}
+
+impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
+    fn from(raw: RawActivationBoundaryDesc) -> Self {
+        Self {
+            version: raw.version,
+            ggml_type: raw.ggml_type,
+            layout: raw.layout,
+            elements_per_token: raw.elements_per_token,
+            bytes_per_token: raw.bytes_per_token,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

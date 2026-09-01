@@ -28,6 +28,17 @@ pub struct ActivationDesc {
     pub flags: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivationBoundaryDesc {
+    pub version: u32,
+    pub ggml_type: u32,
+    pub layout: u32,
+    pub reserved: u32,
+    pub elements_per_token: u64,
+    pub bytes_per_token: u64,
+}
+
 pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
 
 #[repr(C)]

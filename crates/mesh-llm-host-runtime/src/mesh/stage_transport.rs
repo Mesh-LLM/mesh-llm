@@ -426,6 +426,8 @@ pub struct StageRuntimeStatus {
     pub state: crate::inference::skippy::StageRuntimeState,
     pub bind_addr: String,
     pub activation_width: u32,
+    pub input_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    pub output_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
     pub selected_device: Option<skippy_protocol::StageDevice>,
     pub ctx_size: u32,
     pub lane_count: u32,

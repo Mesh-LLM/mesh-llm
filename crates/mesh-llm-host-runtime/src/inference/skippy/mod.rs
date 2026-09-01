@@ -521,6 +521,28 @@ fn embedded_openai_args_from(
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     serving_hooks: &ModelServingHooks,
 ) -> Result<EmbeddedOpenAiArgs> {
+    let activation_width = if config.downstream.is_some() {
+        let descriptor = runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("runtime lock poisoned"))?
+            .output_activation_boundary()
+            .context("stage 0 graph did not expose its output activation boundary")?;
+        anyhow::ensure!(
+            descriptor.version == 1
+                && descriptor.ggml_type == skippy_runtime::GGML_TYPE_F32
+                && descriptor.layout == 1
+                && descriptor.elements_per_token > 0
+                && descriptor
+                    .elements_per_token
+                    .checked_mul(std::mem::size_of::<f32>() as u64)
+                    == Some(descriptor.bytes_per_token),
+            "stage 0 graph output is not supported by raw F32 activation transport: {descriptor:?}"
+        );
+        i32::try_from(descriptor.elements_per_token)
+            .context("stage 0 graph activation width exceeds i32")?
+    } else {
+        embedded_args.activation_width
+    };
     Ok(EmbeddedOpenAiArgs {
         bind_addr: "127.0.0.1:0"
             .parse()
@@ -554,7 +576,7 @@ fn embedded_openai_args_from(
         native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
         native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
         native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-        activation_width: embedded_args.activation_width,
+        activation_width,
         reply_credit_limit: embedded_args.reply_credit_limit,
         downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
         downstream_wire_condition: benchmark_downstream_wire_condition()?,
@@ -609,6 +631,12 @@ impl Drop for NativeSkippyStartupAudit {
 }
 
 impl SkippyModelHandle {
+    pub(crate) fn output_activation_boundary(
+        &self,
+    ) -> Option<skippy_runtime::ActivationBoundaryDesc> {
+        self.runtime.output_activation_boundary()
+    }
+
     fn resolved_mtp_source(
         native_mtp_enabled: bool,
         native_mtp_draft_model_path: Option<&Path>,

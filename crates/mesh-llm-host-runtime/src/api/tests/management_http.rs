@@ -499,6 +499,8 @@ fn health_test_stage_status(
         state,
         bind_addr: "127.0.0.1:9000".to_string(),
         activation_width: 1,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 128,
         lane_count: 1,

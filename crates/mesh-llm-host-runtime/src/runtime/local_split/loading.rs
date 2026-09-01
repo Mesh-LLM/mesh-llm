@@ -17,6 +17,7 @@ use crate::runtime::survey;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
+use skippy_runtime::ActivationBoundaryDesc;
 use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
 use std::future::Future;
@@ -247,6 +248,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             )
             .await?
     };
+    let first_downstream_stage_id = downstream.stage_id.clone();
     let mut runtime_options = settings.runtime_options.clone();
     runtime_options.config.run_id = spec.generation.run_id.clone();
     runtime_options.config.topology_id = spec.generation.topology_id.clone();
@@ -345,6 +347,22 @@ pub(super) async fn load_split_runtime_generation_inner(
     })
     .await
     .context("join load skippy stage0 config task")??;
+    let stage0_output = handle
+        .output_activation_boundary()
+        .context("stage 0 graph did not expose its output activation boundary")?;
+    let first_downstream_status = ready_by_stage
+        .get(&first_downstream_stage_id)
+        .with_context(|| format!("missing ready status for {first_downstream_stage_id}"))?;
+    validate_activation_edge(
+        &settings.stage0.stage_id,
+        stage0_output,
+        &first_downstream_status.stage_id,
+        required_boundary(
+            first_downstream_status.input_activation_boundary,
+            &first_downstream_status.stage_id,
+            "input",
+        )?,
+    )?;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -488,6 +506,25 @@ pub(super) async fn load_downstream_split_runtime_stages(
                 stage.stage_id
             );
         }
+        if let Some(consumer) = downstream.as_ref() {
+            let consumer_status = ready_by_stage
+                .get(&consumer.stage_id)
+                .with_context(|| format!("missing ready status for {}", consumer.stage_id))?;
+            validate_activation_edge(
+                &ready.status.stage_id,
+                required_boundary(
+                    ready.status.output_activation_boundary,
+                    &ready.status.stage_id,
+                    "output",
+                )?,
+                &consumer_status.stage_id,
+                required_boundary(
+                    consumer_status.input_activation_boundary,
+                    &consumer_status.stage_id,
+                    "input",
+                )?,
+            )?;
+        }
         *downstream = Some(skippy::StagePeerDescriptor {
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
@@ -500,6 +537,29 @@ pub(super) async fn load_downstream_split_runtime_stages(
     downstream
         .clone()
         .context("split topology missing downstream stage")
+}
+
+fn required_boundary(
+    descriptor: Option<ActivationBoundaryDesc>,
+    stage_id: &str,
+    edge: &str,
+) -> Result<ActivationBoundaryDesc> {
+    descriptor.with_context(|| {
+        format!("stage {stage_id} did not advertise its graph-observed {edge} activation boundary")
+    })
+}
+
+fn validate_activation_edge(
+    producer_id: &str,
+    producer: ActivationBoundaryDesc,
+    consumer_id: &str,
+    consumer: ActivationBoundaryDesc,
+) -> Result<()> {
+    anyhow::ensure!(
+        producer == consumer,
+        "activation boundary mismatch between producer {producer_id} and consumer {consumer_id}: producer={producer:?} consumer={consumer:?}"
+    );
+    Ok(())
 }
 
 pub(super) fn stage_source_prepare_timeout(
@@ -1131,5 +1191,45 @@ pub(super) fn split_stage_topology_instance(
                 },
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod activation_boundary_tests {
+    use super::{required_boundary, validate_activation_edge};
+    use skippy_runtime::ActivationBoundaryDesc;
+
+    fn boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        ActivationBoundaryDesc {
+            version: 1,
+            ggml_type: 0,
+            layout: 1,
+            elements_per_token,
+            bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
+        }
+    }
+
+    #[test]
+    fn matching_graph_boundaries_form_a_valid_stage_edge() {
+        validate_activation_edge("stage-0", boundary(1024), "stage-1", boundary(1024))
+            .expect("identical graph boundary contracts must match");
+    }
+
+    #[test]
+    fn graph_boundary_mismatch_blocks_topology_activation() {
+        let error = validate_activation_edge("stage-0", boundary(1024), "stage-1", boundary(896))
+            .expect_err("different graph boundary contracts must not connect");
+        assert!(error.to_string().contains("activation boundary mismatch"));
+    }
+
+    #[test]
+    fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
+        let error = required_boundary(None, "stage-1", "input")
+            .expect_err("generation 7 requires graph-observed boundary descriptors");
+        assert!(
+            error
+                .to_string()
+                .contains("did not advertise its graph-observed input")
+        );
     }
 }

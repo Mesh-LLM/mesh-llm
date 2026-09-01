@@ -340,6 +340,8 @@ pub(super) fn runtime_status_for_stage(
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         activation_width: 896,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,
@@ -853,6 +855,13 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let boundary = (load.activation_width > 0).then_some(skippy_runtime::ActivationBoundaryDesc {
+        version: 1,
+        ggml_type: 0,
+        layout: 1,
+        elements_per_token: load.activation_width as u64,
+        bytes_per_token: load.activation_width as u64 * std::mem::size_of::<f32>() as u64,
+    });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -873,6 +882,8 @@ pub(super) fn test_stage_status_from_load(
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
         activation_width: load.activation_width as u32,
+        input_activation_boundary: load.upstream.as_ref().and(boundary),
+        output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -910,6 +921,8 @@ pub(super) fn test_stage_status_from_stop(
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
         activation_width: 0,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,

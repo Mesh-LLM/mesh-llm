@@ -463,12 +463,7 @@ fn validate_manifest_header(manifest: &PackageManifest, report: &mut PackagePref
             "rebuild the package manifest from the source GGUF metadata",
         ),
         Some(_) => {}
-        None => report.error(
-            "missing_activation_width",
-            "package manifest is missing activation_width",
-            Some("model-package.json".to_string()),
-            "rebuild the package manifest with a current skippy-model-package write-package",
-        ),
+        None => {}
     }
     if manifest.source_model.path.trim().is_empty() {
         report.error(
@@ -1218,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_rejects_missing_activation_width() {
+    fn preflight_accepts_missing_deprecated_activation_width() {
         let dir = unique_test_dir("missing-width");
         let package = write_package_fixture(&dir, false);
 
@@ -1230,8 +1225,8 @@ mod tests {
             },
         );
 
-        assert!(!report.valid);
-        assert_issue(&report, "missing_activation_width");
+        assert!(report.valid, "issues: {:?}", report.issues);
+        assert_eq!(report.activation_width, None);
         fs::remove_dir_all(dir).unwrap();
     }
 

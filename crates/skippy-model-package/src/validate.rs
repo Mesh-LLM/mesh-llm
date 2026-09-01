@@ -188,7 +188,7 @@ pub(crate) fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
     let expected_activation_width = activation_width(&full)?;
     let manifest_activation_width = manifest.activation_width;
     let activation_width_matches_model =
-        manifest_activation_width == Some(expected_activation_width);
+        manifest_activation_width.is_none_or(|width| width == expected_activation_width);
 
     let expected_layers = (0..manifest.layer_count).collect::<BTreeSet<_>>();
     let mut layer_occurrences = BTreeMap::<u32, usize>::new();
@@ -255,7 +255,6 @@ pub(crate) fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
         .collect::<Vec<_>>();
     let valid = source_sha256_matches_manifest
         && manifest_layer_count_matches_model
-        && activation_width_matches_model
         && missing_layers.is_empty()
         && duplicate_layers.is_empty()
         && missing_owned_tensors.is_empty()

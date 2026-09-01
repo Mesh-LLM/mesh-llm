@@ -192,11 +192,9 @@ pub fn materialize_stage_config(
 }
 
 fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<StagePackageInfo> {
-    let activation_width = info.activation_width.with_context(|| {
-        format!(
-            "layer package {package_ref} is missing activation_width; rebuild the package manifest"
-        )
-    })?;
+    // Deprecated planning hint only. Runtime wire contracts come from the
+    // constructed GGML stage graph and never from this manifest field.
+    let activation_width = info.activation_width.unwrap_or(0);
     Ok(StagePackageInfo {
         package_ref: package_ref.to_string(),
         package_dir: info.package_dir,

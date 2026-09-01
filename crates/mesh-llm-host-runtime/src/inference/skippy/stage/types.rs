@@ -242,6 +242,8 @@ pub(crate) struct StageStatusSnapshot {
     pub(crate) state: StageRuntimeState,
     pub(crate) bind_addr: String,
     pub(crate) activation_width: u32,
+    pub(crate) input_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    pub(crate) output_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
     pub(crate) selected_device: Option<StageDevice>,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,

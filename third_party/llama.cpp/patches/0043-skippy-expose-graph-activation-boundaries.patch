@@ -1,0 +1,364 @@
+From 998bdc4820a930c411f181a796792f132e62d965 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Tue, 1 Sep 2026 21:32:42 +1000
+Subject: [PATCH] skippy: expose graph activation boundaries
+
+---
+ include/skippy/activation.h    | 12 +++++
+ include/skippy/common.h        |  3 +-
+ include/skippy/runtime.h       | 11 ++++
+ src/llama-context.cpp          | 96 ++++++++++++++++++++++++++++++++++
+ src/llama-context.h            | 15 ++++++
+ src/skippy/abi.cpp             |  3 +-
+ src/skippy/model_lifecycle.cpp | 20 +++++++
+ src/skippy/model_loading.cpp   | 48 +++++++++++++++++
+ src/skippy/runtime_types.h     |  4 ++
+ 9 files changed, 210 insertions(+), 2 deletions(-)
+
+diff --git a/include/skippy/activation.h b/include/skippy/activation.h
+index 32d796c59..65fb95c75 100644
+--- a/include/skippy/activation.h
++++ b/include/skippy/activation.h
+@@ -27,6 +27,18 @@ enum skippy_activation_layout {
+     SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR  = 1,
+ };
+
++#define SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION 1
++
++/** @brief Stable, graph-observed representation for one token at a stage edge. */
++struct skippy_activation_boundary_desc {
++    uint32_t version;
++    uint32_t ggml_type;
++    uint32_t layout;
++    uint32_t reserved;
++    uint64_t elements_per_token;
++    uint64_t bytes_per_token;
++};
++
+ #define SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST   (UINT64_C(1) << 0)
+ #define SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP   (UINT64_C(1) << 1)
+ #define SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD (UINT64_C(1) << 2)
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index e0024ede2..6a44b660c 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -34,7 +34,7 @@ extern "C" {
+
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 44
++#define SKIPPY_ABI_VERSION_PATCH 45
+
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -73,6 +73,7 @@ enum skippy_feature {
+     SKIPPY_FEATURE_NGRAM_CACHE_DRAFT      = 1 << 26,
+     SKIPPY_FEATURE_INKLING_MTP_MM         = 1 << 27,
+     SKIPPY_FEATURE_ITERATION_BATCH        = 1 << 28,
++    SKIPPY_FEATURE_ACTIVATION_BOUNDARY     = 1 << 29,
+ };
+
+ enum skippy_status {
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index ba62f60cf..f63a3418f 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -37,6 +37,7 @@ enum skippy_mtp_source {
+
+ struct skippy_model;
+ struct skippy_session;
++struct skippy_activation_boundary_desc;
+
+ /** @brief Model, stage, memory, cache, device, and family-policy load options. */
+ struct skippy_runtime_config {
+@@ -164,6 +165,16 @@ LLAMA_API enum skippy_status skippy_model_free(
+ LLAMA_API const struct llama_model * skippy_model_llama_model(
+         const struct skippy_model * model);
+
++/** @brief Reads the configured stage graph's observed output boundary descriptor. */
++LLAMA_API bool skippy_model_output_activation_boundary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc);
++
++/** @brief Reads the configured stage graph's observed input boundary descriptor. */
++LLAMA_API bool skippy_model_input_activation_boundary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc);
++
+ /** @brief Creates a fresh inference session for an opened model. */
+ LLAMA_API enum skippy_status skippy_session_create(
+         struct skippy_model * model,
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 1d319e5fc..418e39398 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -12,6 +12,7 @@
+ #include "llama-ext.h"
+ #include "llama-sampler.h"
+ #include "llama.h"
++#include "skippy/graph_filter_scope.h"
+
+ #include <cinttypes>
+ #include <cmath>
+@@ -2444,6 +2445,32 @@ llm_graph_result * llama_context::get_gf_res_prev() const {
+     return static_cast<llm_graph_result *>(gf_res_prev.get());
+ }
+
++bool llama_context::get_activation_boundary(
++        enum ggml_type & type,
++        uint64_t & elements_per_token,
++        uint64_t & bytes_per_token) const {
++    if (!activation_boundary_observed || !activation_boundary_stable) {
++        return false;
++    }
++    type = activation_boundary_type;
++    elements_per_token = activation_boundary_elements_per_token;
++    bytes_per_token = activation_boundary_bytes_per_token;
++    return true;
++}
++
++bool llama_context::get_input_activation_boundary(
++        enum ggml_type & type,
++        uint64_t & elements_per_token,
++        uint64_t & bytes_per_token) const {
++    if (!input_activation_boundary_observed || !input_activation_boundary_stable) {
++        return false;
++    }
++    type = input_activation_boundary_type;
++    elements_per_token = input_activation_boundary_elements_per_token;
++    bytes_per_token = input_activation_boundary_bytes_per_token;
++    return true;
++}
++
+ ggml_cgraph * llama_context::graph_reserve(
+         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+@@ -2478,6 +2505,75 @@ ggml_cgraph * llama_context::graph_reserve(
+
+     auto * gf = model.build_graph(gparams);
+
++    const auto graph_boundary_bytes_per_token = [](
++            const ggml_tensor * boundary,
++            uint64_t elements_per_token,
++            uint64_t & bytes_per_token) {
++        if (boundary == nullptr || !ggml_is_contiguous(boundary) || elements_per_token == 0) {
++            return false;
++        }
++        const uint64_t total_elements = static_cast<uint64_t>(ggml_nelements(boundary));
++        if (total_elements % elements_per_token != 0) {
++            return false;
++        }
++        const uint64_t token_count = total_elements / elements_per_token;
++        const uint64_t total_bytes = static_cast<uint64_t>(ggml_nbytes(boundary));
++        if (token_count == 0 || total_bytes % token_count != 0) {
++            return false;
++        }
++        bytes_per_token = total_bytes / token_count;
++        return bytes_per_token > 0;
++    };
++
++    const skippy_graph_filter & stage_filter = skippy_graph_get_filter();
++    if (stage_filter.enabled && !stage_filter.include_embeddings) {
++        const ggml_tensor * boundary = res->t_inp_embd;
++        bool is_hc_stage_input = false;
++        if (boundary == nullptr) {
++            boundary = ggml_graph_get_tensor(gf, "hc_stage_input");
++            is_hc_stage_input = boundary != nullptr;
++        }
++        uint64_t elements_per_token = boundary != nullptr ? static_cast<uint64_t>(boundary->ne[0]) : 0;
++        if (is_hc_stage_input) {
++            elements_per_token *= static_cast<uint64_t>(boundary->ne[1]);
++        }
++        uint64_t bytes_per_token = 0;
++        if (graph_boundary_bytes_per_token(boundary, elements_per_token, bytes_per_token)) {
++            if (!input_activation_boundary_observed) {
++                input_activation_boundary_observed = true;
++                input_activation_boundary_type = boundary->type;
++                input_activation_boundary_elements_per_token = elements_per_token;
++                input_activation_boundary_bytes_per_token = bytes_per_token;
++            } else if (input_activation_boundary_type != boundary->type ||
++                       input_activation_boundary_elements_per_token != elements_per_token ||
++                       input_activation_boundary_bytes_per_token != bytes_per_token) {
++                input_activation_boundary_stable = false;
++            }
++        } else {
++            input_activation_boundary_stable = false;
++        }
++    }
++
++    if (stage_filter.enabled && !stage_filter.include_output) {
++        const ggml_tensor * boundary = res->get_embd();
++        const uint64_t elements_per_token = boundary != nullptr ? static_cast<uint64_t>(boundary->ne[0]) : 0;
++        uint64_t bytes_per_token = 0;
++        if (graph_boundary_bytes_per_token(boundary, elements_per_token, bytes_per_token)) {
++            if (!activation_boundary_observed) {
++                activation_boundary_observed = true;
++                activation_boundary_type = boundary->type;
++                activation_boundary_elements_per_token = elements_per_token;
++                activation_boundary_bytes_per_token = bytes_per_token;
++            } else if (activation_boundary_type != boundary->type ||
++                       activation_boundary_elements_per_token != elements_per_token ||
++                       activation_boundary_bytes_per_token != bytes_per_token) {
++                activation_boundary_stable = false;
++            }
++        } else {
++            activation_boundary_stable = false;
++        }
++    }
++
+     this->n_outputs = save_n_outputs;
+
+     // initialize scheduler with the specified graph
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 20c121b24..9e883575f 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -254,6 +254,9 @@ public:
+     ggml_cgraph * graph_reserve(
+         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+
++    bool get_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
++    bool get_input_activation_boundary(enum ggml_type & type, uint64_t & elements_per_token, uint64_t & bytes_per_token) const;
++
+     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
+
+ private:
+@@ -370,6 +373,18 @@ private:
+     llm_graph_result_ptr gf_res_prev;
+     llm_graph_result_ptr gf_res_reserve;
+
++    bool activation_boundary_observed = false;
++    bool activation_boundary_stable = true;
++    enum ggml_type activation_boundary_type = GGML_TYPE_COUNT;
++    uint64_t activation_boundary_elements_per_token = 0;
++    uint64_t activation_boundary_bytes_per_token = 0;
++
++    bool input_activation_boundary_observed = false;
++    bool input_activation_boundary_stable = true;
++    enum ggml_type input_activation_boundary_type = GGML_TYPE_COUNT;
++    uint64_t input_activation_boundary_elements_per_token = 0;
++    uint64_t input_activation_boundary_bytes_per_token = 0;
++
+     // host buffer for the model output (logits and embeddings)
+     ggml_backend_buffer_ptr buf_output;
+
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index f48e56cb5..1c3574149 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -36,7 +36,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_NATIVE_MTP_N1 |
+            SKIPPY_FEATURE_NGRAM_CACHE_DRAFT |
+            SKIPPY_FEATURE_INKLING_MTP_MM |
+-           SKIPPY_FEATURE_ITERATION_BATCH;
++           SKIPPY_FEATURE_ITERATION_BATCH |
++           SKIPPY_FEATURE_ACTIVATION_BOUNDARY;
+ }
+
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/model_lifecycle.cpp b/src/skippy/model_lifecycle.cpp
+index 2828ffe38..4ccf2c4a2 100644
+--- a/src/skippy/model_lifecycle.cpp
++++ b/src/skippy/model_lifecycle.cpp
+@@ -123,5 +123,25 @@ const struct llama_model * skippy_model_llama_model(
+     return model != nullptr ? model->model : nullptr;
+ }
+
++bool skippy_model_output_activation_boundary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc) {
++    if (model == nullptr || out_desc == nullptr || !model->has_output_activation_boundary) {
++        return false;
++    }
++    *out_desc = model->output_activation_boundary;
++    return true;
++}
++
++bool skippy_model_input_activation_boundary(
++        const struct skippy_model * model,
++        struct skippy_activation_boundary_desc * out_desc) {
++    if (model == nullptr || out_desc == nullptr || !model->has_input_activation_boundary) {
++        return false;
++    }
++    *out_desc = model->input_activation_boundary;
++    return true;
++}
++
+
+ } // extern "C"
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 166f2f7b7..5a6602a1c 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -696,6 +696,54 @@ static enum skippy_status skippy_finish_model_open(
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+
++    const auto fail_boundary_load = [&](const char * message) {
++        if (event_scope != nullptr) {
++            event_scope->emit_failure(SKIPPY_STATUS_RUNTIME_ERROR, message);
++        }
++        llama_free(stage_model->ctx);
++        stage_model->ctx = nullptr;
++        llama_model_free(model);
++        delete stage_model;
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message);
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    };
++
++    if (config != nullptr && config->filter_tensors_on_load && !config->include_output) {
++        enum ggml_type type = GGML_TYPE_COUNT;
++        uint64_t elements_per_token = 0;
++        uint64_t bytes_per_token = 0;
++        if (!stage_model->ctx->get_activation_boundary(type, elements_per_token, bytes_per_token)) {
++            return fail_boundary_load("stage graph did not expose a stable output activation boundary");
++        }
++        stage_model->has_output_activation_boundary = true;
++        stage_model->output_activation_boundary = {
++            SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION,
++            static_cast<uint32_t>(type),
++            static_cast<uint32_t>(SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR),
++            0,
++            elements_per_token,
++            bytes_per_token,
++        };
++    }
++
++    if (config != nullptr && config->filter_tensors_on_load && !config->include_embeddings) {
++        enum ggml_type type = GGML_TYPE_COUNT;
++        uint64_t elements_per_token = 0;
++        uint64_t bytes_per_token = 0;
++        if (!stage_model->ctx->get_input_activation_boundary(type, elements_per_token, bytes_per_token)) {
++            return fail_boundary_load("stage graph did not expose a stable input activation boundary");
++        }
++        stage_model->has_input_activation_boundary = true;
++        stage_model->input_activation_boundary = {
++            SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION,
++            static_cast<uint32_t>(type),
++            static_cast<uint32_t>(SKIPPY_ACTIVATION_LAYOUT_TOKEN_MAJOR),
++            0,
++            elements_per_token,
++            bytes_per_token,
++        };
++    }
++
+     if (skippy_should_create_native_mtp_sidecar(model, config)) {
+         llama_context_params mtp_params = params;
+         mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index dbe7ab2e4..00f61dc36 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -87,6 +87,10 @@ struct skippy_model {
+     skippy_runtime_config config = {};
+     skippy_glm_dsa_op_timing glm_dsa_timing = {};
+     bool executable = true;
++    bool has_input_activation_boundary = false;
++    skippy_activation_boundary_desc input_activation_boundary = {};
++    bool has_output_activation_boundary = false;
++    skippy_activation_boundary_desc output_activation_boundary = {};
+     uint32_t lane_count = 1;
+     std::mutex lane_mutex;
+     std::vector<bool> lane_in_use;
+--
+2.54.0 (Apple Git-157)

@@ -84,7 +84,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -436,7 +436,7 @@ fn proto_announcement_without_stage_control_is_not_stage_compatible() {
             name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
             major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
             features: vec![
-                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6.to_string(),
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7.to_string(),
             ],
         }],
         ..Default::default()

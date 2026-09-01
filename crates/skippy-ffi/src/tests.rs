@@ -1,7 +1,8 @@
 use std::mem::{offset_of, size_of};
 
 use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, runtime_abi_supported,
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
+    runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -58,6 +59,17 @@ fn rejects_major_and_minor_mismatches() {
         ABI_VERSION_MINOR + 1,
         ABI_VERSION_PATCH,
     )));
+}
+
+#[test]
+fn activation_boundary_descriptor_matches_native_layout() {
+    assert_eq!(size_of::<ActivationBoundaryDesc>(), 32);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, version), 0);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, ggml_type), 4);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, layout), 8);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, reserved), 12);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, elements_per_token), 16);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, bytes_per_token), 24);
 }
 
 #[test]
