@@ -129,10 +129,13 @@ impl Node {
             return Some(addr);
         }
         state.peers.get(&peer_id).and_then(|peer| {
-            peer.addr.addrs.iter().find_map(|candidate| match candidate {
-                iroh::TransportAddr::Ip(addr) => Some(*addr),
-                _ => None,
-            })
+            peer.addr
+                .addrs
+                .iter()
+                .find_map(|candidate| match candidate {
+                    iroh::TransportAddr::Ip(addr) => Some(*addr),
+                    _ => None,
+                })
         })
     }
 }
@@ -149,7 +152,10 @@ fn local_ip_toward(remote: std::net::SocketAddr) -> anyhow::Result<std::net::IpA
     socket
         .connect(remote)
         .context("connect route-probe socket")?;
-    Ok(socket.local_addr().context("read route-probe address")?.ip())
+    Ok(socket
+        .local_addr()
+        .context("read route-probe address")?
+        .ip())
 }
 
 #[derive(Clone)]

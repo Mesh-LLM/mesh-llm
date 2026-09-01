@@ -13,8 +13,7 @@ use std::{
 
 use super::stage_execution::{
     consume_optional_client_ready_hello, enforce_transport_auth, prepare_binary_stage_connection,
-    take_ready_downstream,
-    warm_downstream_preconnect_enabled,
+    take_ready_downstream, warm_downstream_preconnect_enabled,
 };
 use super::{
     direct_return::{PredictionReturnHub, PredictionReturnSinks},

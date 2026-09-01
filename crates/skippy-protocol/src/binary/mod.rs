@@ -22,11 +22,11 @@ pub use types::{
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
-    TRANSPORT_AUTH_MAGIC,
     STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
     StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch, StageSamplingConfig,
-    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, WireStagePhase,
-    activation_frame_flags_from_state_flags, activation_state_flags_from_frame_flags, state_flags,
+    StageStateHeader, StageWireMessage, TRANSPORT_AUTH_MAGIC, WireMessageKind, WireReplyKind,
+    WireStagePhase, activation_frame_flags_from_state_flags,
+    activation_state_flags_from_frame_flags, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {

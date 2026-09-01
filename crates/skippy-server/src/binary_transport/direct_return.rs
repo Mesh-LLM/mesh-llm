@@ -281,7 +281,6 @@ impl PredictionReturnReceiver {
         };
         validate_expected_reply(reply, expected).map(Some)
     }
-
 }
 
 fn validate_expected_reply(reply: StageReply, expected: &[WireReplyKind]) -> Result<StageReply> {
@@ -587,9 +586,11 @@ mod tests {
     #[test]
     fn auth_gated_return_listener_accepts_matching_token() {
         let token = vec![0x7E_u8; 32];
-        let listener =
-            PredictionReturnListener::start_with_auth("127.0.0.1:0".parse().unwrap(), Some(token.clone()))
-                .unwrap();
+        let listener = PredictionReturnListener::start_with_auth(
+            "127.0.0.1:0".parse().unwrap(),
+            Some(token.clone()),
+        )
+        .unwrap();
         let addr = listener.bind_addr();
         let hub = listener.hub();
         let receiver = hub.register(71, 73).unwrap();

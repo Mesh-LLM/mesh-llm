@@ -22,10 +22,10 @@ use super::telemetry::{
 };
 use crate::binary_transport::BinaryStageExecutionOptions;
 use crate::binary_transport::WireCondition;
+use crate::binary_transport::binary_kv::BinaryKvLookupResult;
 use crate::binary_transport::binary_kv::accumulate_shared_prefill_tokens;
 use crate::binary_transport::binary_kv::add_binary_record_stats;
 use crate::binary_transport::binary_kv::emit_binary_proactive_eviction;
-use crate::binary_transport::binary_kv::BinaryKvLookupResult;
 use crate::binary_transport::binary_kv::maybe_lookup_binary_prefill;
 use crate::binary_transport::binary_kv::maybe_record_binary_full_prefill;
 use crate::binary_transport::direct_return;
@@ -358,9 +358,7 @@ fn handle_binary_connection_messages(
                         &lookup_session_key,
                         align_target,
                     )
-                    .map_err(|error| {
-                        openai_frontend::OpenAiError::backend(format!("{error:#}"))
-                    })?;
+                    .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
                     Ok((
                         auto_align,
                         maybe_lookup_binary_prefill(
@@ -538,7 +536,13 @@ fn handle_binary_connection_messages(
                             })?;
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
-                            Ok((auto_align, sessions_before, sessions_after, eviction, result))
+                            Ok((
+                                auto_align,
+                                sessions_before,
+                                sessions_after,
+                                eviction,
+                                result,
+                            ))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                         .with_context(|| {

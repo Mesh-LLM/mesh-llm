@@ -881,7 +881,8 @@ impl Node {
         &self,
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
-        self.prepare_stage_control_request(&mut request, None).await?;
+        self.prepare_stage_control_request(&mut request, None)
+            .await?;
         if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;

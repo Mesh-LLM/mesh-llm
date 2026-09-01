@@ -758,7 +758,8 @@ fn probe_binary_stage_ready(
                 stream.set_read_timeout(Some(PROBE_IO_TIMEOUT)).ok();
                 stream.set_write_timeout(Some(PROBE_IO_TIMEOUT)).ok();
                 if let Some(token) = transport_auth
-                    && let Err(error) = skippy_protocol::binary::send_transport_auth(&mut stream, token)
+                    && let Err(error) =
+                        skippy_protocol::binary::send_transport_auth(&mut stream, token)
                 {
                     last_error =
                         Some(anyhow!(error).context("send binary stage probe transport auth"));

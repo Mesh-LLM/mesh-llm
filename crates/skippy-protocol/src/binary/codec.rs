@@ -5,9 +5,9 @@ use super::{
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
-    TRANSPORT_AUTH_MAGIC,
     StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, TRANSPORT_AUTH_MAGIC, WireMessageKind,
+    WireReplyKind,
     activation::{
         activation_decoded_f32_bytes_with_state_flags, activation_wire_bytes_with_state_flags,
     },
