@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io,
+    io::{self, Read},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
@@ -16,9 +16,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
-        StageReply, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-        read_stage_message, recv_ready, recv_reply, send_ready, send_reply_message,
-        write_stage_message,
+        STAGE_WIRE_FIXED_HEADER_BYTES, StageReply, StageStateHeader, StageWireMessage,
+        WireMessageKind, WireReplyKind, read_stage_message, recv_ready, recv_reply, send_ready,
+        send_reply_message, write_stage_message,
     },
 };
 
@@ -137,8 +137,42 @@ fn handle_prediction_return_connection(
     consume_optional_client_ready_hello(&mut stream)
         .context("consume optional direct prediction return client ready hello")?;
     send_ready(&mut stream).context("send direct prediction return ready")?;
-    let open = read_stage_message(&mut stream, 0).context("read direct prediction return open")?;
+    let open = read_prediction_return_open(&mut stream)?;
     hub.handle_return_connection(open, stream)
+}
+
+fn read_prediction_return_open(stream: &mut TcpStream) -> Result<StageWireMessage> {
+    let mut header = [0_u8; STAGE_WIRE_FIXED_HEADER_BYTES];
+    stream
+        .read_exact(&mut header)
+        .context("read direct prediction return open header")?;
+    let read_i32 = |offset: usize| {
+        let mut bytes = [0_u8; 4];
+        bytes.copy_from_slice(&header[offset..offset + 4]);
+        i32::from_le_bytes(bytes)
+    };
+
+    let kind = WireMessageKind::try_from(read_i32(0))
+        .context("parse direct prediction return open kind")?;
+    if kind != WireMessageKind::PredictionReturnOpen {
+        bail!("expected prediction return open message");
+    }
+
+    // Prediction-return opens are fixed routing headers. Reject fields that
+    // would make the generic decoder read or allocate a variable-length body.
+    if [4, 8, 12, 16]
+        .into_iter()
+        .any(|offset| read_i32(offset) != 0)
+    {
+        bail!("noncanonical prediction return open message");
+    }
+
+    let open = read_stage_message(io::Cursor::new(header), 0)
+        .context("parse direct prediction return open")?;
+    if open.state != StageStateHeader::new(kind) {
+        bail!("noncanonical prediction return open message");
+    }
+    Ok(open)
 }
 
 impl PredictionReturnHub {
@@ -488,7 +522,11 @@ fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWire
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_protocol::binary::{recv_reply, send_reply_predicted_with_stats};
+    use skippy_protocol::binary::{
+        MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES, recv_ready, recv_reply,
+        send_reply_predicted_with_stats, state_flags,
+    };
+    use std::io::Write;
 
     #[test]
     fn handle_return_connection_delivers_reply_to_registered_waiter() {
@@ -515,6 +553,59 @@ mod tests {
         assert_eq!(reply.predicted, 42);
         drop(client);
         handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn prediction_return_open_rejects_metadata_before_reading_its_body() {
+        let hub = Arc::new(PredictionReturnHub::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let _ = result_tx.send(handle_prediction_return_connection(hub, server));
+        });
+
+        recv_ready(&mut client).unwrap();
+
+        let kind = WireMessageKind::PredictionReturnOpen;
+        let mut state = StageStateHeader::new(kind);
+        state.flags |= state_flags::CHAT_SAMPLING_METADATA;
+        let mut header = Vec::new();
+        for value in [
+            kind as i32,
+            0,
+            0,
+            0,
+            0,
+            state.version,
+            state.seq_id,
+            state.phase,
+            state.flags,
+            state.checkpoint_generation,
+            state.prompt_token_count,
+            state.decode_step,
+            state.current_token,
+            state.source_stage_index,
+        ] {
+            header.extend_from_slice(&value.to_le_bytes());
+        }
+        header.extend_from_slice(&1_u64.to_le_bytes());
+        header.extend_from_slice(&2_u64.to_le_bytes());
+        header.extend_from_slice(
+            &u32::try_from(MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES)
+                .unwrap()
+                .to_le_bytes(),
+        );
+        client.write_all(&header).unwrap();
+        client.flush().unwrap();
+
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("return open must be rejected before its metadata body is read");
+        assert!(result.is_err());
+        drop(client);
+        handle.join().unwrap();
     }
 
     #[test]
