@@ -228,6 +228,90 @@ fn prefix_namespace_hasher(
     hasher
 }
 
+/// The *numerical* identity of an exact-state (full-state or KV+recurrent)
+/// payload for prefill/decode handoff.
+///
+/// This is the numerical half of the numerical-vs-placement identity split:
+/// it covers every input that changes the bytes or the interpretation of an
+/// exported state blob — weights, cache dtypes, flash-attention layout, the
+/// GPU layer split, backend, platform, layer range, and the context shape
+/// (`ctx_size`, `lane_count`, which decide the KV buffer geometry a
+/// full-state blob is laid out against).
+///
+/// It deliberately excludes placement: `stage_id`, `stage_index`,
+/// `topology_id`, `run_id`, and bind addresses. A prefill replica and a
+/// decode replica differ in exactly those fields, and state must flow
+/// between them whenever the numerical identity matches.
+pub struct ExactStateIdentityParams<'a> {
+    pub model_id: &'a str,
+    pub model_revision: Option<&'a str>,
+    pub model_file: Option<&'a str>,
+    /// Content digests of the served weights, when known. `model_id` is a
+    /// display name — two runs can present the same id while serving
+    /// different tensors (requantized artifact, republished package,
+    /// swapped GGUF), and state crossing that boundary is silent numerical
+    /// corruption. Absent digests are tagged distinctly so `None` cannot
+    /// alias a real value.
+    pub manifest_sha256: Option<&'a str>,
+    pub source_model_sha256: Option<&'a str>,
+    pub package_ref: Option<&'a str>,
+    pub cache_type_k: &'a str,
+    pub cache_type_v: &'a str,
+    pub flash_attn_type: FlashAttentionType,
+    pub n_gpu_layers: i32,
+    pub backend_device: Option<&'a str>,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    pub ctx_size: u32,
+    pub lane_count: u32,
+    pub payload_kind: &'a str,
+}
+
+pub fn exact_state_identity(params: &ExactStateIdentityParams<'_>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"exact-state-identity-v1");
+    hasher.update(NATIVE_KV_RUNTIME_ABI_VERSION.as_bytes());
+    hasher.update(b"model:");
+    hasher.update(params.model_id.as_bytes());
+    for (tag, value) in [
+        (&b"revision:"[..], params.model_revision),
+        (&b"file:"[..], params.model_file),
+        (&b"manifest:"[..], params.manifest_sha256),
+        (&b"source:"[..], params.source_model_sha256),
+        (&b"package:"[..], params.package_ref),
+        (&b"device:"[..], params.backend_device),
+    ] {
+        hasher.update(tag);
+        match value {
+            Some(value) => {
+                hasher.update(b"=");
+                hasher.update(value.as_bytes());
+            }
+            None => {
+                hasher.update(b"<absent>");
+            }
+        }
+    }
+    hasher.update(b"kv:");
+    hasher.update(params.cache_type_k.as_bytes());
+    hasher.update(b"/");
+    hasher.update(params.cache_type_v.as_bytes());
+    hasher.update(match params.flash_attn_type {
+        FlashAttentionType::Auto => b"fa:auto",
+        FlashAttentionType::Disabled => b"fa:offf",
+        FlashAttentionType::Enabled => b"fa:onnn",
+    });
+    hasher.update(&params.n_gpu_layers.to_le_bytes());
+    hasher.update(&params.layer_start.to_le_bytes());
+    hasher.update(&params.layer_end.to_le_bytes());
+    hasher.update(&params.ctx_size.to_le_bytes());
+    hasher.update(&params.lane_count.to_le_bytes());
+    hasher.update(b"kind:");
+    hasher.update(params.payload_kind.as_bytes());
+    update_platform_identity(&mut hasher);
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
 pub fn page_id(
     config: &StageConfig,
     token_start: u64,
@@ -247,6 +331,144 @@ pub fn page_id(
 
 pub fn activation_page_id(page_id: &str, activation_width: i32) -> String {
     format!("act:{}:w{}", page_id, activation_width.max(0))
+}
+
+#[cfg(test)]
+mod exact_state_identity_tests {
+    use super::*;
+
+    fn params() -> ExactStateIdentityParams<'static> {
+        ExactStateIdentityParams {
+            model_id: "org/model:Q4_K_M",
+            model_revision: Some("abc123"),
+            model_file: Some("model.gguf"),
+            manifest_sha256: Some("m".repeat(64).leak()),
+            source_model_sha256: Some("s".repeat(64).leak()),
+            package_ref: None,
+            cache_type_k: "f16",
+            cache_type_v: "f16",
+            flash_attn_type: FlashAttentionType::Auto,
+            n_gpu_layers: 99,
+            backend_device: Some("Metal"),
+            layer_start: 0,
+            layer_end: 28,
+            ctx_size: 8192,
+            lane_count: 2,
+            payload_kind: "full-state",
+        }
+    }
+
+    /// Placement is excluded *by construction*: the params carry no stage,
+    /// topology, or run fields, so two replicas that differ only in placement
+    /// produce the same identity.
+    #[test]
+    fn identical_numerics_produce_identical_identity() {
+        assert_eq!(
+            exact_state_identity(&params()),
+            exact_state_identity(&params())
+        );
+    }
+
+    #[test]
+    fn cache_dtype_changes_identity() {
+        let saver = ExactStateIdentityParams {
+            cache_type_k: "q4_0",
+            cache_type_v: "q4_0",
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&saver)
+        );
+    }
+
+    #[test]
+    fn context_shape_changes_identity() {
+        let wider_ctx = ExactStateIdentityParams {
+            ctx_size: 16384,
+            ..params()
+        };
+        let more_lanes = ExactStateIdentityParams {
+            lane_count: 4,
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&wider_ctx)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&more_lanes)
+        );
+    }
+
+    #[test]
+    fn backend_and_weights_change_identity() {
+        let cuda = ExactStateIdentityParams {
+            backend_device: Some("CUDA0"),
+            ..params()
+        };
+        let other_revision = ExactStateIdentityParams {
+            model_revision: Some("def456"),
+            ..params()
+        };
+        let absent_revision = ExactStateIdentityParams {
+            model_revision: None,
+            ..params()
+        };
+        assert_ne!(exact_state_identity(&params()), exact_state_identity(&cuda));
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&other_revision)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&absent_revision)
+        );
+    }
+
+    /// Weight content digests must separate state even when the display
+    /// model id matches — the same argument `update_weight_identity` makes
+    /// for KV pages.
+    #[test]
+    fn weight_digests_change_identity() {
+        let requantized = ExactStateIdentityParams {
+            source_model_sha256: Some("t".repeat(64).leak()),
+            ..params()
+        };
+        let repacked = ExactStateIdentityParams {
+            manifest_sha256: Some("n".repeat(64).leak()),
+            ..params()
+        };
+        let absent = ExactStateIdentityParams {
+            manifest_sha256: None,
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&requantized)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&repacked)
+        );
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&absent)
+        );
+    }
+
+    #[test]
+    fn payload_kind_changes_identity() {
+        let pages = ExactStateIdentityParams {
+            payload_kind: "kv-recurrent",
+            ..params()
+        };
+        assert_ne!(
+            exact_state_identity(&params()),
+            exact_state_identity(&pages)
+        );
+    }
 }
 
 #[cfg(test)]
