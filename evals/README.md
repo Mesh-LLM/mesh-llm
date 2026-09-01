@@ -1,5 +1,54 @@
 # mesh-llm Router Evals
 
+## Compare Mesh commits with production defaults
+
+`agentic-replay.py` is the durable entrypoint for comparing two or more
+Mesh refs on one model. It creates isolated detached worktrees, builds each
+release host and native runtime, replays a pinned subset of the Thoughtworks
+agentic-coding trajectories, and produces raw JSONL, CSV/JSON/Markdown tables,
+SVG throughput and TTFT charts, logs, binary hashes, and an artifact inventory.
+
+Inspect the exact build order and launch command without changing anything:
+
+```bash
+python3 evals/agentic-replay.py plan \
+  --ref rc8=v0.76.0-rc8 \
+  --ref main=origin/main \
+  --model '<model-uri>' \
+  --trajectories-per-framework 2
+```
+
+Run the default ABBA comparison after materializing the pinned parquet from
+`thoughtworks/agentic-coding-trajectories`:
+
+```bash
+python3 evals/agentic-replay.py run \
+  --ref rc8=v0.76.0-rc8 \
+  --ref main=origin/main \
+  --model '<model-uri>' \
+  --trajectories-per-framework 2 \
+  --dataset-file /path/to/sessions.parquet \
+  --output /path/to/artifact
+```
+
+The server command is always `mesh-llm serve --model <model> --log-format
+json`. The runner never sets context size, Mesh execution lanes, KV budget, or
+backend tuning; `--concurrency` controls simultaneous client requests only.
+Trajectory count is deliberately explicit rather than hidden behind a default.
+With the example above and client concurrency 1/2/4, the runner selects 18
+unique whole trajectories: two from each of the three recorded agent frameworks
+for each disjoint concurrency cohort. Selection is deterministic by session ID
+hash within each framework.
+
+Every assistant turn becomes one measured request. A trajectory's turns are
+strictly sequential and each request contains the real recorded history before
+that turn; only separate trajectories can overlap. After measuring a turn, the
+runner advances with the recorded assistant action and tool observation rather
+than the benchmark model's output, which gives every experiment arm an identical
+growing prefix. The manifest records all selected session IDs, framework and
+turn counts, context bounds, and hashes. Use `report` to regenerate tables and
+charts from a completed artifact without rerunning the model.
+
 For the pinned Mesh-versus-raw-llama.cpp scheduler matrix across CUDA, Metal,
 dense/MoE/recurrent/hybrid models, llama-benchy, and Thoughtworks agent traces, see
 [`docs/skippy/COMPETITIVE_BENCHMARK.md`](../docs/skippy/COMPETITIVE_BENCHMARK.md).
