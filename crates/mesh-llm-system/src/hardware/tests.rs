@@ -1,4 +1,5 @@
 use super::*;
+use serial_test::serial;
 
 fn synthetic_gpu(index: usize, stable_id: Option<&str>) -> GpuFacts {
     GpuFacts {
@@ -838,8 +839,14 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
+// Real-collector tests below share process-global state: the skippy probe
+// override and the native backend enumeration behind `skippy_runtime`. They
+// are not safe to interleave, so they run in the `real_collector` serial group
+// (see the #1583 review: parallel runs on macOS saw one enumeration return a
+// device while the next returned none).
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[serial(real_collector)]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
 
@@ -861,6 +868,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[serial(real_collector)]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));
 
@@ -886,6 +894,7 @@ fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_gpu_name_only() {
     let result = query(&[Metric::GpuName]);
     assert_eq!(result.vram_bytes, 0);
@@ -893,6 +902,7 @@ fn test_query_gpu_name_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_vram_only() {
     let result = query(&[Metric::VramBytes]);
     assert_eq!(result.gpu_name, None);
@@ -900,6 +910,7 @@ fn test_query_vram_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_multiple_metrics() {
     let result = query(&[Metric::GpuName, Metric::VramBytes]);
     assert_eq!(result.hostname, None);
@@ -907,6 +918,7 @@ fn test_query_multiple_metrics() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_survey_returns_all_metrics() {
     let s = survey();
     let q = query(&[
@@ -1076,6 +1088,7 @@ fn test_query_hostname_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_detect_collector_returns_default_on_non_tegra() {
     let collector = detect_collector();
     let s = collector.collect(&[Metric::VramBytes]);
@@ -1083,6 +1096,7 @@ fn test_detect_collector_returns_default_on_non_tegra() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_is_soc_only() {
     let result = query(&[Metric::IsSoc]);
     assert_eq!(result.vram_bytes, 0);
@@ -1094,6 +1108,7 @@ fn test_query_is_soc_only() {
 
 #[cfg(target_os = "macos")]
 #[test]
+#[serial(real_collector)]
 fn test_macos_is_soc_true() {
     let result = DefaultCollector.collect(&[Metric::IsSoc]);
     assert!(
@@ -1104,6 +1119,7 @@ fn test_macos_is_soc_true() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[serial(real_collector)]
 fn test_tegra_is_soc_true() {
     let result = TegraCollector.collect(&[Metric::IsSoc]);
     assert!(result.is_soc, "TegraCollector must report is_soc=true");
@@ -1111,6 +1127,7 @@ fn test_tegra_is_soc_true() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[serial(real_collector)]
 fn test_linux_discrete_is_soc_false() {
     let result = DefaultCollector.collect(&[Metric::IsSoc]);
     assert!(
