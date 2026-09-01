@@ -17,7 +17,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -34,6 +34,14 @@ const MAX_RETURN_CONNECTIONS: usize = 16;
 
 /// A peer must finish the ready/open handshake within this deadline.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the optional client ready hello has to appear, and to arrive in
+/// full once its first bytes have. Bounded so the other dialect — the stage
+/// waits for our ready before sending anything — still moves on promptly.
+const HELLO_PEEK_BUDGET: Duration = Duration::from_millis(250);
+
+/// Pause between peeks while a partial hello completes.
+const HELLO_PEEK_POLL: Duration = Duration::from_millis(1);
 
 /// Framed replies must keep arriving within this deadline once the stream is
 /// open. Matches the driver-side reply wait so a wedged stage releases the
@@ -283,26 +291,53 @@ fn consume_optional_ready_hello(stream: &mut TcpStream) -> Result<()> {
         .read_timeout()
         .context("read driver prediction return stream timeout")?;
     stream
-        .set_read_timeout(Some(Duration::from_millis(250)))
+        .set_read_timeout(Some(HELLO_PEEK_BUDGET))
         .context("set driver prediction return hello peek timeout")?;
-    let mut bytes = [0_u8; 4];
-    let peeked = stream.peek(&mut bytes);
+    let peeked = peek_ready_hello(stream);
     stream
         .set_read_timeout(previous)
         .context("restore driver prediction return stream timeout")?;
-    match peeked {
-        Ok(4) if i32::from_le_bytes(bytes) == READY_MAGIC => {
-            recv_ready(&mut *stream).context("consume driver prediction return client hello")?;
-        }
-        Ok(_) => {}
-        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-        Err(error) => return Err(error).context("peek driver prediction return hello"),
+    if peeked.context("peek driver prediction return hello")? {
+        recv_ready(&mut *stream).context("consume driver prediction return client hello")?;
     }
     Ok(())
 }
 
+/// Reports whether the peer opened with a client ready hello, leaving the
+/// stream unread either way. A short peek is not proof there is no hello: TCP
+/// may split the four magic bytes, so keep peeking while what has arrived is
+/// still a `READY_MAGIC` prefix. Anything else — a full non-matching word, a
+/// byte that diverges from the magic, EOF, or the budget running out — means
+/// no hello, and the caller reads the bytes as a stage message instead.
+fn peek_ready_hello(stream: &mut TcpStream) -> std::io::Result<bool> {
+    let magic = READY_MAGIC.to_le_bytes();
+    let deadline = Instant::now() + HELLO_PEEK_BUDGET;
+    loop {
+        let mut bytes = [0_u8; 4];
+        match stream.peek(&mut bytes) {
+            Ok(4) => return Ok(bytes == magic),
+            // Only a prefix so far; the rest may still be in flight.
+            Ok(peeked) if peeked > 0 && bytes[..peeked] == magic[..peeked] => {}
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+        // The buffered prefix makes the next peek return immediately, so pause
+        // rather than spin while the remaining bytes arrive.
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(HELLO_PEEK_POLL);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
     use skippy_protocol::binary::{
         StageStateHeader, StageWireMessage, send_reply_predicted_with_stats, write_stage_message,
@@ -345,6 +380,31 @@ mod tests {
             .unwrap()
             .expect("direct return reply");
         assert_eq!(reply.predicted, 42);
+    }
+
+    #[test]
+    fn delivers_reply_when_the_client_hello_arrives_split() {
+        let listener = loopback_listener();
+        let receiver = listener.register(19, 27).unwrap();
+
+        let mut client = TcpStream::connect(listener.local_addr()).unwrap();
+        // TCP may split the four-byte hello; the peek must wait for the rest
+        // instead of reading the tail as the start of a stage message.
+        let magic = READY_MAGIC.to_le_bytes();
+        client.set_nodelay(true).unwrap();
+        client.write_all(&magic[..1]).unwrap();
+        thread::sleep(Duration::from_millis(25));
+        client.write_all(&magic[1..]).unwrap();
+
+        recv_ready(&mut client).unwrap();
+        write_stage_message(&mut client, &open_message(19, 27)).unwrap();
+        send_reply_predicted_with_stats(&mut client, 55, Default::default()).unwrap();
+
+        let reply = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .expect("direct return reply");
+        assert_eq!(reply.predicted, 55);
     }
 
     #[test]

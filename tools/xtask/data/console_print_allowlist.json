@@ -3435,15 +3435,11 @@
   ],
   "crates/skippy-bench/src/direct_return_listener.rs": [
     {
-      "line": 117,
+      "line": 126,
       "macro_name": "eprintln!"
     },
     {
-      "line": 124,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 134,
+      "line": 133,
       "macro_name": "eprintln!"
     },
     {
@@ -3452,6 +3448,10 @@
     },
     {
       "line": 152,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 161,
       "macro_name": "eprintln!"
     }
   ],
