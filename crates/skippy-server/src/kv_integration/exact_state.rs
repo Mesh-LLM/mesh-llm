@@ -165,10 +165,14 @@ impl KvStageIntegration {
                             &lookup.value.page_id,
                         )
                     {
-                        eprintln!(
-                            "skippy exact-state quarantine failed for page {}: {quarantine_error:#}",
-                            lookup.value.page_id
-                        );
+                        let _ =
+                            mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                                message: "Skippy exact-state quarantine failed".to_string(),
+                                context: Some(format!(
+                                    "page_id={} error={quarantine_error:#}",
+                                    lookup.value.page_id
+                                )),
+                            });
                         return Err(error.context(format!(
                             "failed to fully quarantine corrupt exact-state entry: {quarantine_error:#}"
                         )));
