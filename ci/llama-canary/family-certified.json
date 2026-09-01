@@ -24,7 +24,7 @@
     {
       "family": "qwen3-dense",
       "profile": "full",
-      "cadences": ["llama-bump", "manual-full"],
+      "cadences": ["llama-bump", "manual-full", "nightly"],
       "artifact": {"repo": "Qwen/Qwen3-0.6B-GGUF", "revision": "23749fefcc72300e3a2ad315e1317431b06b590a", "files": ["Qwen3-0.6B-Q8_0.gguf"], "file_integrity": {"Qwen3-0.6B-Q8_0.gguf": {"size_bytes": 639446688, "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"}}, "selector": "Q8_0"},
       "execution": {"trunk_layers": 28, "mtp_layers": 0, "activation_width": 1024, "boundary_sweep_period": 0, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 633495552},
@@ -105,7 +105,7 @@
     {
       "family": "falcon-h1",
       "profile": "full",
-      "cadences": ["llama-bump", "manual-full"],
+      "cadences": ["llama-bump", "manual-full", "nightly"],
       "artifact": {"repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF", "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a", "files": ["Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"], "file_integrity": {"Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {"size_bytes": 944786656, "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 942121232},
@@ -132,7 +132,7 @@
     {
       "family": "qwen3-next",
       "profile": "full",
-      "cadences": ["llama-bump", "manual-full"],
+      "cadences": ["llama-bump", "manual-full", "nightly"],
       "artifact": {"repo": "bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF", "revision": "c36ac5f15be18742fcd09baa61d48dfc016aae79", "files": ["Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf"], "file_integrity": {"Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf": {"size_bytes": 22217422720, "blob_id": "ece0ffe31891d1a0f1993565db4a977ae6d862d0ae2e45fc7282ff0a06cf5d5d"}}, "selector": "IQ2_XS"},
       "execution": {"trunk_layers": 48, "mtp_layers": 0, "activation_width": 2048, "boundary_sweep_period": 4, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 22211435520},
@@ -159,7 +159,7 @@
     {
       "family": "mamba",
       "profile": "full",
-      "cadences": ["llama-bump", "manual-full"],
+      "cadences": ["llama-bump", "manual-full", "nightly"],
       "artifact": {"repo": "Felladrin/gguf-mamba-130m-hf", "revision": "83ef2222e1a0437d26bda213537afc195a53b3ad", "files": ["mamba-130m-hf.Q4_K_M.gguf"], "file_integrity": {"mamba-130m-hf.Q4_K_M.gguf": {"size_bytes": 103576544, "blob_id": "2784131bc0546f802bcb720cbc77d26c174c85514400cc645507146ad95f07da"}}, "selector": "Q4_K_M"},
       "execution": {"trunk_layers": 24, "mtp_layers": 0, "activation_width": 768, "boundary_sweep_period": 2, "speculative_policy": "mtp-if-present"},
       "resources": {"runner_role": "family-certify", "cache_policy": "immutable-local", "estimated_model_bytes": 101794800},

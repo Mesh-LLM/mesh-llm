@@ -31,6 +31,34 @@ on:
         required: false
         default: nightly-artifacts/stability/latest
         type: string
+      kv_tool_loop:
+        required: false
+        default: true
+        type: boolean
+      kv_models:
+        required: false
+        default: ""
+        type: string
+      kv_attempts:
+        required: false
+        default: "3"
+        type: string
+      kv_pressure_turns:
+        required: false
+        default: "6"
+        type: string
+      kv_overlap_requests:
+        required: false
+        default: "2"
+        type: string
+      kv_min_cached_tokens:
+        required: false
+        default: "2048"
+        type: string
+      kv_suffix_prefill_limit:
+        required: false
+        default: "256"
+        type: string
 
 permissions:
   contents: read
@@ -53,6 +81,13 @@ jobs:
       MESH_STABILITY_TIMEOUT: ${{ inputs.timeout }}
       MESH_STABILITY_OUTPUT_DIR: ${{ inputs.output_dir }}
       MESH_STABILITY_SKIP_STREAMING: ${{ inputs.skip_streaming && 'true' || 'false' }}
+      MESH_KV_TOOL_LOOP: ${{ inputs.kv_tool_loop && 'true' || 'false' }}
+      MESH_KV_MODELS: ${{ inputs.kv_models || inputs.models }}
+      MESH_KV_ATTEMPTS: ${{ inputs.kv_attempts }}
+      MESH_KV_PRESSURE_TURNS: ${{ inputs.kv_pressure_turns }}
+      MESH_KV_OVERLAP_REQUESTS: ${{ inputs.kv_overlap_requests }}
+      MESH_KV_MIN_CACHED_TOKENS: ${{ inputs.kv_min_cached_tokens }}
+      MESH_KV_SUFFIX_PREFILL_LIMIT: ${{ inputs.kv_suffix_prefill_limit }}
       OPENCODE_DISABLE_AUTOUPDATE: "true"
       OPENCODE_DISABLE_PRUNE: "true"
       OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
@@ -112,7 +147,9 @@ jobs:
           fi
 
       - name: Run stability harness
+        id: stability_harness
         if: ${{ steps.preflight.outputs.run == 'true' }}
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -129,6 +166,24 @@ jobs:
           fi
           scripts/qa-nightly-stability.py "${args[@]}"
 
+      - name: Run KV tool-loop stability harness
+        id: kv_tool_loop
+        if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' && inputs.kv_tool_loop }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/qa-kv-tool-loop-stability.py \
+            --base-url "$MESH_STABILITY_BASE_URL" \
+            --models "$MESH_KV_MODELS" \
+            --attempts "$MESH_KV_ATTEMPTS" \
+            --pressure-turns "$MESH_KV_PRESSURE_TURNS" \
+            --overlap-requests "$MESH_KV_OVERLAP_REQUESTS" \
+            --timeout "$MESH_STABILITY_TIMEOUT" \
+            --min-cached-tokens "$MESH_KV_MIN_CACHED_TOKENS" \
+            --suffix-prefill-limit "$MESH_KV_SUFFIX_PREFILL_LIMIT" \
+            --output-dir "$MESH_STABILITY_OUTPUT_DIR/kv-tool-loop"
+
       - name: Publish run summary
         if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' }}
         shell: bash
@@ -143,6 +198,16 @@ jobs:
               echo "No summary.md was produced by the stability harness."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [[ -f "$MESH_STABILITY_OUTPUT_DIR/kv-tool-loop/summary.md" ]]; then
+            cat "$MESH_STABILITY_OUTPUT_DIR/kv-tool-loop/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$MESH_KV_TOOL_LOOP" == "true" ]]; then
+            {
+              echo
+              echo "## KV tool-loop stability"
+              echo
+              echo "No summary.md was produced by the KV tool-loop harness."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload stability evidence
         if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' }}
@@ -152,3 +217,10 @@ jobs:
           path: ${{ inputs.output_dir }}/
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Fail on stability regression
+        if: ${{ !cancelled() && steps.preflight.outputs.run == 'true' && (steps.stability_harness.outcome == 'failure' || steps.kv_tool_loop.outcome == 'failure') }}
+        shell: bash
+        run: |
+          echo "A nightly stability harness failed; inspect the uploaded evidence and job summary." >&2
+          exit 1
