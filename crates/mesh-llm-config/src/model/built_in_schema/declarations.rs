@@ -588,6 +588,10 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Path,
             "Stage artifacts come from the canonical model source and package planner.",
         ),
+        basic_setting(
+            &format!("{prefix}.source_policy"),
+            string_enum(["fallback", "local-required"]),
+        ),
         rejected_setting(
             &format!("{prefix}.stage_role"),
             ConfigValueSchema::String,

@@ -425,6 +425,11 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
         config.stage_model_path.as_deref(),
         &format!("{base_path}.stage_model_path"),
     )?;
+    validate_optional_enum(
+        config.source_policy.as_deref(),
+        &["fallback", "local-required"],
+        &format!("{base_path}.source_policy"),
+    )?;
     if config.openai_frontend_mode.is_some() {
         return Err(validation_diagnostic(
             &format!("{base_path}.openai_frontend_mode"),

@@ -45,7 +45,7 @@ use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -753,6 +753,68 @@ pub(super) async fn start_run_auto_node_and_plugins(
     Ok((node, channels, plugin_manager))
 }
 
+pub(super) fn register_pre_accept_local_source_policies(
+    config: &plugin::MeshConfig,
+    startup_specs: &[StartupModelSpec],
+) {
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_deref());
+    for model in &config.models {
+        let mut model_ids = BTreeSet::from([model.model.clone()]);
+        let configured_path = model
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .or(default_model_path);
+        if let Some(path) = configured_path {
+            let path = PathBuf::from(path);
+            model_ids.insert(path.to_string_lossy().into_owned());
+            if path.is_absolute() {
+                let canonical = path.canonicalize().unwrap_or(path);
+                model_ids.insert(models::model_ref_for_path(&canonical));
+            }
+        }
+        let required = super::startup_models::skippy_local_source_required(
+            model.skippy.as_ref(),
+            default_skippy,
+        );
+        let runtime_profile = model
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        for model_id in model_ids {
+            skippy::register_local_source_policy(&model_id, &runtime_profile, required);
+        }
+    }
+    for spec in startup_specs {
+        let mut model_ids = BTreeSet::new();
+        if let Some(declared_ref) = spec.declared_ref.as_deref() {
+            model_ids.insert(declared_ref.to_string());
+        }
+        model_ids.insert(spec.model_ref.to_string_lossy().into_owned());
+        if spec.model_ref.is_absolute() {
+            let canonical = spec
+                .model_ref
+                .canonicalize()
+                .unwrap_or_else(|_| spec.model_ref.clone());
+            model_ids.insert(models::model_ref_for_path(&canonical));
+        }
+        for model_id in model_ids {
+            skippy::register_local_source_policy(
+                &model_id,
+                &spec.profile,
+                spec.local_source_required,
+            );
+        }
+    }
+}
+
 pub(super) fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
     if options.disable_iroh_relays {
         mesh::RelayPolicy::ExplicitlyDisabled
@@ -1173,6 +1235,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        local_source_required: primary_startup_model
+            .is_some_and(|model| model.local_source_required),
         split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
@@ -1313,6 +1377,11 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Stage-control starts accepting before eager model resolution. Register
+    // every spelling that can become the model's runtime identity now so a
+    // legacy/profile-unaware request cannot bypass local-required policy in
+    // that window. False entries deliberately clear stale in-process policy.
+    register_pre_accept_local_source_policies(&config, &startup_specs);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(

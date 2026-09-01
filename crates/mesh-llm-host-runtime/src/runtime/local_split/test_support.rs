@@ -40,6 +40,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
         backend: "skippy".to_string(),
         package_ref: match load_mode {
             LoadMode::LayerPackage => "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
@@ -54,6 +55,8 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         layer_end: 36,
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
+        source_model_sha256: None,
+        local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
         media_marker: None,
@@ -167,6 +170,7 @@ pub(super) fn split_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: stage_protocol_generation_supported,
         advertised_model_throughput: vec![],
         cache_affinity: None,
 
@@ -450,6 +454,7 @@ stop = ["END"]
         mesh_config: &mesh_config,
         model_ref: "served-qwen",
         config_model_id: Some("Qwen"),
+        runtime_profile: "",
         model_path: &model_path,
         package: &package,
         generation: &generation,
@@ -470,6 +475,7 @@ stop = ["END"]
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         serving_hooks_factory: None,
+        local_source_required: false,
     };
     let settings = split_generation_load_settings(&spec)
         .await
@@ -578,6 +584,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         mesh_config: &mesh_config,
         model_ref: "meshllm/inkling-UD-Q2_K_XL-layers",
         config_model_id: None,
+        runtime_profile: "",
         model_path: &model_path,
         package: &identity,
         generation: &generation,
@@ -598,6 +605,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         serving_hooks_factory: None,
+        local_source_required: false,
     };
     let guarded = split_generation_load_settings(&guarded_spec)
         .await
@@ -951,6 +959,8 @@ pub(super) fn test_inventory_from_request(
         preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(40_000_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     }
 }

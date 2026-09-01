@@ -13,9 +13,24 @@ impl ModelConfigEntry {
         merge_model_fit(&mut effective, defaults);
         merge_hardware(&mut effective, defaults);
         merge_throughput(&mut effective, defaults);
+        merge_skippy(&mut effective, defaults);
         effective.topology =
             merge_model_topology(defaults.topology.as_ref(), effective.topology.as_ref());
         effective
+    }
+}
+
+fn merge_skippy(effective: &mut ModelConfigEntry, defaults: &ModelConfigDefaults) {
+    let Some(default_source_policy) = defaults
+        .skippy
+        .as_ref()
+        .and_then(|skippy| skippy.source_policy.as_ref())
+    else {
+        return;
+    };
+    let skippy = effective.skippy.get_or_insert_with(Default::default);
+    if skippy.source_policy.is_none() {
+        skippy.source_policy = Some(default_source_policy.clone());
     }
 }
 

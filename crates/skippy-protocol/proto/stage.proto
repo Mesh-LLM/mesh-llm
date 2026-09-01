@@ -19,6 +19,10 @@ message StageControlRequest {
     CancelPrepareStage cancel_prepare_stage = 8;
     StageStatusUpdate stage_status_update = 9;
     ClaimCoordinator claim_coordinator = 10;
+    // A distinct oneof arm makes strict local loads fail closed on older
+    // decoders: they see no recognized command rather than interpreting the
+    // frame as a fallback-capable LoadStage.
+    LoadStage load_local_stage = 11;
   }
 }
 
@@ -104,6 +108,9 @@ message LoadStage {
   optional uint32 generation_signal_window = 42;
   optional StageLoadRuntimeSettings runtime_settings = 43;
   optional bool continuous_batching = 44;
+  optional string source_model_sha256 = 45;
+  SourceResolutionPolicy source_resolution_policy = 46;
+  optional string runtime_profile = 47;
 }
 
 message StageLoadRuntimeSettings {
@@ -138,6 +145,9 @@ message GetLayerInventory {
   string model_id = 1;
   string package_ref = 2;
   string manifest_sha256 = 3;
+  optional string expected_source_model_sha256 = 5;
+  SourceResolutionPolicy source_resolution_policy = 6;
+  optional string runtime_profile = 7;
 }
 
 message PrepareStage {
@@ -243,6 +253,13 @@ message LayerInventory {
   optional string source_model_path = 9;
   optional uint64 source_model_bytes = 10;
   SourceModelKind source_model_kind = 11;
+  optional string source_model_sha256 = 13;
+  optional bool content_addressed_local_source = 14;
+}
+
+enum SourceResolutionPolicy {
+  SOURCE_RESOLUTION_POLICY_FALLBACK = 0;
+  SOURCE_RESOLUTION_POLICY_LOCAL_REQUIRED = 1;
 }
 
 message LayerRange {

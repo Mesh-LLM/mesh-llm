@@ -92,6 +92,7 @@ fn cli_model_exact_config_ref_resolves_pinned_backend_and_keeps_cli_overrides() 
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];

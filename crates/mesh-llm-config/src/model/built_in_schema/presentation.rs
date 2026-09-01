@@ -585,6 +585,13 @@ fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation>
         )
         .placeholder("hf://... or /path/to/stage.gguf")
         .hint("text")),
+        "defaults.skippy.source_policy" => Some(sp(
+            "Split source policy",
+            "Require split workers to use an already-present, content-verified local GGUF, or preserve resolver fallback behavior.",
+            SKIPPY_CATEGORY,
+            25,
+        )
+        .hint("segmented")),
         "defaults.skippy.stage_role" => Some(sp(
             "Stage role",
             "Choose the stage-chain role when topology is not inferred automatically.",

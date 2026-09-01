@@ -8,13 +8,14 @@ use super::{
     ShutdownRuntimeLoadedModelsContext, UnloadTarget, advertise_run_auto_models,
     apply_startup_model_load_finished, cleanup_run_auto_runtime_dir, current_time_secs,
     dashboard_context_usage_source, emit_shutdown, model_target_reconciliation_policy,
-    publish_runtime_llama_slots, record_runtime_operational_event_with_context,
-    refresh_dashboard_context_usage_batch, resolve_eager_startup_models,
-    resolve_runtime_unload_target, run_auto_handle_model_target_reconciliation_result,
-    run_auto_handle_runtime_exit, run_auto_load_runtime_model, run_auto_model_identity,
-    run_auto_reconcile_model_targets, run_auto_record_model_target_manual_unload,
-    run_auto_unload_runtime_model, runtime_unload_candidates, set_openai_guardrail_policy_mode,
-    shutdown_run_auto_services, shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
+    normalize_runtime_model_request_for_config, publish_runtime_llama_slots,
+    record_runtime_operational_event_with_context, refresh_dashboard_context_usage_batch,
+    resolve_eager_startup_models, resolve_runtime_unload_target,
+    run_auto_handle_model_target_reconciliation_result, run_auto_handle_runtime_exit,
+    run_auto_load_runtime_model, run_auto_model_identity, run_auto_reconcile_model_targets,
+    run_auto_record_model_target_manual_unload, run_auto_unload_runtime_model,
+    runtime_unload_candidates, set_openai_guardrail_policy_mode, shutdown_run_auto_services,
+    shutdown_runtime_loaded_models, shutdown_runtime_managed_models,
     spawn_run_auto_startup_model_tasks, startup_default_backend_device, startup_launch_plan,
     suppress_desired_for_resolved_unload_candidate, unpublish_run_auto_nostr_listing,
 };
@@ -514,6 +515,20 @@ pub(super) async fn run_auto_handle_model_intent(
                 }
                 return;
             }
+            let (spec, profile) = match normalize_runtime_model_request_for_config(
+                ctx.config,
+                config_model_id.as_deref(),
+                spec,
+                profile,
+            ) {
+                Ok(normalized) => normalized,
+                Err(error) => {
+                    if let Some(tx) = completion {
+                        let _ = tx.send(Err(error));
+                    }
+                    return;
+                }
+            };
             if ctx
                 .model_target_reconciliation_state
                 .is_load_pending(&spec, &profile)

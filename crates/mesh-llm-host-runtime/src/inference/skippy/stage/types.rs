@@ -13,6 +13,9 @@ pub(crate) struct StageControlCommand {
 pub(crate) enum StageControlRequest {
     Claim(StageCoordinatorClaim),
     Load(StageLoadRequest),
+    /// Fail-closed content-addressed load. Older protobuf decoders do not
+    /// recognize its oneof arm and reject it as a missing command.
+    LoadLocal(StageLoadRequest),
     Stop(StageStopRequest),
     Status(StageStatusFilter),
     Inventory(StageInventoryRequest),
@@ -47,6 +50,9 @@ pub(crate) struct StageLoadRequest {
     pub(crate) topology_id: String,
     pub(crate) run_id: String,
     pub(crate) model_id: String,
+    /// Present for current peers even when the exact profile is the empty
+    /// default. `None` identifies an older/profile-unaware sender.
+    pub(crate) runtime_profile: Option<String>,
     pub(crate) backend: String,
     pub(crate) package_ref: String,
     pub(crate) manifest_sha256: String,
@@ -56,6 +62,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) layer_end: u32,
     pub(crate) model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
+    pub(crate) source_model_sha256: Option<String>,
+    pub(crate) local_source_required: bool,
     pub(crate) projector_path: Option<String>,
     pub(crate) projector_use_gpu: Option<bool>,
     pub(crate) media_marker: Option<String>,
@@ -123,8 +131,13 @@ pub(crate) struct StageStatusFilter {
 #[derive(Clone, Debug)]
 pub(crate) struct StageInventoryRequest {
     pub(crate) model_id: String,
+    /// Present for current peers even when the exact profile is the empty
+    /// default. `None` identifies an older/profile-unaware sender.
+    pub(crate) runtime_profile: Option<String>,
     pub(crate) package_ref: String,
     pub(crate) manifest_sha256: String,
+    pub(crate) expected_source_model_sha256: Option<String>,
+    pub(crate) local_source_required: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +172,8 @@ pub(crate) struct StageLayerInventory {
     pub(crate) preparing_ranges: Vec<StagePreparationStatus>,
     pub(crate) source_model_path: Option<String>,
     pub(crate) source_model_bytes: Option<u64>,
+    pub(crate) source_model_sha256: Option<String>,
+    pub(crate) content_addressed_local_source: Option<bool>,
     pub(crate) source_model_kind: SourceModelKind,
 }
 

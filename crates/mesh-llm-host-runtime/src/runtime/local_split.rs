@@ -1,3 +1,4 @@
+mod attestation;
 mod coordinator;
 mod loading;
 mod recovery;
@@ -17,7 +18,9 @@ use super::local_package::{
     collect_split_participants, resolve_split_runtime_package, split_runtime_compact_meta,
     split_runtime_kv_bytes_per_token,
 };
-use super::split_participant_settle::{wait_for_split_membership, wait_for_split_participants};
+use super::split_participant_settle::{
+    SplitParticipantWaitRequest, wait_for_split_membership, wait_for_split_participants,
+};
 use super::split_planning::{
     PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs,
     plan_locked_runtime_slice_topology_with_resources, plan_runtime_slice_topology_with_resources,
@@ -151,7 +154,23 @@ pub(super) async fn start_runtime_split_model(
     spec: LocalRuntimeModelStartSpec<'_>,
     model_ref: &str,
 ) -> Result<SplitRuntimeStart> {
-    let coordinator_start = elect_split_start_coordinator(&spec, model_ref).await?;
+    let local_source_required = spec.local_source_required;
+    skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
+    // A strict-local standby must index its own file before election so the
+    // elected coordinator can verify identical content without exchanging a
+    // coordinator-local path or falling back to artifact transfer.
+    let preindexed_package = if local_source_required {
+        Some(resolve_split_runtime_package(spec.model_path, model_ref, true).await?)
+    } else {
+        None
+    };
+    let coordinator_start = elect_split_start_coordinator(
+        &spec,
+        model_ref,
+        preindexed_package.as_ref(),
+        local_source_required,
+    )
+    .await?;
     let (canonical_coordinator, settled_membership) = match coordinator_start {
         CanonicalCoordinatorGate::Coordinator(membership) => (spec.node.id(), membership),
         CanonicalCoordinatorGate::Standby { coordinator } => {
@@ -168,6 +187,7 @@ pub(super) async fn start_runtime_split_model(
         &settled_membership,
         canonical_coordinator,
         Duration::from_secs(30),
+        preindexed_package,
     )
     .await?;
     let SplitRuntimeStartPreparation {
@@ -227,6 +247,7 @@ pub(super) async fn start_runtime_split_model(
         mesh_config: spec.mesh_config,
         model_ref,
         config_model_id: spec.config_model_id,
+        runtime_profile: spec.runtime_profile,
         model_path: spec.model_path,
         package: &package,
         generation: &active,
@@ -245,6 +266,7 @@ pub(super) async fn start_runtime_split_model(
         skippy_telemetry: spec.skippy_telemetry.clone(),
         survey_telemetry: spec.survey_telemetry.clone(),
         serving_hooks_factory: None,
+        local_source_required,
     })
     .await?;
     let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(1);
@@ -256,6 +278,7 @@ pub(super) async fn start_runtime_split_model(
         model_path: spec.model_path.to_path_buf(),
         model_ref: model_ref.to_string(),
         config_model_id: spec.config_model_id.map(str::to_string),
+        runtime_profile: spec.runtime_profile.to_string(),
         package: package.clone(),
         compact_meta: compact_meta.clone(),
         active,
@@ -283,6 +306,7 @@ pub(super) async fn start_runtime_split_model(
         event_tx: coordinator_tx,
         stage_loss_first_seen: None,
         topology_locked,
+        local_source_required,
         health_interval: loading::configured_stage_lifecycle_intervals(
             spec.mesh_config,
             spec.config_model_id,
@@ -309,17 +333,26 @@ async fn prepare_split_runtime_start(
     settled_membership: &[SplitParticipant],
     canonical_coordinator: iroh::EndpointId,
     timeout: Duration,
+    preindexed_package: Option<skippy::SkippyPackageIdentity>,
 ) -> Result<SplitRuntimeStartPreparation> {
-    let package = resolve_split_runtime_package(spec.model_path, model_ref).await?;
-    let participant_snapshot = wait_for_split_participants(
-        spec.node,
+    let local_source_required = spec.local_source_required;
+    let package = match preindexed_package {
+        Some(package) => package,
+        None => {
+            resolve_split_runtime_package(spec.model_path, model_ref, local_source_required).await?
+        }
+    };
+    let participant_snapshot = wait_for_split_participants(SplitParticipantWaitRequest {
+        node: spec.node,
+        model_name: model_ref,
         model_ref,
-        model_ref,
-        &package,
-        spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
-        settled_membership,
+        runtime_profile: spec.runtime_profile,
+        package: &package,
+        local_vram_override: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
+        expected_membership: settled_membership,
+        local_source_required,
         timeout,
-    )
+    })
     .await?;
     let compact_meta = split_runtime_compact_meta(&package).await?;
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
@@ -412,9 +445,33 @@ async fn prepare_split_runtime_start(
 async fn elect_split_start_coordinator(
     spec: &LocalRuntimeModelStartSpec<'_>,
     model_ref: &str,
+    preindexed_package: Option<&skippy::SkippyPackageIdentity>,
+    local_source_required: bool,
 ) -> Result<CanonicalCoordinatorGate<Vec<SplitParticipant>>> {
-    let membership =
-        wait_for_split_membership(spec.node, model_ref, model_ref, Duration::from_secs(30)).await?;
+    let mut membership = wait_for_split_membership(
+        spec.node,
+        model_ref,
+        model_ref,
+        local_source_required,
+        Duration::from_secs(30),
+    )
+    .await?;
+    if local_source_required {
+        let package = preindexed_package
+            .context("local-required coordinator election is missing local content identity")?;
+        membership = wait_for_split_participants(SplitParticipantWaitRequest {
+            node: spec.node,
+            model_name: model_ref,
+            model_ref,
+            runtime_profile: spec.runtime_profile,
+            package,
+            local_vram_override: spec.capacity_budget_bytes,
+            expected_membership: &membership.participants,
+            local_source_required: true,
+            timeout: Duration::from_secs(30),
+        })
+        .await?;
+    }
     let gate = canonical_coordinator_gate(spec.node.id(), membership.participants)?;
     if let CanonicalCoordinatorGate::Standby { coordinator } = gate {
         tracing::info!(

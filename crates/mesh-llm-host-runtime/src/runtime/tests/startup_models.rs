@@ -272,6 +272,7 @@ fn startup_model_plan(model_ref: &str) -> StartupModelPlan {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }
 }
@@ -593,6 +594,7 @@ fn test_build_serving_list_keeps_synthetic_local_ref() {
 }
 
 mod cli_device_and_config_matching;
+mod local_required;
 
 #[tokio::test]
 async fn prepare_runtime_startup_defers_model_resolution_until_after_surfaces() {
@@ -1011,6 +1013,7 @@ async fn local_model_only_rejects_catalog_and_relative_model_refs() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: "default".into(),
         resolve_pinned_gpu: false,
     }];
@@ -1160,6 +1163,7 @@ fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![
@@ -1219,6 +1223,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1235,6 +1240,7 @@ fn pinned_gpu_startup_preflight_rejects_synthesized_backend_missing_from_probe()
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(1, Some("pci:0000:b3:00.0"), Some("Vulkan1"))];
@@ -1283,6 +1289,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1299,6 +1306,7 @@ fn pinned_gpu_startup_preflight_canonicalizes_rocm_hip_alias_from_probe() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(1, Some("pci:0000:b3:00.0"), Some("ROCm1"))];
@@ -1413,6 +1421,7 @@ fn pinned_gpu_startup_preflight_unmatched_cli_models_bypass_config_gpu_id() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
@@ -1449,6 +1458,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1465,6 +1475,7 @@ fn pinned_gpu_startup_preflight_missing_gpu_id_fails_closed() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
@@ -1501,6 +1512,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1517,6 +1529,7 @@ fn pinned_gpu_startup_preflight_stores_resolved_pinned_target_in_plan() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
@@ -1556,6 +1569,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1572,6 +1586,7 @@ fn pinned_gpu_startup_preflight_rejects_resolved_gpu_without_backend_device() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), None)];
@@ -1608,6 +1623,7 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let mut plans = vec![StartupModelPlan {
@@ -1624,6 +1640,7 @@ fn pinned_gpu_startup_preflight_unresolvable_gpu_id_fails_closed() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
     let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
@@ -1666,6 +1683,7 @@ fn test_should_not_show_serve_config_help_when_models_are_present() {
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
 

@@ -1,3 +1,4 @@
+use super::attestation::split_stage_source_is_ready;
 use super::coordinator::*;
 use super::loading::*;
 use super::recovery::*;
@@ -20,6 +21,8 @@ use skippy_protocol::{FlashAttentionType, LoadMode};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
+
+mod content_attestation;
 
 fn lifecycle_config() -> plugin::MeshConfig {
     toml::from_str(
@@ -451,6 +454,8 @@ fn split_inventory_package_signal_counts_cached_and_missing_ranges() {
         preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
 
@@ -522,13 +527,23 @@ fn split_peer_preflight_requires_current_stage_protocol_generation() {
     let mut peer = split_test_peer(0x61, "Qwen3-Coder", false);
 
     assert_eq!(
-        split_peer_preflight_exclusion_reason(&peer, "Qwen3-Coder", "meshllm/Qwen3-Coder-layers"),
+        split_peer_preflight_exclusion_reason(
+            &peer,
+            "Qwen3-Coder",
+            "meshllm/Qwen3-Coder-layers",
+            false,
+        ),
         Some(SplitParticipantExclusionReason::StageProtocolGeneration)
     );
 
     peer.stage_protocol_generation_supported = true;
     assert_eq!(
-        split_peer_preflight_exclusion_reason(&peer, "Qwen3-Coder", "meshllm/Qwen3-Coder-layers"),
+        split_peer_preflight_exclusion_reason(
+            &peer,
+            "Qwen3-Coder",
+            "meshllm/Qwen3-Coder-layers",
+            false,
+        ),
         None
     );
 }
@@ -539,7 +554,12 @@ fn split_peer_preflight_keeps_host_eligibility_separate_from_stage_path() {
     peer.rtt_ms = Some(u32::MAX);
 
     assert_eq!(
-        split_peer_preflight_exclusion_reason(&peer, "Qwen3-Coder", "meshllm/Qwen3-Coder-layers"),
+        split_peer_preflight_exclusion_reason(
+            &peer,
+            "Qwen3-Coder",
+            "meshllm/Qwen3-Coder-layers",
+            false,
+        ),
         None
     );
 }
@@ -604,6 +624,8 @@ fn layer_package_stage_source_waits_for_exact_prepare_availability() {
             "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
         ),
         source_model_bytes: Some(4_900_000_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
 
@@ -633,6 +655,8 @@ fn runtime_slice_stage_source_accepts_inventory_availability() {
         preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::PlainGguf,
     };
 
@@ -657,6 +681,8 @@ fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() 
         preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::Unknown,
     };
 
@@ -690,11 +716,13 @@ fn split_inventory_package_signal_result_classifies_empty_inventory() {
         preparing_ranges: Vec::new(),
         source_model_path: None,
         source_model_bytes: None,
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::Unknown,
     };
 
     assert_eq!(
-        split_inventory_package_signal_result(&inventory, &package, true),
+        split_inventory_package_signal_result(&inventory, "model-a", &package, true, false),
         Err(SplitParticipantExclusionReason::StageInventoryEmpty)
     );
 }
@@ -720,12 +748,21 @@ fn split_inventory_package_signal_result_classifies_manifest_mismatch() {
         preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
     inventory.manifest_sha256 = "other-manifest".to_string();
 
     assert_eq!(
-        split_inventory_package_signal_result(&inventory, &package, true),
+        split_inventory_package_signal_result(&inventory, "model-a", &package, true, false),
+        Err(SplitParticipantExclusionReason::PackageManifestMismatch)
+    );
+
+    inventory.manifest_sha256 = package.manifest_sha256.clone();
+    inventory.model_id = "other-model".to_string();
+    assert_eq!(
+        split_inventory_package_signal_result(&inventory, "model-a", &package, true, false),
         Err(SplitParticipantExclusionReason::PackageManifestMismatch)
     );
 }
@@ -754,14 +791,18 @@ fn split_inventory_package_signal_result_requires_transfer_for_partial_package()
         preparing_ranges: Vec::new(),
         source_model_path: Some("/cache/layer-package".to_string()),
         source_model_bytes: Some(1_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     };
 
     assert_eq!(
-        split_inventory_package_signal_result(&inventory, &package, false),
+        split_inventory_package_signal_result(&inventory, "model-a", &package, false, false),
         Err(SplitParticipantExclusionReason::ArtifactTransferUnavailable)
     );
-    assert!(split_inventory_package_signal_result(&inventory, &package, true).is_ok());
+    assert!(
+        split_inventory_package_signal_result(&inventory, "model-a", &package, true, false).is_ok()
+    );
 }
 
 #[test]
@@ -1304,6 +1345,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         mesh_config: &mesh_config,
         model_ref: "Qwen",
         config_model_id: None,
+        runtime_profile: "",
         model_path: &model_path,
         package: &package,
         generation: &generation,
@@ -1324,6 +1366,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         serving_hooks_factory: None,
+        local_source_required: false,
     }))
     .await
     {

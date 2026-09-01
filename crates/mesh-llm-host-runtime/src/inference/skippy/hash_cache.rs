@@ -7,9 +7,10 @@
 //! record per source file and reuses the stored digest when the file's size,
 //! mtime, and ctime still match, skipping the full-file read entirely.
 //!
-//! The cache is advisory: it is a performance optimization for identity keys
-//! that never leave Rust-side coordination (stage deduplication, cache keys,
-//! split topology planning), not a security boundary. A `(size, mtime, ctime)`
+//! The cache is advisory: it is a performance optimization for legacy
+//! path-local identity keys (stage deduplication, cache keys, split topology
+//! planning), not a security boundary. Strict content-addressed local-source
+//! proofs deliberately bypass it. A `(size, mtime, ctime)`
 //! match is treated as sufficient evidence that the content is unchanged. The
 //! ctime check catches files replaced with same-size content by tooling that
 //! restores mtime (rsync, tar, cp --preserve): userspace cannot reset ctime,

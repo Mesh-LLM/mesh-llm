@@ -223,6 +223,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) mesh_config: &'a plugin::MeshConfig,
     pub(super) config_model_id: Option<&'a str>,
+    pub(super) runtime_profile: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) model_bytes: u64,
     pub(super) mmproj_override: Option<&'a Path>,
@@ -236,6 +237,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) local_source_required: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
@@ -553,6 +555,22 @@ pub(super) async fn start_runtime_local_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    let policy_model_id = spec.config_model_id.unwrap_or(runtime_model_name);
+    // Register the effective policy before the first await. Hashing a large
+    // strict-local GGUF can take minutes; an inbound legacy stage request must
+    // fail closed throughout that indexing window, not only after it.
+    skippy::register_local_source_policy(
+        policy_model_id,
+        spec.runtime_profile,
+        spec.local_source_required,
+    );
+    if spec.local_source_required {
+        // Locally-fit strict models are still eligible workers for another
+        // node's split topology. Index their complete GGUF before advertising
+        // the runtime so inventory can resolve the same content identity.
+        super::local_package::resolve_split_runtime_package(spec.model_path, policy_model_id, true)
+            .await?;
+    }
     let local_capacity_bytes = spec
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))

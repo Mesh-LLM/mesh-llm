@@ -42,6 +42,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
         backend: "skippy".to_string(),
         package_ref: "gguf:///model.gguf".to_string(),
         manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
@@ -51,6 +52,8 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         layer_end: 24,
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
+        source_model_sha256: None,
+        local_source_required: false,
         projector_path: None,
         projector_use_gpu: None,
         media_marker: None,
@@ -131,24 +134,228 @@ fn test_preparation_status(
 #[test]
 fn stage_control_inventory_request_round_trips_proto() {
     let requester = make_test_endpoint_id(0x81);
+    let digest = "a".repeat(64);
     let request = crate::inference::skippy::StageControlRequest::Inventory(
         crate::inference::skippy::StageInventoryRequest {
             model_id: "model-a".to_string(),
-            package_ref: "gguf:///model.gguf".to_string(),
-            manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+            runtime_profile: Some("strict-profile".to_string()),
+            package_ref: format!("local-gguf://sha256/{digest}"),
+            manifest_sha256: "b".repeat(64),
+            expected_source_model_sha256: Some(digest.clone()),
+            local_source_required: true,
         },
     );
 
-    let decoded =
-        stage_control_request_from_proto(stage_control_request_to_proto(requester, request))
-            .unwrap();
+    let frame = stage_control_request_to_proto(requester, request).unwrap();
+    let decoded = stage_control_request_from_proto(frame).unwrap();
 
     let crate::inference::skippy::StageControlRequest::Inventory(inventory) = decoded else {
         panic!("expected inventory request");
     };
     assert_eq!(inventory.model_id, "model-a");
-    assert_eq!(inventory.package_ref, "gguf:///model.gguf");
-    assert_eq!(inventory.manifest_sha256, "direct-gguf:1:model.gguf");
+    assert_eq!(inventory.runtime_profile.as_deref(), Some("strict-profile"));
+    assert_eq!(
+        inventory.package_ref,
+        format!("local-gguf://sha256/{digest}")
+    );
+    assert_eq!(inventory.manifest_sha256, "b".repeat(64));
+    assert_eq!(
+        inventory.expected_source_model_sha256.as_deref(),
+        Some(digest.as_str())
+    );
+    assert!(inventory.local_source_required);
+}
+
+#[test]
+fn strict_stage_status_never_exposes_worker_source_path() {
+    let mut load = test_stage_load_request();
+    load.local_source_required = true;
+    load.package_ref = "gguf:///internal-only.gguf".to_string();
+    load.model_path = Some("/worker/private/model.gguf".to_string());
+    load.projector_path = Some("/coordinator/private/mmproj.gguf".to_string());
+
+    let status = stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Ready);
+
+    assert_eq!(status.source_model_path, None);
+    assert_eq!(status.projector_path, None);
+}
+
+#[test]
+fn content_addressed_status_redacts_projector_at_wire_boundary() {
+    let digest = "9".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = true;
+    let mut status =
+        stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Ready);
+    // Simulate a stale internal/older-peer status that still contains a local
+    // projector path. Current wire conversion must fail closed.
+    status.projector_path = Some("/worker/private/mmproj.gguf".to_string());
+
+    let proto = stage_status_to_proto(status);
+    assert!(proto.projector_path.is_none());
+    let decoded = stage_status_from_proto(proto).expect("strict status should decode");
+    assert!(decoded.projector_path.is_none());
+}
+
+#[test]
+fn strict_local_load_uses_distinct_fail_closed_proto_command() {
+    let requester = make_test_endpoint_id(0x85);
+    let digest = "a".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = true;
+    load.model_path = None;
+    load.projector_path = Some("/coordinator/private/mmproj.gguf".to_string());
+
+    let frame = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::LoadLocal(load),
+    )
+    .unwrap();
+    assert!(matches!(
+        frame.command,
+        Some(skippy_protocol::proto::stage::stage_control_request::Command::LoadLocalStage(_))
+    ));
+    let decoded = stage_control_request_from_proto(frame).unwrap();
+    let crate::inference::skippy::StageControlRequest::LoadLocal(decoded) = decoded else {
+        panic!("expected strict local load request");
+    };
+    assert!(decoded.local_source_required);
+    assert!(decoded.model_path.is_none());
+    assert!(decoded.projector_path.is_none());
+}
+
+#[test]
+fn local_load_command_strengthens_a_stale_fallback_domain_flag() {
+    let requester = make_test_endpoint_id(0x8c);
+    let digest = "f".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = false;
+    load.model_path = None;
+
+    let frame = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::LoadLocal(load),
+    )
+    .unwrap();
+    let decoded = stage_control_request_from_proto(frame).unwrap();
+    let crate::inference::skippy::StageControlRequest::LoadLocal(decoded) = decoded else {
+        panic!("expected strict local load request");
+    };
+
+    assert!(decoded.local_source_required);
+}
+
+#[test]
+fn strict_local_load_cannot_use_the_legacy_domain_command() {
+    let requester = make_test_endpoint_id(0x86);
+    let digest = "b".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = true;
+
+    let error = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::Load(load),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("fail-closed LoadLocal"));
+}
+
+#[test]
+fn content_addressed_load_cannot_use_legacy_domain_command_with_fallback_flag() {
+    let requester = make_test_endpoint_id(0x89);
+    let digest = "c".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = false;
+
+    let error = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::Load(load),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("fail-closed LoadLocal"));
+}
+
+#[test]
+fn strict_local_load_cannot_use_the_legacy_prepare_command() {
+    let requester = make_test_endpoint_id(0x87);
+    let mut load = test_stage_load_request();
+    load.local_source_required = true;
+
+    let error = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::Prepare(
+            crate::inference::skippy::StagePrepareRequest {
+                load,
+                coordinator_id: Some(make_test_endpoint_id(0x88)),
+            },
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cannot use the legacy Prepare"));
+}
+
+#[test]
+fn content_addressed_load_cannot_use_legacy_prepare_with_fallback_flag() {
+    let requester = make_test_endpoint_id(0x8a);
+    let digest = "d".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest);
+    load.local_source_required = false;
+
+    let error = stage_control_request_to_proto(
+        requester,
+        crate::inference::skippy::StageControlRequest::Prepare(
+            crate::inference::skippy::StagePrepareRequest {
+                load,
+                coordinator_id: Some(make_test_endpoint_id(0x8b)),
+            },
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cannot use the legacy Prepare"));
+}
+
+#[test]
+fn unavailable_strict_local_load_never_exposes_worker_path() {
+    let digest = "e".repeat(64);
+    let mut load = test_stage_load_request();
+    load.package_ref = format!("local-gguf://sha256/{digest}");
+    load.source_model_sha256 = Some(digest.clone());
+    load.local_source_required = true;
+    load.model_path = Some("/worker/private/model.gguf".to_string());
+
+    let response = stage_control_unavailable_response(
+        crate::inference::skippy::StageControlRequest::LoadLocal(load),
+    );
+    let crate::inference::skippy::StageControlResponse::Ready(ready) = response else {
+        panic!("expected unavailable ready response");
+    };
+
+    assert!(!ready.accepted);
+    assert!(ready.status.source_model_path.is_none());
+    assert_eq!(
+        ready.status.source_model_sha256.as_deref(),
+        Some(digest.as_str())
+    );
 }
 
 #[test]
@@ -162,9 +369,8 @@ fn stage_control_prepare_request_round_trips_proto() {
         },
     );
 
-    let decoded =
-        stage_control_request_from_proto(stage_control_request_to_proto(requester, request))
-            .unwrap();
+    let frame = stage_control_request_to_proto(requester, request).unwrap();
+    let decoded = stage_control_request_from_proto(frame).unwrap();
 
     let crate::inference::skippy::StageControlRequest::Prepare(prepare) = decoded else {
         panic!("expected prepare request");
@@ -194,9 +400,8 @@ fn stage_control_status_update_request_round_trips_proto() {
     let status = test_preparation_status(crate::inference::skippy::StagePreparationState::Loading);
     let request = crate::inference::skippy::StageControlRequest::StatusUpdate(status);
 
-    let decoded =
-        stage_control_request_from_proto(stage_control_request_to_proto(requester, request))
-            .unwrap();
+    let frame = stage_control_request_to_proto(requester, request).unwrap();
+    let decoded = stage_control_request_from_proto(frame).unwrap();
 
     let crate::inference::skippy::StageControlRequest::StatusUpdate(status) = decoded else {
         panic!("expected status update request");
@@ -232,6 +437,8 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
             )],
             source_model_path: Some("/model.gguf".to_string()),
             source_model_bytes: Some(4_096),
+            source_model_sha256: None,
+            content_addressed_local_source: None,
             source_model_kind: crate::inference::skippy::SourceModelKind::PlainGguf,
         },
     );

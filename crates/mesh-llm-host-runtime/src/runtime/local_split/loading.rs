@@ -1,3 +1,4 @@
+use super::attestation::{split_stage_source_is_ready, strict_ready_status_matches};
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
     RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
@@ -47,11 +48,37 @@ pub(super) fn stage_health_ticks(interval: Duration) -> tokio::time::Interval {
     tokio::time::interval(interval)
 }
 
+pub(super) fn peer_supports_strict_local_load(
+    local_node_id: iroh::EndpointId,
+    target_node_id: iroh::EndpointId,
+    peers: &[mesh::PeerInfo],
+) -> bool {
+    target_node_id == local_node_id
+        || peers
+            .iter()
+            .any(|peer| peer.id == target_node_id && peer.local_gguf_content_id_supported)
+}
+
+async fn ensure_peer_supports_strict_local_load(
+    node: &mesh::Node,
+    target_node_id: iroh::EndpointId,
+    stage_id: &str,
+) -> Result<()> {
+    let peers = node.peers().await;
+    anyhow::ensure!(
+        peer_supports_strict_local_load(node.id(), target_node_id, &peers),
+        "stage {stage_id} peer {} no longer advertises content-addressed local GGUF support",
+        target_node_id.fmt_short()
+    );
+    Ok(())
+}
+
 pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) mesh_config: &'a plugin::MeshConfig,
     pub(super) model_ref: &'a str,
     pub(super) config_model_id: Option<&'a str>,
+    pub(super) runtime_profile: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) package: &'a skippy::SkippyPackageIdentity,
     pub(super) generation: &'a SplitTopologyGeneration,
@@ -70,6 +97,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    pub(super) local_source_required: bool,
 }
 
 pub(super) struct SplitGenerationLoadSettings<'a> {
@@ -206,7 +234,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     ))
     .await?;
     let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
-        downstream.endpoint
+        downstream.endpoint.clone()
     } else {
         spec.node
             .ensure_stage_transport_bridge(
@@ -225,11 +253,36 @@ pub(super) async fn load_split_runtime_generation_inner(
     runtime_options.config.model_id = spec.model_ref.to_string();
     runtime_options.config.package_ref = Some(spec.package.package_ref.clone());
     runtime_options.config.manifest_sha256 = Some(spec.package.manifest_sha256.clone());
-    let effective_model_path = stage_load_model_path(
-        settings.load_mode.clone(),
-        &spec.package.package_ref,
-        spec.model_path,
-    );
+    let verified_stage0_model_path = if spec.local_source_required {
+        let mut stage0_load = split_runtime_stage_load_request(
+            spec,
+            &settings,
+            settings.stage0,
+            Some(downstream.clone()),
+            &stage0_return_endpoint,
+        );
+        let stage0_load = tokio::task::spawn_blocking(move || {
+            let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
+            anyhow::ensure!(verified, "local-required stage 0 was not content-verified");
+            anyhow::Ok(stage0_load)
+        })
+        .await
+        .context("join verify local-required stage 0 source task")??;
+        Some(
+            stage0_load
+                .model_path
+                .context("verified local-required stage 0 is missing its worker-local path")?,
+        )
+    } else {
+        None
+    };
+    let effective_model_path = verified_stage0_model_path.unwrap_or_else(|| {
+        stage_load_model_path(
+            settings.load_mode.clone(),
+            &spec.package.package_ref,
+            spec.model_path,
+        )
+    });
     runtime_options.config.source_model_path = Some(effective_model_path.clone());
     runtime_options.config.source_model_sha256 = Some(spec.package.source_model_sha256.clone());
     runtime_options.config.source_model_bytes = Some(spec.package.source_model_bytes);
@@ -355,35 +408,55 @@ pub(super) async fn load_downstream_split_runtime_stages(
             downstream.clone(),
             stage0_return_endpoint,
         );
-        prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
-        wait_for_split_stage_source(
-            spec.node,
-            stage.node_id,
-            &load,
-            stage_source_prepare_timeout(
-                spec.model_path,
-                spec.package,
-                stage,
-                downstream.is_none(),
-            )?,
-            settings.readiness_interval,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "prepare split stage {} on {}",
-                stage.stage_id,
-                stage.node_id.fmt_short()
+        if load.local_source_required {
+            let inventory = query_stage_inventory(spec.node, stage.node_id, &load)
+                .await
+                .with_context(|| {
+                    stage_control_unreachable_message(&load.stage_id, stage.node_id)
+                })?;
+            anyhow::ensure!(
+                split_stage_source_is_ready(&inventory, &load),
+                "stage {} no longer has the exact local GGUF content required by this topology",
+                stage.stage_id
+            );
+        } else {
+            prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
+            wait_for_split_stage_source(
+                spec.node,
+                stage.node_id,
+                &load,
+                stage_source_prepare_timeout(
+                    spec.model_path,
+                    spec.package,
+                    stage,
+                    downstream.is_none(),
+                )?,
+                settings.readiness_interval,
             )
-        })?;
+            .await
+            .with_context(|| {
+                format!(
+                    "prepare split stage {} on {}",
+                    stage.stage_id,
+                    stage.node_id.fmt_short()
+                )
+            })?;
+        }
+        if load.local_source_required {
+            ensure_peer_supports_strict_local_load(spec.node, stage.node_id, &load.stage_id)
+                .await?;
+        }
+        let load_request = if load.local_source_required {
+            skippy::StageControlRequest::LoadLocal(load.clone())
+        } else {
+            skippy::StageControlRequest::Load(load.clone())
+        };
         let response = await_stage_startup(settings.startup_timeout, async {
             if stage.node_id == spec.node.id() {
-                spec.node
-                    .send_local_stage_control(skippy::StageControlRequest::Load(load))
-                    .await
+                spec.node.send_local_stage_control(load_request).await
             } else {
                 spec.node
-                    .send_stage_control(stage.node_id, skippy::StageControlRequest::Load(load))
+                    .send_stage_control(stage.node_id, load_request)
                     .await
             }
         })
@@ -408,6 +481,13 @@ pub(super) async fn load_downstream_split_runtime_stages(
             stage.stage_id,
             ready.error.unwrap_or_else(|| "unknown error".to_string())
         );
+        if load.local_source_required {
+            anyhow::ensure!(
+                strict_ready_status_matches(&ready.status, &load),
+                "stage {} did not attest the expected local GGUF content after load",
+                stage.stage_id
+            );
+        }
         *downstream = Some(skippy::StagePeerDescriptor {
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
@@ -480,6 +560,7 @@ pub(super) fn split_runtime_stage_load_request(
         topology_id: spec.generation.topology_id.clone(),
         run_id: spec.generation.run_id.clone(),
         model_id: spec.model_ref.to_string(),
+        runtime_profile: Some(spec.runtime_profile.to_string()),
         backend: "skippy".to_string(),
         package_ref: spec.package.package_ref.clone(),
         manifest_sha256: spec.package.manifest_sha256.clone(),
@@ -487,13 +568,19 @@ pub(super) fn split_runtime_stage_load_request(
         stage_index: stage.stage_index,
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
-        model_path: Some(stage_load_model_path(
-            settings.load_mode.clone(),
-            &spec.package.package_ref,
-            spec.model_path,
-        )),
+        model_path: (!spec.local_source_required).then(|| {
+            stage_load_model_path(
+                settings.load_mode.clone(),
+                &spec.package.package_ref,
+                spec.model_path,
+            )
+        }),
         source_model_bytes: Some(spec.package.source_model_bytes),
-        projector_path: resolved_config.projector_path.clone(),
+        source_model_sha256: Some(spec.package.source_model_sha256.clone()),
+        local_source_required: spec.local_source_required,
+        projector_path: (!spec.local_source_required || stage.stage_index == 0)
+            .then(|| resolved_config.projector_path.clone())
+            .flatten(),
         projector_use_gpu: resolved_config.projector_use_gpu,
         media_marker: resolved_config.media_marker.clone(),
         image_min_tokens: resolved_config.image_min_tokens,
@@ -985,47 +1072,6 @@ pub(super) fn stage_source_prepare_timeout_message(stage_id: &str, timeout: Dura
     )
 }
 
-pub(super) fn split_stage_source_is_ready(
-    inventory: &skippy::StageLayerInventory,
-    load: &skippy::StageLoadRequest,
-) -> bool {
-    let ready_running_stage = inventory
-        .ready_ranges
-        .iter()
-        .any(|range| split_layer_range_covers(range, load));
-    if ready_running_stage {
-        return true;
-    }
-    if load.load_mode != LoadMode::LayerPackage && !skippy::is_layer_package_ref(&load.package_ref)
-    {
-        return inventory
-            .available_ranges
-            .iter()
-            .any(|range| split_layer_range_covers(range, load));
-    }
-    inventory.preparing_ranges.iter().any(|status| {
-        status.topology_id == load.topology_id
-            && status.run_id == load.run_id
-            && status.stage_id == load.stage_id
-            && status.model_id == load.model_id
-            && status.package_ref == load.package_ref
-            && status.manifest_sha256 == load.manifest_sha256
-            && status.layer_start <= load.layer_start
-            && status.layer_end >= load.layer_end
-            && matches!(
-                status.state,
-                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
-            )
-    })
-}
-
-pub(super) fn split_layer_range_covers(
-    range: &skippy::LayerRange,
-    load: &skippy::StageLoadRequest,
-) -> bool {
-    range.layer_start <= load.layer_start && range.layer_end >= load.layer_end
-}
-
 pub(super) async fn query_stage_inventory(
     node: &mesh::Node,
     stage_node_id: iroh::EndpointId,
@@ -1033,8 +1079,11 @@ pub(super) async fn query_stage_inventory(
 ) -> Result<skippy::StageLayerInventory> {
     let request = skippy::StageInventoryRequest {
         model_id: load.model_id.clone(),
+        runtime_profile: load.runtime_profile.clone(),
         package_ref: load.package_ref.clone(),
         manifest_sha256: load.manifest_sha256.clone(),
+        expected_source_model_sha256: load.source_model_sha256.clone(),
+        local_source_required: load.local_source_required,
     };
     let response = if stage_node_id == node.id() {
         node.send_local_stage_control(skippy::StageControlRequest::Inventory(request))
