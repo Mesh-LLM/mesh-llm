@@ -91,6 +91,13 @@ file_sha256() { # portable sha256 of a file (Linux sha256sum / macOS shasum)
   fi
 }
 
+resolve_path() { # portable `readlink -f` (BSD/macOS readlink has no -f)
+  "$PYTHON_BIN" - "$1" <<'PY'
+import pathlib, sys
+print(pathlib.Path(sys.argv[1]).resolve())
+PY
+}
+
 fail_count=0
 
 echo "=== Materialize competitive inputs ==="
@@ -131,8 +138,8 @@ PY
     continue
   fi
   mkdir -p "$ROOT/models/$key"
-  ln -sfn "$(readlink -f "$cached")" "$ROOT/models/$key/$filename"
-  echo "    ok: $filename ($(du -h "$(readlink -f "$cached")" | cut -f1), sha256 verified)"
+  ln -sfn "$(resolve_path "$cached")" "$ROOT/models/$key/$filename"
+  echo "    ok: $filename ($(du -h "$(resolve_path "$cached")" | cut -f1), sha256 verified)"
 done
 
 # ---------------------------------------------------------------------------
@@ -245,7 +252,7 @@ if [[ "$SKIP_VLLM_CONFIGS" -eq 0 ]]; then
       continue
     fi
     mkdir -p "$ROOT/vllm-configs/$key"
-    ln -sfn "$(readlink -f "$cached")" "$ROOT/vllm-configs/$key/config.json"
+    ln -sfn "$(resolve_path "$cached")" "$ROOT/vllm-configs/$key/config.json"
     echo "    ok: config.json (sha256 verified)"
   done
 fi
@@ -266,7 +273,7 @@ if [[ "$SKIP_DATASET" -eq 0 ]]; then
     fail_count=$((fail_count+1))
   else
     mkdir -p "$ROOT/thoughtworks"
-    ln -sfn "$(readlink -f "$cached")" "$ROOT/thoughtworks/$ds_file"
+    ln -sfn "$(resolve_path "$cached")" "$ROOT/thoughtworks/$ds_file"
     echo "    ok: $ds_file (sha256 verified)"
     sources=()
     while IFS= read -r source; do

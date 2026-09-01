@@ -211,6 +211,7 @@ per-tensor device overrides. None of these has a schema key yet.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `skippy.stage_model_path` | path | unsupported | both | not applicable | rejected (stage artifacts come from the verified model package) | none |
+| `skippy.source_policy` | enum | `fallback` (default), `local-required` | both | model reload | wired (`local-required` admits only workers with the exact pre-copied, content-verified local GGUF and never fetches replacement bytes) | none |
 | `skippy.stage_role` | string | unsupported | both | not applicable | rejected (the typed planner derives stage roles) | none |
 | `skippy.stage_topology` | string | unsupported | both | not applicable | rejected (issue #1052 owns typed per-model topology; untyped strings are not accepted) | none |
 | `skippy.binary_stage_transport` | string | unsupported | both | not applicable | rejected (binary transport is the only staged transport and is selected automatically) | none |

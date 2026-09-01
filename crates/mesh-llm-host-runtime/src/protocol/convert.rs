@@ -13,8 +13,13 @@ fn skippy_stage_subprotocols(
     artifact_transfer_supported: bool,
     stage_protocol_generation_supported: bool,
     status_list_supported: bool,
+    local_gguf_content_id_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
     let mut features = vec![skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string()];
+    if local_gguf_content_id_supported {
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
+    }
     if stage_protocol_generation_supported {
         features.push(
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6.to_string(),
@@ -44,6 +49,13 @@ fn supports_skippy_status_list(subprotocols: &[crate::proto::node::MeshSubprotoc
     supports_skippy_stage_feature(
         subprotocols,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    )
+}
+
+fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+    supports_skippy_stage_feature(
+        subprotocols,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     )
 }
 
@@ -805,6 +817,7 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.artifact_transfer_supported,
             ann.stage_protocol_generation_supported,
             ann.stage_status_list_supported,
+            ann.local_gguf_content_id_supported,
         ),
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         cache_affinity: ann
@@ -1027,6 +1040,7 @@ pub(crate) fn proto_ann_to_local(
         artifact_transfer_supported: supports_skippy_artifact_transfer(&pa.subprotocols),
         stage_protocol_generation_supported: supports_skippy_stage_generation(&pa.subprotocols),
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
+        local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

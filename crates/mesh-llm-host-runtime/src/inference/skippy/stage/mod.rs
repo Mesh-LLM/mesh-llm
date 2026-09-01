@@ -153,6 +153,10 @@ impl StageControlState {
             StageControlRequest::Load(load) => {
                 self.load(load).await.map(StageControlResponse::Ready)
             }
+            StageControlRequest::LoadLocal(mut load) => {
+                load.local_source_required = true;
+                self.load(load).await.map(StageControlResponse::Ready)
+            }
             StageControlRequest::Stop(stop) => {
                 self.stop(stop).await.map(StageControlResponse::Ready)
             }
@@ -217,7 +221,22 @@ impl StageControlState {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let source = resolve_inventory_source(&request);
+        let source_request = request.clone();
+        let source =
+            match tokio::task::spawn_blocking(move || resolve_inventory_source(&source_request))
+                .await
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    tracing::warn!(
+                        model_id = request.model_id,
+                        package_ref = request.package_ref,
+                        error = %error,
+                        "GGUF inventory verification task failed"
+                    );
+                    None
+                }
+            };
         let layer_count = source
             .as_ref()
             .map(|source| source.layer_count)
@@ -251,6 +270,15 @@ impl StageControlState {
         } else {
             Vec::new()
         };
+        let content_addressed_ref =
+            crate::inference::skippy::is_content_addressed_gguf_ref(&request.package_ref);
+        let local_source_required = crate::inference::skippy::effective_local_source_required(
+            &request.model_id,
+            request.runtime_profile.as_deref(),
+            request.local_source_required || content_addressed_ref,
+        );
+        let content_addressed_local_source =
+            local_source_required.then_some(content_addressed_ref && source.is_some());
         StageLayerInventory {
             model_id: request.model_id,
             package_ref: request.package_ref,
@@ -260,10 +288,16 @@ impl StageControlState {
             available_ranges,
             missing_ranges,
             preparing_ranges,
-            source_model_path: source
-                .as_ref()
-                .map(|source| source.path.to_string_lossy().to_string()),
+            source_model_path: (!local_source_required && !content_addressed_ref)
+                .then(|| {
+                    source
+                        .as_ref()
+                        .map(|source| source.path.to_string_lossy().to_string())
+                })
+                .flatten(),
             source_model_bytes: source.as_ref().and_then(|source| source.bytes),
+            source_model_sha256: source.as_ref().and_then(|source| source.sha256.clone()),
+            content_addressed_local_source,
             source_model_kind: source
                 .as_ref()
                 .map(|source| source.kind)
@@ -273,7 +307,7 @@ impl StageControlState {
 
     async fn prepare(
         &mut self,
-        request: StagePrepareRequest,
+        mut request: StagePrepareRequest,
     ) -> Result<StagePrepareAcceptedResponse> {
         if let Some(error) = self.validate_load_claim(&request.load) {
             return Ok(StagePrepareAcceptedResponse {
@@ -285,6 +319,27 @@ impl StageControlState {
                 ),
                 error: Some(error),
             });
+        }
+        let mut load = request.load.clone();
+        let verified_load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage prepare source task")?;
+        match verified_load {
+            Ok(load) => request.load = load,
+            Err(error) => {
+                let error = format!("{error:#}");
+                return Ok(StagePrepareAcceptedResponse {
+                    accepted: false,
+                    status: preparation_status_from_load(
+                        &request.load,
+                        StagePreparationState::Failed,
+                        Some(error.clone()),
+                    ),
+                    error: Some(error),
+                });
+            }
         }
         let key = stage_key(
             &request.load.topology_id,
@@ -398,7 +453,7 @@ impl StageControlState {
         }
     }
 
-    async fn load(&mut self, load: StageLoadRequest) -> Result<StageReadyResponse> {
+    async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
         anyhow::ensure!(
             load.backend == "skippy",
             "unsupported stage backend '{}'",
@@ -411,6 +466,11 @@ impl StageControlState {
                 error: Some(error),
             });
         }
+        load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage load source task")??;
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
         if let Some(existing) = self.stages.remove(&key) {
             existing.server.shutdown().await?;
@@ -419,6 +479,27 @@ impl StageControlState {
         let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
+        if effective_load.local_source_required {
+            let expected_sha256 = effective_load
+                .source_model_sha256
+                .as_deref()
+                .context("local-required stage load is missing expected SHA-256")?;
+            let identity = crate::inference::skippy::verify_registered_content_source(
+                &effective_load.model_id,
+                &effective_load.package_ref,
+                &effective_load.manifest_sha256,
+                expected_sha256,
+            )?;
+            effective_load.model_path = Some(
+                identity
+                    .source_model_path
+                    .to_str()
+                    .context("verified local GGUF path is not valid UTF-8")?
+                    .to_string(),
+            );
+            effective_load.source_model_bytes = Some(identity.source_model_bytes);
+            effective_load.source_model_sha256 = Some(identity.source_model_sha256);
+        }
         super::configure_materialized_stage_cache();
         let package_request = effective_load.clone();
         let mut resolved_package = None;
@@ -805,7 +886,8 @@ fn stage_config(
             .or_else(|| load.model_path.clone()),
         source_model_sha256: materialized
             .map(|artifact| artifact.source_model_sha256.clone())
-            .or_else(|| package.map(|package| package.source_model_sha256.clone())),
+            .or_else(|| package.map(|package| package.source_model_sha256.clone()))
+            .or_else(|| load.source_model_sha256.clone()),
         source_model_bytes: materialized
             .and_then(|artifact| artifact.source_model_bytes)
             .or_else(|| package.and_then(|package| package.source_model_bytes))
@@ -893,6 +975,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         skippy_server::EmbeddedState::Stopped => StageRuntimeState::Stopped,
         skippy_server::EmbeddedState::Failed => StageRuntimeState::Failed,
     };
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&stage.load.package_ref);
     StageStatusSnapshot {
         topology_id: stage.load.topology_id.clone(),
         run_id: stage.load.run_id.clone(),
@@ -900,17 +984,21 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         backend: stage.load.backend.clone(),
         package_ref: Some(stage.load.package_ref.clone()),
         manifest_sha256: Some(stage.load.manifest_sha256.clone()),
-        source_model_path: stage
-            .materialized
-            .as_ref()
-            .map(|artifact| artifact.source_model_path.clone())
-            .or_else(|| {
+        source_model_path: (!content_addressed_ref)
+            .then(|| {
                 stage
-                    .package
+                    .materialized
                     .as_ref()
-                    .map(|package| package.source_model_path.clone())
+                    .map(|artifact| artifact.source_model_path.clone())
+                    .or_else(|| {
+                        stage
+                            .package
+                            .as_ref()
+                            .map(|package| package.source_model_path.clone())
+                    })
+                    .or_else(|| stage.load.model_path.clone())
             })
-            .or_else(|| stage.load.model_path.clone()),
+            .flatten(),
         source_model_sha256: stage
             .materialized
             .as_ref()
@@ -920,7 +1008,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
                     .package
                     .as_ref()
                     .map(|package| package.source_model_sha256.clone())
-            }),
+            })
+            .or_else(|| stage.load.source_model_sha256.clone()),
         source_model_bytes: stage
             .materialized
             .as_ref()
@@ -937,7 +1026,9 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|artifact| artifact.path.to_string_lossy().to_string()),
         materialized_pinned: stage.materialized.is_some(),
-        projector_path: stage.load.projector_path.clone(),
+        projector_path: (!stage.load.local_source_required && !content_addressed_ref)
+            .then(|| stage.load.projector_path.clone())
+            .flatten(),
         stage_id: stage.load.stage_id.clone(),
         stage_index: stage.load.stage_index,
         layer_start: stage.load.layer_start,
@@ -995,6 +1086,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
 }
 
 fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatusSnapshot {
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref);
     StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -1002,12 +1095,16 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         backend: load.backend.clone(),
         package_ref: Some(load.package_ref.clone()),
         manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: load.model_path.clone(),
-        source_model_sha256: None,
+        source_model_path: (!content_addressed_ref)
+            .then(|| load.model_path.clone())
+            .flatten(),
+        source_model_sha256: load.source_model_sha256.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
-        projector_path: load.projector_path.clone(),
+        projector_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.projector_path.clone())
+            .flatten(),
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,

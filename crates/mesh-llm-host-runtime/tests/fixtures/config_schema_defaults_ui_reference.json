@@ -589,6 +589,13 @@
       }
     },
     {
+      "canonical_path": "defaults.skippy.source_policy",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.speculative.draft_acceptance_threshold",
       "support": "supported",
       "source": {

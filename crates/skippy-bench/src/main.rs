@@ -1,5 +1,6 @@
 mod chat_corpus;
 mod cli;
+mod direct_return_listener;
 mod distributed;
 mod evals;
 mod local_single;
