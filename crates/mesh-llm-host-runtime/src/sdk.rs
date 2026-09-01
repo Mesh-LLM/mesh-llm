@@ -61,7 +61,7 @@ pub struct EmbeddedServeHandle {
     invite_token: Option<String>,
     control_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>>,
     task: Option<std::thread::JoinHandle<Result<()>>>,
-    _isolated_config: Option<NamedTempFile>,
+    _config_snapshot: NamedTempFile,
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -142,7 +142,10 @@ pub async fn start_embedded_node(
 ) -> Result<EmbeddedServeHandle> {
     embedded_startup::prepare_embedded_native_runtime(&config.mode)?;
     let isolated_config = prepare_isolated_config(&mut config)?;
-    embedded_logging::validate_embedded_config(config.storage.config_path.as_deref())?;
+    let config_snapshot =
+        embedded_logging::snapshot_validated_config(config.storage.config_path.as_deref())?;
+    config.storage.config_path = Some(embedded_logging::snapshot_path(&config_snapshot));
+    drop(isolated_config);
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let runtime_options = embedded_runtime_options(&config, Some(control_rx));
     let api_base_url = format!("http://127.0.0.1:{}/v1", config.http.api_port);
@@ -181,7 +184,7 @@ pub async fn start_embedded_node(
         invite_token: token_from_status(&status),
         control_tx: Some(control_tx),
         task: Some(task),
-        _isolated_config: isolated_config,
+        _config_snapshot: config_snapshot,
     })
 }
 
