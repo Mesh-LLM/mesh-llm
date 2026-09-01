@@ -1805,6 +1805,8 @@ impl StageOpenAiBackend {
                         request.ids,
                         request.prompt_token_ids,
                         reply.predicted,
+                        request.sampling,
+                        request.chat_sampling_metadata,
                     )?;
                 }
                 current = reply.predicted;

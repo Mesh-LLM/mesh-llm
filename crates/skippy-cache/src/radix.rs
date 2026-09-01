@@ -253,6 +253,27 @@ impl<R, E> UnifiedRadixCache<R, E> {
         Some(entry.value)
     }
 
+    /// Remove an exact recurrent entry only when its value still matches the
+    /// caller's predicate. The value check and removal happen under the same
+    /// cache lock, so a failed restore can quarantine the entry it acquired
+    /// without accidentally deleting a replacement inserted concurrently.
+    pub fn remove_recurrent_if(
+        &mut self,
+        namespace: &str,
+        tokens: &[i32],
+        predicate: impl FnOnce(&E) -> bool,
+    ) -> Option<E> {
+        let should_remove = self
+            .roots
+            .get(namespace)
+            .and_then(|root| node_at(root, tokens))
+            .and_then(|node| node.components.recurrent.as_ref())
+            .is_some_and(|entry| entry.active_refs == 0 && predicate(&entry.value));
+        should_remove
+            .then(|| self.remove_recurrent(namespace, tokens))
+            .flatten()
+    }
+
     pub fn remove_resident_where(
         &mut self,
         mut predicate: impl FnMut(&R) -> bool,
@@ -1387,6 +1408,37 @@ mod tests {
         assert_eq!(
             cache.lookup_resident("stage", &[1, 2, 3, 5]).unwrap().value,
             "left"
+        );
+    }
+
+    #[test]
+    fn conditional_removal_requires_an_unreferenced_matching_entry() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "payload-a")
+            .unwrap();
+        cache.acquire_recurrent("stage", &[1, 2]).unwrap();
+
+        assert_eq!(
+            cache.remove_recurrent_if("stage", &[1, 2], |value| *value == "payload-a"),
+            None,
+            "an active restore lease must prevent quarantine"
+        );
+        assert!(cache.release_recurrent("stage", &[1, 2]));
+        assert_eq!(
+            cache
+                .insert_recurrent("stage", &[1, 2], 2, "payload-b")
+                .unwrap(),
+            Some("payload-a")
+        );
+        assert_eq!(
+            cache.remove_recurrent_if("stage", &[1, 2], |value| *value == "payload-a"),
+            None,
+            "an old restore failure must not remove a replacement"
+        );
+        assert_eq!(
+            cache.remove_recurrent_if("stage", &[1, 2], |value| *value == "payload-b"),
+            Some("payload-b")
         );
     }
 
