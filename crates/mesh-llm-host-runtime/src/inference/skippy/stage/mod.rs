@@ -463,6 +463,7 @@ impl StageControlState {
         self.readiness_probe = Some(start_binary_stage_ready_probe(
             bind_addr,
             stage_load_timeout(&effective_load),
+            effective_load.transport_auth.clone(),
         ));
         let readiness_result = {
             let probe = self
@@ -667,11 +668,20 @@ fn materialize_stage_bind_addr(bind_addr: SocketAddr) -> Result<SocketAddr> {
         .context("read reserved ephemeral stage bind address")
 }
 
-fn start_binary_stage_ready_probe(bind_addr: SocketAddr, timeout: Duration) -> StageReadinessProbe {
+fn start_binary_stage_ready_probe(
+    bind_addr: SocketAddr,
+    timeout: Duration,
+    transport_auth: Option<Vec<u8>>,
+) -> StageReadinessProbe {
     let cancelled = Arc::new(AtomicBool::new(false));
     let probe_cancelled = Arc::clone(&cancelled);
     let handle = tokio::task::spawn_blocking(move || {
-        probe_binary_stage_ready(bind_addr, timeout, &probe_cancelled)
+        probe_binary_stage_ready(
+            bind_addr,
+            timeout,
+            &probe_cancelled,
+            transport_auth.as_deref(),
+        )
     });
     StageReadinessProbe { cancelled, handle }
 }
@@ -733,6 +743,7 @@ fn probe_binary_stage_ready(
     bind_addr: SocketAddr,
     timeout: Duration,
     cancelled: &AtomicBool,
+    transport_auth: Option<&[u8]>,
 ) -> Result<()> {
     const PROBE_IO_TIMEOUT: Duration = Duration::from_secs(2);
     let deadline = std::time::Instant::now() + timeout;
@@ -746,6 +757,13 @@ fn probe_binary_stage_ready(
                 stream.set_nodelay(true).ok();
                 stream.set_read_timeout(Some(PROBE_IO_TIMEOUT)).ok();
                 stream.set_write_timeout(Some(PROBE_IO_TIMEOUT)).ok();
+                if let Some(token) = transport_auth
+                    && let Err(error) = skippy_protocol::binary::send_transport_auth(&mut stream, token)
+                {
+                    last_error =
+                        Some(anyhow!(error).context("send binary stage probe transport auth"));
+                    continue;
+                }
                 match skippy_protocol::binary::recv_ready(&mut stream) {
                     Ok(()) => return Ok(()),
                     Err(error) => {

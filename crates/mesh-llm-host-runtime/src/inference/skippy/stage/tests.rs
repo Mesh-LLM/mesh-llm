@@ -448,7 +448,7 @@ async fn binary_stage_ready_probe_waits_for_wire_handshake() {
     });
 
     let started = Instant::now();
-    let mut probe = start_binary_stage_ready_probe(bind_addr, Duration::from_secs(2));
+    let mut probe = start_binary_stage_ready_probe(bind_addr, Duration::from_secs(2), None);
     (&mut probe.handle)
         .await
         .expect("join readiness probe")
@@ -473,6 +473,7 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
         readiness_probe: Some(start_binary_stage_ready_probe(
             bind_addr,
             Duration::from_secs(900),
+            None,
         )),
         ..Default::default()
     };
@@ -931,4 +932,25 @@ fn stage_load_timeout_scales_with_size_hints_for_all_load_modes() {
 
     request.source_model_bytes = Some(u64::MAX);
     assert_eq!(stage_load_timeout(&request), Duration::from_secs(14400));
+}
+
+#[test]
+fn readiness_probe_authenticates_against_auth_gated_listener() {
+    let token = vec![0x6D_u8; 32];
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_token = token.clone();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        skippy_protocol::binary::recv_transport_auth(&mut stream, &server_token).unwrap();
+        skippy_protocol::binary::send_ready(&mut stream).unwrap();
+    });
+
+    let cancelled = AtomicBool::new(false);
+    probe_binary_stage_ready(addr, Duration::from_secs(5), &cancelled, Some(&token))
+        .expect("probe must authenticate before waiting for ready");
+    server.join().unwrap();
 }
