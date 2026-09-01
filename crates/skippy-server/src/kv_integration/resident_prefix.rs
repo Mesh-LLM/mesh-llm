@@ -10,7 +10,7 @@ use crate::runtime_state::RuntimeState;
 
 use super::{
     KvStageIntegration, PrefillKvIdentity, RadixResidentEntry, ResidentPrefixRecord,
-    ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload,
+    ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload, lock_resident_sequences,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -257,10 +257,7 @@ impl KvStageIntegration {
             required_eviction_tokens,
             ..ResidentCapacityDecision::default()
         };
-        let mut sequences = self
-            .resident_sequences
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sequences = lock_resident_sequences(&self.resident_sequences);
         for ranked_victim in ranked {
             if used_tokens
                 .saturating_add(request_tokens)
@@ -432,10 +429,7 @@ impl KvStageIntegration {
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut sequences = self
-            .resident_sequences
-            .lock()
-            .expect("resident sequence pool lock poisoned");
+        let mut sequences = lock_resident_sequences(&self.resident_sequences);
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
         while evicted_tokens < target_tokens {
@@ -531,10 +525,7 @@ impl KvStageIntegration {
                 .radix
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut sequences = self
-                .resident_sequences
-                .lock()
-                .expect("resident sequence pool lock poisoned");
+            let mut sequences = lock_resident_sequences(&self.resident_sequences);
             if let Some(existing) =
                 radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
             {
@@ -576,15 +567,12 @@ impl KvStageIntegration {
             sequences.allocate()?
         };
         if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
-            if let Err(release_error) = self
-                .resident_sequences
-                .lock()
-                .expect("resident sequence pool lock poisoned")
-                .release(seq_id)
-            {
+            let mut sequences = lock_resident_sequences(&self.resident_sequences);
+            if let Err(release_error) = sequences.release(seq_id) {
+                sequences.force_quarantine(seq_id);
                 return Err(error).with_context(|| {
                     format!(
-                        "release resident sequence {seq_id} after native save failed: {release_error:#}"
+                        "quarantined resident sequence {seq_id} after native save and release failed: {release_error:#}"
                     )
                 });
             }
@@ -594,10 +582,7 @@ impl KvStageIntegration {
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut sequences = self
-            .resident_sequences
-            .lock()
-            .expect("resident sequence pool lock poisoned");
+        let mut sequences = lock_resident_sequences(&self.resident_sequences);
         let inserted = insert_saved_resident(
             &mut radix,
             &mut sequences,

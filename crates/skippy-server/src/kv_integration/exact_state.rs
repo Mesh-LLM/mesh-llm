@@ -158,12 +158,20 @@ impl KvStageIntegration {
                 Ok(restored_payload) => restored_payload,
                 Err(error) => {
                     drop(lease);
-                    if deterministic_failure {
-                        self.quarantine_exact_state_entry(
+                    if deterministic_failure
+                        && let Err(quarantine_error) = self.quarantine_exact_state_entry(
                             &identity.namespace,
                             &lookup.stored_tokens,
                             &lookup.value.page_id,
-                        )?;
+                        )
+                    {
+                        eprintln!(
+                            "skippy exact-state quarantine failed for page {}: {quarantine_error:#}",
+                            lookup.value.page_id
+                        );
+                        return Err(error.context(format!(
+                            "failed to fully quarantine corrupt exact-state entry: {quarantine_error:#}"
+                        )));
                     }
                     return Err(error);
                 }

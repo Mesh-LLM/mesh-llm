@@ -248,6 +248,12 @@ impl ResidentSequencePool {
         Ok(())
     }
 
+    fn force_quarantine(&mut self, seq_id: i32) {
+        self.allocated_seq_ids.remove(&seq_id);
+        self.free_seq_ids.retain(|candidate| *candidate != seq_id);
+        self.quarantined_seq_ids.insert(seq_id);
+    }
+
     fn validate_allocated(&self, seq_id: i32) -> Result<()> {
         if seq_id < self.reserved_seq_count || seq_id >= skippy_cache::LLAMA_MAX_SEQ {
             bail!("resident prefix sequence id {seq_id} is out of range");
@@ -265,6 +271,14 @@ impl ResidentSequencePool {
             self.quarantined_seq_ids.len(),
         )
     }
+}
+
+fn lock_resident_sequences(
+    sequences: &Mutex<ResidentSequencePool>,
+) -> std::sync::MutexGuard<'_, ResidentSequencePool> {
+    sequences
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,7 +391,11 @@ fn verify_resident_ownership(
     if resident_entries == allocated_sequences {
         return Ok(());
     }
-    cache_healthy.store(false, std::sync::atomic::Ordering::Release);
+    if cache_healthy.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        eprintln!(
+            "skippy kv cache disabled: resident ownership mismatch: radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
+        );
+    }
     bail!(
         "resident cache ownership mismatch: radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
     )
@@ -557,10 +575,7 @@ impl KvStageIntegration {
         let (exact_physical_bytes, exact_blocks, exact_block_refs) =
             exact_blob_stats.unwrap_or_default();
         let (resident_allocated_sequences, resident_free_sequences, resident_quarantined_sequences) =
-            self.resident_sequences
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .stats();
+            lock_resident_sequences(&self.resident_sequences).stats();
         let resident_sequence_drift = radix
             .resident_entries
             .abs_diff(resident_allocated_sequences);
@@ -1048,9 +1063,12 @@ mod telemetry_error_class_tests {
 
 #[cfg(test)]
 mod resident_ownership_reconciliation_tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
-    use super::verify_resident_ownership;
+    use super::{ResidentSequencePool, lock_resident_sequences, verify_resident_ownership};
 
     #[test]
     fn ownership_mismatch_permanently_disables_cache_operations() {
@@ -1065,5 +1083,36 @@ mod resident_ownership_reconciliation_tests {
         assert!(!healthy.load(Ordering::Acquire));
         verify_resident_ownership(&healthy, 1, 1).unwrap();
         assert!(!healthy.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn poisoned_resident_sequence_lock_recovers_without_reusing_state() {
+        let sequences = Arc::new(Mutex::new(ResidentSequencePool::new(4)));
+        let poisoned = sequences.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let mut guard = poisoned.lock().unwrap();
+                guard.allocate().unwrap();
+                panic!("poison resident sequence pool for test");
+            })
+            .join()
+            .is_err()
+        );
+
+        let mut guard = lock_resident_sequences(&sequences);
+        assert_eq!(guard.stats(), (1, 0, 0));
+        assert_eq!(guard.allocate().unwrap(), 5);
+    }
+
+    #[test]
+    fn forced_quarantine_removes_a_sequence_from_every_reusable_set() {
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        sequences.release(seq_id).unwrap();
+
+        sequences.force_quarantine(seq_id);
+
+        assert_eq!(sequences.stats(), (0, 0, 1));
+        assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
     }
 }
