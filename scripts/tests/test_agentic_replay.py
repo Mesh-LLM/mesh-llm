@@ -113,6 +113,72 @@ class AgenticReplayTest(unittest.TestCase):
 
         self.assertEqual([result["request_id"] for result in results], ["session-1:0"])
 
+    def test_checkpoint_replay_reconstructs_full_recorded_prefix(self) -> None:
+        trajectory = {
+            "session_id": "session-1",
+            "source_dataset": "source",
+            "agent_framework": "framework",
+            "recorded_model": "recorded-model",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "recorded first"},
+                {"role": "tool", "content": "observation", "tool_call_id": "1"},
+                {"role": "assistant", "content": "recorded second"},
+            ],
+        }
+        calls = []
+        original = BENCH.stream_request
+
+        def fake_stream(*args, **kwargs):
+            calls.append((args[0], list(args[1]), args[2], dict(args[3])))
+            return {"request_id": args[0]}
+
+        BENCH.stream_request = fake_stream
+        try:
+            BENCH.replay_trajectory(
+                trajectory,
+                "model",
+                2048,
+                10,
+                measured_assistant_turns={1},
+                checkpoint_stage="final",
+            )
+        finally:
+            BENCH.stream_request = original
+
+        self.assertEqual([call[0] for call in calls], ["session-1:1"])
+        self.assertEqual(
+            [message["content"] for message in calls[0][1]],
+            ["task", "recorded first", "observation"],
+        )
+        self.assertEqual(calls[0][3]["checkpoint_stage"], "final")
+
+    def test_checkpoint_schedule_balances_four_stages_per_framework(self) -> None:
+        trajectories = []
+        for index in range(4):
+            messages = []
+            for turn in range(8):
+                messages.extend(
+                    [
+                        {"role": "user", "content": f"u{turn}"},
+                        {"role": "assistant", "content": f"a{turn}"},
+                    ]
+                )
+            trajectories.append(
+                {
+                    "session_id": f"session-{index}",
+                    "agent_framework": "framework",
+                    "messages": messages,
+                }
+            )
+
+        schedule = BENCH.checkpoint_schedule(trajectories)
+
+        self.assertEqual(
+            list(schedule.values()),
+            [(1, "early"), (3, "middle"), (5, "late"), (7, "final")],
+        )
+
     def test_trajectory_tools_are_stable_and_schema_shaped(self) -> None:
         trajectory = {
             "messages": [
@@ -215,11 +281,12 @@ class AgenticReplayTest(unittest.TestCase):
         )
 
         self.assertEqual(args.concurrency, [1, 2, 4])
-        self.assertEqual(args.passes, 2)
+        self.assertEqual(args.passes, 1)
+        self.assertEqual(args.replay_mode, "checkpoints")
         self.assertEqual(args.trajectories_per_framework, 4)
         self.assertEqual(args.framework, ["swe-agent", "mini-swe-agent", "openhands"])
         self.assertEqual(args.max_output_tokens, 2048)
-        self.assertEqual(args.warmup_turns, 14)
+        self.assertEqual(args.warmup_turns, 4)
         self.assertEqual(args.max_isl, 65536)
 
     def test_cli_rejects_a_single_wave_concurrency_cohort(self) -> None:
@@ -491,6 +558,7 @@ class AgenticReplayTest(unittest.TestCase):
                 "model": "model",
                 "concurrency": [1],
                 "warmup_turns": 14,
+                "replay_mode": "checkpoints",
             },
             "inputs": {
                 "dataset": {"revision": "c" * 40},
@@ -589,6 +657,7 @@ class AgenticReplayTest(unittest.TestCase):
             concurrency=[1, 2, 4],
             max_output_tokens=2048,
             warmup_turns=14,
+            replay_mode="checkpoints",
         )
 
         plan = BENCH.benchmark_plan(args, self.specs())
@@ -610,6 +679,8 @@ class AgenticReplayTest(unittest.TestCase):
         )
         self.assertEqual(plan["selection"]["measured_unique_trajectory_count"], 36)
         self.assertEqual(plan["selection"]["warmup_unique_trajectory_count"], 12)
+        self.assertEqual(plan["workload"]["measured_requests_per_arm_pass"], 36)
+        self.assertEqual(plan["workload"]["measured_requests_total"], 144)
 
 
 if __name__ == "__main__":

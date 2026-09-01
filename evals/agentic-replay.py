@@ -635,6 +635,8 @@ def replay_trajectory(
     max_output_tokens: int,
     timeout: float,
     turn_limit: Optional[int] = None,
+    measured_assistant_turns: Optional[set[int]] = None,
+    checkpoint_stage: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -644,36 +646,73 @@ def replay_trajectory(
         if recorded["role"] == "assistant":
             if turn_limit is not None and assistant_turn >= turn_limit:
                 break
-            requested_output_tokens = recorded_output_budget(
-                recorded, max_output_tokens
-            )
-            metadata = {
-                "session_id": trajectory["session_id"],
-                "source_dataset": trajectory["source_dataset"],
-                "agent_framework": trajectory["agent_framework"],
-                "recorded_model": trajectory["recorded_model"],
-                "assistant_turn": assistant_turn,
-                "recorded_message_index": message_index,
-                "history_message_count": len(history),
-                "requested_output_tokens": requested_output_tokens,
-                "recorded_output_characters": len(recorded.get("content") or ""),
-                "available_tools": len(tools),
-            }
-            result = stream_request(
-                f"{trajectory['session_id']}:{assistant_turn}",
-                history,
-                tools,
-                metadata,
-                model_id,
-                requested_output_tokens,
-                timeout,
-            )
-            results.append(result)
+            if (
+                measured_assistant_turns is None
+                or assistant_turn in measured_assistant_turns
+            ):
+                requested_output_tokens = recorded_output_budget(
+                    recorded, max_output_tokens
+                )
+                metadata = {
+                    "session_id": trajectory["session_id"],
+                    "source_dataset": trajectory["source_dataset"],
+                    "agent_framework": trajectory["agent_framework"],
+                    "recorded_model": trajectory["recorded_model"],
+                    "assistant_turn": assistant_turn,
+                    "recorded_message_index": message_index,
+                    "history_message_count": len(history),
+                    "requested_output_tokens": requested_output_tokens,
+                    "recorded_output_characters": len(recorded.get("content") or ""),
+                    "available_tools": len(tools),
+                    "checkpoint_stage": checkpoint_stage,
+                }
+                result = stream_request(
+                    f"{trajectory['session_id']}:{assistant_turn}",
+                    history,
+                    tools,
+                    metadata,
+                    model_id,
+                    requested_output_tokens,
+                    timeout,
+                )
+                results.append(result)
             assistant_turn += 1
         # Continue with the recorded trajectory, not the generated benchmark
         # output, so every experiment arm receives the same ordered history.
         history.append(openai_message(recorded))
     return results
+
+
+def assistant_turn_count(trajectory: dict[str, Any]) -> int:
+    return sum(
+        message["role"] == "assistant" for message in trajectory["messages"]
+    )
+
+
+def checkpoint_schedule(
+    trajectories: Sequence[dict[str, Any]],
+) -> dict[str, tuple[int, str]]:
+    """Assign deterministic early/middle/late/final checkpoints per framework."""
+    by_framework: dict[str, list[dict[str, Any]]] = {}
+    for trajectory in trajectories:
+        by_framework.setdefault(trajectory["agent_framework"], []).append(trajectory)
+    schedule: dict[str, tuple[int, str]] = {}
+    stage_names = {1: "early", 2: "middle", 3: "late", 4: "final"}
+    for framework_trajectories in by_framework.values():
+        denominator = len(framework_trajectories)
+        for rank, trajectory in enumerate(framework_trajectories, start=1):
+            turns = assistant_turn_count(trajectory)
+            if turns <= 0:
+                raise ValueError(
+                    f"trajectory {trajectory['session_id']} has no assistant turns"
+                )
+            assistant_turn = max(0, math.ceil(turns * rank / denominator) - 1)
+            stage = stage_names.get(rank) if denominator == 4 else None
+            schedule[trajectory["session_id"]] = (
+                assistant_turn,
+                stage or f"{rank}/{denominator}",
+            )
+    return schedule
 
 
 def summarize_requests(
@@ -797,10 +836,12 @@ def run_trajectory_cell(
     max_output_tokens: int,
     timeout: float,
     raw_path: Path,
+    replay_mode: str,
 ) -> dict[str, Any]:
     if not trajectories:
         raise ValueError("trajectory cell cannot be empty")
     requests: list[dict[str, Any]] = []
+    checkpoints = checkpoint_schedule(trajectories) if replay_mode == "checkpoints" else {}
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(concurrency, len(trajectories))
     ) as pool:
@@ -811,6 +852,16 @@ def run_trajectory_cell(
                 model_id,
                 max_output_tokens,
                 timeout,
+                measured_assistant_turns=(
+                    {checkpoints[trajectory["session_id"]][0]}
+                    if replay_mode == "checkpoints"
+                    else None
+                ),
+                checkpoint_stage=(
+                    checkpoints[trajectory["session_id"]][1]
+                    if replay_mode == "checkpoints"
+                    else None
+                ),
             )
             for trajectory in trajectories
         ]
@@ -839,6 +890,10 @@ def run_trajectory_cell(
             "framework_trajectories": framework_counts,
             "max_output_tokens": max_output_tokens,
             "ordered_replay": True,
+            "replay_mode": replay_mode,
+            "recorded_assistant_turns": sum(
+                assistant_turn_count(trajectory) for trajectory in trajectories
+            ),
         }
     )
     return summary
@@ -970,6 +1025,7 @@ def run_arm_pass(
                 max_output_tokens=args.max_output_tokens,
                 timeout=args.request_timeout,
                 raw_path=pass_dir / f"c-{concurrency}-requests.jsonl",
+                replay_mode=args.replay_mode,
             )
             cells.append(cell)
             write_json(pass_dir / f"c-{concurrency}.json", cell)
@@ -1319,8 +1375,8 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
         "",
         "## Trajectory selection",
         "",
-        "| Client concurrency | Whole trajectories | Recorded agent steps | Framework trajectory / step breakdown |",
-        "|---:|---:|---:|---|",
+        "| Client concurrency | Whole trajectories | Measured requests/pass | Recorded source steps | Framework trajectory / step breakdown |",
+        "|---:|---:|---:|---:|---|",
     ]
     for concurrency in run_document["config"]["concurrency"]:
         cohort = cohort_metadata[str(concurrency)]
@@ -1330,6 +1386,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
         )
         lines.append(
             f"| {concurrency} | {cohort['trajectory_count']} | "
+            f"{cohort['trajectory_count'] if run_document['config'].get('replay_mode', 'all') == 'checkpoints' else cohort['assistant_turns']} | "
             f"{cohort['assistant_turns']} | {breakdown} |"
         )
     lines.extend(
@@ -1337,7 +1394,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             "",
             "## Result table",
             "",
-            "| Ref | Commit | Offered C | Realized C | Slot use | Trajectories/pass | Agent steps | Failures | Comparable | Decode tok/s | Pass range | vs baseline | E2E output tok/s | Pass range | TTFT p50 | Pass range | TTFT p95 | TTFT p50 vs baseline | Cached prompt | Budget exhausted |",
+            "| Ref | Commit | Offered C | Realized C | Slot use | Trajectories/pass | Measured requests | Failures | Comparable | Decode tok/s | Pass range | vs baseline | E2E output tok/s | Pass range | TTFT p50 | Pass range | TTFT p95 | TTFT p50 vs baseline | Cached prompt | Budget exhausted |",
             "|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -1400,8 +1457,9 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             f"- Warm-up cohort: `{warmup_cohort['trajectory_count']}` whole trajectories, disjoint from measured cohorts.",
             f"- Dataset revision: `{run_document['inputs']['dataset']['revision']}`.",
             f"- Selected trajectories: `{selected_trajectories}` unique whole sessions across disjoint concurrency cohorts.",
-            f"- Recorded agent steps: `{selected_turns}` assistant turns per arm pass; each commit replays them once per pass.",
-            "- Turns inside a trajectory are strictly sequential. Different trajectories may overlap up to the offered client concurrency.",
+            f"- Recorded source steps: `{selected_turns}` assistant turns are represented across the selected trajectories.",
+            f"- Replay mode: `{run_document['config'].get('replay_mode', 'all')}`. Checkpoint mode measures one request per trajectory; skipped recorded turns are still appended in order to reconstruct the exact prefix.",
+            "- Within each framework's four trajectories, checkpoint mode deterministically assigns early, middle, late, and final stages. Different trajectories may overlap up to the offered client concurrency.",
             "- Realized concurrency is the time-weighted mean number of in-flight requests. Slot use makes cohort tail drain explicit; do not interpret offered-concurrency scaling as steady-state when utilization is low.",
             "- Each next request uses the recorded conversation history, so experiment arms receive identical growing prefixes and tool observations.",
             "- Per-turn output budgets approximate each recorded assistant action from its character length, capped by the configured maximum; generated output is measured but never fed into the next turn.",
@@ -1432,7 +1490,7 @@ def benchmark_plan(args: argparse.Namespace, specs: Sequence[RefSpec]) -> dict[s
     config = load_competitive_config()
     dataset = config["thoughtworks"]["dataset"]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "repo": str(args.repo),
         "refs": [spec.__dict__ for spec in specs],
         "order": [
@@ -1468,7 +1526,24 @@ def benchmark_plan(args: argparse.Namespace, specs: Sequence[RefSpec]) -> dict[s
         "workload": {
             "concurrency": args.concurrency,
             "passes": args.passes,
-            "ordered_whole_trajectory_replay": True,
+            "replay_mode": args.replay_mode,
+            "ordered_recorded_prefix_replay": True,
+            "measured_requests_per_arm_pass": (
+                len(args.concurrency)
+                * len(args.framework)
+                * args.trajectories_per_framework
+                if args.replay_mode == "checkpoints"
+                else None
+            ),
+            "measured_requests_total": (
+                len(args.concurrency)
+                * len(args.framework)
+                * args.trajectories_per_framework
+                * len(specs)
+                * args.passes
+                if args.replay_mode == "checkpoints"
+                else None
+            ),
             "max_output_tokens": args.max_output_tokens,
             "warmup_turns_per_arm_pass": args.warmup_turns,
         },
@@ -1511,7 +1586,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             build_ref(spec, worktree, args.backend, args.output, commands, args.skip_build)
         )
     run_document: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "started_at": utc_now(),
         "host": {
             "hostname": socket.gethostname(),
@@ -1523,6 +1598,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             "backend": args.backend,
             "concurrency": args.concurrency,
             "passes": args.passes,
+            "replay_mode": args.replay_mode,
             "max_output_tokens": args.max_output_tokens,
             "warmup_turns": args.warmup_turns,
         },
@@ -1590,7 +1666,18 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--model", required=True, help="model URI or local package path")
     parser.add_argument("--backend", default="metal")
-    parser.add_argument("--passes", type=int, default=2)
+    parser.add_argument(
+        "--passes",
+        type=int,
+        default=1,
+        help="A/B passes; use 2 for reverse-order ABBA confirmation",
+    )
+    parser.add_argument(
+        "--replay-mode",
+        choices=("checkpoints", "all"),
+        default="checkpoints",
+        help="measure one stage-balanced checkpoint per trajectory or every assistant turn",
+    )
     parser.add_argument("--concurrency", type=int, action="append", default=[])
     parser.add_argument(
         "--trajectories-per-framework",
@@ -1602,7 +1689,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--warmup-turns",
         type=int,
-        default=14,
+        default=4,
         help="discarded ordered turns from a disjoint cohort after model readiness",
     )
     parser.add_argument("--min-isl", type=int, default=8192)

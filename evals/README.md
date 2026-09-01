@@ -18,7 +18,7 @@ python3 evals/agentic-replay.py plan \
   --trajectories-per-framework 4
 ```
 
-Run the default ABBA comparison after materializing the pinned parquet from
+Run the default fast A/B release gate after materializing the pinned parquet from
 `thoughtworks/agentic-coding-trajectories`:
 
 ```bash
@@ -40,17 +40,23 @@ concurrency so the high-concurrency cells have more than one worker wave. With
 the example above and client concurrency 1/2/4, the runner selects 36 measured
 whole trajectories: four from each of the three recorded agent frameworks for
 each disjoint concurrency cohort. It also selects a disjoint 12-trajectory
-warm-up cohort and discards 14 ordered turns after every model-ready event.
+warm-up cohort and discards four ordered turns after every model-ready event.
 Selection is deterministic by session ID hash within each framework.
 
-Every assistant turn becomes one measured request. A trajectory's turns are
-strictly sequential and each request contains the real recorded history before
-that turn; only separate trajectories can overlap. After measuring a turn, the
-runner advances with the recorded assistant action and tool observation rather
-than the benchmark model's output, which gives every experiment arm an identical
-growing prefix. The manifest records all selected session IDs, framework and
-turn counts, context bounds, and hashes. Use `report` to regenerate tables and
-charts from a completed artifact without rerunning the model.
+The default checkpoint profile measures one request per trajectory: within each
+framework's four trajectories, one deterministically represents each of early,
+middle, late, and final stage. Every request contains the complete recorded
+history before that checkpoint. Skipped assistant turns and tool observations
+are appended from the dataset in strict order, so every experiment arm receives
+an identical prefix without paying for discarded generations at every step.
+This is 36 requests per ref and 72 for a two-ref A/B gate. Use `--passes 2` for
+reverse-order ABBA confirmation when the first-pass result is ambiguous.
+
+For nightly or research runs, `--replay-mode all --passes 2 --warmup-turns 14`
+restores exhaustive assistant-turn replay. The manifest records all selected
+session IDs, framework and turn counts, context bounds, and hashes. Use `report`
+to regenerate tables and charts from a completed artifact without rerunning the
+model.
 
 The default per-turn output cap is 2,048 tokens. Reports lead with token-weighted
 decode throughput measured after first generated content and show end-to-end
