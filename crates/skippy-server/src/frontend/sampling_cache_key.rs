@@ -27,6 +27,8 @@ pub(super) fn sampling_replay_safe(sampling: &SamplingConfig) -> bool {
 
     sampling.temperature <= 0.0
         && sampling.mirostat_mode == 0
+        && sampling.xtc.probability <= 0.0
+        && sampling.dynatemp_range <= 0.0
         && sampling
             .samplers
             .iter()
@@ -333,6 +335,23 @@ mod tests {
                 "Mirostat mode {mirostat_mode} remains RNG-backed at temperature zero"
             );
         }
+        assert!(
+            !sampling_replay_safe(&SamplingConfig {
+                xtc: skippy_runtime::XtcSamplingConfig {
+                    probability: 0.5,
+                    ..greedy.xtc.clone()
+                },
+                ..greedy.clone()
+            }),
+            "XTC remains RNG-backed at temperature zero"
+        );
+        assert!(
+            !sampling_replay_safe(&SamplingConfig {
+                dynatemp_range: 0.5,
+                ..greedy.clone()
+            }),
+            "dynamic temperature remains RNG-backed at temperature zero"
+        );
         assert!(!sampling_replay_safe(&SamplingConfig {
             samplers: vec!["top_k".to_string(), "top_p".to_string()],
             ..greedy

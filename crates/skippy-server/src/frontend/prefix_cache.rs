@@ -1423,6 +1423,17 @@ mod tests {
             },
             SamplingConfig {
                 samplers: vec!["top_k".to_string(), "top_p".to_string()],
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                xtc: skippy_runtime::XtcSamplingConfig {
+                    probability: 0.5,
+                    ..greedy.xtc.clone()
+                },
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                dynatemp_range: 0.5,
                 ..greedy
             },
         ];
