@@ -560,11 +560,17 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
 
-### Minimum bar before every commit
+### Minimum validation by change type
 
-- Rust-only change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
+Choose validation from the changed surface, not merely from the directory that contains the changed file. A Python, shell, documentation, or configuration file under a Rust crate does not by itself require Cargo validation.
+
+- Rust change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
+- Python-only change — run `python3 -m py_compile` for the changed modules and `python3 -m unittest` for the nearest relevant test modules. Run the full `scripts/tests` suite only for shared script infrastructure, CI planning, or broad cross-script changes.
 - UI-only change — run `just build`.
-- Mixed Rust and UI change — run `just build`.
+- Documentation, configuration, or shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.
+- Mixed change — run the union of the checks required for each changed surface.
+
+Do not rerun otherwise unchanged validation solely because a commit is about to be pushed. Rerun affected checks when the validated diff or commit has changed.
 
 ### Rust changes
 
