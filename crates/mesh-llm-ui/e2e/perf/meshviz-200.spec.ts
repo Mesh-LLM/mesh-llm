@@ -229,33 +229,38 @@ test('keeps glowing node visuals stable during live zoom', async ({ page }) => {
   const initialCoreBox = await page.getByTestId('mesh-node-core').first().boundingBox()
   if (!initialCoreBox) throw new Error('Expected a MeshViz node core bounding box')
 
+  const packetLayer = page.getByTestId('mesh-packet-layer')
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const preWheelLayerTransform = await packetLayer.evaluate((element) => element.style.transform)
+  const liveNodeVisualsPromise = page
+    .waitForFunction(
+      (previousTransform) => {
+        const packetLayerElement = document.querySelector('[data-testid="mesh-packet-layer"]')
+        const nodeCore = document.querySelector('[data-testid="mesh-node-core"]')
+
+        if (!(packetLayerElement instanceof HTMLElement) || !(nodeCore instanceof HTMLElement)) return undefined
+
+        const layerTransform = packetLayerElement.style.transform
+        if (!layerTransform.includes('scale(') || layerTransform === previousTransform) return undefined
+
+        const coreBox = nodeCore.getBoundingClientRect()
+        return {
+          layerTransform,
+          coreWidth: coreBox.width,
+          coreHeight: coreBox.height
+        }
+      },
+      preWheelLayerTransform,
+      { polling: 'raf', timeout: 5_000 }
+    )
+    .then((handle) => handle.jsonValue())
+
   for (let index = 0; index < 5; index += 1) {
     await page.mouse.wheel(0, -120)
   }
 
-  await page.waitForFunction(
-    () => document.querySelector<HTMLElement>('[data-testid="mesh-packet-layer"]')?.style.transform.includes('scale('),
-    undefined,
-    { polling: 10, timeout: 1000 }
-  )
-
-  const liveNodeVisuals = await page.evaluate(() => {
-    const packetLayer = document.querySelector('[data-testid="mesh-packet-layer"]')
-    const nodeCore = document.querySelector('[data-testid="mesh-node-core"]')
-
-    if (!(packetLayer instanceof HTMLElement) || !(nodeCore instanceof HTMLElement)) {
-      throw new Error('Expected MeshViz packet layer and node core elements')
-    }
-
-    const coreBox = nodeCore.getBoundingClientRect()
-
-    return {
-      layerTransform: packetLayer.style.transform,
-      coreWidth: coreBox.width,
-      coreHeight: coreBox.height
-    }
-  })
+  const liveNodeVisuals = await liveNodeVisualsPromise
+  if (!liveNodeVisuals) throw new Error('Expected live MeshViz node visual snapshot')
 
   expect(liveNodeVisuals.layerTransform).toContain('scale(')
   expect(Math.abs(liveNodeVisuals.coreWidth - initialCoreBox.width)).toBeLessThan(NODE_SIZE_DELTA_TOLERANCE_PX)
