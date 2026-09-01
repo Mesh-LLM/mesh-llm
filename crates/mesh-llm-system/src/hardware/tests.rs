@@ -641,7 +641,7 @@ fn test_hardware_survey_default() {
     assert!(s.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
@@ -653,7 +653,7 @@ fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     assert!(survey.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     let mut survey = HardwareSurvey::default();
@@ -663,7 +663,28 @@ fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
-#[cfg(all(target_os = "linux", feature = "skippy-devices"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn test_cpu_only_runtime_budget_without_system_ram_leaves_capacity_zero() {
+    let mut survey = HardwareSurvey::default();
+
+    apply_cpu_only_runtime_budget(&mut survey, &[Metric::VramBytes], 0);
+
+    assert_eq!(survey.vram_bytes, 0);
+}
+
+/// Every platform with a CPU-only budget needs a working RAM probe; a probe
+/// that returns 0 leaves GPU-less nodes advertising no capacity at all.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn test_system_ram_probe_reports_installed_memory() {
+    assert!(read_system_ram_bytes() > 0);
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    feature = "skippy-devices"
+))]
 #[test]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
@@ -684,7 +705,10 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     assert!(survey.vram_bytes > 0);
 }
 
-#[cfg(all(target_os = "linux", feature = "skippy-devices"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    feature = "skippy-devices"
+))]
 #[test]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));

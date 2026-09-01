@@ -187,7 +187,13 @@ fn read_system_ram_bytes() -> u64 {
     .unwrap_or(0)
 }
 
-#[cfg(all(target_os = "linux", any(feature = "skippy-devices", test)))]
+/// CPU-only nodes have no VRAM to advertise, so they budget from system RAM
+/// instead. Without this a GPU-less node reports zero capacity, which reads as
+/// `missing_vram` to split planning and fails the local capacity gate.
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    any(feature = "skippy-devices", test)
+))]
 fn apply_cpu_only_runtime_budget(survey: &mut HardwareSurvey, metrics: &[Metric], system_ram: u64) {
     if metrics.contains(&Metric::VramBytes) && system_ram > 0 {
         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
@@ -233,6 +239,11 @@ fn read_windows_total_ram_bytes() -> Option<u64> {
         "Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty TotalPhysicalMemory",
     )?;
     parse_windows_total_physical_memory(&output)
+}
+
+#[cfg(target_os = "windows")]
+fn read_system_ram_bytes() -> u64 {
+    read_windows_total_ram_bytes().unwrap_or(0)
 }
 
 /// Per-GPU VRAM in adapter order.
@@ -305,13 +316,13 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
     let gpus = match skippy_devices::gpu_facts() {
         Ok(gpus) => gpus,
         Err(_) => {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
             return true;
         }
     };
     if gpus.is_empty() {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
         return true;
     }
@@ -630,7 +641,7 @@ impl Collector for DefaultCollector {
             any(not(feature = "skippy-devices"), feature = "dynamic-native-runtime")
         ))]
         {
-            let system_ram = read_windows_total_ram_bytes().unwrap_or(0);
+            let system_ram = read_system_ram_bytes();
             let want_gpu_info =
                 metrics.contains(&Metric::GpuName) || metrics.contains(&Metric::GpuCount);
             let want_vram = metrics.contains(&Metric::VramBytes);
