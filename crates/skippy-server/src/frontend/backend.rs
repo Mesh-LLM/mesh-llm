@@ -493,18 +493,16 @@ impl GenerationAdmissionController {
             self.generation_queue_limit,
         )?;
         match claim {
-            GenerationAdmissionClaim::Acquired(permit) => {
-                return Ok(GenerationAdmissionPermit {
-                    _lane: self.generation_limit.wrap_permit(permit),
-                    _active_work: self.generation_service_estimator.start_active(work),
-                    predicted_wait_ms: Some(0.0),
-                    demand_epoch: self.generation_limit.demand_epoch(),
-                    queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
-                    waited_for_lane: false,
-                    at_capacity_at_start: self.generation_limit.is_at_capacity(),
-                    started_at: Instant::now(),
-                });
-            }
+            GenerationAdmissionClaim::Acquired(permit) => Ok(GenerationAdmissionPermit {
+                _lane: self.generation_limit.wrap_permit(permit),
+                _active_work: self.generation_service_estimator.start_active(work),
+                predicted_wait_ms: Some(0.0),
+                demand_epoch: self.generation_limit.demand_epoch(),
+                queued_at_start: self.generation_queue_depth.load(Ordering::Acquire) > 0,
+                waited_for_lane: false,
+                at_capacity_at_start: self.generation_limit.is_at_capacity(),
+                started_at: Instant::now(),
+            }),
             GenerationAdmissionClaim::Queued(lease) => {
                 self.generation_limit.note_queued_demand();
                 self.generation_service_estimator
@@ -524,7 +522,7 @@ impl GenerationAdmissionController {
                         cancellation,
                     )
                     .await?;
-                return Ok(GenerationAdmissionPermit {
+                Ok(GenerationAdmissionPermit {
                     _lane: self.generation_limit.wrap_permit(lane),
                     _active_work: queued_work.promote(),
                     predicted_wait_ms,
@@ -533,7 +531,7 @@ impl GenerationAdmissionController {
                     waited_for_lane: true,
                     at_capacity_at_start: self.generation_limit.is_at_capacity(),
                     started_at: Instant::now(),
-                });
+                })
             }
         }
     }
