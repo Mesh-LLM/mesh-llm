@@ -239,9 +239,9 @@ runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
 - `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
-  bounded Clippy batches and CLI documentation synchronization.
-- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, and
-  public website build.
+  bounded Clippy batches and generated CLI inventory freshness.
+- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
+  website build, and CLI explorer browser validation.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.

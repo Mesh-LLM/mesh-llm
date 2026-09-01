@@ -49,7 +49,7 @@ RECIPES_BY_FILE: Final = {
         "release-bundle-vulkan-windows", "release-bundle-windows",
     },
     "just/website-ui.just": {
-        "crate-docs", "ui-dev", "ui-dev-public", "ui-test", "website-build",
+        "cli-inventory-check", "crate-docs", "ui-dev", "ui-dev-public", "ui-test", "website-build",
         "website-clean", "website-dev",
     },
     "just/ci.just": {
