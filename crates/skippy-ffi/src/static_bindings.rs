@@ -115,6 +115,8 @@ unsafe extern "C" {
 
     pub fn skippy_session_batch_size(session: *const Session) -> i32;
 
+    pub fn skippy_session_sequence_id(session: *const Session) -> i32;
+
     pub fn skippy_session_begin_external_decode(
         session: *mut Session,
         out_error: *mut *mut Error,

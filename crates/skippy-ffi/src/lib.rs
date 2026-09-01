@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 44;
+pub const ABI_VERSION_PATCH: u32 = 45;
 
 mod abi;
 mod activation;
@@ -99,10 +99,10 @@ pub use dynamic::{
     skippy_session_last_token_signal, skippy_session_llama_context,
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_reset,
     skippy_session_restore_prefix, skippy_session_sample_current, skippy_session_save_prefix,
-    skippy_session_set_position, skippy_session_signal_window, skippy_slice_plan_add_layer_range,
-    skippy_slice_plan_create, skippy_slice_plan_free, skippy_token_is_eog, skippy_tokenize,
-    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
-    skippy_write_gguf_from_parts, skippy_write_slice_gguf,
+    skippy_session_sequence_id, skippy_session_set_position, skippy_session_signal_window,
+    skippy_slice_plan_add_layer_range, skippy_slice_plan_create, skippy_slice_plan_free,
+    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
+    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts, skippy_write_slice_gguf,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -137,8 +137,8 @@ pub use static_bindings::{
     skippy_session_last_token_signal, skippy_session_llama_context,
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_reset,
     skippy_session_restore_prefix, skippy_session_sample_current, skippy_session_save_prefix,
-    skippy_session_set_position, skippy_session_signal_window, skippy_slice_plan_add_layer_range,
-    skippy_slice_plan_create, skippy_slice_plan_free, skippy_token_is_eog, skippy_tokenize,
-    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
-    skippy_write_gguf_from_parts, skippy_write_slice_gguf,
+    skippy_session_sequence_id, skippy_session_set_position, skippy_session_signal_window,
+    skippy_slice_plan_add_layer_range, skippy_slice_plan_create, skippy_slice_plan_free,
+    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
+    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts, skippy_write_slice_gguf,
 };
