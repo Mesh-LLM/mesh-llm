@@ -59,6 +59,7 @@ class KvNightlyWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("\n  pull_request:", workflow)
         self.assertNotIn("\n  push:", workflow)
         self.assertIn("MESH_NIGHTLY_COMPETITIVE_HF_CLI", workflow)
+        self.assertNotIn("MESH_NIGHTLY_COMPETITIVE_HF_CLI ||", workflow)
         self.assertIn('"$HF_CLI" datasets info', workflow)
         self.assertIn('"$HF_CLI" download', workflow)
         self.assertIn('"$HF_CLI" upload', workflow)

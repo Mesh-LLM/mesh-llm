@@ -45,7 +45,7 @@ jobs:
       HF_HISTORY_GATE_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_GATE_ENABLED || '0' }}
       HF_DATASET_REPO: ${{ vars.MESH_PERFORMANCE_HISTORY_DATASET }}
       HF_HISTORY_LOCAL: ${{ github.workspace }}/.performance-history-cache
-      HF_CLI: ${{ vars.MESH_NIGHTLY_COMPETITIVE_HF_CLI || 'hf' }}
+      HF_CLI: ${{ vars.MESH_NIGHTLY_COMPETITIVE_HF_CLI }}
     steps:
       - name: Verify dedicated benchmark runner
         shell: bash
