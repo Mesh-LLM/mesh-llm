@@ -7387,6 +7387,9 @@ version = "0.76.0-rc9"
 dependencies = [
  "anyhow",
  "blake3",
+ "libc",
+ "serde",
+ "serde_json",
  "skippy-protocol",
 ]
 
@@ -7402,6 +7405,7 @@ name = "skippy-correctness"
 version = "0.76.0-rc9"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "hex",
  "model-artifact",

@@ -6,8 +6,8 @@ use std::{
 use anyhow::Result;
 use mesh_llm_events::OutputEvent;
 use skippy_cache::{
-    CacheBlobStore, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
-    UnifiedRadixCache,
+    CacheBlobStore, L3Tier, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
+    StoreLimits, UnifiedRadixCache, prefix_namespace_hash,
 };
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
 use skippy_runtime::ModelStateKind;
@@ -44,9 +44,19 @@ impl KvStageIntegration {
             emit_cache_disabled_warning(config, reason);
             return Ok(None);
         }
-        let payload = effective_cache_payload(cache_config.payload, &model_capability);
+        let mut payload = effective_cache_payload(cache_config.payload, &model_capability);
         if payload == StagePrefixCachePayload::Disabled {
             return Ok(None);
+        }
+        let l3 = l3_tier_from_env(config)?;
+        let dense_without_recurrent = matches!(model_capability, ModelKvCapability::KnownDense);
+        if l3.is_some() && payload == StagePrefixCachePayload::ResidentKv && dense_without_recurrent
+        {
+            // The durable tier needs exportable state and ResidentKv is
+            // borrow-only. Dense families record KV pages with an empty
+            // recurrent snapshot so they reach disk; the model is known
+            // dense, so the empty snapshot is expected rather than corrupt.
+            payload = StagePrefixCachePayload::KvRecurrent;
         }
         if matches!(model_capability, ModelKvCapability::KnownRecurrent)
             && matches!(payload, StagePrefixCachePayload::ResidentKv)
@@ -87,8 +97,13 @@ impl KvStageIntegration {
             std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
         let worker_radix = radix.clone();
         let worker_exact_blobs = exact_blobs.clone();
+        let worker_l3 = l3.clone();
         let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
         let worker_inflight_records = inflight_records.clone();
+        let inflight_fills: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let worker_inflight_fills = inflight_fills.clone();
+        let exact_state_record_queue_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_exact_state_record_queue_bytes = exact_state_record_queue_bytes.clone();
         let exact_state_records_queued = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_records_dropped = exact_state_records_dropped.clone();
@@ -102,10 +117,12 @@ impl KvStageIntegration {
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
+                    let fill_claim = pending.l3_fill_claim.clone();
                     super::run_exact_state_record_job(
                         &worker_inflight_records,
                         &worker_exact_state_records_dropped,
                         &worker_exact_state_records_pending,
+                        &worker_exact_state_record_queue_bytes,
                         &worker_exact_state_record_worker_healthy,
                         &worker_exact_state_record_worker_panics,
                         pending,
@@ -115,10 +132,20 @@ impl KvStageIntegration {
                                 &worker_exact_blobs,
                                 exact_max_entries,
                                 exact_max_bytes,
+                                worker_l3.as_deref(),
                                 pending,
                             )
                         },
                     );
+                    if let Some(fill_claim) = fill_claim {
+                        // The filled entry is radix-resident now (or the
+                        // insert failed, and a re-fill is the right call
+                        // either way): release the claim.
+                        worker_inflight_fills
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&fill_claim);
+                    }
                 }
             })?;
         Ok(Some(Self {
@@ -147,6 +174,10 @@ impl KvStageIntegration {
             cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             output_tokens: Arc::new(Mutex::new(OutputTokenCache::new(exact_max_entries))),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            exact_state_record_queue_bytes,
+            l3,
+            inflight_fills,
+            dense_without_recurrent,
         }))
     }
 
@@ -157,6 +188,88 @@ impl KvStageIntegration {
     ) -> Result<Option<Self>> {
         Self::from_loaded_model(config, Some(model_state_kind))
     }
+}
+
+/// Open the durable L3 tier when `SKIPPY_L3_DIR` is set.
+///
+/// Experimental, environment-only plumbing: the public `[runtime.kv_cache.disk]`
+/// configuration replaces it and this reader becomes a one-release
+/// compatibility shim with a deprecation warning. The tier identity is the
+/// radix cache's own numerical namespace, so restarts reuse it and a change
+/// in weights, cache dtypes, layout or platform refuses stale state.
+const DEFAULT_L3_BUDGET_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+const DEFAULT_L3_MINIMUM_FREE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
+
+fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
+    let Ok(root) = std::env::var("SKIPPY_L3_DIR") else {
+        return Ok(None);
+    };
+    if root.trim().is_empty() {
+        return Ok(None);
+    }
+    let budget_bytes = match std::env::var("SKIPPY_L3_BUDGET_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        // There is no unbounded mode. Zero used to mean "no cap"; it is now
+        // rejected rather than silently reinterpreted.
+        Some(0) => {
+            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                message: "SKIPPY_L3_BUDGET_BYTES=0 is not unbounded; using the default budget"
+                    .to_string(),
+                context: Some(format!("budget_bytes={DEFAULT_L3_BUDGET_BYTES}")),
+            });
+            DEFAULT_L3_BUDGET_BYTES
+        }
+        Some(bytes) => bytes,
+        None => DEFAULT_L3_BUDGET_BYTES,
+    };
+    let identity = prefix_namespace_hash(config, 0, None);
+    let tier = match L3Tier::open_with_limits(
+        &root,
+        StoreLimits::new(budget_bytes, DEFAULT_L3_MINIMUM_FREE_BYTES),
+        identity,
+        L3_SEGMENT_BYTES,
+    ) {
+        Ok(tier) => tier,
+        Err(error) => {
+            // A tier that cannot open is a visible decline, not a crash:
+            // serving continues cache-off for this stage.
+            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                message: "Skippy L3 disk cache disabled for this model stage".to_string(),
+                context: Some(format!(
+                    "stage_id={} directory={root} reason={error:#}",
+                    config.stage_id
+                )),
+            });
+            return Ok(None);
+        }
+    };
+    // Warm state must never be invisible: say what the tier can restore the
+    // moment the stage comes up.
+    match tier.status() {
+        Ok(status) => {
+            let _ = mesh_llm_events::emit_event(OutputEvent::Info {
+                message: "Skippy L3 disk cache open".to_string(),
+                context: Some(format!(
+                    "stage_id={} directory={root} restorable_manifests={} restorable_tokens={} used_bytes={} budget_bytes={}",
+                    config.stage_id,
+                    status.restorable_manifests,
+                    status.restorable_tokens,
+                    status.usage.used_bytes,
+                    status.usage.budget_bytes
+                )),
+            });
+        }
+        Err(error) => {
+            let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                message: "Skippy L3 disk cache open; status unavailable".to_string(),
+                context: Some(format!("stage_id={} reason={error:#}", config.stage_id)),
+            });
+        }
+    }
+    Ok(Some(Arc::new(tier)))
 }
 
 fn emit_cache_disabled_warning(config: &StageConfig, reason: &str) {
@@ -174,8 +287,36 @@ fn store_exact_radix_record(
     blobs: &Mutex<CacheBlobStore>,
     max_entries: usize,
     max_bytes: u64,
+    l3: Option<&L3Tier>,
     pending: PendingExactStateRecord,
 ) -> Result<()> {
+    // Write through to the durable tier before the payload is deduplicated
+    // into blocks, while its bytes are still contiguous. Best-effort: a full
+    // or failing disk must not fail the in-memory record. The refusal reason
+    // lands in the tier's status; one warning per process keeps a full disk
+    // from flooding the log.
+    if let Some(l3) = l3 {
+        let kv_desc_json = pending
+            .extra
+            .kv_desc
+            .as_ref()
+            .and_then(|desc| serde_json::to_string(desc).ok());
+        if let Err(error) = l3.spill(
+            &pending.namespace,
+            &pending.token_ids,
+            &pending.payload,
+            kv_desc_json,
+        ) {
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+                    message: "Skippy L3 disk cache write refused; see kv-cache status".to_string(),
+                    context: Some(format!("page_id={} reason={error:#}", pending.page_id)),
+                });
+            }
+        }
+    }
     let logical_bytes = pending.payload.byte_len();
     let (payload, _) = pending.payload.dedupe_into(
         &mut blobs
@@ -367,6 +508,7 @@ mod tests {
             extra: super::super::ExactStateExtra::default(),
             namespace: "model".to_string(),
             token_ids: tokens.to_vec(),
+            l3_fill_claim: None,
         }
     }
 
@@ -375,13 +517,21 @@ mod tests {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
 
-        store_exact_radix_record(&radix, &blobs, 1, 0, pending("first", &[1, 2], b"aaaabbbb"))
-            .unwrap();
         store_exact_radix_record(
             &radix,
             &blobs,
             1,
             0,
+            None,
+            pending("first", &[1, 2], b"aaaabbbb"),
+        )
+        .unwrap();
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            0,
+            None,
             pending("second", &[1, 3], b"aaaacccc"),
         )
         .unwrap();
@@ -406,9 +556,15 @@ mod tests {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
 
-        let error =
-            store_exact_radix_record(&radix, &blobs, 1, 0, pending("empty", &[], b"aaaabbbb"))
-                .unwrap_err();
+        let error = store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            0,
+            None,
+            pending("empty", &[], b"aaaabbbb"),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -416,6 +572,64 @@ mod tests {
         );
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
         assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
+    }
+
+    #[test]
+    fn exact_records_write_through_to_l3_and_survive_radix_eviction() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+        let root = std::env::temp_dir()
+            .join("skippy-server-l3-tests")
+            .join(format!("write-through-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tier = L3Tier::open(&root, 0, "blake3:test-tier".to_string(), 4096).unwrap();
+
+        // Two records with max_entries = 1: the first is evicted from RAM.
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            0,
+            Some(&tier),
+            pending("first", &[1, 2], b"first-exact-state"),
+        )
+        .unwrap();
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            0,
+            Some(&tier),
+            pending("second", &[1, 3], b"second-exact-state"),
+        )
+        .unwrap();
+        assert!(
+            radix
+                .lock()
+                .unwrap()
+                .lookup_recurrent("model", &[1, 2])
+                .is_none(),
+            "first record must be evicted from RAM"
+        );
+
+        // The evicted prefix still fills from the durable tier, including
+        // for a longer query that extends the recorded path.
+        let fill = tier
+            .fill_longest("model", &[1, 2, 7, 8], 64)
+            .unwrap()
+            .expect("evicted record must remain in L3");
+        assert_eq!(fill.token_count, 2);
+        assert_eq!(
+            fill.payload
+                .full_state_bytes_timed()
+                .unwrap()
+                .0
+                .into_owned(),
+            b"first-exact-state".to_vec()
+        );
+        let status = tier.status().unwrap();
+        assert_eq!(status.activity.writes, 2);
+        assert_eq!(status.activity.fills, 1);
     }
 
     #[test]
