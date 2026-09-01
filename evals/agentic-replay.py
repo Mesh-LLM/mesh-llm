@@ -375,9 +375,16 @@ def load_trajectory_cohorts(
             session_id = trajectory.get("session_id")
             if not isinstance(session_id, str) or not session_id:
                 raise ValueError(f"cohort {name} contains a trajectory without session_id")
-            for field in ("source_dataset", "agent_framework", "recorded_model"):
+            for field in ("source_dataset", "agent_framework"):
                 if not isinstance(trajectory.get(field), str) or not trajectory[field]:
                     raise ValueError(f"trajectory {session_id} has no {field}")
+            if "recorded_model" not in trajectory:
+                raise ValueError(f"trajectory {session_id} has no recorded_model field")
+            recorded_model = trajectory["recorded_model"]
+            if recorded_model is not None and (
+                not isinstance(recorded_model, str) or not recorded_model
+            ):
+                raise ValueError(f"trajectory {session_id} has invalid recorded_model")
             messages = trajectory.get("messages")
             if not isinstance(messages, list) or not messages:
                 raise ValueError(
