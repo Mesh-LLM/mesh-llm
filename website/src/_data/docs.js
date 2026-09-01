@@ -114,6 +114,7 @@ export default [
       ["Skippy native API", "/docs/pages/skippy-api/"],
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
       ["CLI reference", "/docs/pages/CLI/"],
+      ["CLI explorer", "/docs/pages/cli-explorer/"],
       ["Testing playbook", "/docs/pages/testing/"]
     ]
   },

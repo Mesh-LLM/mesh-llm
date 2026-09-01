@@ -5,10 +5,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-mapfile -t crates < <(
-    sed -n '/^publish_crates=(/,/^)/p' scripts/publish-crates.sh \
-        | sed -n 's/^    \([[:alnum:]_-]*\)$/\1/p'
-)
+load_publish_crates() {
+    crates=()
+    while IFS= read -r crate; do
+        crates+=("$crate")
+    done < <(
+        sed -n '/^publish_crates=(/,/^)/p' scripts/publish-crates.sh \
+            | sed -n 's/^    \([[:alnum:]_-]*\)$/\1/p'
+    )
+}
+
+load_publish_crates
 
 if [[ "${#crates[@]}" -eq 0 ]]; then
     echo "No crates found in scripts/publish-crates.sh" >&2

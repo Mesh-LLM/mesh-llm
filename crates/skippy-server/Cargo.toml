@@ -36,7 +36,7 @@ skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc8"  }
 skippy-metrics = { path = "../skippy-metrics", version = "0.76.0-rc8"  }
 skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc8" }
 openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc8"  }
-opentelemetry-proto = "0.31.0"
+opentelemetry-proto = "0.32.0"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
