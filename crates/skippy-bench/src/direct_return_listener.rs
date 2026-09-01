@@ -431,7 +431,10 @@ mod tests {
         let mut client = TcpStream::connect(listener.local_addr()).unwrap();
         recv_ready(&mut client).unwrap();
         write_stage_message(&mut client, &open_message(999, 999)).unwrap();
-        send_reply_predicted_with_stats(&mut client, 7, Default::default()).unwrap();
+        // The listener rejects the unregistered open immediately, so the
+        // following write may either reach the socket buffer or observe the
+        // peer reset. Both outcomes exercise the same rejection path.
+        let _ = send_reply_predicted_with_stats(&mut client, 7, Default::default());
 
         assert!(
             receiver
