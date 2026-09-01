@@ -26,6 +26,12 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    /// Whether the iteration scheduler may serve multiple active lanes.
+    ///
+    /// Binary stages launched by the standalone CLI retain the historical
+    /// enabled default. Mesh-launched stages receive the resolved value from
+    /// the stage-control load request.
+    pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -119,6 +125,7 @@ impl BinaryStageOptions {
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
+            continuous_batching: true,
             openai,
         })
     }
@@ -182,9 +189,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache: None,
@@ -193,6 +211,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -220,6 +239,7 @@ mod tests {
                 max_tokens: 6,
                 pipeline_depth: 2,
             },
+            ..SpeculativeDecodeConfig::default()
         }
     }
 

@@ -147,9 +147,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: None::<StageDevice>,
             kv_cache: None::<StageKvCacheConfig>,
@@ -162,6 +173,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

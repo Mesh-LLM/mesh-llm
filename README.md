@@ -36,7 +36,7 @@ Finish setup:
 mesh-llm setup
 ```
 
-On Windows PowerShell, use `mesh-llm.exe setup`. *(If you plan to run MeshLLM inside WSL2 for CUDA 13+ support or multi-node LAN clustering, see the [Windows & WSL2 Troubleshooting Guide](#-windows--wsl2-troubleshooting).)*
+On Windows PowerShell, use `mesh-llm.exe setup`. *(For native Windows notes, and for the optional WSL2 setup and multi-node LAN clustering, see the [Windows & WSL2 Troubleshooting Guide](#-windows--wsl2-troubleshooting).)*
 
 To remove an executable install later, preview the cleanup first:
 
@@ -235,9 +235,41 @@ binary to `invalid`, but default startup still allows it.
 
 ## 🪟 Windows & WSL2 Troubleshooting
 
-### Running on Windows with CUDA 13+ Drivers
+### Running natively on Windows (NVIDIA)
 
-If you are running Windows with an NVIDIA CUDA 13.x driver (e.g., Driver version 595+) and `mesh-llm` reports `0 GPUs` or falls back to Vulkan, use **WSL2 (Windows Subsystem for Linux)** with `--llama-flavor cuda` to access Linux CUDA 13 runtimes.
+Native Windows CUDA works, including on CUDA 13.x drivers: GPU detection (`mesh-llm gpus`) and full-speed CUDA inference have been verified on driver 610.74 (CUDA UMD 13.3) with an RTX 4070 Ti. The earlier advice to switch to WSL2 when `mesh-llm` reported `0 GPUs` on CUDA 13 drivers predates the cuda12-runtime compatibility fix ([#1127](https://github.com/Mesh-LLM/mesh-llm/issues/1127)) and no longer applies to current releases.
+
+As of v0.76.0-rc8, three distribution/loading bugs still block the out-of-the-box native path. Until the fixes ship, this sequence works end to end:
+
+1. **Install the prerelease** — the stable v0.75.1 Windows bundles fail `install.ps1` verification ([#1510](https://github.com/Mesh-LLM/mesh-llm/issues/1510)):
+
+   ```powershell
+   irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 -OutFile install.ps1
+   .\install.ps1 -PreRelease
+   ```
+
+2. **Install the CUDA runtime from the product bundle** — `mesh-llm runtime install cuda` finds no windows/x86_64 runtimes in the release manifest ([#1511](https://github.com/Mesh-LLM/mesh-llm/issues/1511)). Download `mesh-llm-x86_64-pc-windows-msvc-cuda.zip` for your installed version from the [releases page](https://github.com/Mesh-LLM/mesh-llm/releases), extract it, then:
+
+   ```powershell
+   mesh-llm runtime install --bundle-dir "<extracted>\mesh-bundle" cuda
+   ```
+
+3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)):
+
+   ```powershell
+   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-cuda12\lib;" + $env:PATH
+   mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
+   ```
+
+Good to know on native Windows:
+
+- `--local-model-only` requires an absolute path to a local `.gguf` file; catalog and Hugging Face refs are rejected in this mode.
+- Models download to `%LOCALAPPDATA%\huggingface\hub` (the Rust `hf-hub` convention) — a separate cache from the Python tools' `~\.cache\huggingface`.
+- `mesh-llm.exe` is not code-signed yet, so SmartScreen may prompt when launching it manually.
+
+### Running under WSL2 (alternative)
+
+WSL2 remains a solid alternative if you prefer the Linux CUDA runtimes or want the multi-node LAN setups described below.
 
 #### 1. Install CUDA 13.0 Toolkit inside WSL2
 Inside your Ubuntu WSL2 terminal, install `cuda-toolkit-13-0` to supply `libcudart.so.13`:

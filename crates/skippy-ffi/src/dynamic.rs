@@ -8,10 +8,11 @@ use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationDesc,
     BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc, LlamaLogCallback,
     LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext, MtmdContextParams,
-    MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
-    NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
-    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
-    SlicePlan, Status, TensorInfo, TokenSignal, runtime_abi_supported,
+    MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
+    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
+    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, SlicePlan, Status, TensorInfo,
+    TokenSignal, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -235,7 +236,9 @@ dynamic_symbols! {
     mtmd_context_params_default() -> MtmdContextParams;
     mtmd_init_from_file(mmproj_fname: *const c_char, text_model: *const Opaque, ctx_params: MtmdContextParams) -> *mut MtmdContext;
     mtmd_free(ctx: *mut MtmdContext);
-    mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize) -> *mut MtmdBitmap;
+    mtmd_helper_init_opt_default() -> MtmdHelperInitOpt;
+    mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize, placeholder: bool, opt: MtmdHelperInitOpt) -> MtmdHelperBitmapWrapper;
+    mtmd_helper_video_free(video: *mut MtmdHelperVideo);
     mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
     mtmd_input_chunks_init() -> *mut MtmdInputChunks;
     mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
@@ -286,6 +289,11 @@ type SkippyApplyChatTemplateJsonFn = unsafe extern "C" fn(
     parallel_tool_calls: bool,
     reasoning_format: *const c_char,
     chat_template_kwargs: *const c_char,
+    chat_template: *const c_char,
+    use_jinja: bool,
+    grammar: *const c_char,
+    json_schema: *const c_char,
+    skip_chat_parsing: bool,
     output_text: *mut c_char,
     output_text_capacity: usize,
     out_text_bytes: *mut usize,
@@ -386,6 +394,11 @@ pub unsafe fn skippy_apply_chat_template_json(
     parallel_tool_calls: bool,
     reasoning_format: *const c_char,
     chat_template_kwargs: *const c_char,
+    chat_template: *const c_char,
+    use_jinja: bool,
+    grammar: *const c_char,
+    json_schema: *const c_char,
+    skip_chat_parsing: bool,
     output_text: *mut c_char,
     output_text_capacity: usize,
     out_text_bytes: *mut usize,
@@ -409,6 +422,11 @@ pub unsafe fn skippy_apply_chat_template_json(
             parallel_tool_calls,
             reasoning_format,
             chat_template_kwargs,
+            chat_template,
+            use_jinja,
+            grammar,
+            json_schema,
+            skip_chat_parsing,
             output_text,
             output_text_capacity,
             out_text_bytes,

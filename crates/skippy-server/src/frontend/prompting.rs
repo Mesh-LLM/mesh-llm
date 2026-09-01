@@ -169,6 +169,11 @@ impl StageOpenAiBackend {
                     tools_json,
                     tool_choice_json,
                     parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),
+                    chat_template: options.chat_template.clone(),
+                    use_jinja: options.use_jinja,
+                    grammar: options.grammar.clone(),
+                    json_schema: options.json_schema.clone(),
+                    skip_chat_parsing: options.skip_chat_parsing,
                 },
             )
             .map_err(openai_backend_error)?;
@@ -189,6 +194,17 @@ impl StageOpenAiBackend {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
+        if serde_json::from_str::<Value>(metadata)
+            .ok()
+            .and_then(|value| value.get("skip_chat_parsing").and_then(Value::as_bool))
+            .unwrap_or(false)
+        {
+            return Ok(Some(ParsedChatMessage {
+                content: Some(text.to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+            }));
+        }
 
         // Emulation path: when tools were requested but the prompt was rendered
         // without native tool support, the model emitted TOOL_CALL text lines.

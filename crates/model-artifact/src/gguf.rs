@@ -301,6 +301,17 @@ pub struct GgufCompactMeta {
     pub feed_forward_length: u32,
     pub key_length: u32,
     pub value_length: u32,
+    /// Per-head key width used by sliding-window-attention layers
+    /// (`<arch>.attention.key_length_swa`), when the GGUF carries one.
+    /// llama.cpp's `n_embd_head_k(il)` returns this width for SWA layers and
+    /// the full width otherwise, and the quantised-KV block-alignment check
+    /// runs per layer — so both widths must be aligned for a quantised
+    /// cache to load. `0` means the key was absent (llama.cpp then uses the
+    /// full width for SWA layers too).
+    pub key_length_swa: u32,
+    /// Per-head value width used by SWA layers
+    /// (`<arch>.attention.value_length_swa`); see `key_length_swa`.
+    pub value_length_swa: u32,
     pub kv_lora_rank: u32,
     pub tokenizer_model_name: String,
     pub rope_scale: f32,
@@ -518,9 +529,17 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.key_length = v;
             }
+        } else if key.ends_with(".attention.key_length_swa") {
+            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
+                meta.key_length_swa = v;
+            }
         } else if key.ends_with(".attention.value_length") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
                 meta.value_length = v;
+            }
+        } else if key.ends_with(".attention.value_length_swa") {
+            if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
+                meta.value_length_swa = v;
             }
         } else if key.ends_with(".attention.kv_lora_rank") {
             if let Ok(Some(v)) = read_gguf_value_as_u32(&mut f, vtype) {
@@ -1160,6 +1179,52 @@ mod tests {
         assert_eq!(meta.effective_kv_head_count(), Some(8));
         assert_eq!(meta.k_cache_bytes_per_token_f16(), Some(49_152));
         assert_eq!(meta.v_cache_bytes_per_token_f16(), Some(49_152));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_records_swa_head_widths() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&8i64.to_le_bytes());
+        push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
+        push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
+        push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
+        push_u32_kv(&mut bytes, "llama.block_count", 24);
+        push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
+        push_u32_kv(&mut bytes, "llama.attention.value_length", 128);
+        push_u32_kv(&mut bytes, "llama.attention.key_length_swa", 96);
+        push_u32_kv(&mut bytes, "llama.attention.value_length_swa", 96);
+
+        let path = write_bytes("model-artifact-gguf-swa-widths", &bytes);
+        let meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.key_length, 128);
+        assert_eq!(meta.value_length, 128);
+        assert_eq!(meta.key_length_swa, 96);
+        assert_eq!(meta.value_length_swa, 96);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_swa_widths_absent_by_default() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&6i64.to_le_bytes());
+        push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
+        push_u32_kv(&mut bytes, "llama.attention.head_count", 32);
+        push_u32_kv(&mut bytes, "llama.attention.head_count_kv", 8);
+        push_u32_kv(&mut bytes, "llama.block_count", 24);
+        push_u32_kv(&mut bytes, "llama.attention.key_length", 128);
+        push_u32_kv(&mut bytes, "llama.attention.value_length", 128);
+
+        let path = write_bytes("model-artifact-gguf-no-swa", &bytes);
+        let meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.key_length_swa, 0);
+        assert_eq!(meta.value_length_swa, 0);
         let _ = std::fs::remove_file(path);
     }
 

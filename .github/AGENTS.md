@@ -28,13 +28,14 @@ macOS and Windows lane workflows are authoritative for assembly. Each PR/main
 entry calls one nested reusable lane so its jobs and logs remain visible in a
 focused native run; only an explicit manual-full run uses detached dispatch.
 Platform lanes must call platform-pure host/runtime/product/smoke/SDK reusables
-without empty platform placeholders. Ordinary PR code is GitHub-hosted. The
-approved uncredentialed CUDA smoke may use the ephemeral `gpu-nvidia` scale
-set through the protected default-branch workflow; this narrow exception does
-not allow Depot, secrets, shared cache authority, or broader runner-group
-access. Depot PR execution is prohibited until the cache and runner-group
-isolation gates in `ci/DEPOT_MIGRATION.md` pass. Do not change Depot settings
-or runner groups as part of an ordinary CI refactor.
+without empty platform placeholders. Eligible same-repository PR jobs may use
+Depot only while the checked-in bounded exception and repository gate are
+active; forks remain GitHub-hosted. The approved uncredentialed CUDA smoke may
+use the ephemeral `gpu-nvidia` scale set through the protected default-branch
+workflow. Neither exception grants secrets or broader runner-group access.
+Permanent Depot PR execution still requires the cache and runner-group
+isolation gates in `ci/DEPOT_MIGRATION.md`. Do not change Depot settings or
+runner groups as part of an ordinary CI refactor.
 
 Preserve the five-entry PR shape exactly. Do not create an all-platform PR
 workflow, an all-lanes reusable composer, or a PR controller whose visible job

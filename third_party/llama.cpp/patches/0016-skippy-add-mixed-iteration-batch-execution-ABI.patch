@@ -1,7 +1,7 @@
-From b99c08962e53dd15a0ece74ee46c3bae9f6b7aac Mon Sep 17 00:00:00 2001
+From f0f0d3df6d2724bf7c353b32674a655e66f5be84 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 24 Aug 2026 15:35:31 +1000
-Subject: [PATCH 16/26] skippy: add mixed iteration batch execution ABI
+Subject: [PATCH 16/34] skippy: add mixed iteration batch execution ABI
 
 ---
  include/skippy/common.h        |  11 +-

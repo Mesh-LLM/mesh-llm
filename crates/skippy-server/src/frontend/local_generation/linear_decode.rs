@@ -383,9 +383,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: Some(true),
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -394,12 +405,14 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let speculative = SpeculativeDecodeConfig::default();
         let telemetry = Telemetry::new(None, 1, stage_config.clone(), TelemetryLevel::Off);
         let iteration_scheduler =
-            IterationScheduler::new(runtime.clone(), &stage_config, 1, telemetry.clone()).unwrap();
+            IterationScheduler::new(runtime.clone(), &stage_config, 1, true, telemetry.clone())
+                .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
             config: stage_config.clone(),

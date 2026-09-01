@@ -1,8 +1,7 @@
 use super::shared::{
     absent_condition, equals_bool_condition, present_condition, push_allowed_pattern_constraint,
     push_dependency_disable, push_non_empty_constraint, push_range_constraint,
-    push_requires_constraint, set_numeric, set_static_options, set_static_unavailable,
-    set_text_format,
+    push_requires_constraint, set_numeric, set_static_options, set_text_format,
 };
 use super::*;
 
@@ -31,10 +30,7 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
             set_numeric(setting, Some(1.0), None, Some(1.0), Some("sec"));
         }
         "telemetry.queue_size" => set_numeric(setting, Some(1.0), None, Some(1.0), None),
-        "telemetry.prompt_shape_metrics" => set_static_unavailable(
-            setting,
-            "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
-        ),
+        "telemetry.prompt_shape_metrics" => set_static_options(setting),
         "mesh_requirements.min_node_version" | "mesh_requirements.max_node_version" => {
             set_text_format(setting, ConfigTextFormat::Semver);
             push_non_empty_constraint(setting);

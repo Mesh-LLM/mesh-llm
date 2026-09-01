@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 7 ]; then
-    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <native-sdk-input-dir> <target> <backend> <profile>" >&2
+SKIP_BUILD=0
+if [[ "$#" -eq 8 ]]; then
+    if [[ "$8" != "--skip-build" ]]; then
+        echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <native-sdk-input-dir> <target> <backend> <profile> [--skip-build]" >&2
+        exit 1
+    fi
+    SKIP_BUILD=1
+elif [[ "$#" -ne 7 ]]; then
+    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <native-sdk-input-dir> <target> <backend> <profile> [--skip-build]" >&2
     exit 1
 fi
 
@@ -10,7 +17,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
-scripts/package-sdk-console-assets.sh --sdk kotlin
+if [[ "$SKIP_BUILD" == "1" ]]; then
+    scripts/package-sdk-console-assets.sh --sdk kotlin --skip-build
+else
+    scripts/package-sdk-console-assets.sh --sdk kotlin
+fi
 scripts/verify-sdk-console-assets.sh --sdk kotlin
 
 native_sdk_tmp="$(mktemp -d)"

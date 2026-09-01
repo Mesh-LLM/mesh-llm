@@ -52,11 +52,19 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: 896,
         ctx_size: 512,
         lane_count: 4,
+        continuous_batching: true,
         n_batch: Some(128),
         n_ubatch: Some(64),
         n_gpu_layers: -1,
@@ -65,6 +73,19 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+        runtime_settings: crate::inference::skippy::StageLoadRuntimeSettings {
+            repack: true,
+            op_offload: Some(false),
+            no_host_buffer: true,
+            check_tensors: true,
+            direct_io: true,
+            main_gpu: Some(2),
+            split_mode: skippy_protocol::SplitMode::Row,
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(5),
+        },
         native_mtp_enabled: true,
         shutdown_generation: 7,
         coordinator_term: 11,
@@ -156,6 +177,10 @@ fn stage_control_prepare_request_round_trips_proto() {
     assert_eq!(
         prepare.load.load_mode,
         skippy_protocol::LoadMode::RuntimeSlice
+    );
+    assert_eq!(
+        prepare.load.runtime_settings,
+        test_stage_load_request().runtime_settings
     );
     assert_eq!(
         prepare.load.downstream.and_then(|peer| peer.node_id),

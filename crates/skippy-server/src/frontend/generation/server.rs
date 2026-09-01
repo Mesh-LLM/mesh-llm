@@ -121,6 +121,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         runtime.clone(),
         &config,
         args.generation_concurrency,
+        true,
         telemetry.clone(),
     )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
@@ -172,6 +173,7 @@ pub struct EmbeddedOpenAiArgs {
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
+    pub continuous_batching: bool,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -212,9 +214,29 @@ pub struct EmbeddedOpenAiRequestDefaults {
     pub min_p: Option<f32>,
     pub repeat_penalty: Option<f32>,
     pub repeat_last_n: Option<i32>,
+    pub typical_p: Option<f32>,
+    pub top_nsigma: Option<f32>,
+    pub dynatemp_range: Option<f32>,
+    pub dynatemp_exponent: Option<f32>,
+    pub dry: Option<skippy_runtime::DrySamplingConfig>,
+    pub xtc: Option<skippy_runtime::XtcSamplingConfig>,
+    pub mirostat_mode: Option<i32>,
+    pub mirostat_entropy: Option<f32>,
+    pub mirostat_learning_rate: Option<f32>,
+    pub samplers: Option<Vec<String>>,
+    pub sampler_sequence: Option<String>,
+    pub ignore_eos: Option<bool>,
     pub reasoning_format: Option<EmbeddedReasoningFormat>,
     pub reasoning_enabled: Option<EmbeddedReasoningEnabled>,
     pub reasoning_budget: Option<EmbeddedReasoningBudget>,
+    pub chat_template: Option<String>,
+    pub jinja: Option<bool>,
+    pub chat_template_kwargs: Option<Value>,
+    pub skip_chat_parsing: Option<bool>,
+    pub prefill_assistant: Option<Value>,
+    pub system_prompt: Option<String>,
+    pub grammar: Option<Value>,
+    pub json_schema: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -358,12 +380,14 @@ fn embedded_openai_backend_with_scheduler(
         &args.runtime,
         &args.config,
         args.draft_n_gpu_layers,
+        &args.speculative,
     )?;
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,
         args.draft_n_gpu_layers,
         args.speculative_window,
+        &args.speculative,
     )?;
     let model_id = ModelId::new(
         args.model_id
@@ -415,6 +439,7 @@ fn embedded_openai_backend_with_scheduler(
             args.runtime.clone(),
             &args.config,
             args.generation_concurrency,
+            args.continuous_batching,
             args.telemetry.clone(),
         )?,
     };

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -463,6 +464,58 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         result = self._dry_run("--skip-build")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("cargo build -p skippy-correctness", result.stdout)
+
+    def test_mmproj_smoke_lane_runs_only_for_families_with_a_projector(self) -> None:
+        result = self._dry_run("--skip-build")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("mmproj", result.stdout)
+
+        model = self._model()
+        model["mmproj_artifact"] = {
+            "repo": "org/model",
+            "revision": "a" * 40,
+            "files": ["mmproj-model-f16.gguf"],
+            "file_integrity": {
+                "mmproj-model-f16.gguf": {"size_bytes": 1, "blob_id": "b" * 64}
+            },
+            "selector": "f16",
+        }
+        with_mmproj = self._dry_run("--skip-build", models=[model])
+        self.assertEqual(0, with_mmproj.returncode, with_mmproj.stderr)
+        smokes = [
+            line
+            for line in with_mmproj.stdout.splitlines()
+            if line.startswith("env SKIPPY_MM_MODEL=")
+        ]
+        self.assertEqual(1, len(smokes))
+        self.assertIn("SKIPPY_MM_PROJECTOR=", smokes[0])
+        self.assertIn("frontend::tests::multimodal", smokes[0])
+        self.assertIn("--test-threads=1", smokes[0])
+        self.assertIn("family battery complete: 1/1", with_mmproj.stdout)
+
+    def test_mmproj_failure_is_accounted_separately_from_core_certification(self) -> None:
+        script = BATTERY.read_text(encoding="utf-8")
+        smoke_body = script.split("run_mmproj_smoke() {", 1)[1].split(
+            "\n}\n\nrun_resolved_manifest()", 1
+        )[0]
+
+        self.assertIn("MM_SMOKE_FAILURE_COUNT=0", script)
+        self.assertIn(
+            "MM_SMOKE_FAILURE_COUNT=$((MM_SMOKE_FAILURE_COUNT + 1))",
+            smoke_body,
+        )
+        self.assertNotIn("CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))", smoke_body)
+
+    def test_mmproj_smoke_image_fixture_is_deterministic(self) -> None:
+        fixture = (
+            ROOT / "ci" / "llama-canary" / "fixtures" / "multimodal-smoke.png"
+        )
+        self.assertTrue(fixture.is_file())
+        digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        self.assertEqual(
+            "308ff69210df5efdcc7c79abd65f68f7ed8545f469222e0a3c7f774d074a5034",
+            digest,
+        )
 
     def test_preflight_pins_snapshot_and_limits_speculative_corpus_to_mtp(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

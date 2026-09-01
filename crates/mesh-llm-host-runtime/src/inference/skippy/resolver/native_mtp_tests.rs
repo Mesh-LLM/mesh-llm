@@ -288,6 +288,7 @@ fn speculative_strategy_auto_without_package_generation_disables_native_mtp() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("default speculative strategy should resolve");
 
@@ -320,6 +321,7 @@ fn speculative_strategy_auto_detects_direct_gguf_native_mtp_tensors() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct GGUF native MTP tensors should enable auto native MTP");
 
@@ -361,6 +363,7 @@ fn speculative_strategy_auto_detects_direct_gguf_native_mtp_metadata() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct GGUF native MTP metadata should enable auto native MTP");
 
@@ -391,6 +394,7 @@ model_path = "{}"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("hardware model_path native MTP tensors should enable auto native MTP");
 
@@ -415,6 +419,7 @@ fn speculative_strategy_auto_uses_package_native_mtp_default() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: Some(&generation),
+        compact_meta: None,
     })
     .expect("package native MTP default should resolve");
 
@@ -483,6 +488,7 @@ verify_window_pipeline_depth = 2
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: Some(&generation),
+        compact_meta: None,
     })
     .expect("package composite strategy should resolve");
 
@@ -531,6 +537,7 @@ strategy = "ngram-cache"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: Some(&generation),
+        compact_meta: None,
     })
     .expect("package cache strategy should resolve");
 
@@ -559,6 +566,7 @@ fn package_suffix_strategy_resolves_as_a_standalone_proposer() {
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: Some(&generation),
+        compact_meta: None,
     })
     .expect("package suffix strategy should resolve without native MTP");
 
@@ -600,6 +608,7 @@ ngram_max_proposal_tokens = 6
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct native MTP with cache extension should resolve");
 
@@ -651,6 +660,7 @@ verify_window_pipeline_depth = 2
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct native MTP with suffix extension should resolve");
 
@@ -702,6 +712,7 @@ ngram_max_proposal_tokens = 6
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect_err("cache windows above the llama.cpp limit must be rejected");
 
@@ -733,6 +744,7 @@ ngram_max_proposal_tokens = 6
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct cache strategy should resolve");
 
@@ -774,6 +786,7 @@ ngram_max_proposal_tokens = 48
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("direct suffix strategy should resolve without native MTP");
 
@@ -815,6 +828,7 @@ ngram_max_proposal_tokens = 48
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("disabled strategy should resolve");
 
@@ -842,6 +856,7 @@ strategy = "ngram-suffix"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect_err("an explicit N-gram strategy without bounds must fail");
 
@@ -872,6 +887,7 @@ ngram_max_proposal_tokens = 48
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("standalone suffix strategy should resolve");
 
@@ -918,6 +934,7 @@ ngram_max_proposal_tokens = 1
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })?;
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     let ingress = Arc::new(RecordingNativeProposalIngress::default());
@@ -996,6 +1013,7 @@ strategy = "mtp"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1026,6 +1044,7 @@ draft_min_tokens = 0
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("external MTP sidecar should prove native MTP support");
 
@@ -1069,6 +1088,7 @@ spec_default = false
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("spec_default=false should resolve");
 
@@ -1097,6 +1117,7 @@ strategy = "mtp"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: Some(&generation),
+        compact_meta: None,
     })
     .unwrap_err()
     .to_string();
@@ -1122,6 +1143,7 @@ strategy = "disabled"
         allocatable_memory_bytes: None,
         request_defaults: None,
         package_generation: None,
+        compact_meta: None,
     })
     .expect("disabled speculative strategy should resolve");
 

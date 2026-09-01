@@ -31,6 +31,8 @@ pub(crate) fn any_value_to_json(value: &AnyValue) -> Value {
         }
         Some(any_value::Value::KvlistValue(value)) => attributes_to_json(&value.values),
         Some(any_value::Value::BytesValue(value)) => Value::String(bytes_to_hex(value)),
+        // Strindex values reference a string table we don't carry at this level.
+        Some(any_value::Value::StringValueStrindex(_)) => Value::Null,
         None => Value::Null,
     }
 }
@@ -59,7 +61,9 @@ pub(crate) fn any_value_to_string(value: &AnyValue) -> Option<String> {
         any_value::Value::IntValue(value) => Some(value.to_string()),
         any_value::Value::DoubleValue(value) => Some(value.to_string()),
         any_value::Value::BytesValue(value) => Some(bytes_to_hex(value)),
-        any_value::Value::ArrayValue(_) | any_value::Value::KvlistValue(_) => None,
+        any_value::Value::ArrayValue(_)
+        | any_value::Value::KvlistValue(_)
+        | any_value::Value::StringValueStrindex(_) => None,
     }
 }
 
@@ -69,6 +73,7 @@ pub(crate) fn kv_string(key: &str, value: &str) -> KeyValue {
         value: Some(AnyValue {
             value: Some(any_value::Value::StringValue(value.to_string())),
         }),
+        ..Default::default()
     }
 }
 
@@ -78,6 +83,7 @@ pub(crate) fn kv_i64(key: &str, value: i64) -> KeyValue {
         value: Some(AnyValue {
             value: Some(any_value::Value::IntValue(value)),
         }),
+        ..Default::default()
     }
 }
 

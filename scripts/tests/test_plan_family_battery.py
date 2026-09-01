@@ -143,6 +143,29 @@ class FamilyBatteryPlannerTests(unittest.TestCase):
         self.assertEqual(4, qwen4exp["execution"]["boundary_sweep_period"])
         self.assertEqual(3, len(qwen4exp["artifact"]["files"]))
 
+    def test_mmproj_artifacts_resolve_and_cover_the_vision_families(self) -> None:
+        result = self._run()
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        with_mmproj = {
+            model["family"]: model["mmproj_artifact"]
+            for model in plan["selected_models"]
+            if model.get("mmproj_artifact") is not None
+        }
+        self.assertEqual(
+            {"qwen2-vl", "qwen3-vl"}, set(with_mmproj)
+        )
+        for family, mmproj in with_mmproj.items():
+            with self.subTest(family=family):
+                self.assertEqual(1, len(mmproj["files"]))
+                self.assertTrue(mmproj["file_integrity"])
+                self.assertEqual(
+                    set(mmproj["file_integrity"]), set(mmproj["files"])
+                )
+                self.assertRegex(
+                    mmproj["files"][0], r"^mmproj"
+                )
+
     def test_certified_model_requires_an_explicit_activation_width(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         del manifest["models"][0]["execution"]["activation_width"]

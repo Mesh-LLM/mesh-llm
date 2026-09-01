@@ -970,6 +970,7 @@ jobs:
           fi
           "$binary" --help | head -5
           "$binary" runtime --help | head -20
+          scripts/ci-hf-xet-portability-smoke.sh "$binary"
 
   compose_linux_aarch64_cuda:
     name: Compose Linux aarch64 CUDA (${{ matrix.cuda_version }})

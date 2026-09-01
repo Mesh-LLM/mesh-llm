@@ -1098,6 +1098,7 @@ impl ServingController for MeshApi {
             control_tx
                 .send(RuntimeControlRequest::Load {
                     spec: model_ref.clone(),
+                    config_model_id: None,
                     profile: request.profile.clone(),
                     resp: resp_tx,
                 })

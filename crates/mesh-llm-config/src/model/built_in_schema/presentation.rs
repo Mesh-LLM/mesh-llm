@@ -1063,7 +1063,8 @@ fn control_hint_for_schema(schema: &ConfigValueSchema) -> Option<&'static str> {
             Some("segmented")
         }
         ConfigValueSchema::Array { .. } => Some("text"),
-        ConfigValueSchema::Object => Some("textarea"),
+        ConfigValueSchema::Object { properties } if properties.is_empty() => Some("textarea"),
+        ConfigValueSchema::Object { .. } => None,
         _ => None,
     }
 }

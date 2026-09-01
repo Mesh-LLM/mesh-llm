@@ -78,16 +78,32 @@ fn decode_boundary(
         n_gpu_layers: args.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
         flash_attn_type,
         load_mode: RuntimeLoadMode::LayerPackage,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let selection = select_layer_package_parts(&PackageStageRequest {
         model_id: args.model_id.clone(),
@@ -129,7 +145,9 @@ fn payload_f32(payload: &[u8]) -> Result<Vec<f32>> {
         );
     }
     Ok(payload
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect())
 }

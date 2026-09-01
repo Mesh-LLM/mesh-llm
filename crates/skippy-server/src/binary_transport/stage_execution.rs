@@ -768,6 +768,26 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         frequency_penalty: sampling.frequency_penalty,
         repeat_penalty: sampling.repeat_penalty,
         penalty_last_n: sampling.penalty_last_n,
+        typical_p: sampling.typical_p,
+        top_nsigma: sampling.top_nsigma,
+        dynatemp_range: sampling.dynatemp_range,
+        dynatemp_exponent: sampling.dynatemp_exponent,
+        dry: skippy_runtime::DrySamplingConfig {
+            multiplier: sampling.dry_multiplier,
+            base: sampling.dry_base,
+            allowed_length: sampling.dry_allowed_length,
+            penalty_last_n: sampling.dry_penalty_last_n,
+            sequence_breakers: sampling.dry_sequence_breakers.clone(),
+        },
+        xtc: skippy_runtime::XtcSamplingConfig {
+            probability: sampling.xtc_probability,
+            threshold: sampling.xtc_threshold,
+        },
+        mirostat_mode: sampling.mirostat_mode,
+        mirostat_entropy: sampling.mirostat_entropy,
+        mirostat_learning_rate: sampling.mirostat_learning_rate,
+        samplers: sampling.samplers.clone(),
+        ignore_eos: sampling.ignore_eos,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling
@@ -934,9 +954,20 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         n_gpu_layers: 0,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: false,
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -957,6 +988,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
         }),
+        ..StageConfig::default()
     }
 }
 
@@ -987,16 +1019,13 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, prepare_binary_stage_connection,
-        split_native_mtp_reply, take_ready_downstream, take_warm_or_connect_downstream,
-        token_sideband_or_fill, warm_downstream_is_healthy,
-        warm_downstream_preconnect_enabled_from,
+        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        take_ready_downstream, take_warm_or_connect_downstream, token_sideband_or_fill,
+        warm_downstream_is_healthy, warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
-        io,
         net::{Shutdown, TcpListener, TcpStream},
-        os::fd::AsRawFd,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -1006,8 +1035,12 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    #[cfg(unix)]
     #[test]
     fn accepted_binary_stage_connection_is_blocking() {
+        use super::prepare_binary_stage_connection;
+        use std::{io, os::fd::AsRawFd};
+
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();

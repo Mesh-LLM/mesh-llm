@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 42;
+pub const ABI_VERSION_PATCH: u32 = 44;
 
 mod abi;
 mod activation;
@@ -32,8 +32,8 @@ pub use abi::{
     Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
     SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TensorRole,
-    runtime_abi_supported,
+    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO,
+    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
 };
 pub use activation::{ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationDesc, LogitBias, TensorInfo};
 pub use model::{
@@ -41,13 +41,14 @@ pub use model::{
     LlamaModelKvOverrideValue, LlamaModelQuantizeParams, LlamaModelTensorOverride,
 };
 pub use multimodal::{
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType,
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams, MtmdInputChunkType,
     MtmdInputChunks, MtmdInputText,
 };
 pub use runtime::{NativeRuntimeLoadError, abi_features, try_abi_features};
 pub use sampling::{
-    GenerationSignalWindow, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig,
-    TokenSignal,
+    GenerationSignalWindow, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
+    MAX_SAMPLERS, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig, TokenSignal,
 };
 pub use state::{
     KV_PAGE_CODEC_ISWA_COMPOSITE_V1, KV_PAGE_CODEC_SINGLE_V1, KV_PAGE_FLAG_HAS_K_IDX,
@@ -70,15 +71,16 @@ pub use dynamic::{
     mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free,
     mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single, mtmd_helper_eval_chunks,
     mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens, mtmd_helper_image_get_decoder_pos,
-    mtmd_helper_log_set, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
-    mtmd_input_chunk_get_tokens_image, mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type,
-    mtmd_input_chunks_free, mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size,
-    mtmd_tokenize, native_runtime_loaded, skippy_abi_features_optional,
-    skippy_apply_chat_template_json, skippy_backend_device_at, skippy_backend_device_count,
-    skippy_decode_batch_sampled, skippy_decode_step_frame_batch_sampled,
-    skippy_decode_step_frame_sampled, skippy_decode_step_frame_sampled_mtp,
-    skippy_decode_step_sampled, skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn,
-    skippy_detokenize, skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
+    mtmd_helper_init_opt_default, mtmd_helper_log_set, mtmd_helper_video_free, mtmd_init_from_file,
+    mtmd_input_chunk_get_n_tokens, mtmd_input_chunk_get_tokens_image,
+    mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type, mtmd_input_chunks_free,
+    mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size, mtmd_tokenize,
+    native_runtime_loaded, skippy_abi_features_optional, skippy_apply_chat_template_json,
+    skippy_backend_device_at, skippy_backend_device_count, skippy_decode_batch_sampled,
+    skippy_decode_step_frame_batch_sampled, skippy_decode_step_frame_sampled,
+    skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,
+    skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn, skippy_detokenize,
+    skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
     skippy_export_recurrent_state, skippy_export_state, skippy_import_full_state,
     skippy_import_kv_page, skippy_import_recurrent_state, skippy_import_state,
     skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model_fn, skippy_model_free,
@@ -108,11 +110,11 @@ pub use static_bindings::{
     mtmd_bitmap_free, mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker,
     mtmd_free, mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunks, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
-    mtmd_helper_image_get_decoder_pos, mtmd_helper_log_set, mtmd_init_from_file,
-    mtmd_input_chunk_get_n_tokens, mtmd_input_chunk_get_tokens_image,
-    mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type, mtmd_input_chunks_free,
-    mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size, mtmd_tokenize,
-    skippy_abi_features, skippy_apply_chat_template_json, skippy_backend_device_at,
+    mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
+    mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
+    mtmd_input_chunk_get_tokens_image, mtmd_input_chunk_get_tokens_text, mtmd_input_chunk_get_type,
+    mtmd_input_chunks_free, mtmd_input_chunks_get, mtmd_input_chunks_init, mtmd_input_chunks_size,
+    mtmd_tokenize, skippy_abi_features, skippy_apply_chat_template_json, skippy_backend_device_at,
     skippy_backend_device_count, skippy_decode_batch_sampled,
     skippy_decode_step_frame_batch_sampled, skippy_decode_step_frame_sampled,
     skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,

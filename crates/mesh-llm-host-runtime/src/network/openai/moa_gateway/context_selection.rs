@@ -50,32 +50,32 @@ pub(in crate::network::openai) fn select_degrade_model(
         .or(unknown)
 }
 
-pub(in crate::network::openai) async fn select_remote_host(
+pub(super) async fn eligible_remote_hosts(
     node: &mesh::Node,
     model: &str,
     required_tokens: Option<u32>,
     hosts: Vec<iroh::EndpointId>,
-) -> Option<iroh::EndpointId> {
+) -> Vec<iroh::EndpointId> {
     let Some(required_tokens) = required_tokens else {
-        return hosts.into_iter().next();
+        return hosts;
     };
 
-    let mut unknown = None;
+    let mut fitting = Vec::new();
+    let mut unknown = Vec::new();
     for host in hosts {
         match node.peer_model_context_length(host, model).await {
-            Some(context) if context >= required_tokens => return Some(host),
+            Some(context) if context >= required_tokens => fitting.push(host),
             Some(context) => {
                 tracing::info!(
                     "MoA: skipping remote worker {model} on {}; context {context} cannot fit {required_tokens} required tokens",
                     host.fmt_short()
                 );
             }
-            None => {
-                unknown.get_or_insert(host);
-            }
+            None => unknown.push(host),
         }
     }
-    unknown
+    fitting.extend(unknown);
+    fitting
 }
 
 /// Capabilities the automatic directive can serve: the union across the mesh.
