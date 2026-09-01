@@ -185,7 +185,131 @@ impl CacheDedupeStats {
 
 #[cfg(test)]
 mod tests {
-    use crate::payload::{CacheBlobStore, ExactStatePayload};
+    use std::collections::HashMap;
+
+    use crate::payload::{CacheBlobStore, ExactStatePayload, ExactStatePayloadKind};
+
+    struct DeterministicRng(u64);
+
+    impl DeterministicRng {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
+
+        fn below(&mut self, ceiling: usize) -> usize {
+            (self.next() as usize) % ceiling
+        }
+    }
+
+    #[derive(Clone)]
+    enum ExpectedPayload {
+        Full(Vec<u8>),
+        Recurrent(Vec<u8>),
+        Composite { kv: Vec<u8>, recurrent: Vec<u8> },
+    }
+
+    fn state_machine_budget() -> (usize, usize) {
+        let seeds = std::env::var("SKIPPY_CACHE_STATE_MACHINE_SEEDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(8)
+            .clamp(1, 4_096);
+        let steps = std::env::var("SKIPPY_CACHE_STATE_MACHINE_STEPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(2_000)
+            .clamp(1, 100_000);
+        (seeds, steps)
+    }
+
+    fn random_bytes(rng: &mut DeterministicRng) -> Vec<u8> {
+        let len = rng.below(16) + 1;
+        (0..len)
+            .map(|index| ((rng.below(6) + index % 3) as u8) * 17)
+            .collect()
+    }
+
+    fn make_payload(rng: &mut DeterministicRng) -> (ExactStatePayload, ExpectedPayload) {
+        match rng.below(3) {
+            0 => {
+                let bytes = random_bytes(rng);
+                (
+                    ExactStatePayload::full_state(bytes.clone()),
+                    ExpectedPayload::Full(bytes),
+                )
+            }
+            1 => {
+                let bytes = random_bytes(rng);
+                (
+                    ExactStatePayload::recurrent_only(bytes.clone()),
+                    ExpectedPayload::Recurrent(bytes),
+                )
+            }
+            2 => {
+                let kv = random_bytes(rng);
+                let recurrent = random_bytes(rng);
+                (
+                    ExactStatePayload::kv_recurrent(kv.clone(), recurrent.clone()),
+                    ExpectedPayload::Composite { kv, recurrent },
+                )
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn components(expected: &ExpectedPayload) -> Vec<&[u8]> {
+        match expected {
+            ExpectedPayload::Full(bytes) | ExpectedPayload::Recurrent(bytes) => {
+                vec![bytes.as_slice()]
+            }
+            ExpectedPayload::Composite { kv, recurrent } => {
+                vec![kv.as_slice(), recurrent.as_slice()]
+            }
+        }
+    }
+
+    fn assert_payload(
+        payload: &ExactStatePayload,
+        expected: &ExpectedPayload,
+        seed: u64,
+        step: usize,
+    ) {
+        match expected {
+            ExpectedPayload::Full(bytes) => {
+                assert_eq!(payload.kind(), ExactStatePayloadKind::FullState);
+                assert_eq!(
+                    payload.full_state_bytes_timed().unwrap().0.as_ref(),
+                    bytes,
+                    "seed={seed:#x} step={step}"
+                );
+            }
+            ExpectedPayload::Recurrent(bytes) => {
+                assert_eq!(payload.kind(), ExactStatePayloadKind::RecurrentOnly);
+                assert_eq!(
+                    payload.recurrent_state_bytes().unwrap().as_ref(),
+                    bytes,
+                    "seed={seed:#x} step={step}"
+                );
+            }
+            ExpectedPayload::Composite { kv, recurrent } => {
+                assert_eq!(payload.kind(), ExactStatePayloadKind::KvRecurrent);
+                assert_eq!(
+                    payload.kv_bytes().unwrap().unwrap().as_ref(),
+                    kv,
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    payload.recurrent_state_bytes().unwrap().as_ref(),
+                    recurrent,
+                    "seed={seed:#x} step={step}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn block_store_dedupes_repeated_payload_blocks() {
@@ -275,5 +399,78 @@ mod tests {
         );
         assert_eq!(blobs.logical_ref_count(), refs_before);
         assert_eq!(blobs.block_count(), 2);
+    }
+
+    #[test]
+    fn randomized_payload_ownership_reconciles_after_every_operation() {
+        let (seed_count, steps) = state_machine_budget();
+        for seed_index in 0..seed_count {
+            let seed = 0x83d2_74a9_5e10_b6c3_u64
+                .wrapping_add((seed_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            let mut rng = DeterministicRng(seed);
+            let mut blobs = CacheBlobStore::new(4);
+            let mut owners = Vec::<Option<(ExactStatePayload, ExpectedPayload)>>::new();
+
+            for step in 0..steps {
+                let live = owners
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, owner)| owner.as_ref().map(|_| index))
+                    .collect::<Vec<_>>();
+                let operation = if live.len() >= 64 { 3 } else { rng.below(6) };
+                match operation {
+                    0 | 1 => {
+                        let (payload, expected) = make_payload(&mut rng);
+                        let (payload, _) = payload.dedupe_into(&mut blobs);
+                        owners.push(Some((payload, expected)));
+                    }
+                    2 if !live.is_empty() => {
+                        let source = live[rng.below(live.len())];
+                        let (payload, expected) =
+                            owners[source].as_ref().expect("live owner index").clone();
+                        let (payload, _) = payload.dedupe_into(&mut blobs);
+                        owners.push(Some((payload, expected)));
+                    }
+                    3..=5 if !live.is_empty() => {
+                        let victim = live[rng.below(live.len())];
+                        let (payload, _) = owners[victim].take().expect("live owner index");
+                        payload.release_from(&mut blobs).unwrap();
+                    }
+                    _ => {}
+                }
+
+                let mut expected_blocks = HashMap::<Vec<u8>, u64>::new();
+                for (payload, expected) in owners.iter().flatten() {
+                    assert_payload(payload, expected, seed, step);
+                    for component in components(expected) {
+                        for chunk in component.chunks(4) {
+                            *expected_blocks.entry(chunk.to_vec()).or_default() += 1;
+                        }
+                    }
+                }
+                assert_eq!(
+                    blobs.block_count(),
+                    expected_blocks.len(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    blobs.physical_bytes(),
+                    expected_blocks.keys().map(|block| block.len() as u64).sum(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    blobs.logical_ref_count(),
+                    expected_blocks.values().sum(),
+                    "seed={seed:#x} step={step}"
+                );
+            }
+
+            for owner in owners.into_iter().flatten() {
+                owner.0.release_from(&mut blobs).unwrap();
+            }
+            assert_eq!(blobs.block_count(), 0, "seed={seed:#x}");
+            assert_eq!(blobs.physical_bytes(), 0, "seed={seed:#x}");
+            assert_eq!(blobs.logical_ref_count(), 0, "seed={seed:#x}");
+        }
     }
 }
