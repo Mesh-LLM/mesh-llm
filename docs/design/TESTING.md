@@ -334,7 +334,9 @@ Thoughtworks cell with `scripts/performance-history.py`. When
 `MESH_PERFORMANCE_HISTORY_ENABLED=1`, set
 `MESH_PERFORMANCE_HISTORY_DATASET=meshllm/performance-history` and provide the
 write token as the `MESH_PERFORMANCE_HISTORY_HF_TOKEN` GitHub secret. The
-workflow downloads prior immutable JSONL shards, requires the Hub schema to
+workflow runs on its daily schedule or by a manual dispatch explicitly
+selected from `main`; non-`main` dispatches cannot acquire the persistent GPU
+runner. It downloads prior immutable JSONL shards, requires the Hub schema to
 match `ci/performance-history/schema.json`, reports only exact-cohort drift,
 and uploads one source/run-addressed shard. Three prior complete matching runs
 are required before performance drift is classified; thresholds remain

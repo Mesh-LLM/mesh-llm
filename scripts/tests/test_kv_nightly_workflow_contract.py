@@ -37,11 +37,17 @@ class KvNightlyWorkflowContractTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("runner_label", workflow)
 
-    def test_performance_history_uses_immutable_shards_on_trusted_schedule(self) -> None:
+    def test_performance_history_uses_immutable_shards_on_trusted_main(self) -> None:
         workflow = COMPETITIVE.read_text(encoding="utf-8")
         self.assertIn("on:\n  schedule:", workflow)
-        self.assertNotIn("workflow_dispatch:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("github.repository == 'Mesh-LLM/mesh-llm'", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: main", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertNotIn("\n  pull_request:", workflow)
+        self.assertNotIn("\n  push:", workflow)
         self.assertIn("MESH_PERFORMANCE_HISTORY_HF_TOKEN", workflow)
         self.assertIn("MESH_PERFORMANCE_HISTORY_DATASET", workflow)
         self.assertIn("scripts/performance-history.py", workflow)
