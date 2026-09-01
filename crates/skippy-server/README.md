@@ -103,11 +103,12 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-6 stage protocol.
+- `serve-binary` participates in the breaking generation-7 stage protocol.
   Stage compatibility requires `stage-generation-7`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-6 topology.
+  generation-7 topology. Generation 6 is historical and is not accepted by the
+  current serve binary.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
