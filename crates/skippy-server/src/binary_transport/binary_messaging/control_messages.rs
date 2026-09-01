@@ -72,6 +72,10 @@ pub(super) fn handle_stop(
     }
     let reset_start_unix_nanos = now_unix_nanos() as u64;
     let reset_timer = Instant::now();
+    let session_lease = session_tracker.session_lease(session_key);
+    let release = session_lease
+        .begin_release()
+        .ok_or_else(|| anyhow::anyhow!("cannot stop stale binary session {session_key}"))?;
     let accumulated =
         kv.and_then(|cache| take_shared_prefill_tokens(&cache.split_prefill_tokens, session_key));
     let scheduler_config = config.clone();
@@ -98,7 +102,10 @@ pub(super) fn handle_stop(
             Ok((record, drop_stats))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
-        .context("reset binary stage session")?;
+        .context("reset binary stage session");
+    drop(release);
+    session_tracker.stopped(session_key);
+    let outcome = outcome?;
     let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
     let (record, drop_stats) = outcome.value;
     if let Some(record) = record
@@ -143,7 +150,6 @@ pub(super) fn handle_stop(
         reset_start_unix_nanos,
         reset_end_unix_nanos,
     );
-    session_tracker.stopped(session_key);
     prediction_return_streams.remove(&(message.request_id, message.session_id));
     prediction_return_sinks.remove(message.request_id, message.session_id);
     send_reply_ack_with_stats(upstream, stop_stats).context("send stop ACK")

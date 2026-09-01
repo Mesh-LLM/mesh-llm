@@ -9,7 +9,7 @@ use super::reply::reply_window_for_message;
 use super::reply::send_stage_reply;
 use super::session_lifecycle::align_session_to_message;
 use super::session_tracker::{
-    ConnectionSessionTracker, combine_connection_and_cleanup_results,
+    ConnectionSessionOwnership, ConnectionSessionTracker, combine_connection_and_cleanup_results,
     release_tracked_connection_sessions,
 };
 use super::summary::BinaryMessageObservation;
@@ -87,10 +87,12 @@ pub(super) fn handle_binary_connection(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
+    session_ownership: Arc<ConnectionSessionOwnership>,
     worker_control: &ConnectionWorkerControl,
     first_message: StageWireMessage,
 ) -> Result<()> {
-    let mut session_tracker = ConnectionSessionTracker::default();
+    let mut session_tracker =
+        ConnectionSessionTracker::new(next_connection_session_id(), session_ownership);
     let result = handle_binary_connection_messages(
         config,
         topology,
@@ -114,6 +116,7 @@ pub(super) fn handle_binary_connection(
     let cleanup_result = release_tracked_connection_sessions(
         config,
         iteration_scheduler,
+        kv,
         telemetry,
         &mut session_tracker,
     );
@@ -141,7 +144,7 @@ fn handle_binary_connection_messages(
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
-    let connection_session_id = next_connection_session_id();
+    let connection_session_id = session_tracker.connection_id;
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
     let mut pending_prefill_replies = 0usize;
