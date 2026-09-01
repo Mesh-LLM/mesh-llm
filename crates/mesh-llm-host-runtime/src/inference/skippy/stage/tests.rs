@@ -165,6 +165,14 @@ fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
 }
 
 fn write_metadata_only_gguf(path: &std::path::Path, layer_count: u32) {
+    write_metadata_only_gguf_with_context(path, layer_count, 4096);
+}
+
+fn write_metadata_only_gguf_with_context(
+    path: &std::path::Path,
+    layer_count: u32,
+    context_length: u32,
+) {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"GGUF");
     bytes.extend_from_slice(&3u32.to_le_bytes());
@@ -178,7 +186,7 @@ fn write_metadata_only_gguf(path: &std::path::Path, layer_count: u32) {
     bytes.extend_from_slice(&layer_count.to_le_bytes());
     for (key, value) in [
         ("deepseek4.embedding_length", 2048u32),
-        ("deepseek4.context_length", 4096u32),
+        ("deepseek4.context_length", context_length),
     ] {
         push_gguf_string(&mut bytes, key);
         bytes.extend_from_slice(&4u32.to_le_bytes());
@@ -1008,7 +1016,9 @@ async fn local_required_prepare_never_falls_back_to_supplied_path() {
 fn local_required_load_reverifies_content_after_inventory() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("load-source.gguf");
-    write_metadata_only_gguf(&path, 61);
+    // Keep this content identity distinct from the inventory verification
+    // fixture so both tests remain valid under default parallel execution.
+    write_metadata_only_gguf_with_context(&path, 61, 8192);
     let package =
         super::super::synthetic_content_addressed_gguf_package("load-verification-model", &path)
             .unwrap();
@@ -1026,7 +1036,7 @@ fn local_required_load_reverifies_content_after_inventory() {
     assert_eq!(load.model_path.as_deref(), canonical_path.to_str());
 
     std::thread::sleep(Duration::from_millis(50));
-    write_metadata_only_gguf(&path, 62);
+    write_metadata_only_gguf_with_context(&path, 62, 8192);
     let error = super::super::apply_verified_local_source(&mut load)
         .expect_err("replaced source must fail the load-time verification")
         .to_string();
