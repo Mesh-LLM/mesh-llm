@@ -57,8 +57,14 @@ def build_cohorts(
     cohort_names: Sequence[str],
     frameworks: Sequence[str],
     trajectories_per_framework: int,
+    min_assistant_turns: int = 1,
 ) -> dict[str, list[dict[str, Any]]]:
-    if not cohort_names or not frameworks or trajectories_per_framework <= 0:
+    if (
+        not cohort_names
+        or not frameworks
+        or trajectories_per_framework <= 0
+        or min_assistant_turns <= 0
+    ):
         raise ValueError("cohorts, frameworks, and trajectory count must be positive")
     cohorts = {name: [] for name in cohort_names}
     by_framework = {framework: [] for framework in frameworks}
@@ -76,6 +82,8 @@ def build_cohorts(
         seen.add(session_id)
         messages = validate_messages(row["messages_json"], session_id)
         turns = assistant_turn_count(messages)
+        if turns < min_assistant_turns:
+            continue
         by_framework[framework].append(
             {
                 "session_id": session_id,
@@ -210,7 +218,7 @@ def main() -> int:
     parser.add_argument("--framework", action="append", required=True)
     parser.add_argument("--trajectories-per-framework", type=int, required=True)
     parser.add_argument("--min-isl", type=int, default=8192)
-    parser.add_argument("--max-isl", type=int, default=16384)
+    parser.add_argument("--max-isl", type=int, default=65536)
     parser.add_argument("--min-turns", type=int, default=5)
     parser.add_argument("--source-dataset", action="append", dest="sources", default=[])
     args = parser.parse_args()
@@ -238,6 +246,7 @@ def main() -> int:
         args.cohort,
         args.framework,
         args.trajectories_per_framework,
+        args.min_turns,
     )
     document = manifest_document(
         cohorts,
@@ -250,7 +259,7 @@ def main() -> int:
                 "trajectories_per_framework_per_cohort": args.trajectories_per_framework,
                 "min_isl": args.min_isl,
                 "max_isl_exclusive": args.max_isl,
-                "min_turns": args.min_turns,
+                "min_assistant_turns": args.min_turns,
                 "order": "agent_framework, md5(session_id)",
                 "whole_trajectories": True,
                 "cohorts_disjoint": True,
@@ -258,7 +267,10 @@ def main() -> int:
         },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    args.output.write_text(
+        json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     print(args.output)
     return 0
 

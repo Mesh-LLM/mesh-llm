@@ -36,12 +36,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
+from urllib.parse import urlsplit
 
 
 REPO = Path(__file__).resolve().parents[1]
 COMPETITIVE_CONFIG = REPO / "evals/skippy-competitive-benchmark.json"
 TRAJECTORY_GENERATOR = REPO / "evals/agentic-trajectory-manifest.py"
 DEFAULT_BASE_URL = "http://127.0.0.1:9337/v1"
+DEFAULT_ENDPOINT = urlsplit(DEFAULT_BASE_URL)
+DEFAULT_HOST = DEFAULT_ENDPOINT.hostname or "127.0.0.1"
+DEFAULT_PORT = DEFAULT_ENDPOINT.port or 80
 FORBIDDEN_STARTUP_OPTIONS = (
     "--ctx-size",
     "--generation-concurrency",
@@ -326,6 +330,7 @@ def build_trajectory_manifest(args: argparse.Namespace, output: Path) -> dict[st
         "--min-turns",
         str(args.min_turns),
     ]
+    command.extend(("--cohort", "warmup"))
     for concurrency in args.concurrency:
         command.extend(("--cohort", str(concurrency)))
     for framework in args.framework:
@@ -353,21 +358,38 @@ def build_trajectory_manifest(args: argparse.Namespace, output: Path) -> dict[st
     }
 
 
-def load_trajectory_cohorts(path: Path) -> dict[str, list[dict[str, Any]]]:
+def load_trajectory_cohorts(
+    path: Path, expected_cohorts: Sequence[str]
+) -> dict[str, list[dict[str, Any]]]:
     document = json.loads(path.read_text(encoding="utf-8"))
     cohorts = document.get("cohorts")
     if not isinstance(cohorts, dict) or not cohorts:
         raise ValueError("trajectory manifest must contain nonempty cohorts")
+    missing = [name for name in expected_cohorts if name not in cohorts]
+    if missing:
+        raise ValueError(f"trajectory manifest is missing cohorts: {missing}")
     for name, trajectories in cohorts.items():
         if not isinstance(name, str) or not isinstance(trajectories, list) or not trajectories:
             raise ValueError("each trajectory cohort must be a nonempty list")
         for trajectory in trajectories:
-            if not isinstance(trajectory.get("session_id"), str):
+            session_id = trajectory.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
                 raise ValueError(f"cohort {name} contains a trajectory without session_id")
-            if not isinstance(trajectory.get("messages"), list):
+            for field in ("source_dataset", "agent_framework", "recorded_model"):
+                if not isinstance(trajectory.get(field), str) or not trajectory[field]:
+                    raise ValueError(f"trajectory {session_id} has no {field}")
+            messages = trajectory.get("messages")
+            if not isinstance(messages, list) or not messages:
                 raise ValueError(
-                    f"trajectory {trajectory.get('session_id')} has no messages list"
+                    f"trajectory {session_id} has no messages list"
                 )
+            for index, message in enumerate(messages):
+                if not isinstance(message, dict) or not isinstance(
+                    message.get("role"), str
+                ):
+                    raise ValueError(
+                        f"trajectory {session_id} message {index} has no role"
+                    )
     return cohorts
 
 
@@ -379,7 +401,7 @@ def server_command(binary: Path, model: str) -> list[str]:
     return command
 
 
-def port_is_open(host: str = "127.0.0.1", port: int = 9337) -> bool:
+def port_is_open(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
     with socket.socket() as connection:
         connection.settimeout(0.2)
         return connection.connect_ex((host, port)) == 0
@@ -399,7 +421,7 @@ def wait_for_model(
             raise RuntimeError(
                 f"Mesh exited before readiness with status {process.returncode}"
             )
-        connection = http.client.HTTPConnection("127.0.0.1", 9337, timeout=5)
+        connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=5)
         try:
             connection.request("GET", "/v1/models")
             response = connection.getresponse()
@@ -442,7 +464,7 @@ def stream_request(
     cached_tokens = 0
     content_events = 0
     content_parts: list[str] = []
-    connection = http.client.HTTPConnection("127.0.0.1", 9337, timeout=timeout)
+    connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=timeout)
     payload = {
         "model": model_id,
         "messages": list(messages),
@@ -590,6 +612,7 @@ def replay_trajectory(
     model_id: str,
     max_output_tokens: int,
     timeout: float,
+    turn_limit: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     history: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -597,6 +620,8 @@ def replay_trajectory(
     tools = trajectory_tools(trajectory)
     for message_index, recorded in enumerate(trajectory["messages"]):
         if recorded["role"] == "assistant":
+            if turn_limit is not None and assistant_turn >= turn_limit:
+                break
             requested_output_tokens = recorded_output_budget(
                 recorded, max_output_tokens
             )
@@ -629,34 +654,46 @@ def replay_trajectory(
     return results
 
 
-def summarize_requests(requests: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def summarize_requests(
+    requests: Sequence[dict[str, Any]], offered_concurrency: int = 1
+) -> dict[str, Any]:
     successful = [request for request in requests if "error" not in request]
     ttft = [request["ttft_seconds"] for request in successful]
     completion_tokens = sum(request["completion_tokens"] for request in successful)
     prompt_tokens = sum(request["prompt_tokens"] for request in successful)
     cached_tokens = sum(request["cached_tokens"] for request in successful)
+    elapsed_seconds = sum(request["elapsed_seconds"] for request in successful)
+    generation_seconds = sum(
+        request["generation_seconds"] for request in successful
+    )
     if successful:
         workload_window = max(request["completed"] for request in successful) - min(
             request["started"] for request in successful
         )
     else:
         workload_window = 0.0
-    request_decode_rates = [
-        request["completion_tokens"] / request["generation_seconds"]
-        for request in successful
-        if request["generation_seconds"] > 0
-    ]
+    mean_in_flight = (
+        elapsed_seconds / workload_window if workload_window > 0 else None
+    )
     return {
         "requests": len(requests),
         "successful_requests": len(successful),
         "failed_requests": len(requests) - len(successful),
+        "failed_request_ids": sorted(
+            str(request.get("request_id", "unknown"))
+            for request in requests
+            if "error" in request
+        ),
         "completion_tokens": completion_tokens,
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached_tokens,
-        "exact_output_requests": sum(
+        "generation_seconds": generation_seconds,
+        "workload_window_seconds": workload_window,
+        "budget_exhausted_requests": sum(
             request.get("completion_tokens") == request.get("requested_output_tokens")
             for request in successful
         ),
+        "ttft_samples": ttft,
         "ttft_p50_seconds": statistics.median(ttft) if ttft else None,
         "ttft_p95_seconds": percentile(ttft, 0.95),
         "agent_steps_per_second": (
@@ -665,11 +702,69 @@ def summarize_requests(requests: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "workload_output_tokens_per_second": (
             completion_tokens / workload_window if workload_window > 0 else None
         ),
-        "mean_request_decode_tokens_per_second": (
-            statistics.mean(request_decode_rates) if request_decode_rates else None
+        "decode_tokens_per_second": (
+            completion_tokens / generation_seconds
+            if generation_seconds > 0
+            else None
+        ),
+        "mean_in_flight": mean_in_flight,
+        "concurrency_utilization_pct": (
+            100 * mean_in_flight / offered_concurrency
+            if mean_in_flight is not None and offered_concurrency > 0
+            else None
         ),
         "cache_pct": 100 * cached_tokens / prompt_tokens if prompt_tokens else None,
     }
+
+
+def write_request_records(
+    path: Path,
+    requests: Sequence[dict[str, Any]],
+    concurrency: int,
+    *,
+    warmup: bool = False,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as raw:
+        for request in requests:
+            request["concurrency"] = concurrency
+            request["warmup"] = warmup
+            raw.write(json.dumps(request, sort_keys=True) + "\n")
+
+
+def run_warmup(
+    trajectories: Sequence[dict[str, Any]],
+    model_id: str,
+    turns: int,
+    max_output_tokens: int,
+    timeout: float,
+    raw_path: Path,
+) -> dict[str, Any]:
+    requests: list[dict[str, Any]] = []
+    for trajectory in trajectories:
+        remaining = turns - len(requests)
+        if remaining <= 0:
+            break
+        requests.extend(
+            replay_trajectory(
+                trajectory,
+                model_id,
+                max_output_tokens,
+                timeout,
+                turn_limit=remaining,
+            )
+        )
+    if len(requests) < turns:
+        raise RuntimeError(
+            f"warm-up cohort produced {len(requests)} turns; {turns} required"
+        )
+    write_request_records(raw_path, requests, 1, warmup=True)
+    summary = summarize_requests(requests, 1)
+    if summary["failed_requests"]:
+        raise RuntimeError(
+            f"warm-up failed {summary['failed_requests']} of {summary['requests']} turns"
+        )
+    return summary
 
 
 def run_trajectory_cell(
@@ -684,7 +779,6 @@ def run_trajectory_cell(
     if not trajectories:
         raise ValueError("trajectory cell cannot be empty")
     requests: list[dict[str, Any]] = []
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(concurrency, len(trajectories))
     ) as pool:
@@ -700,11 +794,8 @@ def run_trajectory_cell(
         ]
         for future in futures:
             requests.extend(future.result())
-    with raw_path.open("w", encoding="utf-8") as raw:
-        for request in requests:
-            request["concurrency"] = concurrency
-            raw.write(json.dumps(request, sort_keys=True) + "\n")
-    summary = summarize_requests(requests)
+    write_request_records(raw_path, requests, concurrency)
+    summary = summarize_requests(requests, concurrency)
     framework_counts: dict[str, int] = {}
     for trajectory in trajectories:
         framework = trajectory["agent_framework"]
@@ -762,7 +853,9 @@ def start_server(
     hf_home: Optional[Path],
 ) -> tuple[subprocess.Popen[bytes], list[str]]:
     if port_is_open():
-        raise RuntimeError("TCP 9337 is already in use; stop the existing Mesh instance")
+        raise RuntimeError(
+            f"TCP {DEFAULT_PORT} is already in use; stop the existing Mesh instance"
+        )
     command = server_command(Path(build["binary"]), model)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("wb")
@@ -794,7 +887,7 @@ def stop_server(process: subprocess.Popen[bytes]) -> None:
     while port_is_open() and time.monotonic() < deadline:
         time.sleep(0.2)
     if port_is_open():
-        raise RuntimeError("Mesh stopped but TCP 9337 is still occupied")
+        raise RuntimeError(f"Mesh stopped but TCP {DEFAULT_PORT} is still occupied")
 
 
 def collect_runtime_logs(state_dir: Path, output_dir: Path) -> None:
@@ -827,11 +920,21 @@ def run_arm_pass(
     process: Optional[subprocess.Popen[bytes]] = None
     command = server_command(Path(build["binary"]), args.model)
     cells: list[dict[str, Any]] = []
+    warmup: Optional[dict[str, Any]] = None
     try:
         process, command = start_server(
             build, args.model, state_dir, log_path, args.hf_home
         )
         model_id = wait_for_model(DEFAULT_BASE_URL, args.startup_timeout, process)
+        warmup = run_warmup(
+            trajectories=cohorts["warmup"],
+            model_id=model_id,
+            turns=args.warmup_turns,
+            max_output_tokens=args.max_output_tokens,
+            timeout=args.request_timeout,
+            raw_path=pass_dir / "warmup-requests.jsonl",
+        )
+        write_json(pass_dir / "warmup.json", warmup)
         concurrency_values = (
             args.concurrency
             if pass_index % 2 == 0
@@ -865,6 +968,7 @@ def run_arm_pass(
         "server_command": command,
         "server_log": str(log_path),
         "model_id": model_id,
+        "warmup": warmup,
         "cells": cells,
     }
 
@@ -886,6 +990,61 @@ def pooled_rows(results: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         ref, commit = metadata[label]
         requests = sum(cell["requests"] for cell in cells)
         successes = sum(cell["successful_requests"] for cell in cells)
+        failures = requests - successes
+        failure_identity_known = failures == 0 or all(
+            "failed_request_ids" in cell for cell in cells
+        )
+        failed_request_ids = sorted(
+            request_id
+            for cell in cells
+            for request_id in cell.get("failed_request_ids", [])
+        )
+        completion_tokens = sum(cell.get("completion_tokens", 0) for cell in cells)
+        prompt_tokens = sum(cell.get("prompt_tokens", 0) for cell in cells)
+        cached_tokens = sum(cell.get("cached_tokens", 0) for cell in cells)
+        generation_seconds = sum(
+            cell.get("generation_seconds", 0.0) for cell in cells
+        )
+        workload_seconds = sum(
+            cell.get("workload_window_seconds", 0.0) for cell in cells
+        )
+        pooled_ttft = [
+            value for cell in cells for value in cell.get("ttft_samples", [])
+        ]
+        decode_values = [
+            cell.get(
+                "decode_tokens_per_second",
+                cell.get("mean_request_decode_tokens_per_second"),
+            )
+            for cell in cells
+        ]
+        decode_values = [value for value in decode_values if value is not None]
+        step_values = [
+            cell["agent_steps_per_second"]
+            for cell in cells
+            if cell["agent_steps_per_second"] is not None
+        ]
+        workload_values = [
+            cell["workload_output_tokens_per_second"]
+            for cell in cells
+            if cell["workload_output_tokens_per_second"] is not None
+        ]
+        ttft_p50_values = [
+            cell["ttft_p50_seconds"]
+            for cell in cells
+            if cell["ttft_p50_seconds"] is not None
+        ]
+        realized_concurrency = (
+            sum(
+                cell.get("mean_in_flight", 0.0)
+                * cell.get("workload_window_seconds", 0.0)
+                for cell in cells
+                if cell.get("mean_in_flight") is not None
+            )
+            / workload_seconds
+            if workload_seconds > 0
+            else mean_or_none(cell.get("mean_in_flight") for cell in cells)
+        )
         rows.append(
             {
                 "label": label,
@@ -897,24 +1056,75 @@ def pooled_rows(results: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 "trajectory_replays": sum(cell["trajectories"] for cell in cells),
                 "requests": requests,
                 "successful_requests": successes,
+                "failed_requests": failures,
+                "failed_request_ids": failed_request_ids,
+                "failure_identity_known": failure_identity_known,
                 "success_pct": 100 * successes / requests if requests else None,
-                "exact_output_pct": 100
-                * sum(cell["exact_output_requests"] for cell in cells)
+                "budget_exhausted_pct": 100
+                * sum(
+                    cell.get(
+                        "budget_exhausted_requests",
+                        cell.get("exact_output_requests", 0),
+                    )
+                    for cell in cells
+                )
                 / successes
                 if successes
                 else None,
-                "agent_steps_per_second": mean_or_none(
-                    cell["agent_steps_per_second"] for cell in cells
+                "agent_steps_per_second": (
+                    successes / workload_seconds
+                    if workload_seconds > 0
+                    else mean_or_none(step_values)
                 ),
-                "workload_output_tokens_per_second": mean_or_none(
-                    cell["workload_output_tokens_per_second"] for cell in cells
+                "agent_steps_per_second_min": min(step_values) if step_values else None,
+                "agent_steps_per_second_max": max(step_values) if step_values else None,
+                "workload_output_tokens_per_second": (
+                    completion_tokens / workload_seconds
+                    if workload_seconds > 0
+                    else mean_or_none(workload_values)
                 ),
-                "mean_request_decode_tokens_per_second": mean_or_none(
-                    cell["mean_request_decode_tokens_per_second"] for cell in cells
+                "workload_output_tokens_per_second_min": (
+                    min(workload_values) if workload_values else None
                 ),
-                "ttft_p50_seconds": mean_or_none(cell["ttft_p50_seconds"] for cell in cells),
-                "ttft_p95_seconds": mean_or_none(cell["ttft_p95_seconds"] for cell in cells),
-                "cache_pct": mean_or_none(cell["cache_pct"] for cell in cells),
+                "workload_output_tokens_per_second_max": (
+                    max(workload_values) if workload_values else None
+                ),
+                "decode_tokens_per_second": (
+                    completion_tokens / generation_seconds
+                    if generation_seconds > 0
+                    else mean_or_none(decode_values)
+                ),
+                "decode_tokens_per_second_min": (
+                    min(decode_values) if decode_values else None
+                ),
+                "decode_tokens_per_second_max": (
+                    max(decode_values) if decode_values else None
+                ),
+                "ttft_p50_seconds": (
+                    percentile(pooled_ttft, 0.50)
+                    if pooled_ttft
+                    else mean_or_none(cell["ttft_p50_seconds"] for cell in cells)
+                ),
+                "ttft_p50_seconds_min": (
+                    min(ttft_p50_values) if ttft_p50_values else None
+                ),
+                "ttft_p50_seconds_max": (
+                    max(ttft_p50_values) if ttft_p50_values else None
+                ),
+                "ttft_p95_seconds": (
+                    percentile(pooled_ttft, 0.95)
+                    if pooled_ttft
+                    else mean_or_none(cell["ttft_p95_seconds"] for cell in cells)
+                ),
+                "mean_in_flight": realized_concurrency,
+                "concurrency_utilization_pct": (
+                    100 * realized_concurrency / concurrency
+                    if realized_concurrency is not None
+                    else None
+                ),
+                "cache_pct": (
+                    100 * cached_tokens / prompt_tokens if prompt_tokens else None
+                ),
             }
         )
     baseline_label = results[0]["label"] if results else None
@@ -925,16 +1135,26 @@ def pooled_rows(results: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     }
     for row in rows:
         reference = baseline.get(row["concurrency"])
+        row["delta_comparable"] = bool(
+            reference
+            and row["requests"] == reference["requests"]
+            and row["failure_identity_known"]
+            and reference["failure_identity_known"]
+            and row["failed_request_ids"] == reference["failed_request_ids"]
+        )
         for metric in (
             "agent_steps_per_second",
             "workload_output_tokens_per_second",
+            "decode_tokens_per_second",
             "ttft_p50_seconds",
         ):
             base_value = reference.get(metric) if reference else None
             value = row.get(metric)
             row[f"{metric}_delta_pct"] = (
                 100 * (value / base_value - 1)
-                if value is not None and base_value not in (None, 0)
+                if row["delta_comparable"]
+                and value is not None
+                and base_value not in (None, 0)
                 else None
             )
     return rows
@@ -942,6 +1162,14 @@ def pooled_rows(results: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def fmt(value: Optional[float], digits: int = 2, suffix: str = "") -> str:
     return "—" if value is None else f"{value:.{digits}f}{suffix}"
+
+
+def fmt_range(
+    low: Optional[float], high: Optional[float], digits: int = 2
+) -> str:
+    if low is None or high is None:
+        return "—"
+    return f"{low:.{digits}f}–{high:.{digits}f}"
 
 
 def escape(value: Any) -> str:
@@ -1030,17 +1258,29 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
         writer.writerows(rows)
     labels = [build["label"] for build in run_document["builds"]]
     cohort_metadata = run_document["inputs"]["cohorts"]
+    measured_cohorts = [
+        cohort_metadata[str(value)] for value in run_document["config"]["concurrency"]
+    ]
     selected_trajectories = sum(
-        cohort["trajectory_count"] for cohort in cohort_metadata.values()
+        cohort["trajectory_count"] for cohort in measured_cohorts
     )
-    selected_turns = sum(cohort["assistant_turns"] for cohort in cohort_metadata.values())
+    selected_turns = sum(cohort["assistant_turns"] for cohort in measured_cohorts)
+    warmup_cohort = cohort_metadata["warmup"]
     svg_chart(
-        "Agent-step throughput by commit",
+        "Decode throughput by commit",
         rows,
         labels,
-        "agent_steps_per_second",
-        "Completed agent steps / second",
-        charts / "agent-step-throughput.svg",
+        "decode_tokens_per_second",
+        "Generated tokens / decode second",
+        charts / "decode-throughput.svg",
+    )
+    svg_chart(
+        "End-to-end workload output throughput by commit",
+        rows,
+        labels,
+        "workload_output_tokens_per_second",
+        "Generated tokens / wall-clock second",
+        charts / "workload-output-throughput.svg",
     )
     svg_chart(
         "Median time to first token by commit",
@@ -1075,26 +1315,45 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             "",
             "## Result table",
             "",
-            "| Ref | Commit | C | Trajectories/pass | Agent steps | Success | Steps/s | vs baseline | Output tok/s | TTFT p50 | TTFT p95 | TTFT p50 vs baseline | Cached prompt |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| Ref | Commit | Offered C | Realized C | Slot use | Trajectories/pass | Agent steps | Failures | Comparable | Decode tok/s | Pass range | vs baseline | E2E output tok/s | Pass range | TTFT p50 | Pass range | TTFT p95 | TTFT p50 vs baseline | Cached prompt | Budget exhausted |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for row in rows:
         lines.append(
-            "| {label} | `{commit}` | {concurrency} | {trajectories} | {requests} | {success} | {steps} | {steps_delta} | {output_tps} | {p50} | {p95} | {p50_delta} | {cache} |".format(
+            "| {label} | `{commit}` | {concurrency} | {realized} | {slot_use} | {trajectories} | {requests} | {failures} | {comparable} | {decode_tps} | {decode_range} | {decode_delta} | {output_tps} | {output_range} | {p50} | {p50_range} | {p95} | {p50_delta} | {cache} | {budget} |".format(
                 label=row["label"],
                 commit=row["commit"][:10],
                 concurrency=row["concurrency"],
+                realized=fmt(row["mean_in_flight"]),
+                slot_use=fmt(row["concurrency_utilization_pct"], 1, "%"),
                 trajectories=row["trajectories_per_pass"],
                 requests=row["requests"],
-                success=fmt(row["success_pct"], 1, "%"),
-                steps=fmt(row["agent_steps_per_second"], 3),
-                steps_delta=fmt(row["agent_steps_per_second_delta_pct"], 1, "%"),
+                failures=row["failed_requests"],
+                comparable="yes" if row["delta_comparable"] else "no",
+                decode_tps=fmt(row["decode_tokens_per_second"]),
+                decode_range=fmt_range(
+                    row["decode_tokens_per_second_min"],
+                    row["decode_tokens_per_second_max"],
+                ),
+                decode_delta=fmt(
+                    row["decode_tokens_per_second_delta_pct"], 1, "%"
+                ),
                 output_tps=fmt(row["workload_output_tokens_per_second"]),
+                output_range=fmt_range(
+                    row["workload_output_tokens_per_second_min"],
+                    row["workload_output_tokens_per_second_max"],
+                ),
                 p50=fmt(row["ttft_p50_seconds"], 3, "s"),
+                p50_range=fmt_range(
+                    row["ttft_p50_seconds_min"],
+                    row["ttft_p50_seconds_max"],
+                    3,
+                ),
                 p95=fmt(row["ttft_p95_seconds"], 3, "s"),
                 p50_delta=fmt(row["ttft_p50_seconds_delta_pct"], 1, "%"),
                 cache=fmt(row["cache_pct"], 1, "%"),
+                budget=fmt(row["budget_exhausted_pct"], 1, "%"),
             )
         )
     lines.extend(
@@ -1102,7 +1361,9 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             "",
             "## Charts",
             "",
-            "![Agent-step throughput](charts/agent-step-throughput.svg)",
+            "![Decode throughput](charts/decode-throughput.svg)",
+            "",
+            "![End-to-end workload output throughput](charts/workload-output-throughput.svg)",
             "",
             "![Median TTFT](charts/ttft-p50.svg)",
             "",
@@ -1113,12 +1374,19 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             "- Mesh chooses context size, execution lanes, KV budget, and backend tuning.",
             f"- Client concurrency: `{','.join(map(str, run_document['config']['concurrency']))}`.",
             f"- Pass order: `{' → '.join(item['label'] for item in run_document['order'])}`.",
+            f"- Warm-up: `{run_document['config']['warmup_turns']}` discarded turns from a disjoint cohort after every model-ready event.",
+            f"- Warm-up cohort: `{warmup_cohort['trajectory_count']}` whole trajectories, disjoint from measured cohorts.",
             f"- Dataset revision: `{run_document['inputs']['dataset']['revision']}`.",
             f"- Selected trajectories: `{selected_trajectories}` unique whole sessions across disjoint concurrency cohorts.",
             f"- Recorded agent steps: `{selected_turns}` assistant turns per arm pass; each commit replays them once per pass.",
             "- Turns inside a trajectory are strictly sequential. Different trajectories may overlap up to the offered client concurrency.",
+            "- Realized concurrency is the time-weighted mean number of in-flight requests. Slot use makes cohort tail drain explicit; do not interpret offered-concurrency scaling as steady-state when utilization is low.",
             "- Each next request uses the recorded conversation history, so experiment arms receive identical growing prefixes and tool observations.",
             "- Per-turn output budgets approximate each recorded assistant action from its character length, capped by the configured maximum; generated output is measured but never fed into the next turn.",
+            "- Decode tok/s is token-weighted generation throughput after first content. E2E output tok/s includes prompt ingestion and scheduling.",
+            "- Percent deltas are suppressed unless compared arms fail the same request IDs. Pass ranges expose run-to-run spread.",
+            "- Tool definitions preserve recorded names but use permissive synthetic schemas. This benchmark measures serving performance on reconstructed prompts, not answer quality or byte-identical production prompts.",
+            "- Selection is deterministic hash order, not stratified by context length or difficulty. Treat small deltas as directional unless repeated with a larger cohort.",
             f"- Trajectory manifest SHA-256: `{run_document['inputs']['manifest_sha256']}`.",
             "- Raw request records, server logs, build logs, commands, and exact binary/runtime hashes are retained beside this report.",
             "",
@@ -1153,24 +1421,34 @@ def benchmark_plan(args: argparse.Namespace, specs: Sequence[RefSpec]) -> dict[s
             ["just", "release-host-build"],
             ["just", "release-runtime-build", args.backend],
         ],
-        "server_command": ["<release-binary>", "serve", "--model", args.model, "--log-format", "json"],
+        "server_command": [
+            "<release-binary>",
+            "serve",
+            "--model",
+            args.model,
+            "--log-format",
+            "json",
+        ],
         "dataset": dataset,
         "selection": {
             "source_datasets": args.source_dataset,
             "frameworks": args.framework,
             "trajectories_per_framework_per_concurrency": args.trajectories_per_framework,
-            "unique_trajectory_count": len(args.concurrency)
+            "measured_unique_trajectory_count": len(args.concurrency)
             * len(args.framework)
+            * args.trajectories_per_framework,
+            "warmup_unique_trajectory_count": len(args.framework)
             * args.trajectories_per_framework,
             "min_isl": args.min_isl,
             "max_isl_exclusive": args.max_isl,
-            "min_turns": args.min_turns,
+            "min_assistant_turns": args.min_turns,
         },
         "workload": {
             "concurrency": args.concurrency,
             "passes": args.passes,
             "ordered_whole_trajectory_replay": True,
             "max_output_tokens": args.max_output_tokens,
+            "warmup_turns_per_arm_pass": args.warmup_turns,
         },
         "outputs": [
             "raw request JSONL",
@@ -1198,7 +1476,8 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     write_json(args.output / "plan.json", plan)
     commands = CommandLog(args.output / "commands.jsonl")
     inputs = build_trajectory_manifest(args, args.output)
-    cohorts = load_trajectory_cohorts(Path(inputs["manifest"]))
+    expected_cohorts = ["warmup", *(str(value) for value in args.concurrency)]
+    cohorts = load_trajectory_cohorts(Path(inputs["manifest"]), expected_cohorts)
     worktree_root = (
         args.worktree_root or (args.repo.parent / ".agentic-replay-worktrees")
     ).resolve()
@@ -1222,6 +1501,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
             "concurrency": args.concurrency,
             "passes": args.passes,
             "max_output_tokens": args.max_output_tokens,
+            "warmup_turns": args.warmup_turns,
         },
         "plan_sha256": stable_hash(plan),
         "inputs": inputs,
@@ -1295,7 +1575,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         help="whole trajectories from each framework in each concurrency cohort",
     )
-    parser.add_argument("--max-output-tokens", type=int, default=256)
+    parser.add_argument("--max-output-tokens", type=int, default=2048)
+    parser.add_argument(
+        "--warmup-turns",
+        type=int,
+        default=14,
+        help="discarded ordered turns from a disjoint cohort after model readiness",
+    )
     parser.add_argument("--min-isl", type=int, default=8192)
     parser.add_argument("--max-isl", type=int, default=65536)
     parser.add_argument("--min-turns", type=int, default=5)
@@ -1319,6 +1605,7 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         args.passes,
         args.trajectories_per_framework,
         args.max_output_tokens,
+        args.warmup_turns,
         args.min_isl,
         args.min_turns,
     )
@@ -1336,6 +1623,13 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         args.framework = ["swe-agent", "mini-swe-agent", "openhands"]
     if len(set(args.framework)) != len(args.framework):
         parser.error("--framework values must be unique")
+    trajectories_per_cohort = args.trajectories_per_framework * len(args.framework)
+    minimum_trajectories = 2 * max(args.concurrency)
+    if trajectories_per_cohort < minimum_trajectories:
+        parser.error(
+            "each concurrency cohort must contain at least twice the maximum "
+            f"offered concurrency ({minimum_trajectories} trajectories required)"
+        )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

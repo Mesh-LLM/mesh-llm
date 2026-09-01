@@ -111,6 +111,24 @@ class AgenticTrajectoryManifestTest(unittest.TestCase):
 
         self.assertEqual(validated, messages)
 
+    def test_minimum_turns_uses_actual_assistant_messages(self) -> None:
+        misleading = row("swe-agent", 0, assistant_turns=1)
+        misleading["n_turns"] = 99
+        eligible = row("swe-agent", 1, assistant_turns=3)
+
+        cohorts = MANIFEST.build_cohorts(
+            [misleading, eligible],
+            ["1"],
+            ["swe-agent"],
+            1,
+            min_assistant_turns=3,
+        )
+
+        self.assertEqual(
+            [trajectory["session_id"] for trajectory in cohorts["1"]],
+            ["swe-agent-1"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
