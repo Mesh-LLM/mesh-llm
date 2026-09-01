@@ -34,6 +34,7 @@ jobs:
       COMPETITIVE_SGLANG_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_MODEL_ROOT }}
       COMPETITIVE_OUTPUT: ${{ github.workspace }}/.benchmark-artifacts/${{ github.run_id }}-${{ github.run_attempt }}
       HF_HISTORY_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_ENABLED || '0' }}
+      HF_HISTORY_GATE_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_GATE_ENABLED || '0' }}
       HF_DATASET_REPO: ${{ vars.MESH_PERFORMANCE_HISTORY_DATASET }}
       HF_HISTORY_LOCAL: ${{ github.workspace }}/.performance-history-cache
     steps:
@@ -54,6 +55,10 @@ jobs:
           done
           if [[ "$HF_HISTORY_ENABLED" == "1" ]] && ! command -v hf >/dev/null 2>&1; then
             echo "hf must be baked into the benchmark runner when performance history is enabled" >&2
+            exit 1
+          fi
+          if [[ "$HF_HISTORY_GATE_ENABLED" == "1" && "$HF_HISTORY_ENABLED" != "1" ]]; then
+            echo "MESH_PERFORMANCE_HISTORY_GATE_ENABLED requires performance history to be enabled" >&2
             exit 1
           fi
           for variable in \
@@ -171,6 +176,9 @@ jobs:
           )
           if [[ -d "$HF_HISTORY_LOCAL/data/runs" ]]; then
             args+=(--baseline "$HF_HISTORY_LOCAL/data/runs")
+          fi
+          if [[ "$HF_HISTORY_GATE_ENABLED" == "1" ]]; then
+            args+=(--gate)
           fi
           python3 scripts/performance-history.py "${args[@]}"
           cat "$COMPETITIVE_OUTPUT/summary/PERFORMANCE_REGRESSIONS.md" >> "$GITHUB_STEP_SUMMARY"

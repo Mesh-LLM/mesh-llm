@@ -25,6 +25,14 @@ GPU_FIELDS = (
     "sm_clock_mhz",
     "memory_clock_mhz",
 )
+STABLE_GPU_FIELDS = (
+    "name",
+    "uuid",
+    "compute_capability",
+    "driver_version",
+    "pci_bus_id",
+)
+CANDIDATE_MESH_ARMS = {"mesh", "mesh-adaptive"}
 
 
 def stable_hash(value: object) -> str:
@@ -42,11 +50,17 @@ def load_json(path: Path) -> dict[str, Any]:
 def gpu_fingerprint(artifact: Path) -> dict[str, str | None]:
     path = artifact / "runner-gpu.csv"
     if not path.is_file():
-        return {field: None for field in GPU_FIELDS}
+        raise ValueError(f"missing runner GPU fingerprint: {path}")
     rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
     if len(rows) != 1 or len(rows[0]) != len(GPU_FIELDS):
         raise ValueError(f"runner GPU fingerprint must contain one {len(GPU_FIELDS)}-field row")
-    return dict(zip(GPU_FIELDS, (value.strip() for value in rows[0]), strict=True))
+    fingerprint = dict(zip(GPU_FIELDS, (value.strip() for value in rows[0]), strict=True))
+    missing = [field for field in STABLE_GPU_FIELDS if not fingerprint[field]]
+    if missing:
+        raise ValueError(
+            "runner GPU fingerprint is missing stable fields: " + ", ".join(missing)
+        )
+    return fingerprint
 
 
 def normalize(artifact: Path) -> list[dict[str, Any]]:
@@ -82,6 +96,7 @@ def normalize(artifact: Path) -> list[dict[str, Any]]:
             raise ValueError(f"missing provenance for platform {platform}")
         model = str(cell["model"])
         arm = str(cell["arm"])
+        backend_binary_sha256 = cell.get("binary_sha256")
         cohort = {
             "schema_version": SCHEMA_VERSION,
             "platform": platform,
@@ -90,6 +105,13 @@ def normalize(artifact: Path) -> list[dict[str, Any]]:
             "model": model,
             "model_sha256": provenance.get("models", {}).get(model),
             "arm": arm,
+            # Mesh's binary changes on every candidate by definition; it is
+            # the subject of the comparison. External backends are controls,
+            # so a runtime upgrade must start a fresh cohort rather than
+            # masquerading as a performance regression.
+            "control_backend_binary_sha256": (
+                None if arm in CANDIDATE_MESH_ARMS else backend_binary_sha256
+            ),
             "config_sha256": cell.get("config_sha256"),
             "prompt_manifest_sha256": cell.get("manifest_sha256"),
             "native_runtime_directory_sha256": provenance.get(
@@ -107,7 +129,7 @@ def normalize(artifact: Path) -> list[dict[str, Any]]:
                 "source_sha": provenance.get("mesh_head"),
                 "cohort_key": stable_hash(cohort),
                 "cohort": cohort,
-                "backend_binary_sha256": cell.get("binary_sha256"),
+                "backend_binary_sha256": backend_binary_sha256,
                 "observed_gpu_state": {
                     key: gpu[key]
                     for key in (

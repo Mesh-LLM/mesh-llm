@@ -338,9 +338,13 @@ workflow downloads prior immutable JSONL shards, requires the Hub schema to
 match `ci/performance-history/schema.json`, reports only exact-cohort drift,
 and uploads one source/run-addressed shard. Three prior complete matching runs
 are required before performance drift is classified; thresholds remain
-report-only during baseline collection. The Hub Dataset Viewer materializes
-the JSONL shards as Parquet without adding a runtime conversion dependency to
-the trusted benchmark runner.
+report-only during baseline collection. After the baseline window, set
+`MESH_PERFORMANCE_HISTORY_GATE_ENABLED=1` to make statistically sustained
+throughput or TTFT regressions fail the nightly job. Missing stable GPU
+fingerprints fail closed, and external backend runtime digests are part of the
+comparison cohort while the candidate Mesh binary digest remains an observed
+field. The Hub Dataset Viewer materializes the JSONL shards as Parquet without
+adding a runtime conversion dependency to the trusted benchmark runner.
 
 ### 0g. Logging workflow certification
 
@@ -896,8 +900,8 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a released coordinator without advertised
-  `skippy-stage/2` `artifact-transfer`, `stage-generation-5`, and
-  `direct-prediction-return` support must not be selected for a generation-4
+  `skippy-stage/2` `artifact-transfer`, `stage-generation-6`, and
+  `direct-prediction-return` support must not be selected for a generation-5
   split topology; the worker must fall back to local/HF package resolution.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node
   must advertise no `artifact-transfer` feature, reject inbound artifact

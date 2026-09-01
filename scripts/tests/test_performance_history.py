@@ -16,16 +16,18 @@ SPEC.loader.exec_module(HISTORY)
 
 
 class PerformanceHistoryTests(unittest.TestCase):
-    def _artifact(self, root: Path, throughput: float = 100.0) -> Path:
+    def _artifact(
+        self, root: Path, throughput: float = 100.0, arm: str = "mesh"
+    ) -> Path:
         artifact = root / "artifact"
-        result_dir = artifact / "trace" / "cuda" / "qwen3" / "c-64" / "mesh"
+        result_dir = artifact / "trace" / "cuda" / "qwen3" / "c-64" / arm
         result_dir.mkdir(parents=True)
         provenance = artifact / "provenance"
         provenance.mkdir()
         cell = {
             "platform": "cuda",
             "model": "qwen3",
-            "arm": "mesh",
+            "arm": arm,
             "workload": "thoughtworks",
             "concurrency": 64,
             "config_sha256": "c" * 64,
@@ -82,6 +84,49 @@ class PerformanceHistoryTests(unittest.TestCase):
         self.assertEqual("42", row["observed_gpu_state"]["temperature_c"])
         self.assertEqual(64, row["cohort"]["concurrency"])
         self.assertEqual(64, len(row["cohort_key"]))
+
+    def test_missing_or_incomplete_gpu_fingerprint_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = self._artifact(Path(temp_dir))
+            (artifact / "runner-gpu.csv").unlink()
+            with self.assertRaisesRegex(ValueError, "missing runner GPU fingerprint"):
+                HISTORY.normalize(artifact)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = self._artifact(Path(temp_dir))
+            (artifact / "runner-gpu.csv").write_text(
+                "RTX 5080,,12.0,999.1,0000:01:00.0,P0,42,2400,12000\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "missing stable fields: uuid"):
+                HISTORY.normalize(artifact)
+
+    def test_external_backend_upgrade_starts_a_new_cohort(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = self._artifact(Path(temp_dir), arm="vllm")
+            first = HISTORY.normalize(artifact)[0]
+            marker_path = next(artifact.glob("trace/*/*/*/*/complete.json"))
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            marker["cell"]["binary_sha256"] = "d" * 64
+            marker["cell_sha256"] = HISTORY.stable_hash(marker["cell"])
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            second = HISTORY.normalize(artifact)[0]
+
+        self.assertNotEqual(first["cohort_key"], second["cohort_key"])
+
+    def test_mesh_binary_change_remains_in_the_same_comparison_cohort(self) -> None:
+        for arm in ("mesh", "mesh-adaptive"):
+            with self.subTest(arm=arm), tempfile.TemporaryDirectory() as temp_dir:
+                artifact = self._artifact(Path(temp_dir), arm=arm)
+                first = HISTORY.normalize(artifact)[0]
+                marker_path = next(artifact.glob("trace/*/*/*/*/complete.json"))
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                marker["cell"]["binary_sha256"] = "d" * 64
+                marker["cell_sha256"] = HISTORY.stable_hash(marker["cell"])
+                marker_path.write_text(json.dumps(marker), encoding="utf-8")
+                second = HISTORY.normalize(artifact)[0]
+
+            self.assertEqual(first["cohort_key"], second["cohort_key"])
 
     def test_compare_requires_three_exact_cohort_baselines(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
