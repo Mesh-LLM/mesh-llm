@@ -66,18 +66,24 @@ scp -P <SSH_PORT> /tmp/mesh-llm-bundle.tar.gz user@host:
 ssh -p <SSH_PORT> user@host 'mkdir -p ~/bin && tar xzf mesh-llm-bundle.tar.gz -C ~/bin --strip-components=1'
 ```
 
-### Fix macOS quarantine — ALWAYS after scp
+### Clear quarantine and sign the final remote binary — ALWAYS after scp
 
-Files transferred via scp get provenance/quarantine xattrs that make macOS
-SIGKILL the binary on launch (exit 137). After every scp:
+Files transferred via scp can carry provenance/quarantine xattrs that make
+macOS SIGKILL the binary on launch (exit 137). Clear those attributes before
+signing, then sign the final remote binary once with the stable Apple-issued
+development identity used for that build:
 
 ```bash
-codesign -s - ~/bin/mesh-llm
 xattr -cr ~/bin/mesh-llm
+codesign --force --sign "<APPLE_DEVELOPMENT_IDENTITY>" ~/bin/mesh-llm
+codesign --verify --verbose=2 ~/bin/mesh-llm
+codesign -dv --verbose=4 ~/bin/mesh-llm 2>&1 | tee /tmp/mesh-llm-codesign.txt
 ```
 
-Verify: `xattr ~/bin/mesh-llm` should print nothing. Note codesign changes the
-file hash — don't compare local vs remote hashes after signing.
+`xattr ~/bin/mesh-llm` should print nothing. Do not ad-hoc sign the
+binary: that identity is not stable across builds and can invalidate the Local
+Network privacy decision. Signing changes the file hash, so do not compare
+local and remote hashes afterward.
 
 Verify the version on the remote matches what you built:
 
@@ -108,13 +114,17 @@ For the first multi-node run of an exact app/binary identity:
    supported command to query or reset an individual program from the
    undetermined state, so scripts must not claim this check passed merely
    because a raw UDP probe worked.
-4. For first repro/debug runs over SSH, use a held foreground TTY as described
-   by `remote-observable-process`; do not begin with launchd or detached
-   `nohup`. Apple documents Terminal/SSH command-line tools as automatically
-   allowed, while a helper/service can inherit a different responsible app.
+4. Authorize the exact launch context that will run the test. For a
+   CLI-launched repro over SSH, use the held foreground TTY described by
+   `remote-observable-process`. If a per-user launchd agent or GUI app will run
+   the workload, launch that exact agent/app while a user is logged in and
+   accept its prompt before diagnosis; an SSH TTY does not authorize a
+   different responsible app.
 5. Treat the network preflight as passed only after both nodes report an iroh
-   **direct** path to the intended LAN address (`direct_addr_available=true`,
-   `observed_via_relay=false`). An invite containing a LAN candidate, a raw UDP
+   **direct** path, `observed_via_relay=false`, and an
+   `observed_direct_remote_addr` whose IP matches the intended LAN address of
+   the peer. `direct_addr_available=true` alone only proves that some direct
+   address was observed. An invitation containing a LAN candidate, a raw UDP
    probe, or a working relay path does not prove the deployed process has Local
    Network access.
 
@@ -195,7 +205,7 @@ A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Exit 137 immediately after scp | macOS quarantine/provenance xattr | `codesign -s - <bin>; xattr -cr <dir>` |
+| Exit 137 immediately after scp | macOS quarantine/provenance xattr | Clear xattrs, sign once with the stable Apple-issued development identity, and verify as above |
 | `mesh-llm: command not found` over SSH | `~/.local/bin` not on non-interactive PATH | Full path or `bash -lc` |
 | Empty `/v1/models` | Model still downloading/loading | Wait; watch skippy-native.log |
 | "No inference server available" | Election in progress or load failed | Check stderr + skippy-native.log |
