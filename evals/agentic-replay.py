@@ -393,6 +393,21 @@ def load_trajectory_cohorts(
     return cohorts
 
 
+def validate_warmup_capacity(
+    trajectories: Sequence[dict[str, Any]], required_turns: int
+) -> None:
+    available_turns = sum(
+        message["role"] == "assistant"
+        for trajectory in trajectories
+        for message in trajectory["messages"]
+    )
+    if available_turns < required_turns:
+        raise ValueError(
+            f"warm-up cohort has {available_turns} assistant turns; "
+            f"{required_turns} required"
+        )
+
+
 def server_command(binary: Path, model: str) -> list[str]:
     command = [str(binary), "serve", "--model", model, "--log-format", "json"]
     for option in FORBIDDEN_STARTUP_OPTIONS:
@@ -1478,6 +1493,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     inputs = build_trajectory_manifest(args, args.output)
     expected_cohorts = ["warmup", *(str(value) for value in args.concurrency)]
     cohorts = load_trajectory_cohorts(Path(inputs["manifest"]), expected_cohorts)
+    validate_warmup_capacity(cohorts["warmup"], args.warmup_turns)
     worktree_root = (
         args.worktree_root or (args.repo.parent / ".agentic-replay-worktrees")
     ).resolve()

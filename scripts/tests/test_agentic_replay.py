@@ -264,6 +264,19 @@ class AgenticReplayTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing cohorts"):
                 BENCH.load_trajectory_cohorts(manifest, ["warmup", "1"])
 
+    def test_warmup_capacity_is_validated_before_builds(self) -> None:
+        trajectories = [
+            {
+                "messages": [
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "action"},
+                ]
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "1 assistant turns; 14 required"):
+            BENCH.validate_warmup_capacity(trajectories, 14)
+
     def test_summarize_requests_computes_stream_windows_and_cache_rate(self) -> None:
         requests = [
             {
