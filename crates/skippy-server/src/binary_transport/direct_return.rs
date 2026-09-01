@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
-        mpsc::{RecvTimeoutError, TryRecvError},
+        mpsc::RecvTimeoutError,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -275,16 +275,8 @@ impl PredictionReturnReceiver {
         validate_expected_reply(reply, std::slice::from_ref(&expected)).map(Some)
     }
 
-    pub(crate) fn try_recv_one_of(&self, expected: &[WireReplyKind]) -> Result<Option<StageReply>> {
-        let Some(reply) = self.try_recv()? else {
-            return Ok(None);
-        };
-        validate_expected_reply(reply, expected).map(Some)
-    }
-
     /// Event-driven bounded wait: blocks on the return channel and wakes the
-    /// moment a reply is delivered, unlike `try_recv_one_of` which only
-    /// samples. Returns `None` on timeout.
+    /// moment a reply is delivered. Returns `None` on timeout.
     pub(crate) fn recv_one_of_timeout(
         &self,
         expected: &[WireReplyKind],
@@ -299,17 +291,6 @@ impl PredictionReturnReceiver {
             }
         };
         validate_expected_reply(reply, expected).map(Some)
-    }
-
-    fn try_recv(&self) -> Result<Option<StageReply>> {
-        match self.receiver.try_recv() {
-            Ok(Ok(reply)) => Ok(Some(reply)),
-            Ok(Err(error)) => Err(anyhow!(error)),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => {
-                Err(anyhow!("prediction return channel disconnected"))
-            }
-        }
     }
 }
 
