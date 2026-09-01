@@ -132,8 +132,33 @@ struct DirectIteration {
     input: Option<ActivationFrame>,
     sample_last: bool,
     phase: IterationBatchPhase,
+    deadline: Option<Instant>,
+    cancellation: Option<openai_frontend::CancellationToken>,
     enqueued_at: Instant,
     reply: std_mpsc::SyncSender<OpenAiResult<SchedulerIterationOutcome>>,
+}
+
+impl DirectIteration {
+    fn ensure_active(&self) -> OpenAiResult<()> {
+        ensure_direct_iteration_active(self.deadline, self.cancellation.as_ref())
+    }
+}
+
+fn ensure_direct_iteration_active(
+    deadline: Option<Instant>,
+    cancellation: Option<&openai_frontend::CancellationToken>,
+) -> OpenAiResult<()> {
+    if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+        return Err(OpenAiError::cancelled(
+            "request cancelled during scheduler iteration",
+        ));
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(OpenAiError::backend(
+            "cache operation deadline exceeded during scheduler iteration",
+        ));
+    }
+    Ok(())
 }
 
 type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) + Send>;
@@ -592,6 +617,8 @@ impl IterationScheduler {
             sampling,
             sample_last,
             phase,
+            None,
+            None,
         )
     }
 
@@ -605,6 +632,8 @@ impl IterationScheduler {
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
         phase: IterationBatchPhase,
+        deadline: Option<Instant>,
+        cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
         self.execute_direct_iteration(
             channel,
@@ -616,6 +645,8 @@ impl IterationScheduler {
             None,
             sample_last,
             phase,
+            deadline,
+            cancellation,
         )
     }
 
@@ -641,6 +672,8 @@ impl IterationScheduler {
             input,
             sample_last,
             IterationBatchPhase::Decode,
+            None,
+            None,
         )
     }
 
@@ -656,8 +689,11 @@ impl IterationScheduler {
         input: Option<ActivationFrame>,
         sample_last: bool,
         phase: IterationBatchPhase,
+        deadline: Option<Instant>,
+        cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
         validate_direct_iteration(token_ids, positions)?;
+        ensure_direct_iteration_active(deadline, cancellation)?;
         self.enqueue_command(SchedulerCommand::ExecuteIteration(DirectIteration {
             session_id: session_id.to_string(),
             target_token_count,
@@ -667,12 +703,16 @@ impl IterationScheduler {
             input,
             sample_last,
             phase,
+            deadline,
+            cancellation: cancellation.cloned(),
             enqueued_at: Instant::now(),
             reply: channel.reply.clone(),
         }))?;
-        channel.result.recv().map_err(|error| {
+        let result = channel.result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
-        })?
+        })?;
+        ensure_direct_iteration_active(deadline, cancellation)?;
+        result
     }
 
     /// Runs an operation on the scheduler worker so speculative verification,
@@ -1263,11 +1303,24 @@ impl SchedulerWorker {
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 
+        let mut active = Vec::with_capacity(batch.len());
+        for request in batch {
+            match request.ensure_active() {
+                Ok(()) => active.push(request),
+                Err(error) => {
+                    let _ = request.reply.send(Err(error));
+                }
+            }
+        }
+        if active.is_empty() {
+            return;
+        }
+
         let lock_started = Instant::now();
         let mut runtime = match self.runtime.lock() {
             Ok(runtime) => runtime,
             Err(_) => {
-                for request in batch {
+                for request in active {
                     let _ = request
                         .reply
                         .send(Err(OpenAiError::backend("runtime lock poisoned")));
@@ -1277,8 +1330,12 @@ impl SchedulerWorker {
         };
         let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
-        let mut runnable = Vec::with_capacity(batch.len());
-        for request in batch {
+        let mut runnable = Vec::with_capacity(active.len());
+        for request in active {
+            if let Err(error) = request.ensure_active() {
+                let _ = request.reply.send(Err(error));
+                continue;
+            }
             let alignment = match request.target_token_count {
                 Some(target_token_count) => runtime
                     .align_session_to_token_count_if_ahead(&request.session_id, target_token_count),
@@ -1846,9 +1903,128 @@ mod tests {
             input: None,
             sample_last: true,
             phase: IterationBatchPhase::Prefill,
+            deadline: None,
+            cancellation: None,
             enqueued_at: Instant::now(),
             reply,
         }
+    }
+
+    #[test]
+    fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (commands, receiver) = std_mpsc::sync_channel(8);
+        let worker = thread::spawn(move || {
+            SchedulerWorker {
+                runtime,
+                scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+                requests: BTreeMap::new(),
+                direct_iterations: VecDeque::new(),
+                cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+                commands: receiver,
+                kv_capacity_tokens: 64,
+                max_direct_batch_size: 1,
+                max_commands_per_turn: 8,
+                iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
+                telemetry: None,
+                last_served_direct: false,
+                last_served_cache_runtime: false,
+                last_emitted_lifecycle_counters: (0, 0, 0, 0),
+            }
+            .run();
+        });
+        let (worker_blocked, worker_blocked_rx) = std_mpsc::sync_channel(0);
+        let (release_worker, release_worker_rx) = std_mpsc::sync_channel(0);
+        commands
+            .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
+                label: "deadline-test-gate",
+                control: None,
+                run: Box::new(move |_| {
+                    worker_blocked.send(()).unwrap();
+                    release_worker_rx.recv().unwrap();
+                }),
+            }))
+            .unwrap();
+        worker_blocked_rx.recv().unwrap();
+
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let (reply, result) = std_mpsc::sync_channel(1);
+        let mut request = direct_iteration("expired-deferred-suffix", 1);
+        request.deadline = Some(deadline);
+        request.reply = reply;
+        commands
+            .send(SchedulerCommand::ExecuteIteration(request))
+            .unwrap();
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .saturating_add(Duration::from_millis(1)),
+        );
+        release_worker.send(()).unwrap();
+
+        let error = result
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocked direct iteration returned")
+            .unwrap_err();
+        assert!(error.to_string().contains("deadline exceeded"));
+        commands.send(SchedulerCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn direct_iteration_rechecks_deadline_after_worker_reply() {
+        let (commands, receiver) = std_mpsc::sync_channel(1);
+        let scheduler = IterationScheduler {
+            shared: Arc::new(IterationSchedulerShared {
+                commands,
+                owner_count: AtomicUsize::new(1),
+                worker: Mutex::new(None),
+            }),
+        };
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let caller = thread::spawn(move || {
+            let channel = scheduler.direct_iteration_channel();
+            scheduler.execute_iteration_on(
+                &channel,
+                "late-worker-reply",
+                &[1],
+                &[],
+                None,
+                false,
+                IterationBatchPhase::Prefill,
+                Some(deadline),
+                None,
+            )
+        });
+
+        let SchedulerCommand::ExecuteIteration(request) = receiver.recv().unwrap() else {
+            panic!("expected direct iteration command");
+        };
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .saturating_add(Duration::from_millis(1)),
+        );
+        request
+            .reply
+            .send(Err(OpenAiError::backend("late worker result")))
+            .unwrap();
+
+        let error = caller.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("deadline exceeded"));
+    }
+
+    #[test]
+    fn queued_direct_iteration_carries_cancellation_state() {
+        let cancellation = openai_frontend::CancellationToken::new();
+        let mut request = direct_iteration("cancelled-deferred-suffix", 1);
+        request.cancellation = Some(cancellation.clone());
+        cancellation.cancel();
+
+        let error = request.ensure_active().unwrap_err();
+        assert!(error.to_string().contains("request cancelled"));
     }
 
     #[test]

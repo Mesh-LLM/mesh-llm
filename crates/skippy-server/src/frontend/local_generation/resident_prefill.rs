@@ -63,6 +63,8 @@ impl StageOpenAiBackend {
                 sampling,
                 should_sample,
                 IterationBatchPhase::Prefill,
+                Some(deadline),
+                cancellation,
             )?;
             chunk_count = chunk_count.saturating_add(1);
             max_batch_size = max_batch_size.max(outcome.batch_size);

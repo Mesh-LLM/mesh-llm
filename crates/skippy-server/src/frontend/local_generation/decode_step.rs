@@ -83,6 +83,8 @@ impl StageOpenAiBackend {
                 request.sampling.enabled.then_some(request.sampling),
                 true,
                 skippy_runtime::IterationBatchPhase::Decode,
+                None,
+                request.cancellation,
             )?;
             (
                 outcome.predicted,
