@@ -717,6 +717,87 @@ fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
+#[test]
+fn test_healthy_gpu_probe_credits_ram_offload_from_injected_source() {
+    // 12 GB dGPU in a 32 GB machine → 12 + 0.90 × 20 = 30 GB advertised,
+    // matching both the Linux behavior of this seam and the legacy Windows
+    // collector path.
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 32_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 30_000_000_000);
+    assert_eq!(survey.gpu_vram, vec![12_000_000_000]);
+}
+
+#[test]
+fn test_healthy_gpu_probe_with_zero_ram_source_advertises_bare_vram() {
+    // A zero RAM source (platforms without a reader) keeps the pre-existing
+    // behavior: bare VRAM, no offload credit.
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 0,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+}
+
+#[test]
+fn test_healthy_gpu_probe_ram_below_vram_saturates_to_bare_vram() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 8_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+}
+
+#[test]
+fn test_healthy_soc_probe_does_not_probe_system_ram() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 16_000_000_000;
+    gpu.reserved_bytes = Some(2_000_000_000);
+    gpu.unified_memory = true;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::IsSoc, Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || panic!("system RAM must not be probed for a unified-memory survey"),
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 14_000_000_000);
+}
+
+#[test]
+fn test_healthy_gpu_probe_without_vram_metric_does_not_probe_system_ram() {
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Ok::<Vec<GpuFacts>, ()>(vec![synthetic_gpu(0, None)]),
+        || panic!("system RAM must not be probed when VramBytes is not requested"),
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 0);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn test_probe_fallback_leaves_vram_untouched_on_macos() {
