@@ -399,20 +399,26 @@ fn poll_direct_or_downstream_reply(
     let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
     let started = Instant::now();
     let reply_timeout = stage_reply_timeout();
+    // The direct-return sink is the standard reply path, so block on its
+    // channel and wake the moment the reply lands instead of sampling it
+    // between bounded peeks: sampling quantized every reply wait to the poll
+    // interval and cost a uniform 0..poll of added latency per token. The
+    // tunnelled downstream fallback is checked without blocking each slice,
+    // so a fallback reply is still detected within one poll interval.
     let result = loop {
         if let Some(reply) = prediction_return
-            .try_recv_one_of(expected_replies)
+            .recv_one_of_timeout(expected_replies, DIRECT_RETURN_FALLBACK_POLL)
             .map_err(openai_backend_error)?
         {
             break Ok(reply);
         }
         if downstream_reply_available(downstream)? {
             // `peek` only proves that the first byte has arrived. Tunnelled
-            // replies may be fragmented, so retaining the short poll timeout
-            // while decoding the complete frame turns an ordinary partial
-            // arrival into EWOULDBLOCK. Once downstream wins the race, give
-            // the frame the remainder of the bounded fallback deadline.
+            // replies may be fragmented, so decode the complete frame under
+            // the remainder of the bounded fallback deadline rather than the
+            // nonblocking mode used for the availability check.
             let remaining = reply_timeout.saturating_sub(started.elapsed());
+            timeout_restore.prepare_blocking_read()?;
             downstream
                 .set_read_timeout(Some(remaining.max(DIRECT_RETURN_FALLBACK_POLL)))
                 .map_err(openai_io_error)?;
@@ -452,12 +458,13 @@ struct DirectReturnFallbackTimeout {
 }
 
 impl DirectReturnFallbackTimeout {
+    /// Puts the downstream socket into nonblocking mode so availability peeks
+    /// return immediately while the reply wait blocks on the direct-return
+    /// channel instead.
     fn install(downstream: &TcpStream) -> OpenAiResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
-        downstream
-            .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
-            .map_err(openai_io_error)?;
+        downstream.set_nonblocking(true).map_err(openai_io_error)?;
         Ok(Self {
             downstream: restore_stream,
             previous_timeout,
@@ -465,7 +472,17 @@ impl DirectReturnFallbackTimeout {
         })
     }
 
+    /// Leave nonblocking mode before handing the socket to a frame decode.
+    fn prepare_blocking_read(&mut self) -> OpenAiResult<()> {
+        self.downstream
+            .set_nonblocking(false)
+            .map_err(openai_io_error)
+    }
+
     fn restore(&mut self) -> OpenAiResult<()> {
+        self.downstream
+            .set_nonblocking(false)
+            .map_err(openai_io_error)?;
         self.downstream
             .set_read_timeout(self.previous_timeout)
             .map_err(openai_io_error)?;
@@ -477,6 +494,7 @@ impl DirectReturnFallbackTimeout {
 impl Drop for DirectReturnFallbackTimeout {
     fn drop(&mut self) {
         if !self.restored {
+            let _ = self.downstream.set_nonblocking(false);
             let _ = self.downstream.set_read_timeout(self.previous_timeout);
         }
     }
@@ -588,13 +606,6 @@ mod tests {
     #[test]
     fn direct_return_fallback_timeout_restores_on_drop_after_early_exit() {
         let (stream, _peer) = connected_stream_pair();
-        // Socket timeout readback may be rounded to the OS timer granularity.
-        // Capture the effective values so the test verifies install and restore
-        // without assuming the kernel preserves the requested duration exactly.
-        stream
-            .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
-            .unwrap();
-        let effective_poll = stream.read_timeout().unwrap();
         stream
             .set_read_timeout(Some(Duration::from_millis(123)))
             .unwrap();
@@ -602,10 +613,89 @@ mod tests {
 
         {
             let _restore = DirectReturnFallbackTimeout::install(&stream).unwrap();
-            assert_eq!(stream.read_timeout().unwrap(), effective_poll);
+            // Nonblocking mode makes an availability peek on a silent socket
+            // return immediately instead of blocking out the read timeout.
+            let started = Instant::now();
+            let mut byte = [0u8; 1];
+            let peek = stream.peek(&mut byte);
+            assert!(matches!(
+                peek,
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+            ));
+            assert!(started.elapsed() < Duration::from_millis(50));
         }
 
+        // Drop restores blocking mode and the original read timeout.
         assert_eq!(stream.read_timeout().unwrap(), effective_original);
+        let started = Instant::now();
+        let mut byte = [0u8; 1];
+        let peek = stream.peek(&mut byte);
+        assert!(matches!(
+            peek,
+            Err(ref error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn direct_return_reply_wakes_the_wait_immediately() {
+        let request_id = 71;
+        let session_id = 73;
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(request_id, session_id).unwrap();
+        let (mut downstream, _peer) = connected_stream_pair();
+
+        // Feed replies through the real return-stream reader: the sink writer
+        // half sends framed replies, the attached reader delivers them to the
+        // hub channel the wait blocks on.
+        let (sink_writer, sink_reader) = connected_stream_pair();
+        receiver.attach_opened_stream(sink_reader);
+        let sink_writer = Arc::new(std::sync::Mutex::new(sink_writer));
+
+        let mut max_wake_ms = 0.0_f64;
+        for _ in 0..5 {
+            let writer = sink_writer.clone();
+            let sent_at = Arc::new(std::sync::Mutex::new(None::<Instant>));
+            let sent_at_writer = sent_at.clone();
+            let sender = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut stream = writer.lock().unwrap();
+                *sent_at_writer.lock().unwrap() = Some(Instant::now());
+                skippy_protocol::binary::send_reply_message(
+                    &mut *stream,
+                    &StageReply {
+                        kind: WireReplyKind::PredictedToken,
+                        predicted: 5,
+                        predicted_tokens: vec![5],
+                        native_mtp_draft: None,
+                        window: Default::default(),
+                        stats: StageReplyStats::default(),
+                    },
+                )
+                .unwrap();
+            });
+
+            let reply = receive_embedded_stage_reply_one_of(
+                &mut downstream,
+                Some(&receiver),
+                &[WireReplyKind::PredictedToken],
+            )
+            .unwrap();
+            let received_at = Instant::now();
+            sender.join().unwrap();
+            assert_eq!(reply.predicted, 5);
+            let wake_ms = received_at
+                .duration_since(sent_at.lock().unwrap().unwrap())
+                .as_secs_f64()
+                * 1000.0;
+            max_wake_ms = max_wake_ms.max(wake_ms);
+        }
+        // The wait must be event-driven: a sampling loop quantizes wake-up to
+        // its poll interval (10ms) and reliably exceeds this bound.
+        assert!(
+            max_wake_ms < 8.0,
+            "direct return wake took {max_wake_ms:.2}ms; reply wait is polling, not event-driven"
+        );
     }
 
     #[test]
