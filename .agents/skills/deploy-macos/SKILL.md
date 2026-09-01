@@ -85,6 +85,44 @@ Verify the version on the remote matches what you built:
 ~/bin/mesh-llm --version
 ```
 
+### Authorize macOS Local Network access — BEFORE remote diagnosis
+
+macOS Local Network privacy is keyed to the **responsible code** and its code
+signature. Replacing or ad-hoc re-signing a development binary can therefore
+change the identity whose decision macOS remembers. A GUI app or launch agent
+may show a blocking Local Network alert on the logged-in desktop even though
+the same network is reachable from an interactive shell.
+
+For the first multi-node run of an exact app/binary identity:
+
+1. Sign it once with the stable Apple-issued development identity used for that
+   build. Do not repeatedly ad-hoc re-sign it between attempts. Verify with
+   `codesign --verify --verbose=2 <path>` and record
+   `codesign -dv --verbose=4 <path> 2>&1` in the lab evidence.
+2. Launch it once from the same responsible app/service context intended for
+   the test while a user is logged in at the Mac. Trigger a mesh join or mDNS
+   operation, then accept the Local Network alert on that Mac. Repeat on every
+   Mac participating in the test.
+3. Check **System Settings > Privacy & Security > Local Network**. If the
+   responsible app is listed, make sure access is enabled. macOS offers no
+   supported command to query or reset an individual program from the
+   undetermined state, so scripts must not claim this check passed merely
+   because a raw UDP probe worked.
+4. For first repro/debug runs over SSH, use a held foreground TTY as described
+   by `remote-observable-process`; do not begin with launchd or detached
+   `nohup`. Apple documents Terminal/SSH command-line tools as automatically
+   allowed, while a helper/service can inherit a different responsible app.
+5. Treat the network preflight as passed only after both nodes report an iroh
+   **direct** path to the intended LAN address (`direct_addr_available=true`,
+   `observed_via_relay=false`). An invite containing a LAN candidate, a raw UDP
+   probe, or a working relay path does not prove the deployed process has Local
+   Network access.
+
+If no alert appears, keep the process alive after its first failed LAN
+operation: macOS can fail to display the alert for very short-lived processes.
+Do not debug iroh candidate selection until this gate is complete. See Apple
+TN3179, [Understanding local network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+
 ## Launch
 
 Serve a model and join the public mesh:
