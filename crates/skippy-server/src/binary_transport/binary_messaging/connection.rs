@@ -508,7 +508,19 @@ fn handle_binary_connection_messages(
                             Ok((sessions_before, sessions_after, eviction, result))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
-                        .context("execute scheduler-owned binary stage message")?;
+                        .with_context(|| {
+                            format!(
+                                "execute scheduler-owned binary stage message \
+                                 kind={:?} pos_start={} token_count={} tokens={} \
+                                 executable_tokens={} activation_bytes={}",
+                                message.kind,
+                                message.pos_start,
+                                message.token_count,
+                                message.tokens.len(),
+                                executable_token_ids.len(),
+                                input_activation_bytes,
+                            )
+                        })?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
                     runtime_lock_acquires = 1;
