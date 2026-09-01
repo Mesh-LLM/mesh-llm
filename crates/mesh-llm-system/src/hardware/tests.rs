@@ -839,11 +839,8 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
-// Real-collector tests below share process-global state: the skippy probe
-// override and the native backend enumeration behind `skippy_runtime`. They
-// are not safe to interleave, so they run in the `real_collector` serial group
-// (see the #1583 review: parallel runs on macOS saw one enumeration return a
-// device while the next returned none).
+// Keep real-collector tests in one group so the Linux-only process-global
+// skippy probe override cannot be consumed by an unrelated query test.
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
 #[serial(real_collector)]
@@ -926,11 +923,17 @@ fn test_survey_returns_all_metrics() {
         Metric::VramBytes,
         Metric::GpuCount,
         Metric::Hostname,
+        Metric::IsSoc,
+        Metric::GpuFacts,
     ]);
     assert_eq!(s.vram_bytes, q.vram_bytes);
     assert_eq!(s.gpu_name, q.gpu_name);
     assert_eq!(s.gpu_count, q.gpu_count);
     assert_eq!(s.hostname.is_some(), q.hostname.is_some());
+    assert_eq!(s.is_soc, q.is_soc);
+    assert_eq!(s.gpu_vram, q.gpu_vram);
+    assert_eq!(s.gpu_reserved, q.gpu_reserved);
+    assert_eq!(s.gpus, q.gpus);
 }
 
 #[test]
