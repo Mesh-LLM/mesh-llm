@@ -10,10 +10,10 @@
 use std::{
     collections::HashMap,
     io::ErrorKind,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -26,6 +26,20 @@ use skippy_protocol::binary::{
     send_ready,
 };
 
+/// Upper bound on concurrently served return connections. Each distributed
+/// run drives one prompt at a time, so legitimate traffic is a handful of
+/// connections; the cap only exists so idle or hostile peers cannot pile up
+/// blocking handler threads.
+const MAX_RETURN_CONNECTIONS: usize = 16;
+
+/// A peer must finish the ready/open handshake within this deadline.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Framed replies must keep arriving within this deadline once the stream is
+/// open. Matches the driver-side reply wait so a wedged stage releases the
+/// handler thread instead of pinning it forever.
+const REPLY_READ_TIMEOUT: Duration = Duration::from_secs(180);
+
 type ReplyResult = std::result::Result<StageReply, String>;
 
 #[derive(Default)]
@@ -37,6 +51,8 @@ pub(crate) struct DriverReturnListener {
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     waiters: Arc<Waiters>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    local_addr: SocketAddr,
 }
 
 pub(crate) struct DriverReturnReceiver {
@@ -45,21 +61,73 @@ pub(crate) struct DriverReturnReceiver {
     receiver: mpsc::Receiver<ReplyResult>,
 }
 
+struct ConnectionSlot {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionSlot {
+    fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        let mut current = active.load(Ordering::SeqCst);
+        loop {
+            if current >= MAX_RETURN_CONNECTIONS {
+                return None;
+            }
+            match active.compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => {
+                    return Some(Self {
+                        active: active.clone(),
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl DriverReturnListener {
-    pub(crate) fn start(bind_addr: SocketAddr) -> Result<Self> {
+    /// Bind the return listener. `allowed_sources` is the set of peer
+    /// addresses permitted to deliver replies (loopback is always allowed so
+    /// same-host stages keep working); connections from any other source are
+    /// dropped before the handshake.
+    pub(crate) fn start(bind_addr: SocketAddr, allowed_sources: Vec<IpAddr>) -> Result<Self> {
         let listener = TcpListener::bind(bind_addr)
             .with_context(|| format!("bind driver prediction return listener {bind_addr}"))?;
+        let local_addr = listener
+            .local_addr()
+            .context("read driver prediction return listener local addr")?;
         listener
             .set_nonblocking(true)
             .context("set driver prediction return listener nonblocking")?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let waiters = Arc::new(Waiters::default());
+        let active_connections = Arc::new(AtomicUsize::new(0));
         let thread_shutdown = shutdown.clone();
         let thread_waiters = waiters.clone();
         let thread = thread::spawn(move || {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((stream, peer)) => {
+                        if !source_allowed(peer.ip(), &allowed_sources) {
+                            eprintln!(
+                                "driver prediction return refused connection from unexpected \
+                                 source {peer}"
+                            );
+                            continue;
+                        }
+                        let Some(slot) = ConnectionSlot::acquire(&active_connections) else {
+                            eprintln!(
+                                "driver prediction return refused connection from {peer}: \
+                                 connection limit ({MAX_RETURN_CONNECTIONS}) reached"
+                            );
+                            continue;
+                        };
                         // Accepted sockets inherit O_NONBLOCK from the listener
                         // on BSD/macOS (Linux clears it); restore blocking mode
                         // so the framed reads below don't fail with EAGAIN.
@@ -71,6 +139,7 @@ impl DriverReturnListener {
                         }
                         let waiters = thread_waiters.clone();
                         thread::spawn(move || {
+                            let _slot = slot;
                             if let Err(error) = handle_return_connection(&waiters, stream) {
                                 eprintln!("driver prediction return connection failed: {error:#}");
                             }
@@ -91,7 +160,13 @@ impl DriverReturnListener {
             shutdown,
             thread: Some(thread),
             waiters,
+            local_addr,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
     pub(crate) fn register(
@@ -112,6 +187,10 @@ impl DriverReturnListener {
             receiver,
         })
     }
+}
+
+fn source_allowed(source: IpAddr, allowed_sources: &[IpAddr]) -> bool {
+    source.is_loopback() || allowed_sources.contains(&source)
 }
 
 impl Drop for DriverReturnListener {
@@ -148,6 +227,9 @@ impl DriverReturnReceiver {
 }
 
 fn handle_return_connection(waiters: &Waiters, mut stream: TcpStream) -> Result<()> {
+    stream
+        .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+        .context("set driver prediction return handshake deadline")?;
     consume_optional_ready_hello(&mut stream)?;
     send_ready(&mut stream).context("send driver prediction return ready")?;
     let open = read_stage_message(&mut stream, 0).context("read driver prediction return open")?;
@@ -170,6 +252,9 @@ fn handle_return_connection(waiters: &Waiters, mut stream: TcpStream) -> Result<
                 open.session_id
             )
         })?;
+    stream
+        .set_read_timeout(Some(REPLY_READ_TIMEOUT))
+        .context("set driver prediction return reply deadline")?;
     loop {
         match recv_reply(&mut stream) {
             Ok(reply) => {
@@ -214,4 +299,94 @@ fn consume_optional_ready_hello(stream: &mut TcpStream) -> Result<()> {
         Err(error) => return Err(error).context("peek driver prediction return hello"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skippy_protocol::binary::{
+        StageStateHeader, StageWireMessage, send_reply_predicted_with_stats, write_stage_message,
+    };
+
+    fn open_message(request_id: u64, session_id: u64) -> StageWireMessage {
+        StageWireMessage {
+            kind: WireMessageKind::PredictionReturnOpen,
+            pos_start: 0,
+            token_count: 0,
+            state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
+            request_id,
+            session_id,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        }
+    }
+
+    fn loopback_listener() -> DriverReturnListener {
+        DriverReturnListener::start(SocketAddr::from(([127, 0, 0, 1], 0)), Vec::new()).unwrap()
+    }
+
+    #[test]
+    fn delivers_framed_reply_to_registered_waiter_after_handshake() {
+        let listener = loopback_listener();
+        let receiver = listener.register(17, 23).unwrap();
+
+        let mut client = TcpStream::connect(listener.local_addr()).unwrap();
+        send_ready(&mut client).unwrap();
+        recv_ready(&mut client).unwrap();
+        write_stage_message(&mut client, &open_message(17, 23)).unwrap();
+        send_reply_predicted_with_stats(&mut client, 42, Default::default()).unwrap();
+
+        let reply = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .expect("direct return reply");
+        assert_eq!(reply.predicted, 42);
+    }
+
+    #[test]
+    fn closed_connection_wakes_registered_waiter_with_error() {
+        let listener = loopback_listener();
+        let receiver = listener.register(29, 31).unwrap();
+
+        let mut client = TcpStream::connect(listener.local_addr()).unwrap();
+        recv_ready(&mut client).unwrap();
+        write_stage_message(&mut client, &open_message(29, 31)).unwrap();
+        drop(client);
+
+        let error = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect_err("closed direct return must wake the waiter");
+        assert!(error.to_string().contains("closed before the next reply"));
+    }
+
+    #[test]
+    fn unregistered_ids_never_reach_a_waiter() {
+        let listener = loopback_listener();
+        let receiver = listener.register(37, 41).unwrap();
+
+        let mut client = TcpStream::connect(listener.local_addr()).unwrap();
+        recv_ready(&mut client).unwrap();
+        write_stage_message(&mut client, &open_message(999, 999)).unwrap();
+        send_reply_predicted_with_stats(&mut client, 7, Default::default()).unwrap();
+
+        assert!(
+            receiver
+                .recv_timeout(Duration::from_millis(300))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn source_allowlist_always_admits_loopback() {
+        assert!(source_allowed("127.0.0.1".parse().unwrap(), &[]));
+        assert!(source_allowed("::1".parse().unwrap(), &[]));
+        let lan: IpAddr = "192.168.0.54".parse().unwrap();
+        assert!(source_allowed(lan, &[lan]));
+        assert!(!source_allowed("192.168.0.99".parse().unwrap(), &[lan]));
+    }
 }

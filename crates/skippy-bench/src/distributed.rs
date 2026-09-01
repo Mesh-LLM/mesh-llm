@@ -1,6 +1,9 @@
 use std::{
+    collections::hash_map::RandomState,
     fs,
-    net::TcpStream,
+    hash::{BuildHasher, Hasher},
+    io::ErrorKind,
+    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     thread,
@@ -369,19 +372,7 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
         .context("deployment plan has no stages")?;
     // The topology hands the final stage the driver return endpoint as its
     // downstream, so the driver must listen there to close the prediction ring.
-    let return_port = plan
-        .driver_return_endpoint
-        .rsplit_once(':')
-        .and_then(|(_, port)| port.parse::<u16>().ok())
-        .with_context(|| {
-            format!(
-                "parse driver return endpoint port from {}",
-                plan.driver_return_endpoint
-            )
-        })?;
-    let return_listener =
-        DriverReturnListener::start(std::net::SocketAddr::from(([0, 0, 0, 0], return_port)))
-            .context("start driver prediction return listener")?;
+    let return_listener = start_driver_return_listener(plan)?;
     let prompt_cases = prompt_cases(args)?;
     if prompt_cases.is_empty() {
         bail!("prompt corpus is empty");
@@ -510,10 +501,14 @@ fn ensure_reply_kind(
 
 /// The final stage prefers delivering predictions over the direct return
 /// connection; if it could not connect there it falls back to the upstream
-/// reply chain. Decide once per prompt which path is live: wait on the direct
-/// channel first, and only fall back to a blocking upstream read when the
-/// direct path stayed silent through the first decode step.
+/// reply chain. Decide once per prompt which path is live: poll both reply
+/// paths until one produces data, so a failed direct connection costs
+/// milliseconds — not a full direct-return timeout — before the upstream
+/// reply is consumed.
 const DIRECT_RETURN_REPLY_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Alternating poll interval while neither reply path has produced data yet.
+const REPLY_PATH_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 fn receive_decode_reply(
     stream: &mut TcpStream,
@@ -537,17 +532,109 @@ fn receive_decode_reply(
                 )
             }),
         Some(false) => upstream(stream),
-        None => match direct_return.recv_timeout(DIRECT_RETURN_REPLY_TIMEOUT)? {
-            Some(reply) => {
-                *direct_mode = Some(true);
-                Ok(reply)
+        None => {
+            let deadline = Instant::now() + DIRECT_RETURN_REPLY_TIMEOUT;
+            loop {
+                if let Some(reply) = direct_return.recv_timeout(REPLY_PATH_POLL_INTERVAL)? {
+                    *direct_mode = Some(true);
+                    return Ok(reply);
+                }
+                if upstream_reply_ready(stream)? {
+                    *direct_mode = Some(false);
+                    return upstream(stream);
+                }
+                if Instant::now() >= deadline {
+                    bail!(
+                        "timed out waiting for a reply on either return path at decode step \
+                         {decode_step} for prompt {prompt_index}"
+                    );
+                }
             }
-            None => {
-                *direct_mode = Some(false);
-                upstream(stream)
-            }
-        },
+        }
     }
+}
+
+/// Peek the upstream stream without consuming bytes so the undecided reply
+/// wait can notice a fallback reply immediately. EOF also counts as "ready":
+/// the follow-up blocking read surfaces the disconnect error promptly instead
+/// of spinning until the deadline.
+fn upstream_reply_ready(stream: &mut TcpStream) -> Result<bool> {
+    let previous = stream
+        .read_timeout()
+        .context("read upstream reply stream timeout")?;
+    stream
+        .set_read_timeout(Some(REPLY_PATH_POLL_INTERVAL))
+        .context("set upstream reply peek timeout")?;
+    let peeked = stream.peek(&mut [0_u8; 1]);
+    stream
+        .set_read_timeout(previous)
+        .context("restore upstream reply stream timeout")?;
+    match peeked {
+        Ok(_) => Ok(true),
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Ok(false)
+        }
+        Err(error) => Err(error).context("peek upstream reply stream"),
+    }
+}
+
+/// Bind the driver return listener on the interface named by the deployment
+/// plan rather than every interface; fall back to the wildcard only when that
+/// address is not local (e.g. the plan names a NAT-visible address), keeping
+/// the peer allowlist as the guard in that case.
+fn start_driver_return_listener(plan: &DeploymentPlan) -> Result<DriverReturnListener> {
+    let endpoint = plan.driver_return_endpoint.as_str();
+    let planned_addr = endpoint
+        .to_socket_addrs()
+        .with_context(|| format!("resolve driver return endpoint {endpoint}"))?
+        .next()
+        .with_context(|| format!("driver return endpoint resolved to no address: {endpoint}"))?;
+    let allowed_sources = stage_host_ips(plan);
+    match DriverReturnListener::start(planned_addr, allowed_sources.clone()) {
+        Ok(listener) => Ok(listener),
+        Err(bind_error) => {
+            eprintln!(
+                "driver prediction return listener could not bind {planned_addr} ({bind_error:#}); \
+                 falling back to a wildcard bind guarded by the stage-host allowlist"
+            );
+            DriverReturnListener::start(
+                SocketAddr::from(([0, 0, 0, 0], planned_addr.port())),
+                allowed_sources,
+            )
+            .context("start driver prediction return listener")
+        }
+    }
+}
+
+/// Resolve every stage host in the plan; these are the only non-loopback
+/// sources allowed to deliver direct prediction returns.
+fn stage_host_ips(plan: &DeploymentPlan) -> Vec<IpAddr> {
+    let mut ips = Vec::new();
+    for stage in &plan.stages {
+        let endpoint = stage
+            .endpoint
+            .strip_prefix("tcp://")
+            .unwrap_or(&stage.endpoint);
+        let Ok(resolved) = endpoint.to_socket_addrs() else {
+            eprintln!(
+                "driver prediction return allowlist skipping unresolvable stage endpoint \
+                 {endpoint}"
+            );
+            continue;
+        };
+        for addr in resolved {
+            if !ips.contains(&addr.ip()) {
+                ips.push(addr.ip());
+            }
+        }
+    }
+    ips
+}
+
+/// Random request/session identifiers so a peer on the benchmark network
+/// cannot guess a live ID and inject a forged prediction reply.
+fn random_wire_id() -> u64 {
+    RandomState::new().build_hasher().finish()
 }
 
 fn run_remote_prompt_case(
@@ -571,8 +658,8 @@ fn run_remote_prompt_case(
         })?;
 
     let wire_started = Instant::now();
-    let request_id = 10_000_u64 + prompt_index as u64;
-    let session_id = 20_000_u64 + prompt_index as u64;
+    let request_id = random_wire_id();
+    let session_id = random_wire_id();
     let direct_return = return_listener
         .register(request_id, session_id)
         .with_context(|| format!("register direct prediction return for prompt {prompt_index}"))?;
@@ -1009,6 +1096,87 @@ pub(super) fn generate_bench_run_id() -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use skippy_protocol::binary::send_reply_predicted_with_stats;
+    use std::net::TcpListener;
+
+    #[test]
+    fn undecided_reply_wait_consumes_upstream_reply_promptly() {
+        let return_listener =
+            DriverReturnListener::start(SocketAddr::from(([127, 0, 0, 1], 0)), Vec::new()).unwrap();
+        let direct_return = return_listener.register(1, 2).unwrap();
+
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(upstream_listener.local_addr().unwrap()).unwrap();
+        let (mut upstream_side, _) = upstream_listener.accept().unwrap();
+        thread::spawn(move || {
+            send_reply_predicted_with_stats(&mut upstream_side, 7, Default::default()).unwrap();
+            // Keep the write side open so the driver's read is not racing EOF.
+            thread::sleep(Duration::from_secs(2));
+        });
+
+        let started = Instant::now();
+        let mut direct_mode = None;
+        let reply = receive_decode_reply(&mut stream, &direct_return, &mut direct_mode, 0, 0)
+            .expect("upstream fallback reply");
+        assert_eq!(reply.predicted, 7);
+        assert_eq!(direct_mode, Some(false));
+        // The whole point of the dual wait: nowhere near DIRECT_RETURN_REPLY_TIMEOUT.
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn undecided_reply_wait_prefers_direct_reply_and_locks_direct_mode() {
+        let return_listener =
+            DriverReturnListener::start(SocketAddr::from(([127, 0, 0, 1], 0)), Vec::new()).unwrap();
+        let direct_return = return_listener.register(3, 4).unwrap();
+
+        // Silent upstream: connect a peer that never writes.
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(upstream_listener.local_addr().unwrap()).unwrap();
+        let (_upstream_side, _) = upstream_listener.accept().unwrap();
+
+        let return_addr = return_listener.local_addr();
+        thread::spawn(move || {
+            use skippy_protocol::binary::{
+                StageStateHeader, StageWireMessage, recv_ready, write_stage_message,
+            };
+            let mut client = TcpStream::connect(return_addr).unwrap();
+            recv_ready(&mut client).unwrap();
+            write_stage_message(
+                &mut client,
+                &StageWireMessage {
+                    kind: WireMessageKind::PredictionReturnOpen,
+                    pos_start: 0,
+                    token_count: 0,
+                    state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
+                    request_id: 3,
+                    session_id: 4,
+                    sampling: None,
+                    chat_sampling_metadata: None,
+                    tokens: Vec::new(),
+                    positions: Vec::new(),
+                    activation: Vec::new(),
+                    raw_bytes: Vec::new(),
+                },
+            )
+            .unwrap();
+            send_reply_predicted_with_stats(&mut client, 11, Default::default()).unwrap();
+            thread::sleep(Duration::from_secs(2));
+        });
+
+        let mut direct_mode = None;
+        let reply = receive_decode_reply(&mut stream, &direct_return, &mut direct_mode, 0, 0)
+            .expect("direct return reply");
+        assert_eq!(reply.predicted, 11);
+        assert_eq!(direct_mode, Some(true));
+    }
+
+    #[test]
+    fn random_wire_ids_are_not_predictable_constants() {
+        let first = random_wire_id();
+        let second = random_wire_id();
+        assert_ne!(first, second);
+    }
 
     #[test]
     fn parses_prompt_token_ids() {
