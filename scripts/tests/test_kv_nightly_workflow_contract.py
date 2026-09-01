@@ -46,8 +46,22 @@ class KvNightlyWorkflowContractTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: main", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, cuda]", workflow)
+        self.assertNotIn("gpu-nvidia", workflow)
+        self.assertIn("EXPECTED_BENCHMARK_RUNNER_NAME: white", workflow)
+        self.assertIn(
+            '[[ "$RUNNER_NAME" != "$EXPECTED_BENCHMARK_RUNNER_NAME" ]]', workflow
+        )
+        self.assertLess(
+            workflow.index("Verify dedicated benchmark runner"),
+            workflow.index("uses: actions/checkout"),
+        )
         self.assertNotIn("\n  pull_request:", workflow)
         self.assertNotIn("\n  push:", workflow)
+        self.assertIn("MESH_NIGHTLY_COMPETITIVE_HF_CLI", workflow)
+        self.assertIn('"$HF_CLI" datasets info', workflow)
+        self.assertIn('"$HF_CLI" download', workflow)
+        self.assertIn('"$HF_CLI" upload', workflow)
         self.assertIn("MESH_PERFORMANCE_HISTORY_HF_TOKEN", workflow)
         self.assertIn("MESH_PERFORMANCE_HISTORY_DATASET", workflow)
         self.assertIn("scripts/performance-history.py", workflow)

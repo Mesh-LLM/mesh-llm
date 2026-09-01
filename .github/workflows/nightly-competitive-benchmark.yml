@@ -24,9 +24,10 @@ jobs:
         github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && vars.MESH_NIGHTLY_COMPETITIVE_ENABLED == '1')
       )
-    runs-on: ${{ fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') }}
+    runs-on: [self-hosted, Linux, X64, cuda]
     timeout-minutes: 780
     env:
+      EXPECTED_BENCHMARK_RUNNER_NAME: white
       LLAMA_STAGE_BUILD_DIR: ${{ vars.MESH_NIGHTLY_COMPETITIVE_NATIVE_DIR }}
       COMPETITIVE_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_MODEL_ROOT }}
       COMPETITIVE_TOKENIZER_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_TOKENIZER_ROOT }}
@@ -44,7 +45,17 @@ jobs:
       HF_HISTORY_GATE_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_GATE_ENABLED || '0' }}
       HF_DATASET_REPO: ${{ vars.MESH_PERFORMANCE_HISTORY_DATASET }}
       HF_HISTORY_LOCAL: ${{ github.workspace }}/.performance-history-cache
+      HF_CLI: ${{ vars.MESH_NIGHTLY_COMPETITIVE_HF_CLI || 'hf' }}
     steps:
+      - name: Verify dedicated benchmark runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_NAME" != "$EXPECTED_BENCHMARK_RUNNER_NAME" ]]; then
+            echo "nightly competitive benchmark requires runner '$EXPECTED_BENCHMARK_RUNNER_NAME'; got '$RUNNER_NAME'" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: main
@@ -56,12 +67,12 @@ jobs:
           set -euo pipefail
           for command in cargo just python3 nvidia-smi; do
             command -v "$command" >/dev/null || {
-              echo "missing on gpu-nvidia runner image: $command" >&2
+              echo "missing on the $EXPECTED_BENCHMARK_RUNNER_NAME benchmark runner: $command" >&2
               exit 1
             }
           done
-          if [[ "$HF_HISTORY_ENABLED" == "1" ]] && ! command -v hf >/dev/null 2>&1; then
-            echo "hf must be baked into the benchmark runner when performance history is enabled" >&2
+          if [[ "$HF_HISTORY_ENABLED" == "1" ]] && ! command -v "$HF_CLI" >/dev/null 2>&1; then
+            echo "MESH_NIGHTLY_COMPETITIVE_HF_CLI must name the pre-baked hf executable when performance history is enabled" >&2
             exit 1
           fi
           if [[ "$HF_HISTORY_GATE_ENABLED" == "1" && "$HF_HISTORY_ENABLED" != "1" ]]; then
@@ -109,8 +120,8 @@ jobs:
             echo "MESH_PERFORMANCE_HISTORY_HF_TOKEN must be configured when history is enabled" >&2
             exit 1
           fi
-          hf datasets info "$HF_DATASET_REPO" --revision main >/dev/null
-          hf download "$HF_DATASET_REPO" \
+          "$HF_CLI" datasets info "$HF_DATASET_REPO" --revision main >/dev/null
+          "$HF_CLI" download "$HF_DATASET_REPO" \
             --type dataset \
             --revision main \
             --local-dir "$HF_HISTORY_LOCAL"
@@ -199,7 +210,7 @@ jobs:
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
           remote_path="data/runs/$source_sha/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.jsonl"
-          hf upload "$HF_DATASET_REPO" \
+          "$HF_CLI" upload "$HF_DATASET_REPO" \
             "$COMPETITIVE_OUTPUT/summary/performance-history.jsonl" \
             "$remote_path" \
             --type dataset \

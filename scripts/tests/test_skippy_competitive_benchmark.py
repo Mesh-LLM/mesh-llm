@@ -41,6 +41,8 @@ class CompetitiveBenchmarkTest(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: main", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, cuda]", workflow)
+        self.assertIn("EXPECTED_BENCHMARK_RUNNER_NAME: white", workflow)
         self.assertNotIn("\n  pull_request:", workflow)
         self.assertNotIn("\n  push:", workflow)
         self.assertIn("--capacity-match-comparison-kv", workflow)

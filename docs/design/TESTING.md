@@ -336,11 +336,14 @@ Thoughtworks cell with `scripts/performance-history.py`. When
 write token as the `MESH_PERFORMANCE_HISTORY_HF_TOKEN` GitHub secret. The
 workflow runs on its daily schedule or by a manual dispatch explicitly
 selected from `main`; non-`main` dispatches cannot acquire the persistent GPU
-runner. It downloads prior immutable JSONL shards, requires the Hub schema to
-match `ci/performance-history/schema.json`, reports only exact-cohort drift,
-and uploads one source/run-addressed shard. Three prior complete matching runs
-are required before performance drift is classified; thresholds remain
-report-only during baseline collection. After the baseline window, set
+runner. The fixed `[self-hosted, Linux, X64, cuda]` selector must resolve to
+the runner named `white`, and
+`MESH_NIGHTLY_COMPETITIVE_HF_CLI` must name its pre-baked `hf` executable when
+history is enabled. It downloads prior immutable JSONL shards, requires the Hub
+schema to match `ci/performance-history/schema.json`, reports only exact-cohort
+drift, and uploads one source/run-addressed shard. Three prior complete
+matching runs are required before performance drift is classified; thresholds
+remain report-only during baseline collection. After the baseline window, set
 `MESH_PERFORMANCE_HISTORY_GATE_ENABLED=1` to make statistically sustained
 throughput or TTFT regressions fail the nightly job. Missing stable GPU
 fingerprints fail closed, and external backend runtime digests are part of the
