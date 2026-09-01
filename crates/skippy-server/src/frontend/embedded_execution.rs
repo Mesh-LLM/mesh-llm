@@ -396,6 +396,25 @@ fn poll_direct_or_downstream_reply(
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
 ) -> OpenAiResult<StageReply> {
+    poll_direct_or_downstream_reply_with_fallback_poll(
+        downstream,
+        prediction_return,
+        expected_replies,
+        DIRECT_RETURN_FALLBACK_POLL,
+    )
+}
+
+// The fallback poll interval is injectable so a test can widen it and assert the
+// direct-return wake fires well inside one interval — proving the wait is
+// event-driven rather than quantized to the poll — without depending on
+// sub-poll scheduler latency, which a loaded or virtualized CI runner cannot
+// guarantee.
+fn poll_direct_or_downstream_reply_with_fallback_poll(
+    downstream: &mut TcpStream,
+    prediction_return: &PredictionReturnReceiver,
+    expected_replies: &[WireReplyKind],
+    fallback_poll: Duration,
+) -> OpenAiResult<StageReply> {
     let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
     let started = Instant::now();
     let reply_timeout = stage_reply_timeout();
@@ -407,7 +426,7 @@ fn poll_direct_or_downstream_reply(
     // so a fallback reply is still detected within one poll interval.
     let result = loop {
         if let Some(reply) = prediction_return
-            .recv_one_of_timeout(expected_replies, DIRECT_RETURN_FALLBACK_POLL)
+            .recv_one_of_timeout(expected_replies, fallback_poll)
             .map_err(openai_backend_error)?
         {
             break Ok(reply);
@@ -420,7 +439,7 @@ fn poll_direct_or_downstream_reply(
             let remaining = reply_timeout.saturating_sub(started.elapsed());
             timeout_restore.prepare_blocking_read()?;
             downstream
-                .set_read_timeout(Some(remaining.max(DIRECT_RETURN_FALLBACK_POLL)))
+                .set_read_timeout(Some(remaining.max(fallback_poll)))
                 .map_err(openai_io_error)?;
             break receive_downstream_stage_reply_one_of(downstream, expected_replies);
         }
@@ -639,6 +658,9 @@ mod tests {
 
     #[test]
     fn direct_return_reply_wakes_the_wait_immediately() {
+        // Far wider than the production 10ms fallback poll so an event-driven
+        // wake and a polling wake sit orders of magnitude apart.
+        const WIDE_FALLBACK_POLL: Duration = Duration::from_millis(1000);
         let request_id = 71;
         let session_id = 73;
         let hub = Arc::new(PredictionReturnHub::default());
@@ -675,10 +697,17 @@ mod tests {
                 .unwrap();
             });
 
-            let reply = receive_embedded_stage_reply_one_of(
+            // Inject a deliberately wide fallback poll so the two behaviours are
+            // far apart: a polling wait would take up to WIDE_FALLBACK_POLL to
+            // notice the reply, while an event-driven wait wakes on channel
+            // delivery. Asserting the wake lands well inside that interval proves
+            // it is event-driven without pinning an absolute sub-poll latency
+            // that a loaded CI runner cannot honour.
+            let reply = poll_direct_or_downstream_reply_with_fallback_poll(
                 &mut downstream,
-                Some(&receiver),
+                &receiver,
                 &[WireReplyKind::PredictedToken],
+                WIDE_FALLBACK_POLL,
             )
             .unwrap();
             let received_at = Instant::now();
@@ -690,11 +719,15 @@ mod tests {
                 * 1000.0;
             max_wake_ms = max_wake_ms.max(wake_ms);
         }
-        // The wait must be event-driven: a sampling loop quantizes wake-up to
-        // its poll interval (10ms) and reliably exceeds this bound.
+        // Event-driven wake fires on channel delivery; a polling wait would
+        // quantize to WIDE_FALLBACK_POLL (1000ms). The 100ms bound sits an order
+        // of magnitude below the poll yet far above channel-delivery + scheduler
+        // latency on a loaded runner, so it fails a polling regression without
+        // flaking on a correct implementation.
         assert!(
-            max_wake_ms < 8.0,
-            "direct return wake took {max_wake_ms:.2}ms; reply wait is polling, not event-driven"
+            max_wake_ms < 100.0,
+            "direct return wake took {max_wake_ms:.2}ms with a {}ms fallback poll; reply wait is polling, not event-driven",
+            WIDE_FALLBACK_POLL.as_millis()
         );
     }
 
