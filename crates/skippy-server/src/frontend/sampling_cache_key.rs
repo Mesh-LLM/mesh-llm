@@ -1,14 +1,37 @@
 use sha2::{Digest, Sha256};
 use skippy_runtime::SamplingConfig;
 
+const REPLAY_SAFE_SAMPLER_CHAIN: [&str; 9] = [
+    "penalties",
+    "dry",
+    "top_n_sigma",
+    "top_k",
+    "typical_p",
+    "top_p",
+    "min_p",
+    "xtc",
+    "temperature",
+];
+
 /// Returns whether a sampled output can be replayed without changing the
 /// request's sampling semantics.
 ///
 /// A positive temperature always leaves the output dependent on RNG state,
-/// including when the caller supplied a seed. A disabled sampler and a
-/// non-positive temperature both use deterministic greedy selection.
+/// including when the caller supplied a seed. Mirostat also samples through
+/// its own RNG-backed selection step, and a custom sampler chain may omit the
+/// temperature sampler that makes a non-positive temperature greedy.
 pub(super) fn sampling_replay_safe(sampling: &SamplingConfig) -> bool {
-    !sampling.enabled || sampling.temperature <= 0.0
+    if !sampling.enabled {
+        return true;
+    }
+
+    sampling.temperature <= 0.0
+        && sampling.mirostat_mode == 0
+        && sampling
+            .samplers
+            .iter()
+            .map(String::as_str)
+            .eq(REPLAY_SAFE_SAMPLER_CHAIN)
 }
 
 fn update_bytes(digest: &mut Sha256, field: &[u8], value: &[u8]) {
@@ -282,5 +305,37 @@ mod tests {
             sampling_semantic_fingerprint(&sampling, Some("a")),
             sampling_semantic_fingerprint(&sampling, Some("ab"))
         );
+    }
+
+    #[test]
+    fn replay_eligibility_matches_rng_backed_native_sampling_paths() {
+        assert!(
+            SamplingConfig::default()
+                .samplers
+                .iter()
+                .map(String::as_str)
+                .eq(REPLAY_SAFE_SAMPLER_CHAIN)
+        );
+        let greedy = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        assert!(sampling_replay_safe(&SamplingConfig::default()));
+        assert!(sampling_replay_safe(&greedy));
+
+        for mirostat_mode in [1, 2] {
+            assert!(
+                !sampling_replay_safe(&SamplingConfig {
+                    mirostat_mode,
+                    ..greedy.clone()
+                }),
+                "Mirostat mode {mirostat_mode} remains RNG-backed at temperature zero"
+            );
+        }
+        assert!(!sampling_replay_safe(&SamplingConfig {
+            samplers: vec!["top_k".to_string(), "top_p".to_string()],
+            ..greedy
+        }));
     }
 }

@@ -113,6 +113,33 @@ fn exact_replay_cache_key(
     format!("{}:replay:v2:{fingerprint}", identity.page_id)
 }
 
+fn record_replay_safe_first_token(
+    kv: &KvStageIntegration,
+    identity: &crate::kv_integration::PrefillKvIdentity,
+    predicted: i32,
+    sampling: &SamplingConfig,
+    chat_sampling_metadata: Option<&str>,
+) -> bool {
+    if !sampling_replay_safe(sampling) {
+        return false;
+    }
+    let cache_key = exact_replay_cache_key(identity, sampling, chat_sampling_metadata);
+    kv.record_cached_first_token_with_key(&cache_key, identity, predicted)
+}
+
+fn lookup_replay_safe_first_token(
+    kv: &KvStageIntegration,
+    identity: &crate::kv_integration::PrefillKvIdentity,
+    sampling: &SamplingConfig,
+    chat_sampling_metadata: Option<&str>,
+) -> Option<i32> {
+    if !sampling_replay_safe(sampling) {
+        return None;
+    }
+    let cache_key = exact_replay_cache_key(identity, sampling, chat_sampling_metadata);
+    kv.lookup_cached_first_token_with_key(&cache_key)
+}
+
 pub(super) fn stage0_prefill_record_identities(
     kv: &KvStageIntegration,
     config: &StageConfig,
@@ -568,14 +595,15 @@ impl StageOpenAiBackend {
         let identity = kv.prefill_identity(&self.config, &base, 0, token_ids);
         let recorded_state =
             self.record_embedded_stage0_full_prefill(session_id, ids, token_ids)?;
-        let recorded_token = if sampling_replay_safe(sampling) {
-            let cache_key = exact_replay_cache_key(&identity, sampling, chat_sampling_metadata);
-            kv.record_cached_first_token_with_key(&cache_key, &identity, predicted)
-        } else {
-            // The state is still useful for ordinary prefix restoration, but a
-            // token sampled with an RNG-dependent request is never reusable.
-            false
-        };
+        // The state is still useful for ordinary prefix restoration, but a
+        // token sampled with an RNG-dependent request is never reusable.
+        let recorded_token = record_replay_safe_first_token(
+            kv,
+            &identity,
+            predicted,
+            sampling,
+            chat_sampling_metadata,
+        );
         let mut attrs = self.openai_attrs(ids);
         attrs.insert(
             "skippy.kv.decision".to_string(),
@@ -791,15 +819,15 @@ impl StageOpenAiBackend {
         if request.prompt_token_ids.is_empty() || !kv.should_lookup() {
             return Ok(None);
         }
-        if !sampling_replay_safe(request.sampling) {
-            return Ok(None);
-        }
         let timer = PhaseTimer::start();
         let base = self.local_kv_message_base(session_key, request.ids);
         let identity = kv.prefill_identity(request.config, &base, 0, request.prompt_token_ids);
-        let cache_key =
-            exact_replay_cache_key(&identity, request.sampling, request.chat_sampling_metadata);
-        let Some(predicted) = kv.lookup_cached_first_token_with_key(&cache_key) else {
+        let Some(predicted) = lookup_replay_safe_first_token(
+            kv,
+            &identity,
+            request.sampling,
+            request.chat_sampling_metadata,
+        ) else {
             return Ok(None);
         };
         let Some(restore) = self.try_restore_embedded_split_prefill(
@@ -1350,5 +1378,80 @@ mod tests {
             None,
             "stochastic requests must not reuse a deterministic first token"
         );
+    }
+
+    #[test]
+    fn first_token_record_and_lookup_reject_rng_backed_zero_temperature_chains() {
+        let config = StageConfig {
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            ctx_size: 256,
+            lane_count: 1,
+            kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                mode: skippy_protocol::StageKvCacheMode::LookupRecord,
+                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
+                max_entries: 8,
+                max_bytes: 0,
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 1,
+                shared_prefix_record_limit: 1,
+            }),
+            ..Default::default()
+        };
+        let cache = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("resident cache");
+        let identity = crate::kv_integration::PrefillKvIdentity {
+            identity: crate::kv_proto::PageIdentity {
+                token_count: 4,
+                ..Default::default()
+            },
+            page_id: "page".to_string(),
+            namespace: "stage".to_string(),
+            token_ids: vec![1, 2, 3, 4],
+        };
+        let greedy = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let unsafe_configs = [
+            SamplingConfig {
+                mirostat_mode: 1,
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                samplers: vec!["top_k".to_string(), "top_p".to_string()],
+                ..greedy
+            },
+        ];
+
+        for (index, sampling) in unsafe_configs.iter().enumerate() {
+            let raw_key = exact_replay_cache_key(&identity, sampling, None);
+            assert!(!record_replay_safe_first_token(
+                &cache,
+                &identity,
+                100 + index as i32,
+                sampling,
+                None,
+            ));
+            assert_eq!(
+                cache.lookup_cached_first_token_with_key(&raw_key),
+                None,
+                "an RNG-backed token must not be recorded"
+            );
+
+            assert!(cache.record_cached_first_token_with_key(
+                &raw_key,
+                &identity,
+                200 + index as i32,
+            ));
+            assert_eq!(
+                lookup_replay_safe_first_token(&cache, &identity, sampling, None),
+                None,
+                "an RNG-backed request must not look up even a pre-existing token"
+            );
+        }
     }
 }
