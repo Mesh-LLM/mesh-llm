@@ -261,6 +261,14 @@ repository content. It is intentionally evidence-producing and non-required:
 failed nightlies should guide stabilization work, not block unrelated pull
 requests.
 
+The reusable run also invokes `qa-kv-tool-loop-stability.py` by default. Use
+`MESH_NIGHTLY_KV_MODELS` to select the direct model IDs and the bounded
+`MESH_NIGHTLY_KV_{ATTEMPTS,PRESSURE_TURNS,OVERLAP_REQUESTS,MIN_CACHED_TOKENS,SUFFIX_PREFILL_LIMIT}`
+variables to tune the live probe. A manual run may set `skip_kv_tool_loop` for
+a deliberately narrower diagnosis. Both harnesses run to completion, publish
+their summaries and evidence, and then preserve either failure as the job
+result.
+
 ### 0f. KV/tool-loop stability certification
 
 Run the KV/tool-loop certification probe when changing Skippy KV slot cleanup,
@@ -306,6 +314,33 @@ This certification is deliberately a lab/release-confidence check, not a
 required PR gate. Use it to prove KV/cache stability on a real direct-model
 endpoint after local unit tests and before relying on agent workloads such as
 Goose, Pi, or OpenCode for broad smoke coverage.
+
+The separate `nightly-kv-coverage.yml` schedule expands the deterministic
+radix-lease and blob-ownership state machines on a pinned public CPU image. It
+records exact seed and step budgets plus the source SHA, and preserves the
+seed/step trace in its uploaded log. Repository variables
+`MESH_NIGHTLY_KV_STATE_MACHINE_SEEDS` and
+`MESH_NIGHTLY_KV_STATE_MACHINE_STEPS` may raise or lower the bounded corpus;
+set `MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` to disable the scheduled run. Manual
+dispatch still executes trusted `main` on GitHub-hosted infrastructure.
+
+The unchanged-pin daily llama canary uses the `nightly` cadence in
+`ci/llama-canary/family-certified.json`: Qwen3 dense, Falcon-H1 hybrid,
+Qwen3Next composite, and Mamba recurrent. Llama bumps and explicit forced
+certification retain the full 33-family battery.
+
+The trusted CUDA competitive benchmark normalizes every completed
+Thoughtworks cell with `scripts/performance-history.py`. When
+`MESH_PERFORMANCE_HISTORY_ENABLED=1`, set
+`MESH_PERFORMANCE_HISTORY_DATASET=meshllm/performance-history` and provide the
+write token as the `MESH_PERFORMANCE_HISTORY_HF_TOKEN` GitHub secret. The
+workflow downloads prior immutable JSONL shards, requires the Hub schema to
+match `ci/performance-history/schema.json`, reports only exact-cohort drift,
+and uploads one source/run-addressed shard. Three prior complete matching runs
+are required before performance drift is classified; thresholds remain
+report-only during baseline collection. The Hub Dataset Viewer materializes
+the JSONL shards as Parquet without adding a runtime conversion dependency to
+the trusted benchmark runner.
 
 ### 0g. Logging workflow certification
 
