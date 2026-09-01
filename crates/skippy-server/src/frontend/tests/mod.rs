@@ -4,7 +4,8 @@ pub(super) use super::{
     admission::GenerationTokenBudget,
     iteration_scheduler::IterationScheduler,
     prefill::{
-        PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs, PrefillChunkSchedule,
+        EmbeddedPrefillDrain, PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs,
+        PrefillChunkSchedule,
     },
 };
 pub(super) use crate::binary_transport::WireCondition;

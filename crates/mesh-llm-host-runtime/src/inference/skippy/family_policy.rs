@@ -311,33 +311,15 @@ fn resident_kv_policy() -> FamilyPolicy {
         prefix_cache: FamilyPrefixCachePolicy::Auto {
             payload: FamilyPrefixCachePayload::ResidentKv,
             min_tokens: 256,
-            // Was 128. Real-world OpenAI surface workloads (Goose,
-            // OpenCode, pi) record prefixes that average 1.5–2k
-            // tokens — much larger than `min_tokens`. 128 entries at
-            // ~2k tokens each pins ~256k cells, which exceeds even a
-            // 131k-`n_ctx` model's unified KV pool. The active lanes
-            // then can't find a slot and the embedded runtime
-            // returns HTTP 502
-            // `RuntimeError: llama_decode failed`
-            // (`decode: failed to find a memory slot`).
-            //
-            // 16 entries at ~2k tokens ≈ 32k cells; comfortable
-            // headroom under any model that gets `kv_unified = true`
-            // serving (`lane_count > 1`). The LRU in
-            // `ResidentPrefixCache` evicts older entries as new
-            // prefixes are recorded, so cache hit rate for the
-            // recent workload is preserved.
-            //
-            // The entry-count cap is the *coarse* lever: it bounds
-            // how many distinct prefixes the cache can hold, but with
-            // `kv_unified = true` even 16 long prefixes can pin the
-            // full cell pool. The complementary fine-grained cell
-            // budget (`max_resident_tokens` in
-            // `ResidentCacheConfig::from_stage`, landed in PR #566)
-            // closes the remaining gap by evicting on token pressure
-            // before the cell pool runs out. The 16-entry cap is
-            // still useful as a structural ceiling.
-            max_entries: 16,
+            // Keep this as a generous policy ceiling. The effective resident
+            // limit is derived from `n_ctx` below and then capped by the native
+            // sequence-ID budget in `ResidentCacheConfig::from_stage`. Runtime
+            // capacity admission measures physical unified-KV cells before
+            // every restore/prefill, so a small fixed entry ceiling only
+            // discards shared sibling prefixes while the physical pool is
+            // mostly empty. Dense c256 agent replay needs the 224 safe resident
+            // IDs left after reserving 32 IDs for 16 live lanes.
+            max_entries: 512,
         },
     }
 }
@@ -597,7 +579,7 @@ mod tests {
             FamilyPrefixCachePolicy::Auto {
                 payload: FamilyPrefixCachePayload::ResidentKv,
                 min_tokens: 256,
-                max_entries: 16,
+                max_entries: 512,
             }
         );
     }
@@ -616,7 +598,7 @@ mod tests {
             FamilyPrefixCachePolicy::Auto {
                 payload: FamilyPrefixCachePayload::ResidentKv,
                 min_tokens: 256,
-                max_entries: 16,
+                max_entries: 512,
             }
         );
     }
@@ -751,7 +733,7 @@ mod tests {
                         FamilyPrefixCachePolicy::Auto {
                             payload: FamilyPrefixCachePayload::ResidentKv,
                             min_tokens: 256,
-                            max_entries: 16,
+                            max_entries: 512,
                         },
                         "{family_id}"
                     )
@@ -794,13 +776,18 @@ mod tests {
             } else {
                 FamilyPrefixCachePayload::ResidentKv
             };
+            let expected_entries = if expected.recurrent_or_hybrid {
+                16
+            } else {
+                512
+            };
 
             assert_eq!(
                 policy.prefix_cache,
                 FamilyPrefixCachePolicy::Auto {
                     payload: expected_payload,
                     min_tokens: 256,
-                    max_entries: 16,
+                    max_entries: expected_entries,
                 },
                 "{} ({})",
                 expected.llama_architecture,

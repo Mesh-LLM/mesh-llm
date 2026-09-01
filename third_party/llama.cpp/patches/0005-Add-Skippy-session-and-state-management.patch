@@ -1,7 +1,7 @@
-From ccf3e81352a3804fbbc4adecb076292964a0de74 Mon Sep 17 00:00:00 2001
+From 82c0b13af92b44f6a6a2489407d5e41ebc5ccab5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 8 Aug 2026 16:02:19 +1000
-Subject: [PATCH 05/34] Add Skippy session and state management
+Subject: [PATCH 05/32] Add Skippy session and state management
 
 ---
  include/skippy/signals.h                      |  44 +

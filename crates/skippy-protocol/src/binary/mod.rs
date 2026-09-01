@@ -14,6 +14,7 @@ pub use codec::{
     send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
     send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
+pub use types::sampling_flags;
 pub use types::{
     ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_FLAG_RWKV7_V_FIRST,
     LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
@@ -178,6 +179,9 @@ mod tests {
         let mut stats = StageReplyStats::default();
         stats.observe_prefill_edge_transport(2, 12_000, 3_000, 1_048_576);
         stats.observe_prefill_edge_transport(1, 4_000, 40_000, 524_288);
+        stats.observe_prefill_compute(2, 18_000, 128);
+        stats.observe_prefill_compute(1, 42_000, 128);
+        stats.observe_prefill_compute(3, 25_000, 64);
 
         let mut bytes = Vec::new();
         send_reply_predicted_with_stats(&mut bytes, 42, stats).unwrap();
@@ -189,6 +193,22 @@ mod tests {
         assert_eq!(reply.stats.prefill_edge_stage_index, 1);
         assert_eq!(reply.stats.prefill_edge_activation_bytes_max, 524_288);
         assert_eq!(reply.stats.prefill_edge_observation_count, 2);
+        assert_eq!(reply.stats.prefill_compute_us_at_slowest_rate, 42_000);
+        assert_eq!(reply.stats.prefill_compute_stage_index, 1);
+        assert_eq!(reply.stats.prefill_compute_token_count_at_slowest_rate, 128);
+        assert_eq!(reply.stats.prefill_compute_observation_count, 3);
+    }
+
+    #[test]
+    fn prefill_compute_calibration_ignores_short_tail_overhead() {
+        let mut stats = StageReplyStats::default();
+        stats.observe_prefill_compute(1, 48_000, 128);
+        stats.observe_prefill_compute(1, 30_000, 9);
+
+        assert_eq!(stats.prefill_compute_us_at_slowest_rate, 48_000);
+        assert_eq!(stats.prefill_compute_stage_index, 1);
+        assert_eq!(stats.prefill_compute_token_count_at_slowest_rate, 128);
+        assert_eq!(stats.prefill_compute_observation_count, 2);
     }
 
     #[test]

@@ -1,7 +1,7 @@
-From b9abc56bf8d9846802b57a273845c887dc374e2e Mon Sep 17 00:00:00 2001
+From 1a4705add2cb65474e4735920db980892a6e4f11 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 13 Aug 2026 22:32:25 +1000
-Subject: [PATCH 13/34] skippy: support composite ISWA KV pages
+Subject: [PATCH 13/32] skippy: support composite ISWA KV pages
 
 ---
  include/skippy/common.h                       |   2 +-
@@ -87,7 +87,7 @@ index 74f9ac52a..1c77c5450 100644
          struct skippy_session * session,
          const struct skippy_kv_page_desc * desc,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 05bdbcb94..c61d024db 100644
+index 10de4e126..0a363e9c9 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1464,6 +1464,26 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {

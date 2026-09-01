@@ -1,7 +1,7 @@
-From 0e85fc04aec9478880a3c09e68b0875bfafee21c Mon Sep 17 00:00:00 2001
+From aed2113335677e1cac9f6beccd9efef9b26ff1b2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 05:32:28 +1000
-Subject: [PATCH 18/34] fixup: resolve leftover upstream-merge breakage in
+Subject: [PATCH 18/32] fixup: resolve leftover upstream-merge breakage in
  metal kargs, mtmd resize algo, common_json port
 
 ---

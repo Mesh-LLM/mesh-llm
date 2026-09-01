@@ -24,7 +24,7 @@ use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
         READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
-        WireReplyKind, activation_frame_flags_from_state_flags, send_ready,
+        WireReplyKind, activation_frame_flags_from_state_flags, sampling_flags, send_ready,
     },
 };
 use skippy_runtime::{
@@ -387,7 +387,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 23 * std::mem::size_of::<i64>();
+    const REPLY_STATS_BYTES: usize = 27 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
@@ -759,6 +759,7 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
     let sampling = sampling?;
     let mut config = SamplingConfig {
         enabled: true,
+        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,
@@ -787,7 +788,6 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
-        ignore_eos: sampling.ignore_eos,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling

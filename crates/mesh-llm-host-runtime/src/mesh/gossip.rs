@@ -10,6 +10,7 @@ use super::{
     record_mesh_operational_event, record_mesh_operational_event_with_context,
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
+use crate::mesh::cache_affinity_gossip;
 use crate::mesh::peer_state::{PropagatedLatencyObservation, policy_accepts_peer};
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
@@ -283,11 +284,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.artifact_transfer_supported != new.artifact_transfer_supported
         || old.stage_protocol_generation_supported != new.stage_protocol_generation_supported
         || old.stage_status_list_supported != new.stage_status_list_supported
-        || match (&old.cache_affinity, &new.cache_affinity) {
-            (Some(old), Some(new)) => !old.has_same_cache_state(new),
-            (None, None) => false,
-            _ => true,
-        }
+        || cache_affinity_gossip::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
@@ -301,21 +298,6 @@ pub(crate) fn merge_first_joined_mesh_ts(existing: &mut Option<u64>, incoming: O
         (Some(_), None) => {}
         (Some(a), Some(b)) => *existing = Some(a.min(b)),
         (None, None) => {}
-    }
-}
-
-fn merge_cache_affinity(
-    existing: &mut Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
-    incoming: Option<&mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
-    clear_on_absence: bool,
-) {
-    match (existing.as_ref(), incoming) {
-        (_, None) if clear_on_absence => *existing = None,
-        (None, Some(incoming)) => *existing = Some(incoming.clone()),
-        (Some(current), Some(incoming)) if incoming.is_newer_than(current) => {
-            *existing = Some(incoming.clone());
-        }
-        _ => {}
     }
 }
 
@@ -384,7 +366,7 @@ pub(super) fn apply_transitive_ann(
     existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-    merge_cache_affinity(
+    cache_affinity_gossip::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),
         false,
@@ -833,7 +815,7 @@ impl Node {
         existing.stage_protocol_generation_supported = ann.stage_protocol_generation_supported;
         existing.stage_status_list_supported = ann.stage_status_list_supported;
         existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
-        merge_cache_affinity(
+        cache_affinity_gossip::merge_advertisement(
             &mut existing.cache_affinity,
             ann.cache_affinity.as_ref(),
             true,
@@ -1081,15 +1063,11 @@ impl Node {
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
         let now_unix_ms = current_time_unix_ms();
-        let salt = mesh_llm_routing::cache_inventory::rotating_salt(
+        let cache_affinity = cache_affinity_gossip::local_advertisement(
+            &self.cache_affinity_inventory,
             self.endpoint.id().as_bytes(),
             now_unix_ms,
         );
-        let cache_affinity = self
-            .cache_affinity_inventory
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .advertisement(salt, now_unix_ms);
         let release_attestation = self.release_attestation.lock().await.clone();
         let (mesh_id, mesh_policy_hash, signed_genesis_policy) =
             if let Some(state) = self.requirement_mesh_state.lock().await.clone() {

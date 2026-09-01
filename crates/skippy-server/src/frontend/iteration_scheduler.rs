@@ -1,12 +1,15 @@
 mod cache_runtime;
 
 use self::cache_runtime::{
-    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry, should_serve_cache_runtime,
+    CacheAffinityRefresh, CacheRuntimeQueue, CacheRuntimeTelemetry,
+    should_coalesce_direct_iterations, should_fill_cache_runtime_wave, should_serve_cache_runtime,
+    should_suppress_cache_runtime,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
+use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
 use openai_frontend::{OpenAiError, OpenAiResult};
@@ -14,8 +17,8 @@ use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_runtime::{ActivationFrame, IterationBatchPhase, SamplingConfig};
 use skippy_scheduler::{
-    AdmissionError, CacheAffinity, IterationPhase, MemoryComponent, Scheduler, SchedulerConfig,
-    Sequence,
+    AdmissionError, IterationPhase, IterationPrediction, MemoryComponent, Scheduler,
+    SchedulerConfig, Sequence,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
@@ -31,6 +34,7 @@ const MAX_NATIVE_ITERATION_TOKENS: usize = 2048;
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_COMMAND_QUEUE_CAPACITY: usize = 8;
 const MAX_COMMANDS_PER_TURN: usize = 64;
+const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
 
@@ -53,6 +57,15 @@ pub(super) struct ScheduledGenerationRequest<'a> {
     pub(super) cancellation: Option<&'a openai_frontend::CancellationToken>,
 }
 
+pub(super) struct ScheduledResumeRequest<'a> {
+    pub(super) id: &'a str,
+    pub(super) prompt_tokens: &'a [i32],
+    pub(super) generated_tokens: &'a [i32],
+    pub(super) max_tokens: u32,
+    pub(super) sampling: Option<&'a SamplingConfig>,
+    pub(super) cancellation: Option<&'a openai_frontend::CancellationToken>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SchedulerIterationOutcome {
     pub(crate) predicted: i32,
@@ -72,6 +85,11 @@ pub(crate) struct SchedulerRuntimeOutcome<T> {
     pub(crate) runtime_lock_hold_ms: f64,
 }
 
+pub(crate) struct DirectIterationChannel {
+    reply: std_mpsc::SyncSender<OpenAiResult<SchedulerIterationOutcome>>,
+    result: std_mpsc::Receiver<OpenAiResult<SchedulerIterationOutcome>>,
+}
+
 struct IterationSchedulerShared {
     commands: std_mpsc::SyncSender<SchedulerCommand>,
     owner_count: AtomicUsize,
@@ -84,6 +102,9 @@ struct ScheduledRequest {
     max_tokens: u32,
     sampling: Option<SamplingConfig>,
     chat_sampling_metadata: Option<String>,
+    generated_tokens: Vec<i32>,
+    runtime_configured: bool,
+    retain_runtime: bool,
     reply: std_mpsc::Sender<SchedulerEvent>,
 }
 
@@ -150,10 +171,10 @@ enum SchedulerCommand {
     ExecuteRuntime(RuntimeOperation),
     ExecuteCacheAwareRuntime(
         RuntimeOperation,
-        CacheAffinity,
         Arc<[i32]>,
         u64,
-        Option<CacheAffinityRefresh>,
+        StagePrefixCachePayload,
+        CacheAffinityRefresh,
     ),
     Cancel(String),
     Shutdown,
@@ -175,6 +196,7 @@ struct RequestState {
     chat_sampling_metadata: Option<String>,
     prompt_token_count: usize,
     runtime_configured: bool,
+    retain_runtime: bool,
 }
 
 struct SchedulerWorker {
@@ -188,6 +210,8 @@ struct SchedulerWorker {
     max_direct_batch_size: usize,
     max_commands_per_turn: usize,
     iteration_interval: Duration,
+    active_runtime_sessions: usize,
+    direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
     last_served_cache_runtime: bool,
@@ -195,6 +219,11 @@ struct SchedulerWorker {
 }
 
 impl IterationScheduler {
+    pub(crate) fn direct_iteration_channel(&self) -> DirectIterationChannel {
+        let (reply, result) = std_mpsc::sync_channel(1);
+        DirectIterationChannel { reply, result }
+    }
+
     pub(crate) fn new(
         runtime: Arc<Mutex<RuntimeState>>,
         config: &StageConfig,
@@ -225,6 +254,7 @@ impl IterationScheduler {
         let iteration_interval = scheduler_config.iteration_interval;
         let max_consecutive_prefill_iterations =
             scheduler_config.max_consecutive_prefill_iterations;
+        let mixed_prefill_decode = scheduler_config.mixed_prefill_decode;
         let cache_runtime_queue = CacheRuntimeQueue::new(
             scheduler_config.cache_aging_cost_per_iteration,
             scheduler_config.group_waiting_prefixes,
@@ -255,6 +285,10 @@ impl IterationScheduler {
                     json!(max_consecutive_prefill_iterations),
                 ),
                 (
+                    "skippy.scheduler.mixed_prefill_decode".to_string(),
+                    json!(mixed_prefill_decode),
+                ),
+                (
                     "skippy.scheduler.cache_policy".to_string(),
                     json!("weighted_lpm_aging_dfs_waiting_prefix"),
                 ),
@@ -275,6 +309,8 @@ impl IterationScheduler {
                     max_direct_batch_size: scheduler_lane_count.max(1),
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
+                    active_runtime_sessions: 0,
+                    direct_wave_full: false,
                     telemetry: Some(telemetry),
                     last_served_direct: false,
                     last_served_cache_runtime: false,
@@ -307,19 +343,67 @@ impl IterationScheduler {
             max_tokens: request.max_tokens,
             sampling: request.sampling.cloned(),
             chat_sampling_metadata: request.chat_sampling_metadata.map(str::to_string),
+            generated_tokens: Vec::new(),
+            runtime_configured: false,
+            retain_runtime: false,
             reply,
         }))?;
 
+        self.drive_generation_events(
+            request.id,
+            request.cancellation,
+            events,
+            &mut on_token,
+            started,
+            false,
+        )
+    }
+
+    pub(super) fn resume_generation(
+        &self,
+        request: ScheduledResumeRequest<'_>,
+        mut on_token: impl FnMut(i32) -> OpenAiResult<TokenControl>,
+    ) -> OpenAiResult<ScheduledGenerationStats> {
+        let started = Instant::now();
+        let (reply, events) = std_mpsc::channel();
+        self.enqueue_command(SchedulerCommand::Submit(ScheduledRequest {
+            id: request.id.to_string(),
+            prompt_tokens: request.prompt_tokens.to_vec(),
+            max_tokens: request.max_tokens,
+            sampling: request.sampling.cloned(),
+            chat_sampling_metadata: None,
+            generated_tokens: request.generated_tokens.to_vec(),
+            runtime_configured: true,
+            retain_runtime: true,
+            reply,
+        }))?;
+
+        self.drive_generation_events(
+            request.id,
+            request.cancellation,
+            events,
+            &mut on_token,
+            started,
+            true,
+        )
+    }
+
+    fn drive_generation_events(
+        &self,
+        id: &str,
+        cancellation: Option<&openai_frontend::CancellationToken>,
+        events: std_mpsc::Receiver<SchedulerEvent>,
+        on_token: &mut impl FnMut(i32) -> OpenAiResult<TokenControl>,
+        started: Instant,
+        resumed: bool,
+    ) -> OpenAiResult<ScheduledGenerationStats> {
         let mut first_token_at = None;
         loop {
-            if request
-                .cancellation
-                .is_some_and(openai_frontend::CancellationToken::is_cancelled)
-            {
+            if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
                 let _ = self
                     .shared
                     .commands
-                    .try_send(SchedulerCommand::Cancel(request.id.to_string()));
+                    .try_send(SchedulerCommand::Cancel(id.to_string()));
                 return Err(OpenAiError::backend("request cancelled"));
             }
             match events.recv_timeout(CANCELLATION_POLL_INTERVAL) {
@@ -334,16 +418,20 @@ impl IterationScheduler {
                             let _ = self
                                 .shared
                                 .commands
-                                .try_send(SchedulerCommand::Cancel(request.id.to_string()));
+                                .try_send(SchedulerCommand::Cancel(id.to_string()));
                             return Err(error);
                         }
                     }
                 }
                 Ok(SchedulerEvent::Complete) => {
                     let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
-                    let prompt_ms = first_token_at
-                        .map(|first| first.duration_since(started).as_secs_f64() * 1_000.0)
-                        .unwrap_or(elapsed_ms);
+                    let prompt_ms = if resumed {
+                        0.0
+                    } else {
+                        first_token_at
+                            .map(|first| first.duration_since(started).as_secs_f64() * 1_000.0)
+                            .unwrap_or(elapsed_ms)
+                    };
                     return Ok(ScheduledGenerationStats {
                         prompt_ms,
                         predicted_ms: (elapsed_ms - prompt_ms).max(0.0),
@@ -369,7 +457,31 @@ impl IterationScheduler {
         sample_last: bool,
         phase: IterationBatchPhase,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
+        let channel = self.direct_iteration_channel();
+        self.execute_iteration_on(
+            &channel,
+            session_id,
+            token_ids,
+            positions,
+            sampling,
+            sample_last,
+            phase,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_iteration_on(
+        &self,
+        channel: &DirectIterationChannel,
+        session_id: &str,
+        token_ids: &[i32],
+        positions: &[i32],
+        sampling: Option<&SamplingConfig>,
+        sample_last: bool,
+        phase: IterationBatchPhase,
+    ) -> OpenAiResult<SchedulerIterationOutcome> {
         self.execute_direct_iteration(
+            channel,
             session_id,
             None,
             token_ids,
@@ -392,7 +504,9 @@ impl IterationScheduler {
         input: Option<ActivationFrame>,
         sample_last: bool,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
+        let channel = self.direct_iteration_channel();
         self.execute_direct_iteration(
+            &channel,
             session_id,
             Some(target_token_count),
             token_ids,
@@ -407,6 +521,7 @@ impl IterationScheduler {
     #[allow(clippy::too_many_arguments)]
     fn execute_direct_iteration(
         &self,
+        channel: &DirectIterationChannel,
         session_id: &str,
         target_token_count: Option<u64>,
         token_ids: &[i32],
@@ -417,7 +532,6 @@ impl IterationScheduler {
         phase: IterationBatchPhase,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
         validate_direct_iteration(token_ids, positions)?;
-        let (reply, result) = std_mpsc::sync_channel(1);
         self.enqueue_command(SchedulerCommand::ExecuteIteration(DirectIteration {
             session_id: session_id.to_string(),
             target_token_count,
@@ -428,9 +542,9 @@ impl IterationScheduler {
             sample_last,
             phase,
             enqueued_at: Instant::now(),
-            reply,
+            reply: channel.reply.clone(),
         }))?;
-        result.recv().map_err(|error| {
+        channel.result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
         })?
     }
@@ -470,10 +584,10 @@ impl IterationScheduler {
     pub(crate) fn execute_cache_aware_runtime_timed<T>(
         &self,
         label: &'static str,
-        affinity: CacheAffinity,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
-        refresh_affinity: Option<CacheAffinityRefresh>,
+        payload: StagePrefixCachePayload,
+        refresh_affinity: CacheAffinityRefresh,
         operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
     where
@@ -482,9 +596,9 @@ impl IterationScheduler {
         let (runtime_operation, result) = runtime_operation(label, operation);
         self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
             runtime_operation,
-            affinity,
             prompt_tokens,
             priority,
+            payload,
             refresh_affinity,
         ))?;
         result.recv().map_err(|error| {
@@ -577,6 +691,25 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            if self.should_defer_cache_runtime() {
+                if !self.wait_for_scheduler_command(DIRECT_ITERATION_COALESCE_WINDOW) {
+                    return;
+                }
+                continue;
+            }
+            let cache_fill_wave_pending = should_fill_cache_runtime_wave(
+                !self.direct_iterations.is_empty(),
+                self.cache_runtime_queue.has_wave_aware_operations(),
+                self.active_runtime_sessions,
+                self.max_direct_batch_size,
+            );
+            let coalesce_direct = should_coalesce_direct_iterations(
+                !self.cache_runtime_queue.is_empty(),
+                self.cache_runtime_queue.has_wave_aware_operations(),
+            );
+            if !cache_fill_wave_pending && coalesce_direct && !self.coalesce_direct_iterations() {
+                return;
+            }
             self.run_work_turn();
             if !self.iteration_interval.is_zero() {
                 match self.commands.recv_timeout(self.iteration_interval) {
@@ -603,16 +736,16 @@ impl SchedulerWorker {
             }
             SchedulerCommand::ExecuteCacheAwareRuntime(
                 operation,
-                affinity,
                 prompt_tokens,
                 priority,
+                payload,
                 refresh_affinity,
             ) => {
-                self.cache_runtime_queue.enqueue(
+                self.cache_runtime_queue.enqueue_lazy(
                     operation,
-                    affinity,
                     prompt_tokens,
                     priority,
+                    payload,
                     refresh_affinity,
                 );
             }
@@ -621,14 +754,61 @@ impl SchedulerWorker {
         }
     }
 
+    fn should_defer_cache_runtime(&self) -> bool {
+        self.cache_runtime_queue.has_wave_aware_operations()
+            && self.direct_wave_full
+            && self.active_runtime_sessions >= self.max_direct_batch_size
+            && self.direct_iterations.is_empty()
+            && self.requests.is_empty()
+            && !self.cache_runtime_queue.is_empty()
+    }
+
+    fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
+        match self.commands.recv_timeout(timeout) {
+            Ok(SchedulerCommand::Shutdown) => {
+                self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                false
+            }
+            Ok(command) => {
+                self.handle_command(command);
+                true
+            }
+            Err(std_mpsc::RecvTimeoutError::Timeout) => true,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => false,
+        }
+    }
+
     fn run_work_turn(&mut self) {
         let has_cache_runtime = !self.cache_runtime_queue.is_empty();
-        let has_iteration = !self.requests.is_empty() || !self.direct_iterations.is_empty();
-        let serve_cache_runtime = should_serve_cache_runtime(
-            has_cache_runtime,
-            has_iteration,
-            self.last_served_cache_runtime,
+        let has_wave_aware_cache_runtime = self.cache_runtime_queue.has_wave_aware_operations();
+        let has_direct = !self.direct_iterations.is_empty();
+        let has_planned = !self.requests.is_empty();
+        let has_iteration = has_planned || has_direct;
+        if has_wave_aware_cache_runtime
+            && has_direct
+            && self.active_runtime_sessions >= self.max_direct_batch_size
+        {
+            self.direct_wave_full = true;
+        }
+        let suppress_cache_runtime = should_suppress_cache_runtime(
+            has_wave_aware_cache_runtime,
+            self.direct_wave_full,
+            self.active_runtime_sessions,
+            self.max_direct_batch_size,
         );
+        let fill_cache_wave = should_fill_cache_runtime_wave(
+            has_direct,
+            has_wave_aware_cache_runtime,
+            self.active_runtime_sessions,
+            self.max_direct_batch_size,
+        );
+        let serve_cache_runtime = !suppress_cache_runtime
+            && (fill_cache_wave
+                || should_serve_cache_runtime(
+                    has_cache_runtime,
+                    has_iteration,
+                    self.last_served_cache_runtime,
+                ));
         self.cache_runtime_queue.advance_turn();
         if serve_cache_runtime {
             self.last_served_cache_runtime = true;
@@ -647,13 +827,24 @@ impl SchedulerWorker {
     }
 
     fn run_runtime_operation(
-        &self,
+        &mut self,
         operation: RuntimeOperation,
         cache: Option<CacheRuntimeTelemetry>,
     ) {
         let started = Instant::now();
         let label = operation.label;
         (operation.run)(&self.runtime);
+        if let Ok(runtime) = self.runtime.lock() {
+            self.active_runtime_sessions = runtime.active_session_count();
+            if self.active_runtime_sessions < self.max_direct_batch_size {
+                self.direct_wave_full = false;
+            } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
+                // A cache restore may complete before its caller can enqueue
+                // the first direct iteration. Remember the saturated wave so
+                // another cache restore cannot slip in during that gap.
+                self.direct_wave_full = true;
+            }
+        }
         if let Some(telemetry) = self.telemetry.as_ref() {
             let mut attrs = BTreeMap::from([
                 ("skippy.scheduler.operation".to_string(), json!(label)),
@@ -692,6 +883,34 @@ impl SchedulerWorker {
         }
     }
 
+    fn coalesce_direct_iterations(&mut self) -> bool {
+        let target = direct_coalesce_target(
+            self.active_runtime_sessions,
+            self.direct_iterations.len(),
+            self.max_direct_batch_size,
+        );
+        if target <= self.direct_iterations.len() {
+            return true;
+        }
+
+        let deadline = Instant::now() + DIRECT_ITERATION_COALESCE_WINDOW;
+        while self.direct_iterations.len() < target {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            match self.commands.recv_timeout(remaining) {
+                Ok(SchedulerCommand::Shutdown) => {
+                    self.fail_all(OpenAiError::backend("iteration scheduler stopped"));
+                    return false;
+                }
+                Ok(command) => self.handle_command(command),
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        true
+    }
+
     fn submit(&mut self, request: ScheduledRequest) {
         let admission_tokens = request
             .prompt_tokens
@@ -702,7 +921,7 @@ impl SchedulerWorker {
                     .min(DECODE_BATCH_HEADROOM_TOKENS),
             )
             .min(self.kv_capacity_tokens);
-        let sequence = Sequence::new(
+        let mut sequence = Sequence::new(
             request.id.clone(),
             request.prompt_tokens.clone(),
             request.max_tokens,
@@ -710,6 +929,9 @@ impl SchedulerWorker {
             0,
         )
         .with_admission_tokens(admission_tokens);
+        if !request.generated_tokens.is_empty() {
+            sequence = sequence.with_prefilled_generation(request.generated_tokens.clone());
+        }
         if let Err(error) = self.scheduler.submit(sequence) {
             let error = match error {
                 AdmissionError::QueueFull { .. } => generation_queue_full_error(),
@@ -728,20 +950,33 @@ impl SchedulerWorker {
                 sampling: request.sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,
                 prompt_token_count: request.prompt_tokens.len(),
-                runtime_configured: false,
+                runtime_configured: request.runtime_configured,
+                retain_runtime: request.retain_runtime,
             },
         );
     }
 
     fn cancel(&mut self, id: &str) {
         self.scheduler.cancel(id);
-        self.drop_runtime_sessions([id]);
+        let retain_runtime = self
+            .requests
+            .get(id)
+            .is_some_and(|request| request.retain_runtime);
+        if !retain_runtime {
+            self.drop_runtime_sessions([id]);
+        }
         self.requests.remove(id);
     }
 
     fn fail_request(&mut self, id: &str, error: OpenAiError) {
         self.scheduler.cancel(id);
-        self.drop_runtime_sessions([id]);
+        let retain_runtime = self
+            .requests
+            .get(id)
+            .is_some_and(|request| request.retain_runtime);
+        if !retain_runtime {
+            self.drop_runtime_sessions([id]);
+        }
         if let Some(request) = self.requests.remove(id) {
             let _ = request.reply.send(SchedulerEvent::Error(error));
         }
@@ -765,7 +1000,13 @@ impl SchedulerWorker {
         }
         for id in stopped {
             self.scheduler.cancel(&id);
-            self.drop_runtime_sessions([id.as_str()]);
+            let retain_runtime = self
+                .requests
+                .get(&id)
+                .is_some_and(|request| request.retain_runtime);
+            if !retain_runtime {
+                self.drop_runtime_sessions([id.as_str()]);
+            }
             if let Some(request) = self.requests.remove(&id) {
                 let _ = request.reply.send(SchedulerEvent::Complete);
             }
@@ -832,7 +1073,9 @@ impl SchedulerWorker {
             return;
         }
 
+        let execution_started = Instant::now();
         let result = self.execute_plan(&plan);
+        let execution_elapsed = execution_started.elapsed();
         let predicted = match result {
             Ok(predicted) => predicted,
             Err(error) => {
@@ -840,9 +1083,11 @@ impl SchedulerWorker {
                 return;
             }
         };
+        self.scheduler
+            .observe_iteration_duration(&plan, execution_elapsed);
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
-        self.emit_step_telemetry(&step, iteration_started.elapsed());
+        self.emit_step_telemetry(&step, iteration_started.elapsed(), execution_elapsed);
     }
 
     fn run_direct_iteration_batch(&mut self) {
@@ -937,10 +1182,10 @@ impl SchedulerWorker {
 
         match result {
             Ok(outputs) => {
-                if outputs.len() != runnable.len() {
+                if outputs.request_outputs.len() != runnable.len() {
                     let error = OpenAiError::backend(format!(
                         "scheduler iteration returned {} outputs for {} requests",
-                        outputs.len(),
+                        outputs.request_outputs.len(),
                         runnable.len()
                     ));
                     for (request, _) in runnable {
@@ -948,12 +1193,39 @@ impl SchedulerWorker {
                     }
                     return;
                 }
-                for (((request, session_alignment), output), batch_wait_ms) in
-                    runnable.into_iter().zip(outputs).zip(batch_wait_ms)
+                let mut predicted = vec![None; runnable.len()];
+                for sample in outputs.samples {
+                    let Some(slot) = predicted.get_mut(sample.request_index) else {
+                        let error = OpenAiError::backend(format!(
+                            "scheduler iteration sample references request {}, but only {} requests ran",
+                            sample.request_index,
+                            runnable.len()
+                        ));
+                        for (request, _) in runnable {
+                            let _ = request.reply.send(Err(error.clone()));
+                        }
+                        return;
+                    };
+                    if slot.replace(sample.predicted_token).is_some() {
+                        let error = OpenAiError::backend(format!(
+                            "scheduler iteration returned duplicate sample for request {}",
+                            sample.request_index
+                        ));
+                        for (request, _) in runnable {
+                            let _ = request.reply.send(Err(error.clone()));
+                        }
+                        return;
+                    }
+                }
+                for ((((request, session_alignment), output), predicted), batch_wait_ms) in runnable
+                    .into_iter()
+                    .zip(outputs.request_outputs)
+                    .zip(predicted)
+                    .zip(batch_wait_ms)
                 {
                     let _ = request.reply.send(Ok(SchedulerIterationOutcome {
-                        predicted: output.predicted_token,
-                        output: output.output,
+                        predicted: predicted.unwrap_or(-1),
+                        output,
                         batch_size,
                         batch_wait_ms,
                         runtime_lock_wait_ms,
@@ -970,14 +1242,22 @@ impl SchedulerWorker {
         }
     }
 
-    fn finish_iteration(&mut self, plan: &skippy_scheduler::IterationPlan, predicted: &[i32]) {
+    fn finish_iteration(
+        &mut self,
+        plan: &skippy_scheduler::IterationPlan,
+        predicted: &[IterationPrediction],
+    ) {
         let mut stopped = BTreeSet::new();
         let mut missing_predictions = BTreeSet::new();
+        let predicted_by_work = predicted
+            .iter()
+            .map(|prediction| (prediction.work_index, prediction.token))
+            .collect::<BTreeMap<_, _>>();
         for (index, work) in plan.work.iter().enumerate() {
             if !work.sample_last {
                 continue;
             }
-            let Some(token) = predicted.get(index).copied() else {
+            let Some(token) = predicted_by_work.get(&index).copied() else {
                 missing_predictions.insert(work.sequence_id.clone());
                 continue;
             };
@@ -1018,7 +1298,16 @@ impl SchedulerWorker {
             .filter(|id| self.scheduler.sequence(id).is_none())
             .cloned()
             .collect::<Vec<_>>();
-        self.drop_runtime_sessions(terminal.iter().map(String::as_str));
+        let owned_runtime_ids = terminal
+            .iter()
+            .filter(|id| {
+                self.requests
+                    .get(*id)
+                    .is_some_and(|request| !request.retain_runtime)
+            })
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.drop_runtime_sessions(owned_runtime_ids);
         for id in terminal {
             if let Some(request) = self.requests.remove(&id) {
                 let _ = request.reply.send(SchedulerEvent::Complete);
@@ -1030,6 +1319,7 @@ impl SchedulerWorker {
         &mut self,
         step: &skippy_scheduler::IterationTelemetry,
         elapsed: Duration,
+        execution_elapsed: Duration,
     ) {
         if self.telemetry.is_none() {
             return;
@@ -1092,6 +1382,14 @@ impl SchedulerWorker {
             (
                 "skippy.scheduler.step_ms".to_string(),
                 json!(elapsed.as_secs_f64() * 1_000.0),
+            ),
+            (
+                "skippy.scheduler.execution_ms".to_string(),
+                json!(execution_elapsed.as_secs_f64() * 1_000.0),
+            ),
+            (
+                "skippy.scheduler.overhead_ms".to_string(),
+                json!(elapsed.saturating_sub(execution_elapsed).as_secs_f64() * 1_000.0),
             ),
         ]);
         if lifecycle_changed {
@@ -1172,7 +1470,10 @@ impl SchedulerWorker {
         Ok((configured, failures))
     }
 
-    fn execute_plan(&self, plan: &skippy_scheduler::IterationPlan) -> OpenAiResult<Vec<i32>> {
+    fn execute_plan(
+        &self,
+        plan: &skippy_scheduler::IterationPlan,
+    ) -> OpenAiResult<Vec<IterationPrediction>> {
         let mut runtime = self
             .runtime
             .lock()
@@ -1202,8 +1503,12 @@ impl SchedulerWorker {
             .iteration_batch_sampled(&requests)
             .map(|outputs| {
                 outputs
+                    .samples
                     .into_iter()
-                    .map(|output| output.predicted_token)
+                    .map(|sample| IterationPrediction {
+                        work_index: sample.request_index,
+                        token: sample.predicted_token,
+                    })
                     .collect()
             })
             .map_err(openai_backend_error)
@@ -1214,7 +1519,16 @@ impl SchedulerWorker {
         for id in &ids {
             self.scheduler.cancel(id);
         }
-        self.drop_runtime_sessions(ids.iter().map(String::as_str));
+        let owned_runtime_ids = ids
+            .iter()
+            .filter(|id| {
+                self.requests
+                    .get(*id)
+                    .is_some_and(|request| !request.retain_runtime)
+            })
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.drop_runtime_sessions(owned_runtime_ids);
         for id in ids {
             if let Some(request) = self.requests.remove(&id) {
                 let _ = request.reply.send(SchedulerEvent::Error(error.clone()));
@@ -1242,10 +1556,19 @@ impl SchedulerWorker {
         }
     }
 
-    fn drop_runtime_sessions<'a>(&self, ids: impl IntoIterator<Item = &'a str>) {
-        if let Ok(mut runtime) = self.runtime.lock() {
+    fn drop_runtime_sessions<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) {
+        let active_runtime_sessions = if let Ok(mut runtime) = self.runtime.lock() {
             for id in ids {
                 let _ = runtime.drop_session_timed(id);
+            }
+            Some(runtime.active_session_count())
+        } else {
+            None
+        };
+        if let Some(active_runtime_sessions) = active_runtime_sessions {
+            self.active_runtime_sessions = active_runtime_sessions;
+            if active_runtime_sessions < self.max_direct_batch_size {
+                self.direct_wave_full = false;
             }
         }
     }
@@ -1257,6 +1580,16 @@ fn should_serve_direct(has_direct: bool, has_planned: bool, last_served_direct: 
     } else {
         has_direct
     }
+}
+
+fn direct_coalesce_target(
+    active_runtime_sessions: usize,
+    queued_direct_iterations: usize,
+    max_direct_batch_size: usize,
+) -> usize {
+    active_runtime_sessions
+        .max(queued_direct_iterations)
+        .min(max_direct_batch_size)
 }
 
 fn scheduler_safe_mode_from_value(value: Option<&str>) -> bool {
@@ -1387,9 +1720,13 @@ fn build_scheduler_config(
         } else {
             usize::MAX
         },
-        // Preserve phase-homogeneous native batches while bounding the time a
-        // newly admitted prefill can block already-live decode sequences.
+        // Retained for scheduler-lab compatibility; production uses the mixed
+        // path below when the model does not carry recurrent state.
         max_consecutive_prefill_iterations: 1,
+        // A live mixed probe permanently raised subsequent decode-step cost by
+        // 9-20% on the Studio54 Qwen3.5 recurrent trace even after admission
+        // fell back. Keep phase-homogeneous execution for recurrent models.
+        mixed_prefill_decode: recurrent_bytes_per_sequence == 0,
         cache_aging_cost_per_iteration: CACHE_AGING_COST_PER_TURN,
         group_waiting_prefixes: true,
         // Native execution already provides a collection window: requests
@@ -1471,6 +1808,14 @@ mod tests {
     }
 
     #[test]
+    fn direct_coalescing_tracks_active_sessions_without_penalizing_singletons() {
+        assert_eq!(direct_coalesce_target(1, 1, 16), 1);
+        assert_eq!(direct_coalesce_target(16, 1, 16), 16);
+        assert_eq!(direct_coalesce_target(32, 4, 16), 16);
+        assert_eq!(direct_coalesce_target(0, 4, 16), 4);
+    }
+
+    #[test]
     fn server_scheduler_config_uses_runtime_lanes_and_native_batch_limits() {
         let config = build_scheduler_config(32, 131_072, 1024, Some(4096), Some(128), 64);
         assert_eq!(config.max_active_sequences, 32);
@@ -1478,9 +1823,13 @@ mod tests {
         assert_eq!(config.max_tokens_per_iteration, 2048);
         assert_eq!(config.prefill_chunk_tokens, 128);
         assert_eq!(config.max_consecutive_prefill_iterations, 1);
+        assert!(!config.mixed_prefill_decode);
         assert_eq!(config.memory_components[0].capacity_bytes, 131_072);
         assert_eq!(config.memory_components[1].bytes_per_sequence, 1024);
         assert_eq!(config.memory_components[1].capacity_bytes, 65_536);
+
+        let non_recurrent = build_scheduler_config(32, 131_072, 0, Some(4096), Some(128), 64);
+        assert!(non_recurrent.mixed_prefill_decode);
     }
 
     #[test]
@@ -1498,6 +1847,8 @@ mod tests {
             max_direct_batch_size: 2,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1511,6 +1862,9 @@ mod tests {
             max_tokens: 1,
             sampling: None,
             chat_sampling_metadata: None,
+            generated_tokens: Vec::new(),
+            runtime_configured: false,
+            retain_runtime: false,
             reply: reply_a,
         });
         worker.submit(ScheduledRequest {
@@ -1519,6 +1873,9 @@ mod tests {
             max_tokens: 1,
             sampling: None,
             chat_sampling_metadata: None,
+            generated_tokens: Vec::new(),
+            runtime_configured: false,
+            retain_runtime: false,
             reply: reply_b,
         });
 
@@ -1547,8 +1904,18 @@ mod tests {
         assert_eq!(plan.work.len(), 2);
         assert!(plan.work.iter().all(|work| work.sample_last));
 
-        let step = worker.scheduler.complete_iteration(&plan, &[10, 20]);
-        worker.finish_iteration(&plan, &[10, 20]);
+        let predictions = [
+            IterationPrediction {
+                work_index: 0,
+                token: 10,
+            },
+            IterationPrediction {
+                work_index: 1,
+                token: 20,
+            },
+        ];
+        let step = worker.scheduler.complete_iteration(&plan, &predictions);
+        worker.finish_iteration(&plan, &predictions);
         assert_eq!(step.admitted, 2);
 
         assert_eq!(consumer_a.join().unwrap(), vec![10]);
@@ -1602,6 +1969,8 @@ mod tests {
             max_direct_batch_size: 1,
             max_commands_per_turn: 8,
             iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
@@ -1614,12 +1983,19 @@ mod tests {
             max_tokens: 2,
             sampling: None,
             chat_sampling_metadata: None,
+            generated_tokens: Vec::new(),
+            runtime_configured: false,
+            retain_runtime: false,
             reply,
         });
         let plan = worker.scheduler.plan_iteration();
-        worker.scheduler.complete_iteration(&plan, &[10]);
+        let predictions = [IterationPrediction {
+            work_index: 0,
+            token: 10,
+        }];
+        worker.scheduler.complete_iteration(&plan, &predictions);
 
-        worker.finish_iteration(&plan, &[10]);
+        worker.finish_iteration(&plan, &predictions);
 
         let SchedulerEvent::Token { ack, .. } = events.recv().unwrap() else {
             panic!("expected token event");
@@ -1628,6 +2004,63 @@ mod tests {
         ack.send(TokenControl::Stop).unwrap();
         worker.apply_pending_controls();
         assert!(!worker.requests.contains_key("slow-consumer"));
+    }
+
+    #[test]
+    fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        runtime
+            .lock()
+            .unwrap()
+            .track_session_tokens_for_test("resumed", 1);
+        let (_commands, receiver) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime: Arc::clone(&runtime),
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 0,
+            direct_wave_full: false,
+            telemetry: None,
+            last_served_direct: false,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        worker
+            .scheduler
+            .submit(
+                Sequence::new("resumed".to_string(), vec![1], 2, None, 0)
+                    .with_prefilled_generation(vec![7]),
+            )
+            .unwrap();
+        let (reply, _events) = std_mpsc::channel();
+        worker.requests.insert(
+            "resumed".to_string(),
+            RequestState {
+                reply,
+                pending_controls: VecDeque::new(),
+                sampling: None,
+                chat_sampling_metadata: None,
+                prompt_token_count: 1,
+                runtime_configured: true,
+                retain_runtime: true,
+            },
+        );
+
+        worker.cancel("resumed");
+
+        assert_eq!(
+            runtime.lock().unwrap().session_stats().tracked_token_counts,
+            1
+        );
+        assert!(!worker.requests.contains_key("resumed"));
+        assert!(worker.scheduler.sequence("resumed").is_none());
     }
 
     #[test]
@@ -1646,6 +2079,8 @@ mod tests {
                 max_direct_batch_size: 3,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
@@ -1668,6 +2103,91 @@ mod tests {
         assert!(outcome.queue_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_hold_ms >= 0.0);
+    }
+
+    #[test]
+    fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_empty() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let (selected, selected_rx) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 1,
+            direct_wave_full: true,
+            telemetry: None,
+            last_served_direct: true,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        worker.cache_runtime_queue.enqueue_with_payload(
+            RuntimeOperation {
+                label: "full-wave-cache",
+                run: Box::new(move |_| {
+                    selected.send(()).unwrap();
+                }),
+            },
+            skippy_scheduler::CacheAffinity::default(),
+            Arc::from([1]),
+            0,
+            StagePrefixCachePayload::KvRecurrent,
+            None,
+        );
+
+        worker.run_work_turn();
+
+        assert!(selected_rx.try_recv().is_err());
+        assert!(!worker.cache_runtime_queue.is_empty());
+    }
+
+    #[test]
+    fn resident_kv_does_not_engage_direct_wave_gate() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (_commands, receiver) = std_mpsc::channel();
+        let (selected, selected_rx) = std_mpsc::channel();
+        let mut worker = SchedulerWorker {
+            runtime,
+            scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+            requests: BTreeMap::new(),
+            direct_iterations: VecDeque::new(),
+            cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+            commands: receiver,
+            kv_capacity_tokens: 64,
+            max_direct_batch_size: 1,
+            max_commands_per_turn: 8,
+            iteration_interval: Duration::ZERO,
+            active_runtime_sessions: 1,
+            direct_wave_full: true,
+            telemetry: None,
+            last_served_direct: true,
+            last_served_cache_runtime: false,
+            last_emitted_lifecycle_counters: (0, 0, 0, 0),
+        };
+        worker.cache_runtime_queue.enqueue(
+            RuntimeOperation {
+                label: "resident-cache",
+                run: Box::new(move |_| {
+                    selected.send(()).unwrap();
+                }),
+            },
+            skippy_scheduler::CacheAffinity::default(),
+            Arc::from([1]),
+            0,
+            None,
+        );
+
+        worker.run_work_turn();
+
+        assert!(selected_rx.try_recv().is_ok());
+        assert!(worker.cache_runtime_queue.is_empty());
     }
 
     #[test]
@@ -1733,6 +2253,8 @@ mod tests {
                 max_direct_batch_size: 1,
                 max_commands_per_turn: 8,
                 iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
                 telemetry: None,
                 last_served_direct: false,
                 last_served_cache_runtime: false,
@@ -1761,6 +2283,9 @@ mod tests {
                 max_tokens: 1,
                 sampling: None,
                 chat_sampling_metadata: None,
+                generated_tokens: Vec::new(),
+                runtime_configured: false,
+                retain_runtime: false,
                 reply,
             }))
             .unwrap();

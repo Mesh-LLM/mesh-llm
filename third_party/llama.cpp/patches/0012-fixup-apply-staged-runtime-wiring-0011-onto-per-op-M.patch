@@ -1,7 +1,7 @@
-From efb05d27d2d0fa43dcfc48dc0a052779cbea668d Mon Sep 17 00:00:00 2001
+From a50dd009619634b32d588f8af9d2c81984c9a648 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 25 Aug 2026 23:23:33 +1000
-Subject: [PATCH 12/34] fixup: apply staged runtime wiring (0011) onto per-op
+Subject: [PATCH 12/32] fixup: apply staged runtime wiring (0011) onto per-op
  Metal layout
 
 ---
@@ -655,7 +655,7 @@ index eab00881b..bfb80e105 100644
          struct skippy_session * session,
          struct skippy_error ** out_error);
 diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
-index d74b56c03..db1fdf570 100644
+index 86bc95ede..adbc4d640 100644
 --- a/include/skippy/sampling.h
 +++ b/include/skippy/sampling.h
 @@ -1,6 +1,11 @@
@@ -670,8 +670,10 @@ index d74b56c03..db1fdf570 100644
  #include "common.h"
  
  #ifdef __cplusplus
-@@ -10,6 +15,7 @@ extern "C" {
+@@ -10,8 +15,9 @@ extern "C" {
  #define SKIPPY_MAX_LOGIT_BIAS 256
+ #define SKIPPY_SAMPLING_FLAG_ENABLED (1u << 0)
+ #define SKIPPY_SAMPLING_FLAG_IGNORE_EOS (1u << 1)
  
  
 +/** @brief Versioned sampling configuration consumed by Skippy decode entrypoints. */
@@ -1037,7 +1039,7 @@ index 644fac937..195dbe88d 100644
      LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
      LLM_KV_FULL_ATTENTION_INTERVAL,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ecfb3554e..339c4e01e 100644
+index af3fe661f..aa3d6230d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1263,7 +1263,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -1159,7 +1161,7 @@ index ecfb3554e..339c4e01e 100644
      }
  }
  
-@@ -2060,11 +2008,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -2058,11 +2006,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
@@ -1175,7 +1177,7 @@ index ecfb3554e..339c4e01e 100644
          }
  
          n_outputs_prev += n_outputs;
-@@ -3677,6 +3624,7 @@ llama_context_params llama_context_default_params() {
+@@ -3675,6 +3622,7 @@ llama_context_params llama_context_default_params() {
          /*.n_seq_max                   =*/ 1,
          /*.n_rs_seq                    =*/ 0,
          /*.n_outputs_max               =*/ 0,
@@ -1227,7 +1229,7 @@ index 402015415..d5b060efe 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 49daa8e97..910db38a9 100644
+index 6ac2fa322..550dd6c15 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -178,6 +178,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -1239,7 +1241,7 @@ index 49daa8e97..910db38a9 100644
          case LLM_ARCH_OPENELM:
              return new llama_model_openelm(params);
          case LLM_ARCH_GPTNEOX:
-@@ -2598,15 +2600,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2593,15 +2595,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                      }
  
@@ -1258,7 +1260,7 @@ index 49daa8e97..910db38a9 100644
                          if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                              filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                          } else {
-@@ -2616,24 +2612,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2611,24 +2607,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
  
                      filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
  
@@ -1284,7 +1286,7 @@ index 49daa8e97..910db38a9 100644
                          GGML_ASSERT(hparams.is_swa_any());
  
                          if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-@@ -2754,6 +2733,7 @@ llama_model_params llama_model_default_params() {
+@@ -2749,6 +2728,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -1292,7 +1294,7 @@ index 49daa8e97..910db38a9 100644
      };
  
      return result;
-@@ -2897,6 +2877,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2892,6 +2872,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_DEEPSEEK2OCR:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DEEPSEEK4:
@@ -1300,7 +1302,7 @@ index 49daa8e97..910db38a9 100644
          case LLM_ARCH_PLM:
          case LLM_ARCH_CHATGLM:
          case LLM_ARCH_GRANITE:
-@@ -3230,3 +3211,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+@@ -3225,3 +3206,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
  uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
      return (uint32_t) model->target_layer_ids.size();
  }
@@ -1406,7 +1408,7 @@ index 716f4a5e8..39a09fe21 100644
          graph(const llama_model & model, const llm_graph_params & params);
      };
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 3a9fb82f0..49d4eaa59 100644
+index 8440e5b97..74eb3aa59 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -372,9 +372,11 @@ llama_sampler * skippy_build_sampling_chain(
@@ -1718,4 +1720,3 @@ index 0dda8770f..ec9bc8f88 100644
  //
 -- 
 2.55.0
-
