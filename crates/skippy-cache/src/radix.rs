@@ -218,9 +218,19 @@ impl<R, E> UnifiedRadixCache<R, E> {
         value: E,
     ) -> Result<Option<E>> {
         validate_tokens(tokens)?;
+        let namespace = namespace.into();
+        if self
+            .roots
+            .get(&namespace)
+            .and_then(|root| node_at(root, tokens))
+            .and_then(|node| node.components.recurrent.as_ref())
+            .is_some_and(|entry| entry.active_refs > 0)
+        {
+            bail!("cannot replace an active recurrent radix entry");
+        }
         self.clock = self.clock.saturating_add(1);
         let last_used = self.clock;
-        let node = self.ensure_node(namespace.into(), tokens);
+        let node = self.ensure_node(namespace, tokens);
         Ok(node
             .components
             .recurrent
@@ -1440,6 +1450,28 @@ mod tests {
             cache.remove_recurrent_if("stage", &[1, 2], |value| *value == "payload-b"),
             Some("payload-b")
         );
+    }
+
+    #[test]
+    fn recurrent_insert_cannot_replace_an_active_restore_source() {
+        let mut cache = UnifiedRadixCache::<(), &str>::new();
+        cache
+            .insert_recurrent("stage", &[1, 2], 2, "original")
+            .unwrap();
+        cache.acquire_recurrent("stage", &[1, 2]).unwrap();
+
+        assert_eq!(
+            cache
+                .insert_recurrent("stage", &[1, 2], 2, "replacement")
+                .unwrap_err()
+                .to_string(),
+            "cannot replace an active recurrent radix entry"
+        );
+        assert_eq!(
+            cache.lookup_recurrent("stage", &[1, 2]).unwrap().value,
+            "original"
+        );
+        assert!(cache.release_recurrent("stage", &[1, 2]));
     }
 
     #[test]

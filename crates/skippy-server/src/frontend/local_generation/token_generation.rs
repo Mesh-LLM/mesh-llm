@@ -12,6 +12,7 @@ use crate::frontend::generation::TokenControl;
 use crate::frontend::generation_receipt::{
     GenerationCommit, GenerationStart, complete_generation_before_cleanup,
 };
+use crate::frontend::iteration_scheduler::CacheRuntimeContext;
 use crate::frontend::iteration_scheduler::DirectIterationChannel;
 use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
 use crate::frontend::iteration_scheduler::ScheduledResumeRequest;
@@ -34,7 +35,7 @@ use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
 
@@ -89,6 +90,34 @@ struct KvRecordResult {
     proactive_evicted_entries: usize,
     proactive_evicted_tokens: u64,
     proactive_eviction_error: Option<anyhow::Error>,
+}
+
+fn ensure_cache_operation_active(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    cache_operation: &CacheRuntimeContext,
+) -> OpenAiResult<()> {
+    if let Err(error) = cache_operation.ensure_active() {
+        let _ = runtime.drop_session_timed(session_id);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn prefill_cache_chunks(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    tokens: &[i32],
+    chunk_tokens: usize,
+    cache_operation: &CacheRuntimeContext,
+) -> OpenAiResult<()> {
+    for chunk in tokens.chunks(chunk_tokens.max(1)) {
+        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+        runtime
+            .prefill(session_id, chunk)
+            .map_err(openai_backend_error)?;
+    }
+    ensure_cache_operation_active(runtime, session_id, cache_operation)
 }
 
 impl Default for KvRecordResult {
@@ -748,15 +777,24 @@ impl StageOpenAiBackend {
         let scheduler_prefill_tokens = Arc::clone(&prefill_tokens);
         let record_prefill_tokens = Arc::clone(&prefill_tokens);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
+        let cache_operation_deadline = Instant::now()
+            .checked_add(self.generation_admission_timeout)
+            .ok_or_else(|| OpenAiError::backend("cache operation deadline overflow"))?;
         let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
-            Arc::clone(&prefill_tokens),
-            0,
-            cache_payload,
-            refresh_cache_affinity,
-            move |runtime| {
+            super::super::iteration_scheduler::CacheAwareRuntimeRequest {
+                operation_id: request.ids.request_id_string(),
+                deadline: cache_operation_deadline,
+                cancellation: request.cancellation,
+                prompt_tokens: Arc::clone(&prefill_tokens),
+                priority: 0,
+                payload: cache_payload,
+                refresh_affinity: refresh_cache_affinity,
+            },
+            move |runtime, cache_operation| {
                 let outcome = scheduler_backend.restore_or_record_kv_on_runtime(
                     runtime,
+                    cache_operation,
                     &scheduler_ids,
                     &scheduler_session_id,
                     scheduler_prefill_tokens.as_ref(),
@@ -815,6 +853,8 @@ impl StageOpenAiBackend {
                     &request.prompt_token_ids[suffix_start..boundary],
                     None,
                     false,
+                    cache_operation_deadline,
+                    request.cancellation,
                 )?;
                 prefill_chunk_count = prefill_chunk_count
                     .saturating_add(checkpoint_prefill.chunk_count)
@@ -867,6 +907,8 @@ impl StageOpenAiBackend {
                 &request.prompt_token_ids[suffix_start..],
                 request.sampling.enabled.then_some(request.sampling),
                 true,
+                cache_operation_deadline,
+                request.cancellation,
             )?;
             prompt_prefill_sample =
                 Some(suffix_outcome.predicted.ok_or_else(|| {
@@ -1095,6 +1137,7 @@ impl StageOpenAiBackend {
     fn restore_or_record_kv_on_runtime(
         &self,
         runtime: &mut RuntimeState,
+        cache_operation: &CacheRuntimeContext,
         ids: &OpenAiGenerationIds,
         session_id: &str,
         prefill_tokens: &[i32],
@@ -1104,6 +1147,7 @@ impl StageOpenAiBackend {
         max_tokens: u32,
         cache_stats: &mut GenerationCacheStats,
     ) -> OpenAiResult<KvRestoreOutcome> {
+        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         let emit_debug = self.telemetry.is_debug_enabled();
         let runtime_sessions_before = emit_debug.then(|| runtime.session_stats());
         let (restored_prefill, restored_prefill_tokens, protected_resident_seq_id) =
@@ -1122,6 +1166,7 @@ impl StageOpenAiBackend {
             } else {
                 (false, 0, None)
             };
+        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         let capacity = if let Some(kv) = self.kv.as_ref() {
             let decode_batch_tokens = u64::from(self.config.n_batch.unwrap_or(2048));
             let target_free_tokens =
@@ -1149,6 +1194,7 @@ impl StageOpenAiBackend {
                 ..crate::kv_integration::ResidentCapacityDecision::default()
             }
         };
+        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         if !capacity.admitted {
             return Ok(KvRestoreOutcome {
                 runtime_sessions_before,
@@ -1181,6 +1227,9 @@ impl StageOpenAiBackend {
         }
         let prompt_prefill_sample = None;
         let mut decoded_prefill_suffix = false;
+        let cache_prefill_chunk_tokens = usize::try_from(self.config.n_ubatch.unwrap_or(256))
+            .unwrap_or(2_048)
+            .clamp(1, 2_048);
         if restored_prefill_tokens < prefill_tokens.len() {
             decoded_prefill_suffix = true;
             if let Some(checkpoint_tokens) =
@@ -1191,9 +1240,14 @@ impl StageOpenAiBackend {
                         && restored_prefill_tokens < checkpoint_tokens.len()
                 })
             {
-                runtime
-                    .prefill(session_id, &checkpoint_tokens[restored_prefill_tokens..])
-                    .map_err(openai_backend_error)?;
+                prefill_cache_chunks(
+                    runtime,
+                    session_id,
+                    &checkpoint_tokens[restored_prefill_tokens..],
+                    cache_prefill_chunk_tokens,
+                    cache_operation,
+                )?;
+                ensure_cache_operation_active(runtime, session_id, cache_operation)?;
                 let _ = self.record_exact_state_at_tokens(
                     runtime,
                     session_id,
@@ -1201,9 +1255,13 @@ impl StageOpenAiBackend {
                     checkpoint_tokens,
                     "chat_prefix_checkpoint",
                 );
-                runtime
-                    .prefill(session_id, &prefill_tokens[checkpoint_tokens.len()..])
-                    .map_err(openai_backend_error)?;
+                prefill_cache_chunks(
+                    runtime,
+                    session_id,
+                    &prefill_tokens[checkpoint_tokens.len()..],
+                    cache_prefill_chunk_tokens,
+                    cache_operation,
+                )?;
             } else if let Some(kv) = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state()) {
                 // Recurrent and full-state payloads cannot reconstruct a shorter
                 // shared prefix from the state at the end of the request. Stop
@@ -1218,28 +1276,43 @@ impl StageOpenAiBackend {
                     identity.identity.token_count as usize > restored_prefill_tokens
                 }) {
                     let boundary = identity.identity.token_count as usize;
-                    runtime
-                        .prefill(
-                            session_id,
-                            &prefill_tokens[restored_prefill_tokens..boundary],
-                        )
-                        .map_err(openai_backend_error)?;
+                    prefill_cache_chunks(
+                        runtime,
+                        session_id,
+                        &prefill_tokens[restored_prefill_tokens..boundary],
+                        cache_prefill_chunk_tokens,
+                        cache_operation,
+                    )?;
+                    ensure_cache_operation_active(runtime, session_id, cache_operation)?;
                     kv.record_exact_state(runtime, session_id, &identity)
                         .map_err(openai_backend_error)?;
-                    runtime
-                        .prefill(session_id, &prefill_tokens[boundary..])
-                        .map_err(openai_backend_error)?;
+                    prefill_cache_chunks(
+                        runtime,
+                        session_id,
+                        &prefill_tokens[boundary..],
+                        cache_prefill_chunk_tokens,
+                        cache_operation,
+                    )?;
                 } else {
-                    runtime
-                        .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
-                        .map_err(openai_backend_error)?;
+                    prefill_cache_chunks(
+                        runtime,
+                        session_id,
+                        &prefill_tokens[restored_prefill_tokens..],
+                        cache_prefill_chunk_tokens,
+                        cache_operation,
+                    )?;
                 }
             } else {
-                runtime
-                    .prefill(session_id, &prefill_tokens[restored_prefill_tokens..])
-                    .map_err(openai_backend_error)?;
+                prefill_cache_chunks(
+                    runtime,
+                    session_id,
+                    &prefill_tokens[restored_prefill_tokens..],
+                    cache_prefill_chunk_tokens,
+                    cache_operation,
+                )?;
             }
         }
+        ensure_cache_operation_active(runtime, session_id, cache_operation)?;
         cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
         cache_stats.suffix_prefill_tokens =
             saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));

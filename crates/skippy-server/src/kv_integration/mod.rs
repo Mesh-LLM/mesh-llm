@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, AtomicUsize},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize},
         mpsc::{SyncSender, TrySendError},
     },
 };
@@ -27,6 +27,7 @@ mod config;
 mod exact_state;
 mod identity;
 mod model_capability;
+mod output_tokens;
 mod records;
 mod resident_prefix;
 
@@ -149,8 +150,10 @@ pub struct KvStageIntegration {
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
-    pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
-    pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
+    pub(crate) exact_state_record_worker_healthy: Arc<AtomicBool>,
+    pub(crate) exact_state_record_worker_panics: Arc<AtomicU64>,
+    pub(crate) cache_healthy: Arc<AtomicBool>,
+    pub(crate) output_tokens: Arc<Mutex<output_tokens::OutputTokenCache>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
 }
 
@@ -195,6 +198,8 @@ pub(crate) struct ResidentSequencePool {
     reserved_seq_count: i32,
     next_seq_id: i32,
     free_seq_ids: Vec<i32>,
+    allocated_seq_ids: BTreeSet<i32>,
+    quarantined_seq_ids: BTreeSet<i32>,
 }
 
 impl ResidentSequencePool {
@@ -203,30 +208,77 @@ impl ResidentSequencePool {
             reserved_seq_count,
             next_seq_id: reserved_seq_count,
             free_seq_ids: Vec::new(),
+            allocated_seq_ids: BTreeSet::new(),
+            quarantined_seq_ids: BTreeSet::new(),
         }
     }
 
     pub(crate) fn allocate(&mut self) -> Result<i32> {
         if let Some(seq_id) = self.free_seq_ids.pop() {
+            if !self.allocated_seq_ids.insert(seq_id) {
+                bail!("resident prefix sequence id {seq_id} is already allocated");
+            }
             return Ok(seq_id);
         }
         let seq_id = self.next_seq_id;
+        if seq_id < self.reserved_seq_count || seq_id >= skippy_cache::LLAMA_MAX_SEQ {
+            bail!("resident prefix sequence id capacity exhausted");
+        }
         self.next_seq_id = self
             .next_seq_id
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("resident prefix sequence id overflow"))?;
-        if seq_id < self.reserved_seq_count || seq_id >= skippy_cache::LLAMA_MAX_SEQ {
-            bail!("resident prefix sequence id capacity exhausted");
+        if !self.allocated_seq_ids.insert(seq_id) {
+            bail!("resident prefix sequence id {seq_id} is already allocated");
         }
         Ok(seq_id)
     }
 
-    fn release(&mut self, seq_id: i32) {
-        debug_assert!(seq_id >= self.reserved_seq_count);
-        debug_assert!(seq_id < skippy_cache::LLAMA_MAX_SEQ);
-        debug_assert!(!self.free_seq_ids.contains(&seq_id));
+    fn release(&mut self, seq_id: i32) -> Result<()> {
+        self.validate_allocated(seq_id)?;
+        self.allocated_seq_ids.remove(&seq_id);
         self.free_seq_ids.push(seq_id);
+        Ok(())
     }
+
+    fn quarantine(&mut self, seq_id: i32) -> Result<()> {
+        self.validate_allocated(seq_id)?;
+        self.allocated_seq_ids.remove(&seq_id);
+        self.quarantined_seq_ids.insert(seq_id);
+        Ok(())
+    }
+
+    fn force_quarantine(&mut self, seq_id: i32) {
+        self.allocated_seq_ids.remove(&seq_id);
+        self.free_seq_ids.retain(|candidate| *candidate != seq_id);
+        self.quarantined_seq_ids.insert(seq_id);
+    }
+
+    fn validate_allocated(&self, seq_id: i32) -> Result<()> {
+        if seq_id < self.reserved_seq_count || seq_id >= skippy_cache::LLAMA_MAX_SEQ {
+            bail!("resident prefix sequence id {seq_id} is out of range");
+        }
+        if !self.allocated_seq_ids.contains(&seq_id) {
+            bail!("resident prefix sequence id {seq_id} is not allocated");
+        }
+        Ok(())
+    }
+
+    fn stats(&self) -> (usize, usize, usize) {
+        (
+            self.allocated_seq_ids.len(),
+            self.free_seq_ids.len(),
+            self.quarantined_seq_ids.len(),
+        )
+    }
+}
+
+fn lock_resident_sequences(
+    sequences: &Mutex<ResidentSequencePool>,
+) -> std::sync::MutexGuard<'_, ResidentSequencePool> {
+    sequences
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,14 +292,65 @@ fn has_exact_state_record_capacity(pending_count: &AtomicUsize) -> bool {
     pending_count.load(std::sync::atomic::Ordering::Acquire) < EXACT_STATE_RECORD_CAPACITY
 }
 
+fn finish_exact_state_record(
+    inflight_records: &Mutex<BTreeSet<String>>,
+    pending_count: &AtomicUsize,
+    page_id: &str,
+) {
+    inflight_records
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(page_id);
+    pending_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+}
+
+fn run_exact_state_record_job(
+    inflight_records: &Mutex<BTreeSet<String>>,
+    dropped: &AtomicU64,
+    pending_count: &AtomicUsize,
+    worker_healthy: &AtomicBool,
+    worker_panics: &AtomicU64,
+    pending: PendingExactStateRecord,
+    work: impl FnOnce(PendingExactStateRecord) -> Result<()>,
+) {
+    let page_id = pending.page_id.clone();
+    if !worker_healthy.load(std::sync::atomic::Ordering::Acquire) {
+        dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        finish_exact_state_record(inflight_records, pending_count, &page_id);
+        return;
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(pending))) {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(_) => {
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            worker_panics.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            worker_healthy.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    finish_exact_state_record(inflight_records, pending_count, &page_id);
+}
+
 fn enqueue_exact_state_record(
     sender: &SyncSender<PendingExactStateRecord>,
     inflight_records: &Mutex<BTreeSet<String>>,
     queued: &AtomicU64,
     dropped: &AtomicU64,
     pending_count: &AtomicUsize,
+    worker_healthy: &AtomicBool,
     pending: PendingExactStateRecord,
 ) -> ExactStateRecordAdmission {
+    if !worker_healthy.load(std::sync::atomic::Ordering::Acquire) {
+        inflight_records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&pending.page_id);
+        dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return ExactStateRecordAdmission::WorkerStopped;
+    }
     pending_count.fetch_add(1, std::sync::atomic::Ordering::Release);
     match sender.try_send(pending) {
         Ok(()) => {
@@ -280,6 +383,27 @@ pub(crate) struct ExactStateExtra {
     pub(crate) kv_desc: Option<RuntimeKvPageDesc>,
 }
 
+fn verify_resident_ownership(
+    cache_healthy: &AtomicBool,
+    resident_entries: usize,
+    allocated_sequences: usize,
+) -> Result<()> {
+    if resident_entries == allocated_sequences {
+        return Ok(());
+    }
+    if cache_healthy.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: "Skippy KV cache disabled after resident ownership mismatch".to_string(),
+            context: Some(format!(
+                "radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
+            )),
+        });
+    }
+    bail!(
+        "resident cache ownership mismatch: radix_entries={resident_entries} allocated_sequences={allocated_sequences}"
+    )
+}
+
 impl KvStageIntegration {
     pub fn mode(&self) -> StageKvMode {
         self.mode
@@ -290,17 +414,29 @@ impl KvStageIntegration {
     }
 
     pub fn should_lookup(&self) -> bool {
-        matches!(
-            self.mode,
-            StageKvMode::LookupRecord | StageKvMode::Correctness
-        )
+        self.cache_healthy
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(
+                self.mode,
+                StageKvMode::LookupRecord | StageKvMode::Correctness
+            )
     }
 
     pub fn should_record(&self) -> bool {
-        matches!(
-            self.mode,
-            StageKvMode::Record | StageKvMode::LookupRecord | StageKvMode::Correctness
-        )
+        self.cache_healthy
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(
+                self.mode,
+                StageKvMode::Record | StageKvMode::LookupRecord | StageKvMode::Correctness
+            )
+    }
+
+    pub(crate) fn verify_resident_ownership(
+        &self,
+        resident_entries: usize,
+        allocated_sequences: usize,
+    ) -> Result<()> {
+        verify_resident_ownership(&self.cache_healthy, resident_entries, allocated_sequences)
     }
 
     pub(crate) fn meets_shared_prefix_min_tokens(&self, matched_tokens: usize) -> bool {
@@ -308,6 +444,12 @@ impl KvStageIntegration {
     }
 
     pub fn try_begin_record(&self, page_id: &str) -> bool {
+        if !self
+            .exact_state_record_worker_healthy
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return false;
+        }
         self.inflight_records
             .lock()
             .expect("kv inflight record lock poisoned")
@@ -322,7 +464,9 @@ impl KvStageIntegration {
     }
 
     pub(crate) fn has_exact_state_record_capacity(&self) -> bool {
-        has_exact_state_record_capacity(&self.exact_state_records_pending)
+        self.exact_state_record_worker_healthy
+            .load(std::sync::atomic::Ordering::Acquire)
+            && has_exact_state_record_capacity(&self.exact_state_records_pending)
     }
 
     pub(crate) fn enqueue_exact_state_record(
@@ -335,6 +479,7 @@ impl KvStageIntegration {
             &self.exact_state_records_queued,
             &self.exact_state_records_dropped,
             &self.exact_state_records_pending,
+            &self.exact_state_record_worker_healthy,
             pending,
         )
     }
@@ -422,13 +567,43 @@ impl KvStageIntegration {
             .lock()
             .expect("resident activation cache lock poisoned");
         let activations = activations.stats();
-        let exact_blob_stats = self
-            .exact_blobs
+        let exact_blob_stats = self.exact_blobs.try_lock().ok().map(|blobs| {
+            (
+                blobs.physical_bytes(),
+                blobs.block_count(),
+                blobs.logical_ref_count(),
+            )
+        });
+        let exact_state_stats_busy = radix_stats.is_none() || exact_blob_stats.is_none();
+        let (exact_physical_bytes, exact_blocks, exact_block_refs) =
+            exact_blob_stats.unwrap_or_default();
+        let (resident_allocated_sequences, resident_free_sequences, resident_quarantined_sequences) =
+            lock_resident_sequences(&self.resident_sequences).stats();
+        let resident_sequence_drift = radix
+            .resident_entries
+            .abs_diff(resident_allocated_sequences);
+        let (resident_capacity_reservations, resident_capacity_reserved_tokens) =
+            self.resident_capacity_reservations.stats();
+        let output_token_entries = self
+            .output_tokens
             .try_lock()
             .ok()
-            .map(|blobs| (blobs.physical_bytes(), blobs.block_count()));
-        let exact_state_stats_busy = radix_stats.is_none() || exact_blob_stats.is_none();
-        let (exact_physical_bytes, _) = exact_blob_stats.unwrap_or_default();
+            .map(|tokens| tokens.len())
+            .unwrap_or_default();
+        let (split_prefill_sessions, split_prefill_tokens) = self
+            .split_prefill_tokens
+            .try_lock()
+            .ok()
+            .map(|sessions| {
+                (
+                    sessions.len(),
+                    sessions
+                        .values()
+                        .map(Vec::len)
+                        .fold(0, usize::saturating_add),
+                )
+            })
+            .unwrap_or_default();
         vec![
             ("skippy.kv.mode", json!(format!("{:?}", self.mode))),
             ("skippy.kv.payload", json!(format!("{:?}", self.payload))),
@@ -492,6 +667,8 @@ impl KvStageIntegration {
                 "skippy.exact_cache.physical_bytes",
                 json!(exact_physical_bytes),
             ),
+            ("skippy.exact_cache.blocks", json!(exact_blocks)),
+            ("skippy.exact_cache.block_refs", json!(exact_block_refs)),
             (
                 "skippy.exact_cache.stats_busy",
                 json!(exact_state_stats_busy),
@@ -517,12 +694,73 @@ impl KvStageIntegration {
                         .load(std::sync::atomic::Ordering::Relaxed)
                 ),
             ),
+            (
+                "skippy.exact_cache.worker_healthy",
+                json!(
+                    self.exact_state_record_worker_healthy
+                        .load(std::sync::atomic::Ordering::Acquire)
+                ),
+            ),
+            (
+                "skippy.exact_cache.worker_panics",
+                json!(
+                    self.exact_state_record_worker_panics
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
+            ),
             ("skippy.exact_cache.max_bytes", json!(self.exact_max_bytes)),
             (
                 "skippy.exact_cache.max_entries",
                 json!(self.exact_max_entries),
             ),
+            (
+                "skippy.kv.output_token_entries",
+                json!(output_token_entries),
+            ),
+            (
+                "skippy.kv.split_prefill_sessions",
+                json!(split_prefill_sessions),
+            ),
+            (
+                "skippy.kv.split_prefill_tokens",
+                json!(split_prefill_tokens),
+            ),
+            (
+                "skippy.kv.split_prefill_bytes",
+                json!(split_prefill_tokens.saturating_mul(std::mem::size_of::<i32>())),
+            ),
+            (
+                "skippy.kv.resident_allocated_sequences",
+                json!(resident_allocated_sequences),
+            ),
+            (
+                "skippy.kv.resident_free_sequences",
+                json!(resident_free_sequences),
+            ),
+            (
+                "skippy.kv.resident_quarantined_sequences",
+                json!(resident_quarantined_sequences),
+            ),
+            (
+                "skippy.kv.resident_sequence_drift",
+                json!(resident_sequence_drift),
+            ),
+            (
+                "skippy.kv.capacity_reservations",
+                json!(resident_capacity_reservations),
+            ),
+            (
+                "skippy.kv.capacity_reserved_tokens",
+                json!(resident_capacity_reserved_tokens),
+            ),
             ("skippy.kv.correctness_mode", json!(self.correctness_mode)),
+            (
+                "skippy.kv.cache_healthy",
+                json!(
+                    self.cache_healthy
+                        .load(std::sync::atomic::Ordering::Acquire)
+                ),
+            ),
             (
                 "skippy.kv.trust_local_writes",
                 json!(self.trust_local_writes),
@@ -564,11 +802,10 @@ impl KvStageIntegration {
         {
             return false;
         }
-        self.first_tokens
+        self.output_tokens
             .lock()
-            .expect("first-token cache lock poisoned")
-            .insert(cache_key.to_string(), predicted)
-            .is_none()
+            .expect("output-token cache lock poisoned")
+            .record_first(cache_key, predicted)
     }
 
     /// Test-only compatibility helper for the identity-only cache probe.
@@ -584,11 +821,10 @@ impl KvStageIntegration {
         if !self.should_lookup() {
             return None;
         }
-        self.first_tokens
+        self.output_tokens
             .lock()
-            .expect("first-token cache lock poisoned")
-            .get(cache_key)
-            .copied()
+            .expect("output-token cache lock poisoned")
+            .lookup_first(cache_key)
     }
 
     pub fn record_cached_replay_tokens(
@@ -606,31 +842,20 @@ impl KvStageIntegration {
         {
             return None;
         }
-        let mut replay_tokens = self
-            .replay_tokens
+        self.output_tokens
             .lock()
-            .expect("replay-token cache lock poisoned");
-        let entry = replay_tokens.entry(cache_key.to_string()).or_default();
-        if entry.len() > previous.len() {
-            return Some(entry.len().min(max_replay_tokens));
-        }
-        if entry.as_slice() != previous {
-            return None;
-        }
-        entry.push(predicted);
-        Some(entry.len())
+            .expect("output-token cache lock poisoned")
+            .record_replay(cache_key, previous, predicted, max_replay_tokens)
     }
 
     pub fn lookup_cached_replay_tokens(&self, cache_key: &str, max_tokens: usize) -> Vec<i32> {
         if !self.should_lookup() || max_tokens == 0 {
             return Vec::new();
         }
-        self.replay_tokens
+        self.output_tokens
             .lock()
-            .expect("replay-token cache lock poisoned")
-            .get(cache_key)
-            .map(|tokens| tokens.iter().copied().take(max_tokens).collect())
-            .unwrap_or_default()
+            .expect("output-token cache lock poisoned")
+            .lookup_replay(cache_key, max_tokens)
     }
 }
 
@@ -650,13 +875,14 @@ mod exact_state_record_queue_tests {
     use skippy_cache::ExactStatePayload;
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::sync_channel,
     };
 
     use super::{
         BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
         PendingExactStateRecord, enqueue_exact_state_record, has_exact_state_record_capacity,
+        run_exact_state_record_job,
     };
 
     fn pending(page_id: &str) -> PendingExactStateRecord {
@@ -686,6 +912,7 @@ mod exact_state_record_queue_tests {
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(0);
+        let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
             enqueue_exact_state_record(
@@ -694,6 +921,7 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &worker_healthy,
                 pending("dropped"),
             ),
             ExactStateRecordAdmission::DroppedFull
@@ -712,6 +940,7 @@ mod exact_state_record_queue_tests {
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);
         let pending_count = AtomicUsize::new(0);
+        let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
             enqueue_exact_state_record(
@@ -720,6 +949,7 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &worker_healthy,
                 pending("orphaned"),
             ),
             ExactStateRecordAdmission::WorkerStopped
@@ -738,6 +968,7 @@ mod exact_state_record_queue_tests {
         let dropped = AtomicU64::new(0);
         let pending_count = Arc::new(AtomicUsize::new(0));
         let worker_pending_count = pending_count.clone();
+        let worker_healthy = AtomicBool::new(true);
 
         assert_eq!(
             enqueue_exact_state_record(
@@ -746,6 +977,7 @@ mod exact_state_record_queue_tests {
                 &queued,
                 &dropped,
                 &pending_count,
+                &worker_healthy,
                 pending("page"),
             ),
             ExactStateRecordAdmission::Queued
@@ -764,6 +996,50 @@ mod exact_state_record_queue_tests {
         assert_eq!(queued.load(Ordering::Relaxed), 1);
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
         assert_eq!(pending_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn worker_panic_fails_closed_and_releases_all_record_bookkeeping() {
+        let (sender, _receiver) = sync_channel(1);
+        let inflight = Mutex::new(BTreeSet::from(["panicked".to_string()]));
+        let queued = AtomicU64::new(0);
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(1);
+        let worker_healthy = AtomicBool::new(true);
+        let worker_panics = AtomicU64::new(0);
+
+        run_exact_state_record_job(
+            &inflight,
+            &dropped,
+            &pending_count,
+            &worker_healthy,
+            &worker_panics,
+            pending("panicked"),
+            |_| panic!("injected exact-record worker failure"),
+        );
+
+        assert!(!worker_healthy.load(Ordering::Acquire));
+        assert_eq!(worker_panics.load(Ordering::Relaxed), 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(pending_count.load(Ordering::Acquire), 0);
+        assert!(inflight.lock().unwrap().is_empty());
+
+        inflight.lock().unwrap().insert("later".to_string());
+        assert_eq!(
+            enqueue_exact_state_record(
+                &sender,
+                &inflight,
+                &queued,
+                &dropped,
+                &pending_count,
+                &worker_healthy,
+                pending("later"),
+            ),
+            ExactStateRecordAdmission::WorkerStopped
+        );
+        assert!(inflight.lock().unwrap().is_empty());
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
+        assert_eq!(pending_count.load(Ordering::Acquire), 0);
     }
 }
 
@@ -785,5 +1061,61 @@ mod telemetry_error_class_tests {
             telemetry_error_class_from_message("arbitrary secret detail 123"),
             "internal"
         );
+    }
+}
+
+#[cfg(test)]
+mod resident_ownership_reconciliation_tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::{ResidentSequencePool, lock_resident_sequences, verify_resident_ownership};
+
+    #[test]
+    fn ownership_mismatch_permanently_disables_cache_operations() {
+        let healthy = AtomicBool::new(true);
+
+        let error = verify_resident_ownership(&healthy, 2, 1).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "resident cache ownership mismatch: radix_entries=2 allocated_sequences=1"
+        );
+        assert!(!healthy.load(Ordering::Acquire));
+        verify_resident_ownership(&healthy, 1, 1).unwrap();
+        assert!(!healthy.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn poisoned_resident_sequence_lock_recovers_without_reusing_state() {
+        let sequences = Arc::new(Mutex::new(ResidentSequencePool::new(4)));
+        let poisoned = sequences.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let mut guard = poisoned.lock().unwrap();
+                guard.allocate().unwrap();
+                panic!("poison resident sequence pool for test");
+            })
+            .join()
+            .is_err()
+        );
+
+        let mut guard = lock_resident_sequences(&sequences);
+        assert_eq!(guard.stats(), (1, 0, 0));
+        assert_eq!(guard.allocate().unwrap(), 5);
+    }
+
+    #[test]
+    fn forced_quarantine_removes_a_sequence_from_every_reusable_set() {
+        let mut sequences = ResidentSequencePool::new(4);
+        let seq_id = sequences.allocate().unwrap();
+        sequences.release(seq_id).unwrap();
+
+        sequences.force_quarantine(seq_id);
+
+        assert_eq!(sequences.stats(), (0, 0, 1));
+        assert_eq!(sequences.allocate().unwrap(), seq_id + 1);
     }
 }

@@ -314,6 +314,7 @@ mod tests {
         let selected = selected.clone();
         RuntimeOperation {
             label,
+            control: None,
             run: Box::new(move |_| {
                 selected.send(label).unwrap();
             }),

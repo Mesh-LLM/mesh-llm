@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -95,6 +95,16 @@ pub(crate) struct DirectIterationChannel {
     result: std_mpsc::Receiver<OpenAiResult<SchedulerIterationOutcome>>,
 }
 
+pub(crate) struct CacheAwareRuntimeRequest<'a> {
+    pub(crate) operation_id: String,
+    pub(crate) deadline: Instant,
+    pub(crate) cancellation: Option<&'a openai_frontend::CancellationToken>,
+    pub(crate) prompt_tokens: Arc<[i32]>,
+    pub(crate) priority: u64,
+    pub(crate) payload: StagePrefixCachePayload,
+    pub(crate) refresh_affinity: CacheAffinityRefresh,
+}
+
 struct IterationSchedulerShared {
     commands: std_mpsc::SyncSender<SchedulerCommand>,
     owner_count: AtomicUsize,
@@ -122,8 +132,33 @@ struct DirectIteration {
     input: Option<ActivationFrame>,
     sample_last: bool,
     phase: IterationBatchPhase,
+    deadline: Option<Instant>,
+    cancellation: Option<openai_frontend::CancellationToken>,
     enqueued_at: Instant,
     reply: std_mpsc::SyncSender<OpenAiResult<SchedulerIterationOutcome>>,
+}
+
+impl DirectIteration {
+    fn ensure_active(&self) -> OpenAiResult<()> {
+        ensure_direct_iteration_active(self.deadline, self.cancellation.as_ref())
+    }
+}
+
+fn ensure_direct_iteration_active(
+    deadline: Option<Instant>,
+    cancellation: Option<&openai_frontend::CancellationToken>,
+) -> OpenAiResult<()> {
+    if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
+        return Err(OpenAiError::cancelled(
+            "request cancelled during scheduler iteration",
+        ));
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(OpenAiError::backend(
+            "cache operation deadline exceeded during scheduler iteration",
+        ));
+    }
+    Ok(())
 }
 
 type RuntimeOperationFn = Box<dyn FnOnce(&Arc<Mutex<RuntimeState>>) + Send>;
@@ -131,7 +166,71 @@ type RuntimeSetupOutcome = (Vec<String>, Vec<(String, OpenAiError)>);
 
 struct RuntimeOperation {
     label: &'static str,
+    control: Option<CacheRuntimeContext>,
     run: RuntimeOperationFn,
+}
+
+const CACHE_OPERATION_ACTIVE: u8 = 0;
+const CACHE_OPERATION_CANCELLED: u8 = 1;
+const CACHE_OPERATION_DEADLINE_EXCEEDED: u8 = 2;
+
+#[derive(Clone)]
+pub(crate) struct CacheRuntimeContext {
+    operation_id: String,
+    deadline: Instant,
+    cancellation: Option<openai_frontend::CancellationToken>,
+    state: Arc<AtomicU8>,
+}
+
+impl CacheRuntimeContext {
+    fn new(
+        operation_id: String,
+        deadline: Instant,
+        cancellation: Option<&openai_frontend::CancellationToken>,
+    ) -> Self {
+        Self {
+            operation_id,
+            deadline,
+            cancellation: cancellation.cloned(),
+            state: Arc::new(AtomicU8::new(CACHE_OPERATION_ACTIVE)),
+        }
+    }
+
+    pub(crate) fn ensure_active(&self) -> OpenAiResult<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(openai_frontend::CancellationToken::is_cancelled)
+        {
+            self.cancel(CACHE_OPERATION_CANCELLED);
+        } else if Instant::now() >= self.deadline {
+            self.cancel(CACHE_OPERATION_DEADLINE_EXCEEDED);
+        }
+        match self.state.load(Ordering::Acquire) {
+            CACHE_OPERATION_ACTIVE => Ok(()),
+            CACHE_OPERATION_CANCELLED => Err(OpenAiError::cancelled(format!(
+                "cache runtime operation {} was cancelled",
+                self.operation_id
+            ))),
+            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::backend(format!(
+                "cache runtime operation {} exceeded its deadline",
+                self.operation_id
+            ))),
+            _ => Err(OpenAiError::backend(format!(
+                "cache runtime operation {} entered an invalid state",
+                self.operation_id
+            ))),
+        }
+    }
+
+    fn cancel(&self, reason: u8) {
+        let _ = self.state.compare_exchange(
+            CACHE_OPERATION_ACTIVE,
+            reason,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
 }
 
 fn runtime_operation<T>(
@@ -148,6 +247,7 @@ where
     let enqueued_at = Instant::now();
     let operation = RuntimeOperation {
         label,
+        control: None,
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
@@ -168,6 +268,52 @@ where
         }),
     };
     (operation, result)
+}
+
+fn cache_runtime_operation<T>(
+    label: &'static str,
+    operation_id: String,
+    deadline: Instant,
+    cancellation: Option<&openai_frontend::CancellationToken>,
+    operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> OpenAiResult<T> + Send + 'static,
+) -> (
+    RuntimeOperation,
+    std_mpsc::Receiver<OpenAiResult<SchedulerRuntimeOutcome<T>>>,
+    CacheRuntimeContext,
+)
+where
+    T: Send + 'static,
+{
+    let (reply, result) = std_mpsc::sync_channel(1);
+    let enqueued_at = Instant::now();
+    let control = CacheRuntimeContext::new(operation_id, deadline, cancellation);
+    let worker_control = control.clone();
+    let runtime_operation = RuntimeOperation {
+        label,
+        control: Some(control.clone()),
+        run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
+            let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
+            let lock_started = Instant::now();
+            let outcome = worker_control.ensure_active().and_then(|()| {
+                runtime
+                    .lock()
+                    .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
+            });
+            let outcome = outcome.and_then(|mut runtime| {
+                worker_control.ensure_active()?;
+                let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
+                let hold_started = Instant::now();
+                operation(&mut runtime, &worker_control).map(|value| SchedulerRuntimeOutcome {
+                    value,
+                    queue_wait_ms,
+                    runtime_lock_wait_ms,
+                    runtime_lock_hold_ms: hold_started.elapsed().as_secs_f64() * 1_000.0,
+                })
+            });
+            let _ = reply.send(outcome);
+        }),
+    };
+    (runtime_operation, result, control)
 }
 
 enum SchedulerCommand {
@@ -471,6 +617,8 @@ impl IterationScheduler {
             sampling,
             sample_last,
             phase,
+            None,
+            None,
         )
     }
 
@@ -484,6 +632,8 @@ impl IterationScheduler {
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
         phase: IterationBatchPhase,
+        deadline: Option<Instant>,
+        cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
         self.execute_direct_iteration(
             channel,
@@ -495,6 +645,8 @@ impl IterationScheduler {
             None,
             sample_last,
             phase,
+            deadline,
+            cancellation,
         )
     }
 
@@ -520,6 +672,8 @@ impl IterationScheduler {
             input,
             sample_last,
             IterationBatchPhase::Decode,
+            None,
+            None,
         )
     }
 
@@ -535,8 +689,11 @@ impl IterationScheduler {
         input: Option<ActivationFrame>,
         sample_last: bool,
         phase: IterationBatchPhase,
+        deadline: Option<Instant>,
+        cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SchedulerIterationOutcome> {
         validate_direct_iteration(token_ids, positions)?;
+        ensure_direct_iteration_active(deadline, cancellation)?;
         self.enqueue_command(SchedulerCommand::ExecuteIteration(DirectIteration {
             session_id: session_id.to_string(),
             target_token_count,
@@ -546,12 +703,16 @@ impl IterationScheduler {
             input,
             sample_last,
             phase,
+            deadline,
+            cancellation: cancellation.cloned(),
             enqueued_at: Instant::now(),
             reply: channel.reply.clone(),
         }))?;
-        channel.result.recv().map_err(|error| {
+        let result = channel.result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
-        })?
+        })?;
+        ensure_direct_iteration_active(deadline, cancellation)?;
+        result
     }
 
     /// Runs an operation on the scheduler worker so speculative verification,
@@ -589,26 +750,29 @@ impl IterationScheduler {
     pub(crate) fn execute_cache_aware_runtime_timed<T>(
         &self,
         label: &'static str,
-        prompt_tokens: Arc<[i32]>,
-        priority: u64,
-        payload: StagePrefixCachePayload,
-        refresh_affinity: CacheAffinityRefresh,
-        operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
+        request: CacheAwareRuntimeRequest<'_>,
+        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> OpenAiResult<T>
+        + Send
+        + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
     where
         T: Send + 'static,
     {
-        let (runtime_operation, result) = runtime_operation(label, operation);
+        let (runtime_operation, result, control) = cache_runtime_operation(
+            label,
+            request.operation_id,
+            request.deadline,
+            request.cancellation,
+            operation,
+        );
         self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
             runtime_operation,
-            prompt_tokens,
-            priority,
-            payload,
-            refresh_affinity,
+            request.prompt_tokens,
+            request.priority,
+            request.payload,
+            request.refresh_affinity,
         ))?;
-        result.recv().map_err(|error| {
-            OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
-        })?
+        wait_for_cache_runtime(result, &control)
     }
 
     fn enqueue_command(&self, command: SchedulerCommand) -> OpenAiResult<()> {
@@ -621,6 +785,26 @@ impl IterationScheduler {
                     OpenAiError::backend("iteration scheduler stopped")
                 }
             })
+    }
+}
+
+fn wait_for_cache_runtime<T>(
+    result: std_mpsc::Receiver<OpenAiResult<SchedulerRuntimeOutcome<T>>>,
+    control: &CacheRuntimeContext,
+) -> OpenAiResult<SchedulerRuntimeOutcome<T>> {
+    loop {
+        control.ensure_active()?;
+        let remaining = control
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .min(CANCELLATION_POLL_INTERVAL);
+        match result.recv_timeout(remaining) {
+            Ok(outcome) => return outcome,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(OpenAiError::backend("iteration scheduler stopped"));
+            }
+        }
     }
 }
 
@@ -838,6 +1022,7 @@ impl SchedulerWorker {
     ) {
         let started = Instant::now();
         let label = operation.label;
+        let cache_operation = operation.control.clone();
         (operation.run)(&self.runtime);
         if let Ok(runtime) = self.runtime.lock() {
             self.active_runtime_sessions = runtime.active_session_count();
@@ -858,6 +1043,21 @@ impl SchedulerWorker {
                     json!(started.elapsed().as_secs_f64() * 1_000.0),
                 ),
             ]);
+            if let Some(cache_operation) = cache_operation {
+                attrs.insert(
+                    "skippy.scheduler.cache_operation_id".to_string(),
+                    json!(cache_operation.operation_id),
+                );
+                attrs.insert(
+                    "skippy.scheduler.cache_operation_state".to_string(),
+                    json!(match cache_operation.state.load(Ordering::Acquire) {
+                        CACHE_OPERATION_ACTIVE => "active",
+                        CACHE_OPERATION_CANCELLED => "cancelled",
+                        CACHE_OPERATION_DEADLINE_EXCEEDED => "deadline_exceeded",
+                        _ => "invalid",
+                    }),
+                );
+            }
             if let Some(cache) = cache {
                 attrs.insert(
                     "skippy.scheduler.cache_matched_tokens".to_string(),
@@ -1103,11 +1303,24 @@ impl SchedulerWorker {
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 
+        let mut active = Vec::with_capacity(batch.len());
+        for request in batch {
+            match request.ensure_active() {
+                Ok(()) => active.push(request),
+                Err(error) => {
+                    let _ = request.reply.send(Err(error));
+                }
+            }
+        }
+        if active.is_empty() {
+            return;
+        }
+
         let lock_started = Instant::now();
         let mut runtime = match self.runtime.lock() {
             Ok(runtime) => runtime,
             Err(_) => {
-                for request in batch {
+                for request in active {
                     let _ = request
                         .reply
                         .send(Err(OpenAiError::backend("runtime lock poisoned")));
@@ -1117,8 +1330,12 @@ impl SchedulerWorker {
         };
         let runtime_lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
-        let mut runnable = Vec::with_capacity(batch.len());
-        for request in batch {
+        let mut runnable = Vec::with_capacity(active.len());
+        for request in active {
+            if let Err(error) = request.ensure_active() {
+                let _ = request.reply.send(Err(error));
+                continue;
+            }
             let alignment = match request.target_token_count {
                 Some(target_token_count) => runtime
                     .align_session_to_token_count_if_ahead(&request.session_id, target_token_count),
@@ -1686,9 +1903,128 @@ mod tests {
             input: None,
             sample_last: true,
             phase: IterationBatchPhase::Prefill,
+            deadline: None,
+            cancellation: None,
             enqueued_at: Instant::now(),
             reply,
         }
+    }
+
+    #[test]
+    fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let (commands, receiver) = std_mpsc::sync_channel(8);
+        let worker = thread::spawn(move || {
+            SchedulerWorker {
+                runtime,
+                scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8)),
+                requests: BTreeMap::new(),
+                direct_iterations: VecDeque::new(),
+                cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+                commands: receiver,
+                kv_capacity_tokens: 64,
+                max_direct_batch_size: 1,
+                max_commands_per_turn: 8,
+                iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
+                telemetry: None,
+                last_served_direct: false,
+                last_served_cache_runtime: false,
+                last_emitted_lifecycle_counters: (0, 0, 0, 0),
+            }
+            .run();
+        });
+        let (worker_blocked, worker_blocked_rx) = std_mpsc::sync_channel(0);
+        let (release_worker, release_worker_rx) = std_mpsc::sync_channel(0);
+        commands
+            .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
+                label: "deadline-test-gate",
+                control: None,
+                run: Box::new(move |_| {
+                    worker_blocked.send(()).unwrap();
+                    release_worker_rx.recv().unwrap();
+                }),
+            }))
+            .unwrap();
+        worker_blocked_rx.recv().unwrap();
+
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let (reply, result) = std_mpsc::sync_channel(1);
+        let mut request = direct_iteration("expired-deferred-suffix", 1);
+        request.deadline = Some(deadline);
+        request.reply = reply;
+        commands
+            .send(SchedulerCommand::ExecuteIteration(request))
+            .unwrap();
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .saturating_add(Duration::from_millis(1)),
+        );
+        release_worker.send(()).unwrap();
+
+        let error = result
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocked direct iteration returned")
+            .unwrap_err();
+        assert!(error.to_string().contains("deadline exceeded"));
+        commands.send(SchedulerCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn direct_iteration_rechecks_deadline_after_worker_reply() {
+        let (commands, receiver) = std_mpsc::sync_channel(1);
+        let scheduler = IterationScheduler {
+            shared: Arc::new(IterationSchedulerShared {
+                commands,
+                owner_count: AtomicUsize::new(1),
+                worker: Mutex::new(None),
+            }),
+        };
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let caller = thread::spawn(move || {
+            let channel = scheduler.direct_iteration_channel();
+            scheduler.execute_iteration_on(
+                &channel,
+                "late-worker-reply",
+                &[1],
+                &[],
+                None,
+                false,
+                IterationBatchPhase::Prefill,
+                Some(deadline),
+                None,
+            )
+        });
+
+        let SchedulerCommand::ExecuteIteration(request) = receiver.recv().unwrap() else {
+            panic!("expected direct iteration command");
+        };
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .saturating_add(Duration::from_millis(1)),
+        );
+        request
+            .reply
+            .send(Err(OpenAiError::backend("late worker result")))
+            .unwrap();
+
+        let error = caller.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("deadline exceeded"));
+    }
+
+    #[test]
+    fn queued_direct_iteration_carries_cancellation_state() {
+        let cancellation = openai_frontend::CancellationToken::new();
+        let mut request = direct_iteration("cancelled-deferred-suffix", 1);
+        request.cancellation = Some(cancellation.clone());
+        cancellation.cancel();
+
+        let error = request.ensure_active().unwrap_err();
+        assert!(error.to_string().contains("request cancelled"));
     }
 
     #[test]
@@ -2017,6 +2353,96 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_cache_runtime_is_rejected_before_runtime_or_user_work() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let cancellation = openai_frontend::CancellationToken::new();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let worker_executions = executions.clone();
+        let (operation, result, _) = cache_runtime_operation(
+            "cancelled-cache",
+            "request-7".to_string(),
+            Instant::now() + Duration::from_secs(1),
+            Some(&cancellation),
+            move |_, _| {
+                worker_executions.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        cancellation.cancel();
+        (operation.run)(&runtime);
+
+        let error = result.recv().unwrap().unwrap_err();
+        assert!(error.to_string().contains("request-7 was cancelled"));
+        assert_eq!(executions.load(Ordering::Relaxed), 0);
+        assert_eq!(runtime.lock().unwrap().active_session_count(), 0);
+    }
+
+    #[test]
+    fn expired_cache_runtime_is_rejected_before_runtime_or_user_work() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let executions = Arc::new(AtomicUsize::new(0));
+        let worker_executions = executions.clone();
+        let (operation, result, _) = cache_runtime_operation(
+            "expired-cache",
+            "request-8".to_string(),
+            Instant::now(),
+            None,
+            move |_, _| {
+                worker_executions.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        (operation.run)(&runtime);
+
+        let error = result.recv().unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("request-8 exceeded its deadline")
+        );
+        assert_eq!(executions.load(Ordering::Relaxed), 0);
+        assert_eq!(runtime.lock().unwrap().active_session_count(), 0);
+    }
+
+    #[test]
+    fn in_flight_cache_runtime_observes_cancellation_at_checkpoint() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let cancellation = openai_frontend::CancellationToken::new();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let worker_executions = executions.clone();
+        let (started, started_rx) = std_mpsc::sync_channel(0);
+        let (cancelled, cancelled_rx) = std_mpsc::sync_channel(0);
+        let (operation, result, _) = cache_runtime_operation(
+            "in-flight-cancelled-cache",
+            "request-9".to_string(),
+            Instant::now() + Duration::from_secs(1),
+            Some(&cancellation),
+            move |_, control| {
+                worker_executions.fetch_add(1, Ordering::Relaxed);
+                started.send(()).unwrap();
+                cancelled_rx.recv().unwrap();
+                control.ensure_active()?;
+                worker_executions.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+        let canceller = thread::spawn(move || {
+            started_rx.recv().unwrap();
+            cancellation.cancel();
+            cancelled.send(()).unwrap();
+        });
+
+        (operation.run)(&runtime);
+        canceller.join().unwrap();
+
+        let error = result.recv().unwrap().unwrap_err();
+        assert!(error.to_string().contains("request-9 was cancelled"));
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_empty() {
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let (_commands, receiver) = std_mpsc::channel();
@@ -2042,6 +2468,7 @@ mod tests {
         worker.cache_runtime_queue.enqueue_with_payload(
             RuntimeOperation {
                 label: "full-wave-cache",
+                control: None,
                 run: Box::new(move |_| {
                     selected.send(()).unwrap();
                 }),
@@ -2085,6 +2512,7 @@ mod tests {
         worker.cache_runtime_queue.enqueue(
             RuntimeOperation {
                 label: "resident-cache",
+                control: None,
                 run: Box::new(move |_| {
                     selected.send(()).unwrap();
                 }),
@@ -2178,6 +2606,7 @@ mod tests {
         commands
             .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
                 label: "panic-test-gate",
+                control: None,
                 run: Box::new(move |_| {
                     worker_blocked.send(()).unwrap();
                     release_worker_rx.recv().unwrap();
@@ -2203,6 +2632,7 @@ mod tests {
         commands
             .send(SchedulerCommand::ExecuteRuntime(RuntimeOperation {
                 label: "panic-test",
+                control: None,
                 run: Box::new(|_| panic!("injected scheduler worker panic")),
             }))
             .unwrap();

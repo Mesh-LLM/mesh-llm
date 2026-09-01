@@ -158,12 +158,24 @@ impl KvStageIntegration {
                 Ok(restored_payload) => restored_payload,
                 Err(error) => {
                     drop(lease);
-                    if deterministic_failure {
-                        self.quarantine_exact_state_entry(
+                    if deterministic_failure
+                        && let Err(quarantine_error) = self.quarantine_exact_state_entry(
                             &identity.namespace,
                             &lookup.stored_tokens,
                             &lookup.value.page_id,
-                        );
+                        )
+                    {
+                        let _ =
+                            mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                                message: "Skippy exact-state quarantine failed".to_string(),
+                                context: Some(format!(
+                                    "page_id={} error={quarantine_error:#}",
+                                    lookup.value.page_id
+                                )),
+                            });
+                        return Err(error.context(format!(
+                            "failed to fully quarantine corrupt exact-state entry: {quarantine_error:#}"
+                        )));
                     }
                     return Err(error);
                 }
@@ -191,22 +203,27 @@ impl KvStageIntegration {
         Ok(None)
     }
 
-    fn quarantine_exact_state_entry(&self, namespace: &str, tokens: &[i32], page_id: &str) -> bool {
+    fn quarantine_exact_state_entry(
+        &self,
+        namespace: &str,
+        tokens: &[i32],
+        page_id: &str,
+    ) -> Result<bool> {
         let removed = self
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove_recurrent_if(namespace, tokens, |entry| entry.page_id == page_id);
         let Some(entry) = removed else {
-            return false;
+            return Ok(false);
         };
         entry.payload.release_from(
             &mut self
                 .exact_blobs
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        true
+        )?;
+        Ok(true)
     }
 
     pub fn record_exact_state(
