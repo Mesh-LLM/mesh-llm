@@ -1093,6 +1093,20 @@ mod tests {
         (namespace, tokens)
     }
 
+    fn state_machine_budget() -> (usize, usize) {
+        let seeds = std::env::var("SKIPPY_CACHE_STATE_MACHINE_SEEDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(8)
+            .clamp(1, 4_096);
+        let steps = std::env::var("SKIPPY_CACHE_STATE_MACHINE_STEPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(2_000)
+            .clamp(1, 100_000);
+        (seeds, steps)
+    }
+
     fn reference_longest(
         entries: &HashMap<(String, Vec<i32>), u64>,
         namespace: &str,
@@ -1552,6 +1566,228 @@ mod tests {
                 let stats = cache.stats();
                 assert_eq!(stats.resident_entries, resident.len());
                 assert_eq!(stats.recurrent_entries, recurrent.len());
+            }
+        }
+    }
+
+    #[test]
+    fn randomized_leases_and_evictions_preserve_ownership_stats() {
+        #[derive(Clone, Copy, Default)]
+        struct Entry {
+            value: u64,
+            bytes: u64,
+            refs: u32,
+        }
+
+        let (seed_count, steps) = state_machine_budget();
+        for seed_index in 0..seed_count {
+            let seed = 0x19a4_7c2e_d18b_5601_u64
+                .wrapping_add((seed_index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            let mut rng = DeterministicRng(seed);
+            let mut cache = UnifiedRadixCache::<u64, u64>::new();
+            let mut resident = HashMap::<i32, Entry>::new();
+            let mut recurrent = HashMap::<i32, Entry>::new();
+            let mut resident_evictions = 0_u64;
+            let mut recurrent_evictions = 0_u64;
+
+            for step in 0..steps {
+                let token = (rng.below(32) + 1) as i32;
+                let tokens = [token];
+                let value = (seed_index as u64) << 32 | step as u64;
+                let bytes = (rng.below(8) + 1) as u64;
+                match rng.below(8) {
+                    0 => {
+                        let active = resident.get(&token).is_some_and(|entry| entry.refs > 0);
+                        let result = cache.insert_resident("state", &tokens, bytes, value);
+                        if active {
+                            assert!(result.is_err(), "seed={seed:#x} step={step}");
+                        } else {
+                            let expected = resident.insert(
+                                token,
+                                Entry {
+                                    value,
+                                    bytes,
+                                    refs: 0,
+                                },
+                            );
+                            assert_eq!(
+                                result.unwrap(),
+                                expected.map(|entry| entry.value),
+                                "seed={seed:#x} step={step}"
+                            );
+                        }
+                    }
+                    1 => {
+                        let active = recurrent.get(&token).is_some_and(|entry| entry.refs > 0);
+                        let result = cache.insert_recurrent("state", &tokens, bytes, value);
+                        if active {
+                            assert!(result.is_err(), "seed={seed:#x} step={step}");
+                        } else {
+                            let expected = recurrent.insert(
+                                token,
+                                Entry {
+                                    value,
+                                    bytes,
+                                    refs: 0,
+                                },
+                            );
+                            assert_eq!(
+                                result.unwrap(),
+                                expected.map(|entry| entry.value),
+                                "seed={seed:#x} step={step}"
+                            );
+                        }
+                    }
+                    2 => {
+                        let actual = cache.acquire_resident("state", &tokens);
+                        let expected = resident.get_mut(&token);
+                        assert_eq!(
+                            actual.is_some(),
+                            expected.is_some(),
+                            "seed={seed:#x} step={step}"
+                        );
+                        if let (Some(hit), Some(entry)) = (actual, expected) {
+                            entry.refs = entry.refs.saturating_add(1);
+                            assert_eq!(hit.value, entry.value, "seed={seed:#x} step={step}");
+                            assert_eq!(hit.active_refs, entry.refs, "seed={seed:#x} step={step}");
+                        }
+                    }
+                    3 => {
+                        let actual = cache.acquire_recurrent("state", &tokens);
+                        let expected = recurrent.get_mut(&token);
+                        assert_eq!(
+                            actual.is_some(),
+                            expected.is_some(),
+                            "seed={seed:#x} step={step}"
+                        );
+                        if let (Some(hit), Some(entry)) = (actual, expected) {
+                            entry.refs = entry.refs.saturating_add(1);
+                            assert_eq!(hit.value, entry.value, "seed={seed:#x} step={step}");
+                            assert_eq!(hit.active_refs, entry.refs, "seed={seed:#x} step={step}");
+                        }
+                    }
+                    4 => {
+                        let expected = resident.get_mut(&token).is_some_and(|entry| {
+                            if entry.refs == 0 {
+                                false
+                            } else {
+                                entry.refs -= 1;
+                                true
+                            }
+                        });
+                        assert_eq!(
+                            cache.release_resident("state", &tokens),
+                            expected,
+                            "seed={seed:#x} step={step}"
+                        );
+                    }
+                    5 => {
+                        let expected = recurrent.get_mut(&token).is_some_and(|entry| {
+                            if entry.refs == 0 {
+                                false
+                            } else {
+                                entry.refs -= 1;
+                                true
+                            }
+                        });
+                        assert_eq!(
+                            cache.release_recurrent("state", &tokens),
+                            expected,
+                            "seed={seed:#x} step={step}"
+                        );
+                    }
+                    6 => {
+                        let expected = resident
+                            .get(&token)
+                            .filter(|entry| entry.refs == 0)
+                            .copied();
+                        let actual = cache.evict_resident_candidate("state", &tokens);
+                        assert_eq!(
+                            actual.is_some(),
+                            expected.is_some(),
+                            "seed={seed:#x} step={step}"
+                        );
+                        if let (Some(eviction), Some(entry)) = (actual, expected) {
+                            assert_eq!(eviction.value, entry.value, "seed={seed:#x} step={step}");
+                            resident.remove(&token);
+                            resident_evictions += 1;
+                        }
+                    }
+                    7 => {
+                        let actual = cache.evict_lru_recurrent();
+                        let has_candidate = recurrent.values().any(|entry| entry.refs == 0);
+                        assert_eq!(
+                            actual.is_some(),
+                            has_candidate,
+                            "seed={seed:#x} step={step}"
+                        );
+                        if let Some(eviction) = actual {
+                            let evicted_token = eviction.tokens[0];
+                            let entry = recurrent
+                                .remove(&evicted_token)
+                                .expect("evicted recurrent entry must exist in reference model");
+                            assert_eq!(entry.refs, 0, "seed={seed:#x} step={step}");
+                            assert_eq!(eviction.value, entry.value, "seed={seed:#x} step={step}");
+                            recurrent_evictions += 1;
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+
+                let stats = cache.stats();
+                assert_eq!(
+                    stats.namespaces,
+                    usize::from(!resident.is_empty() || !recurrent.is_empty()),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_entries,
+                    resident.len(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_tokens,
+                    resident.len() as u64,
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.recurrent_entries,
+                    recurrent.len(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_pinned_tokens,
+                    resident.values().filter(|entry| entry.refs > 0).count() as u64,
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_logical_bytes,
+                    resident.values().map(|entry| entry.bytes).sum(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.recurrent_logical_bytes,
+                    recurrent.values().map(|entry| entry.bytes).sum(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_active_refs,
+                    resident.values().map(|entry| u64::from(entry.refs)).sum(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.recurrent_active_refs,
+                    recurrent.values().map(|entry| u64::from(entry.refs)).sum(),
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.resident_evictions, resident_evictions,
+                    "seed={seed:#x} step={step}"
+                );
+                assert_eq!(
+                    stats.recurrent_evictions, recurrent_evictions,
+                    "seed={seed:#x} step={step}"
+                );
             }
         }
     }

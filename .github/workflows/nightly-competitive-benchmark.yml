@@ -33,6 +33,10 @@ jobs:
       COMPETITIVE_SGLANG_PYTHON: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_PYTHON }}
       COMPETITIVE_SGLANG_MODEL_ROOT: ${{ vars.MESH_NIGHTLY_COMPETITIVE_SGLANG_MODEL_ROOT }}
       COMPETITIVE_OUTPUT: ${{ github.workspace }}/.benchmark-artifacts/${{ github.run_id }}-${{ github.run_attempt }}
+      HF_HISTORY_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_ENABLED || '0' }}
+      HF_HISTORY_GATE_ENABLED: ${{ vars.MESH_PERFORMANCE_HISTORY_GATE_ENABLED || '0' }}
+      HF_DATASET_REPO: ${{ vars.MESH_PERFORMANCE_HISTORY_DATASET }}
+      HF_HISTORY_LOCAL: ${{ github.workspace }}/.performance-history-cache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -49,6 +53,14 @@ jobs:
               exit 1
             }
           done
+          if [[ "$HF_HISTORY_ENABLED" == "1" ]] && ! command -v hf >/dev/null 2>&1; then
+            echo "hf must be baked into the benchmark runner when performance history is enabled" >&2
+            exit 1
+          fi
+          if [[ "$HF_HISTORY_GATE_ENABLED" == "1" && "$HF_HISTORY_ENABLED" != "1" ]]; then
+            echo "MESH_PERFORMANCE_HISTORY_GATE_ENABLED requires performance history to be enabled" >&2
+            exit 1
+          fi
           for variable in \
             LLAMA_STAGE_BUILD_DIR \
             COMPETITIVE_MODEL_ROOT \
@@ -64,6 +76,38 @@ jobs:
             fi
           done
           nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+
+      - name: Capture benchmark runner fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$COMPETITIVE_OUTPUT"
+          nvidia-smi \
+            --query-gpu=name,uuid,compute_cap,driver_version,pci.bus_id,pstate,temperature.gpu,clocks.current.sm,clocks.current.memory \
+            --format=csv,noheader,nounits \
+            > "$COMPETITIVE_OUTPUT/runner-gpu.csv"
+
+      - name: Download cohort-matched performance history
+        if: ${{ env.HF_HISTORY_ENABLED == '1' }}
+        env:
+          HF_TOKEN: ${{ secrets.MESH_PERFORMANCE_HISTORY_HF_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$HF_DATASET_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "MESH_PERFORMANCE_HISTORY_DATASET must be an owner/dataset repo id" >&2
+            exit 1
+          fi
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "MESH_PERFORMANCE_HISTORY_HF_TOKEN must be configured when history is enabled" >&2
+            exit 1
+          fi
+          hf datasets info "$HF_DATASET_REPO" --revision main >/dev/null
+          hf download "$HF_DATASET_REPO" \
+            --type dataset \
+            --revision main \
+            --local-dir "$HF_HISTORY_LOCAL"
+          cmp ci/performance-history/schema.json "$HF_HISTORY_LOCAL/schema.json"
 
       - name: Build current Mesh benchmark server
         shell: bash
@@ -118,6 +162,42 @@ jobs:
               --artifact "$COMPETITIVE_OUTPUT"
             cat "$COMPETITIVE_OUTPUT/summary/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Normalize performance history and report regressions
+        id: performance_history
+        if: ${{ !cancelled() && steps.benchmark.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --artifact "$COMPETITIVE_OUTPUT"
+            --output "$COMPETITIVE_OUTPUT/summary/performance-history.jsonl"
+            --report "$COMPETITIVE_OUTPUT/summary/PERFORMANCE_REGRESSIONS.md"
+          )
+          if [[ -d "$HF_HISTORY_LOCAL/data/runs" ]]; then
+            args+=(--baseline "$HF_HISTORY_LOCAL/data/runs")
+          fi
+          if [[ "$HF_HISTORY_GATE_ENABLED" == "1" ]]; then
+            args+=(--gate)
+          fi
+          python3 scripts/performance-history.py "${args[@]}"
+          cat "$COMPETITIVE_OUTPUT/summary/PERFORMANCE_REGRESSIONS.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish immutable performance history shard
+        if: ${{ !cancelled() && env.HF_HISTORY_ENABLED == '1' && steps.performance_history.outcome == 'success' }}
+        env:
+          HF_TOKEN: ${{ secrets.MESH_PERFORMANCE_HISTORY_HF_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          remote_path="data/runs/$source_sha/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.jsonl"
+          hf upload "$HF_DATASET_REPO" \
+            "$COMPETITIVE_OUTPUT/summary/performance-history.jsonl" \
+            "$remote_path" \
+            --type dataset \
+            --revision main \
+            --commit-message "Record nightly performance for $source_sha"
 
       - name: Upload benchmark evidence
         if: ${{ !cancelled() }}

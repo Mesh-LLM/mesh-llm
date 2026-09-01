@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MeshLLM normalized performance history row",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "created_utc",
+    "source_sha",
+    "cohort_key",
+    "cohort",
+    "backend_binary_sha256",
+    "observed_gpu_state",
+    "prompt_count",
+    "successful_requests",
+    "failed_requests",
+    "output_tokens",
+    "measured_wall_ms",
+    "output_tokens_per_second",
+    "ttft_ms_mean",
+    "complete",
+    "artifact_result"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "created_utc": {"type": "string"},
+    "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "cohort_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cohort": {"type": "object"},
+    "backend_binary_sha256": {"type": ["string", "null"]},
+    "observed_gpu_state": {"type": "object"},
+    "prompt_count": {"type": "integer", "minimum": 1},
+    "successful_requests": {"type": "integer", "minimum": 0},
+    "failed_requests": {"type": "integer", "minimum": 0},
+    "output_tokens": {"type": "integer", "minimum": 0},
+    "measured_wall_ms": {"type": "number", "minimum": 0},
+    "output_tokens_per_second": {"type": "number", "minimum": 0},
+    "ttft_ms_mean": {"type": "number", "minimum": 0},
+    "complete": {"type": "boolean"},
+    "artifact_result": {"type": "string"}
+  },
+  "additionalProperties": false
+}

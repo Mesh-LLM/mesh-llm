@@ -32,6 +32,7 @@ jobs:
       new_sha: ${{ steps.sha.outputs.new_sha }}
       changed: ${{ steps.sha.outputs.changed }}
       certify: ${{ steps.sha.outputs.certify }}
+      cadence: ${{ steps.sha.outputs.cadence }}
       battery_outcome: ${{ steps.battery.outcome }}
       trusted_queue_sha: ${{ steps.sha.outputs.trusted_queue_sha }}
     env:
@@ -102,10 +103,18 @@ jobs:
             else
               echo "changed=true"
             fi
-            if [[ "$old_sha" != "$new_sha" || "$FORCE_CERTIFY" == "true" ]]; then
+            if [[ "$FORCE_CERTIFY" == "true" ]]; then
               echo "certify=true"
+              echo "cadence=manual-full"
+            elif [[ "$old_sha" != "$new_sha" ]]; then
+              echo "certify=true"
+              echo "cadence=llama-bump"
+            elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+              echo "certify=true"
+              echo "cadence=nightly"
             else
               echo "certify=false"
+              echo "cadence="
             fi
           } >> "$GITHUB_OUTPUT"
 
@@ -119,6 +128,7 @@ jobs:
           plan="target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
           python3 scripts/plan-family-battery.py \
             --manifest ci/llama-canary/family-certified.json \
+            --cadence "${{ steps.sha.outputs.cadence }}" \
             --shard-count 1 \
             --check-cache \
             --cache-root "$HF_CACHE" \
@@ -210,13 +220,25 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report forced certification result
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'false' && steps.sha.outputs.certify == 'true' && steps.battery.outcome == 'success'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.cadence == 'manual-full' && steps.battery.outcome == 'success'
         run: |
           {
             echo "## llama.cpp upstream canary (forced certification)"
             echo
             echo "The pinned upstream passed the requested full family battery. No pin update was needed."
             echo
+            cat /tmp/llama-upstream-pr.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report nightly family result
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.cadence == 'nightly' && steps.battery.outcome == 'success'
+        run: |
+          {
+            echo "## llama.cpp nightly family sentinels"
+            echo
+            echo "The pinned upstream passed the dense, hybrid/composite, and recurrent sentinel battery."
+            echo
+            echo "Certified families: ${{ steps.family_plan.outputs.family_count }}"
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -254,6 +276,7 @@ jobs:
         if: >
           steps.prepare.outcome == 'success'
           && steps.sha.outputs.certify == 'true'
+          && steps.sha.outputs.cadence != 'nightly'
           && steps.battery.outcome == 'failure'
         timeout-minutes: 720
         continue-on-error: true
@@ -277,7 +300,17 @@ jobs:
           contains(fromJSON('["success", "failure"]'), steps.repair_queue.outcome)
           || contains(fromJSON('["success", "failure"]'), steps.repair_battery.outcome)
           || steps.battery.outcome == 'failure'
+        env:
+          CANARY_CADENCE: ${{ steps.sha.outputs.cadence }}
         run: |
+          if [[ "$CANARY_CADENCE" == "nightly" ]]; then
+            {
+              echo "## llama.cpp nightly family sentinels failed"
+              echo
+              echo "The bounded trusted-main nightly battery failed. Inspect the uploaded family evidence; the upstream patch-queue repair agent was intentionally not invoked for an unchanged pin."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           {
             echo "## llama.cpp canary needs human attention"
             echo

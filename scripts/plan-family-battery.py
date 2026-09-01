@@ -462,18 +462,27 @@ def _normalize_models(value: object, policy: dict[str, Any]) -> list[dict[str, A
     return models
 
 
-def _select_models(models: list[dict[str, Any]], families: str) -> list[dict[str, Any]]:
+def _select_models(
+    models: list[dict[str, Any]], families: str, cadence: str
+) -> list[dict[str, Any]]:
+    selected = models
+    if cadence:
+        if cadence not in CADENCES:
+            raise PlanError(f"--cadence must be one of: {', '.join(CADENCES)}")
+        selected = [model for model in selected if cadence in model["cadences"]]
     if not families:
-        return models
+        return selected
     requested = families.split(",")
-    if any(not FAMILY_RE.fullmatch(item) for item in requested) or len(set(requested)) != len(requested):
+    if any(not FAMILY_RE.fullmatch(item) for item in requested) or len(
+        set(requested)
+    ) != len(requested):
         raise PlanError("--families must contain unique comma-separated family labels")
     by_family = {model["family"]: model for model in models}
     unknown = [family for family in requested if family not in by_family]
     if unknown:
         raise PlanError(f"unknown selected families: {', '.join(unknown)}")
     requested_set = set(requested)
-    return [model for model in models if model["family"] in requested_set]
+    return [model for model in selected if model["family"] in requested_set]
 
 
 def _work_weight(model: dict[str, Any]) -> int:
@@ -584,13 +593,16 @@ def _verify_cache(models: list[dict[str, Any]], cache_root: Path) -> None:
 def build_plan(
     manifest_path: Path,
     families: str = "",
+    cadence: str = "",
     shard_count: int = 1,
     cache_root: Path | None = None,
 ) -> dict[str, Any]:
     manifest, manifest_sha256 = _load_manifest(manifest_path)
     _exact_keys(manifest, {"schema_version", "policy", "models"}, "manifest")
     policy = _validate_policy(manifest.get("policy"))
-    models = _select_models(_normalize_models(manifest.get("models"), policy), families)
+    models = _select_models(
+        _normalize_models(manifest.get("models"), policy), families, cadence
+    )
     if not models:
         raise PlanError("family selection produced no models")
     if cache_root is not None:
@@ -617,6 +629,7 @@ def build_plan(
         "manifest": manifest_source,
         "manifest_sha256": manifest_sha256,
         "required_certification_lanes": list(CORE_LANES),
+        "selected_cadence": cadence or None,
         "selected_family_count": len(models),
         "selected_models": models,
         "shards": shards,
@@ -636,6 +649,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--families", default="")
+    parser.add_argument("--cadence", default="", choices=("", *CADENCES))
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--check-cache", action="store_true")
@@ -654,7 +668,13 @@ def main(argv: list[str] | None = None) -> int:
         cache_root = Path(env_cache)
     if not args.check_cache:
         cache_root = None
-    plan = build_plan(args.manifest, args.families, args.shard_count, cache_root)
+    plan = build_plan(
+        args.manifest,
+        families=args.families,
+        cadence=args.cadence,
+        shard_count=args.shard_count,
+        cache_root=cache_root,
+    )
     rendered = json.dumps(plan, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
