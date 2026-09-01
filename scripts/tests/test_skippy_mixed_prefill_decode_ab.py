@@ -149,7 +149,7 @@ class MixedPrefillDecodeAbTests(unittest.TestCase):
         )
 
         self.assertIn("Mixed scheduling", report)
-        self.assertNotIn("Anchor gap p95 ms", report)
+        self.assertNotIn("Anchor stream gap p95 ms", report)
         self.assertNotIn("Prefill TTFT p95 ms", report)
         self.assertIn("| Makespan ms | 0.000 | 2.000 | n/a |", report)
 

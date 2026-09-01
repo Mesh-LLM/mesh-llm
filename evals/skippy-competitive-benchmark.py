@@ -39,10 +39,11 @@ ARMS = ("llama", "mesh")
 OPTIONAL_ARMS = ("vllm", "sglang")
 ADAPTIVE_MESH_ARM = "mesh-adaptive"
 KNOWN_ARMS = (*ARMS, ADAPTIVE_MESH_ARM, *OPTIONAL_ARMS)
-REPORT_ARM_ORDER = (*ARMS, *OPTIONAL_ARMS)
+REPORT_ARM_ORDER = (*ARMS, ADAPTIVE_MESH_ARM, *OPTIONAL_ARMS)
 REPORT_ARM_STYLES = {
     "llama": ("raw llama.cpp", "#64748b"),
     "mesh": ("Mesh", "#0284c7"),
+    ADAPTIVE_MESH_ARM: ("Mesh adaptive", "#7c3aed"),
     "vllm": ("vLLM", "#16a34a"),
     "sglang": ("SGLang", "#9333ea"),
 }
@@ -141,7 +142,9 @@ def load_config(path: Path) -> dict[str, Any]:
             )
         for field in ("thoughtworks_context_size", "thoughtworks_active_lanes"):
             value = model.get(field)
-            if value is not None and (not isinstance(value, int) or value <= 0):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
                 raise ValueError(f"model {model['key']} needs a positive {field}")
         vllm_capacity = model.get("vllm_capacity")
         if vllm_capacity is not None and (
@@ -1143,9 +1146,42 @@ def load_complete(path: Path, cell_hash: str) -> bool:
     if not path.is_file():
         return False
     try:
-        return json.loads(path.read_text(encoding="utf-8")).get("cell_sha256") == cell_hash
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        return (
+            marker.get("cell_sha256") == cell_hash
+            and isinstance(marker.get("cell"), dict)
+            and stable_hash(marker["cell"]) == cell_hash
+        )
     except (OSError, json.JSONDecodeError):
         return False
+
+
+def completed_cell(output_dir: Path) -> dict[str, Any] | None:
+    path = output_dir / "complete.json"
+    if not path.is_file():
+        return None
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    cell = marker.get("cell")
+    if not isinstance(cell, dict) or marker.get("cell_sha256") != stable_hash(cell):
+        return None
+    return cell
+
+
+def quarantine_cell(output_dir: Path, artifact_root: Path) -> None:
+    if not output_dir.exists():
+        return
+    relative = output_dir.relative_to(artifact_root)
+    quarantine = (
+        artifact_root
+        / "quarantine"
+        / f"{time.time_ns()}-{stable_hash(str(relative))[:12]}"
+        / relative
+    )
+    quarantine.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(output_dir), str(quarantine))
 
 
 def request_completion(
@@ -1187,9 +1223,12 @@ def request_completion(
             error = response.read(4096).decode(errors="replace")
         elif not stream:
             document = json.loads(response.read())
+            if document.get("error"):
+                error = json.dumps(document["error"], sort_keys=True)
             choices = document.get("choices", [])
             if choices:
-                text = choices[0].get("message", {}).get("content") or ""
+                message = choices[0].get("message", {})
+                text = message.get("content") or message.get("reasoning_content") or ""
                 if text:
                     first_token = time.monotonic()
                     content.append(text)
@@ -1205,6 +1244,9 @@ def request_completion(
                 try:
                     event = json.loads(body)
                 except json.JSONDecodeError:
+                    continue
+                if event.get("error"):
+                    error = json.dumps(event["error"], sort_keys=True)
                     continue
                 if isinstance(event.get("usage"), dict):
                     usage = event["usage"]
@@ -1224,7 +1266,9 @@ def request_completion(
     finished = time.monotonic()
     text = "".join(content)
     completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-    if error is None and completion_tokens and completion_tokens != output_tokens:
+    if error is None and not text:
+        error = "response did not contain non-empty output"
+    if error is None and completion_tokens != output_tokens:
         error = f"expected {output_tokens} completion tokens, got {completion_tokens}"
     return {
         "status": status,
@@ -1232,6 +1276,7 @@ def request_completion(
         "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
         "completion_tokens": completion_tokens,
+        "requested_completion_tokens": output_tokens,
         "ttft_ms": None if first_token is None else (first_token - started) * 1000,
         "elapsed_ms": (finished - started) * 1000,
         "error": error,
@@ -1260,6 +1305,16 @@ def parity_probe(port: int, model_id: str, concurrency_values: Sequence[int]) ->
                 results.append(result)
         cells.append({"concurrency": concurrency, "results": results})
     return {"cells": cells}
+
+
+def parity_result_valid(result: dict[str, Any], expected_output_tokens: int = 32) -> bool:
+    return (
+        result.get("status") == 200
+        and not result.get("error")
+        and bool(result.get("content"))
+        and result.get("requested_completion_tokens") == expected_output_tokens
+        and result.get("completion_tokens") == expected_output_tokens
+    )
 
 
 def synthetic_benchy_common_command(
@@ -1402,6 +1457,7 @@ def run_synthetic_arm(
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
         print(f"SKIP synthetic {args.platform} {model['key']} {arm}")
         return
+    quarantine_cell(output_dir, args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = model_path(args.model_root, model)
     benchmark_model_id = served_model_id(arm, model)
@@ -1537,6 +1593,7 @@ def run_trace_cell(
     if args.resume and load_complete(output_dir / "complete.json", cell_hash):
         print(f"SKIP thoughtworks {args.platform} {model['key']} c={concurrency} {arm}")
         return
+    quarantine_cell(output_dir, args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = model_path(args.model_root, model)
     benchmark_model_id = served_model_id(arm, model)
@@ -1745,6 +1802,17 @@ def load_synthetic_rows(root: Path) -> list[dict[str, Any]]:
             continue
         platform = arm_dir.parents[1].name
         model = arm_dir.parent.name
+        cell = completed_cell(arm_dir)
+        if cell is None or any(
+            cell.get(key) != value
+            for key, value in {
+                "platform": platform,
+                "model": model,
+                "arm": arm_dir.name,
+                "workload": "synthetic",
+            }.items()
+        ):
+            continue
         status = read_status(arm_dir / "status.tsv")
         for path in sorted(arm_dir.glob("tg-*-c-*.json")):
             match = CELL_RE.match(path.name)
@@ -1790,6 +1858,22 @@ def load_synthetic_rows(root: Path) -> list[dict[str, Any]]:
 def load_trace_rows(root: Path) -> list[dict[str, Any]]:
     rows = []
     for path in sorted((root / "trace").glob("*/*/c-*/*/result.json")):
+        arm_dir = path.parent
+        platform = arm_dir.parents[2].name
+        model = arm_dir.parents[1].name
+        concurrency = int(arm_dir.parent.name.removeprefix("c-"))
+        cell = completed_cell(arm_dir)
+        if cell is None or any(
+            cell.get(key) != value
+            for key, value in {
+                "platform": platform,
+                "model": model,
+                "arm": arm_dir.name,
+                "workload": "thoughtworks",
+                "concurrency": concurrency,
+            }.items()
+        ):
+            continue
         result = json.loads(path.read_text(encoding="utf-8"))
         result["complete"] = result["failed_requests"] == 0
         rows.append(result)
@@ -1802,6 +1886,17 @@ def load_parity_rows(root: Path, concurrency_values: Sequence[int]) -> list[dict
         arm = path.parent.name
         model = path.parent.parent.name
         platform = path.parent.parent.parent.name
+        cell = completed_cell(path.parent)
+        if cell is None or any(
+            cell.get(key) != value
+            for key, value in {
+                "platform": platform,
+                "model": model,
+                "arm": arm,
+                "workload": "synthetic",
+            }.items()
+        ):
+            continue
         for cell in json.loads(path.read_text(encoding="utf-8"))["cells"]:
             indexed[(platform, model, arm, cell["concurrency"])] = {
                 result["request_index"]: result for result in cell["results"]
@@ -1828,7 +1923,7 @@ def load_parity_rows(root: Path, concurrency_values: Sequence[int]) -> list[dict
                 for index in indexes:
                     left = raw.get(index, {})
                     right = candidate.get(index, {})
-                    if left.get("status") != 200 or right.get("status") != 200:
+                    if not parity_result_valid(left) or not parity_result_valid(right):
                         failures += 1
                     else:
                         valid += 1

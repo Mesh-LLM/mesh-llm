@@ -2,10 +2,9 @@ use std::io;
 
 use super::invalid_data;
 
-// v13 combines the raw-F32 activation contract and per-stage prefill calibration statistics with
-// the full configurable sampler-chain payload. Stage peers must be upgraded together so older
-// readers reject the changed wire contract.
-pub const STAGE_STATE_VERSION: i32 = 13;
+// v14 expands the fixed StageReplyStats payload from 23 to 27 i64 fields. Stage peers must be
+// upgraded together so older readers reject the changed wire contract before decoding it.
+pub const STAGE_STATE_VERSION: i32 = 14;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;

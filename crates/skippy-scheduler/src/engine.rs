@@ -36,6 +36,7 @@ pub struct Scheduler {
     waiting_order_dirty: bool,
     decode_us_ewma_by_rows: BTreeMap<usize, f64>,
     mixed_prefill_viable: bool,
+    mixed_decode_cursor: usize,
 }
 
 const DURATION_EWMA_ALPHA: f64 = 0.25;
@@ -58,6 +59,7 @@ impl Scheduler {
             waiting_order_dirty: false,
             decode_us_ewma_by_rows: BTreeMap::new(),
             mixed_prefill_viable: true,
+            mixed_decode_cursor: 0,
         }
     }
 
@@ -232,10 +234,18 @@ impl Scheduler {
         // Decode is latency-sensitive and consumes exactly one token per live
         // sequence. Reserve those rows first so prompt traffic cannot starve
         // active generation.
-        for id in &ids {
+        let decode_start = if ids.is_empty() {
+            0
+        } else {
+            self.mixed_decode_cursor % ids.len()
+        };
+        let mut decode_examined = 0usize;
+        for offset in 0..ids.len() {
             if budget == 0 {
                 break;
             }
+            decode_examined = offset + 1;
+            let id = &ids[(decode_start + offset) % ids.len()];
             let Some(sequence) = self.active.get_mut(id) else {
                 continue;
             };
@@ -257,6 +267,9 @@ impl Scheduler {
             sequence.prefill_cursor = replay_len.saturating_add(1);
             plan.token_count += 1;
             budget -= 1;
+        }
+        if !ids.is_empty() {
+            self.mixed_decode_cursor = (decode_start + decode_examined) % ids.len();
         }
 
         let mut prefill_sequences = 0usize;
@@ -832,6 +845,45 @@ mod tests {
         assert_eq!(mixed.work[1].phase, IterationPhase::Prefill);
         assert_eq!(mixed.work[1].tokens.len(), 4);
         assert!(!mixed.work[1].sample_last);
+    }
+
+    #[test]
+    fn mixed_decode_budget_rotates_across_all_live_sequences() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 3,
+            max_tokens_per_iteration: 2,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        for id in ["a", "b", "c"] {
+            let mut active = sequence(id, 1, 8);
+            active.prefill_cursor = 1;
+            active.generated_tokens.push(42);
+            scheduler.active.insert(id.to_string(), active);
+        }
+        scheduler.decode_us_ewma_by_rows.insert(2, 1_000.0);
+
+        let expected = [["a", "b"], ["c", "a"], ["b", "c"]];
+        for expected_ids in expected {
+            let plan = scheduler.plan_iteration();
+            assert_eq!(
+                plan.work
+                    .iter()
+                    .map(|work| work.sequence_id.as_str())
+                    .collect::<Vec<_>>(),
+                expected_ids
+            );
+            let predictions = plan
+                .work
+                .iter()
+                .enumerate()
+                .map(|(work_index, _)| IterationPrediction {
+                    work_index,
+                    token: 43 + i32::try_from(work_index).unwrap(),
+                })
+                .collect::<Vec<_>>();
+            scheduler.complete_iteration(&plan, &predictions);
+        }
     }
 
     #[test]

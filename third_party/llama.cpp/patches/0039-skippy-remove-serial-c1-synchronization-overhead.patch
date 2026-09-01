@@ -13,7 +13,7 @@ Subject: [PATCH] skippy: remove serial c1 synchronization overhead
  src/skippy/sampling_internal.h  |  6 +++
  src/skippy/session.cpp          | 33 ++++++++++++---
  src/skippy/state.cpp            |  8 ++--
- 9 files changed, 117 insertions(+), 19 deletions(-)
+ 9 files changed, 116 insertions(+), 19 deletions(-)
 
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 index 2e85acf51..435515075 100644
@@ -98,18 +98,18 @@ index 51f4f71cb..2a3b87f40 100644
      skippy_runtime_config config = {};
      skippy_glm_dsa_op_timing glm_dsa_timing = {};
      bool executable = true;
-@@ -89,6 +91,11 @@ struct skippy_model {
-     std::mutex lane_mutex;
-     std::vector<bool> lane_in_use;
-     std::vector<std::vector<llama_token>> lane_resident_prefix_tokens;
+@@ -115,6 +116,11 @@ struct skippy_session {
+     int32_t preserve_prefix_tokens = 0;
+     std::vector<llama_token> token_history;
+     std::vector<skippy_token_signal> signal_history;
 +    std::vector<llama_pos> prefill_positions;
 +    std::vector<int32_t> prefill_n_seq_ids;
 +    std::vector<llama_seq_id> prefill_seq_ids;
 +    std::vector<llama_seq_id *> prefill_seq_id_ptrs;
 +    std::vector<int8_t> prefill_logits;
-     std::mutex chat_templates_mutex;
-     void * chat_templates = nullptr;
-     void (*chat_templates_free)(void *) = nullptr;
+     llama_sampler * sampling_chain = nullptr;
+     llama_sampler * grammar_sampler = nullptr;
+     bool sampling_backend_enabled = false;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 index 6fb1e1f64..a2d695de7 100644
 --- a/src/skippy/sampling.cpp
@@ -122,18 +122,17 @@ index 6fb1e1f64..a2d695de7 100644
  #include <exception>
  #include <limits>
  #include <regex>
-@@ -84,18 +85,31 @@ enum skippy_status skippy_decode_tokens(
+@@ -84,18 +85,30 @@ enum skippy_status skippy_decode_tokens(
      }
  
      const llama_pos token_start = session->n_past;
 -    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
 -    batch.n_tokens = n_tokens;
-+    skippy_model * model = session->stage_model;
-+    model->prefill_positions.resize(token_count);
-+    model->prefill_n_seq_ids.resize(token_count, 1);
-+    model->prefill_seq_ids.resize(token_count, session->seq_id);
-+    model->prefill_seq_id_ptrs.resize(token_count);
-+    model->prefill_logits.resize(token_count, 0);
++    session->prefill_positions.resize(token_count);
++    session->prefill_n_seq_ids.resize(token_count, 1);
++    session->prefill_seq_ids.resize(token_count, session->seq_id);
++    session->prefill_seq_id_ptrs.resize(token_count);
++    session->prefill_logits.resize(token_count, 0);
      for (int32_t i = 0; i < n_tokens; ++i) {
 -        batch.token[i] = token_ids[i];
 -        batch.pos[i] = session->n_past + i;
@@ -142,20 +141,20 @@ index 6fb1e1f64..a2d695de7 100644
 -        batch.logits[i] = request_logits && i == n_tokens - 1 ? 1 : 0;
 -    }
 +        const size_t index = static_cast<size_t>(i);
-+        model->prefill_positions[index] = session->n_past + i;
-+        model->prefill_n_seq_ids[index] = 1;
-+        model->prefill_seq_ids[index] = session->seq_id;
-+        model->prefill_seq_id_ptrs[index] = &model->prefill_seq_ids[index];
-+        model->prefill_logits[index] = request_logits && i == n_tokens - 1 ? 1 : 0;
++        session->prefill_positions[index] = session->n_past + i;
++        session->prefill_n_seq_ids[index] = 1;
++        session->prefill_seq_ids[index] = session->seq_id;
++        session->prefill_seq_id_ptrs[index] = &session->prefill_seq_ids[index];
++        session->prefill_logits[index] = request_logits && i == n_tokens - 1 ? 1 : 0;
 +    }
 +    llama_batch batch = {
 +        /*n_tokens =*/ n_tokens,
 +        /*token    =*/ const_cast<llama_token *>(token_ids),
 +        /*embd     =*/ nullptr,
-+        /*pos      =*/ model->prefill_positions.data(),
-+        /*n_seq_id =*/ model->prefill_n_seq_ids.data(),
-+        /*seq_id   =*/ model->prefill_seq_id_ptrs.data(),
-+        /*logits   =*/ model->prefill_logits.data(),
++        /*pos      =*/ session->prefill_positions.data(),
++        /*n_seq_id =*/ session->prefill_n_seq_ids.data(),
++        /*seq_id   =*/ session->prefill_seq_id_ptrs.data(),
++        /*logits   =*/ session->prefill_logits.data(),
 +    };
  
      enum skippy_status status = skippy_decode_batch(session, batch, token_count, glm_dsa_phase_hint, out_error);
@@ -370,4 +369,3 @@ index 3a8763869..a2292fef8 100644
  }
 -- 
 2.54.0 (Apple Git-157)
-

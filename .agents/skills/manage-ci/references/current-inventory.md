@@ -31,7 +31,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-competitive-benchmark.yml` is an opt-in daily/manual trusted-main
+`nightly-competitive-benchmark.yml` is an opt-in daily trusted-main
 benchmark on the approved fixed `gpu-nvidia` label set. It has read-only
 permissions, never accepts a ref or runner label, installs no tools, consumes
 pre-baked inputs selected by `MESH_NIGHTLY_COMPETITIVE_*` repository variables,

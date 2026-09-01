@@ -98,56 +98,52 @@ impl GenerationAdmissionQueue {
         }
     }
 
-    fn enqueue(
+    pub(in crate::frontend) fn claim_or_enqueue(
         self: &Arc<Self>,
-        scheduling: GenerationAdmissionScheduling,
-        reservation: GenerationQueueReservation,
-    ) -> GenerationAdmissionQueueLease {
-        let id = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let id = state.next_id;
-            state.next_id = state.next_id.saturating_add(1);
-            let turn = state.turn;
-            // A newly visible prompt can change waiting-prefix weights and
-            // cache value before a lane opens, so invalidate a speculative
-            // election that has not yet acquired a permit.
-            state.selected_id = None;
-            state.waiters.insert(
-                id,
-                GenerationAdmissionWaiter {
-                    scheduling,
-                    enqueued_turn: turn,
-                    order: id,
-                },
-            );
-            id
-        };
-        self.changed.notify_waiters();
-        GenerationAdmissionQueueLease {
-            queue: Arc::clone(self),
-            id,
-            reservation: Some(reservation),
-        }
-    }
-
-    pub(in crate::frontend) fn try_acquire_lane_if_idle(
-        &self,
         generation_limit: Arc<Semaphore>,
-    ) -> Result<Option<OwnedSemaphorePermit>, tokio::sync::TryAcquireError> {
-        // Keep the empty check and lane claim under the same queue lock. A
-        // prompt entering the scheduler-visible waiting room must not be
-        // overtaken by an arrival racing this fast path.
-        let state = self
+        scheduling: GenerationAdmissionScheduling,
+        generation_queue_depth: Arc<AtomicUsize>,
+        generation_queue_limit: usize,
+    ) -> OpenAiResult<GenerationAdmissionClaim> {
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !state.waiters.is_empty() {
-            return Ok(None);
+        if state.waiters.is_empty() {
+            match generation_limit.try_acquire_owned() {
+                Ok(permit) => return Ok(GenerationAdmissionClaim::Acquired(permit)),
+                Err(tokio::sync::TryAcquireError::Closed) => {
+                    return Err(generation_lanes_busy_error());
+                }
+                Err(tokio::sync::TryAcquireError::NoPermits) => {}
+            }
         }
-        generation_limit.try_acquire_owned().map(Some)
+        let reservation = reserve_generation_queue(generation_queue_depth, generation_queue_limit)
+            .ok_or_else(generation_queue_full_error)?;
+        let id = state.next_id;
+        state.next_id = state.next_id.saturating_add(1);
+        let turn = state.turn;
+        // Claiming a lane or entering the waiting room is one queue-locked operation. A lane that
+        // becomes free after the failed fast claim cannot be taken by a newer arrival before this
+        // waiter is visible.
+        state.selected_id = None;
+        state.waiters.insert(
+            id,
+            GenerationAdmissionWaiter {
+                scheduling,
+                enqueued_turn: turn,
+                order: id,
+            },
+        );
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(GenerationAdmissionClaim::Queued(
+            GenerationAdmissionQueueLease {
+                queue: Arc::clone(self),
+                id,
+                reservation: Some(reservation),
+            },
+        ))
     }
 
     pub(in crate::frontend) fn notify_lane_available(&self) {
@@ -251,14 +247,19 @@ impl GenerationAdmissionQueue {
     }
 }
 
-struct GenerationAdmissionQueueLease {
+pub(in crate::frontend) enum GenerationAdmissionClaim {
+    Acquired(OwnedSemaphorePermit),
+    Queued(GenerationAdmissionQueueLease),
+}
+
+pub(in crate::frontend) struct GenerationAdmissionQueueLease {
     queue: Arc<GenerationAdmissionQueue>,
     id: u64,
     reservation: Option<GenerationQueueReservation>,
 }
 
 impl GenerationAdmissionQueueLease {
-    async fn acquire(
+    pub(in crate::frontend) async fn acquire(
         mut self,
         generation_limit: Arc<Semaphore>,
         admission_timeout: Duration,
@@ -573,21 +574,6 @@ pub(in crate::frontend) async fn acquire_generation_permit_with_queue_reservatio
             Err(OpenAiError::cancelled("request cancelled"))
         }
     }
-}
-
-pub(in crate::frontend) async fn acquire_generation_permit_with_scheduling(
-    generation_limit: Arc<Semaphore>,
-    queue: Arc<GenerationAdmissionQueue>,
-    reservation: GenerationQueueReservation,
-    scheduling: GenerationAdmissionScheduling,
-    admission_timeout: Duration,
-    deadline: Instant,
-    cancellation: &CancellationToken,
-) -> OpenAiResult<OwnedSemaphorePermit> {
-    queue
-        .enqueue(scheduling, reservation)
-        .acquire(generation_limit, admission_timeout, deadline, cancellation)
-        .await
 }
 
 #[cfg(test)]
