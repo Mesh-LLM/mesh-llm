@@ -560,11 +560,18 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
 
-### Minimum bar before every commit
+### Minimum validation by change type
 
-- Rust-only change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
+Choose validation from the changed surface, not merely from the directory that contains the changed file. A non-Rust file under a Rust crate does not require Cargo validation only when it cannot affect Cargo metadata, build scripts, generated Rust, or the shipped binary. Treat Cargo and build configuration changes as Rust-impacting.
+
+- Rust change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
+- Python-only change — pass every changed module explicitly to `python3 -m py_compile <changed-module.py>...` and run `python3 -m unittest <nearest-test-module>...` for the nearest relevant tests. Run the full `scripts/tests` suite only for shared script infrastructure, CI planning, or broad cross-script changes.
 - UI-only change — run `just build`.
-- Mixed Rust and UI change — run `just build`.
+- CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
+- Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.
+- Mixed change — run the union of the checks required for each changed surface.
+
+Do not rerun otherwise unchanged validation solely because a commit is about to be pushed. Rerun affected checks when the validated diff or commit has changed.
 
 ### Rust changes
 
