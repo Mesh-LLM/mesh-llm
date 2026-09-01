@@ -1,8 +1,8 @@
-From 345a1b647c2105ab796fd3cc13868ce93dbaa11b Mon Sep 17 00:00:00 2001
+From e452cbe8a43fa879e89d328b7c2e7c33707316da Mon Sep 17 00:00:00 2001
 From: Scam
  <44c96d97d4bda5bbcbd62565b0b19bb2e895e1fad5d9e9116f267909f1dae78e@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 08:36:03 +1000
-Subject: [PATCH 32/34] skippy: carry full-source shared-table ownership
+Subject: [PATCH 32/32] skippy: carry full-source shared-table ownership
 
 ---
  include/skippy/common.h        |  2 +-

@@ -62,6 +62,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
         family_plan = _step_block(workflow, "Plan and verify family certification cache")
         self.assertIn("python3 scripts/plan-family-battery.py", family_plan)
+        self.assertIn('--cadence "${{ steps.sha.outputs.cadence }}"', family_plan)
         self.assertIn("--check-cache", family_plan)
         self.assertIn('--cache-root "$HF_CACHE"', family_plan)
         self.assertIn('--github-output "$GITHUB_OUTPUT"', family_plan)
@@ -100,10 +101,17 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         capture = _step_block(workflow, "Capture upstream SHAs")
         self.assertIn('"$FORCE_CERTIFY" == "true"', capture)
         self.assertIn('echo "certify=true"', capture)
+        self.assertIn('echo "cadence=manual-full"', capture)
+        self.assertIn('echo "cadence=llama-bump"', capture)
+        self.assertIn('"$GITHUB_EVENT_NAME" == "schedule"', capture)
+        self.assertIn('echo "cadence=nightly"', capture)
 
         forced_report = _step_block(workflow, "Report forced certification result")
-        self.assertIn("steps.sha.outputs.changed == 'false'", forced_report)
-        self.assertIn("steps.sha.outputs.certify == 'true'", forced_report)
+        self.assertIn("steps.sha.outputs.cadence == 'manual-full'", forced_report)
+
+        nightly_report = _step_block(workflow, "Report nightly family result")
+        self.assertIn("steps.sha.outputs.cadence == 'nightly'", nightly_report)
+        self.assertIn("steps.family_plan.outputs.family_count", nightly_report)
 
     def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -129,6 +137,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         battery_repair = _step_block(workflow, "Agent repair loop (battery failure)")
         self.assertIn("steps.prepare.outcome == 'success'", battery_repair)
         self.assertIn("steps.battery.outcome == 'failure'", battery_repair)
+        self.assertIn("steps.sha.outputs.cadence != 'nightly'", battery_repair)
         self.assertIn("scripts/llama-canary-agent-repair.sh battery", battery_repair)
         self.assertIn("continue-on-error: true", battery_repair)
 
@@ -137,6 +146,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         fail_step = _step_block(workflow, "Fail when the canary needs human attention")
         self.assertIn("steps.repair_queue.outcome", fail_step)
         self.assertIn("steps.repair_battery.outcome", fail_step)
+        self.assertIn("CANARY_CADENCE:", fail_step)
+        self.assertIn('[[ "$CANARY_CADENCE" == "nightly" ]]', fail_step)
+        self.assertIn("repair agent was intentionally not invoked", fail_step)
         self.assertIn("exit 1", fail_step)
 
         # The battery lane itself no longer hard-fails the job before the

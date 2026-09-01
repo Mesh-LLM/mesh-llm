@@ -34,7 +34,7 @@ pub use logging::{
     set_filtered_native_logs_enabled, suppress_native_logs, unregister_filtered_native_logs,
     write_native_log_note,
 };
-pub use native::StageModel;
+pub use native::{StageModel, StageModelReader};
 pub use native_mtp::NativeMtpDraft;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_events::{
@@ -50,9 +50,9 @@ pub use skippy_ffi::{
 pub use types::{
     ActivationDesc, ActivationFrame, ChatReasoningFormat, ChatTemplateJsonOptions,
     ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput,
-    DrySamplingConfig, GenerationSignalWindow, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig,
-    TensorInfo, TokenSignal, XtcSamplingConfig,
+    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample, LogitBias,
+    MAX_LOGIT_BIAS, MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame,
+    RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

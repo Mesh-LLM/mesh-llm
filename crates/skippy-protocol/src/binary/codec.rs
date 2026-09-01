@@ -619,17 +619,14 @@ fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<V
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 23;
-const I64_WIRE_BYTES: usize = std::mem::size_of::<i64>();
-const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * I64_WIRE_BYTES;
+const REPLY_STATS_FIELD_COUNT: usize = 27;
+const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     let fields = reply_stats_fields(stats);
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     for (chunk, value) in bytes
-        .as_chunks_mut::<I64_WIRE_BYTES>()
-        .0
-        .iter_mut()
+        .chunks_exact_mut(std::mem::size_of::<i64>())
         .zip(fields)
     {
         chunk.copy_from_slice(&value.to_le_bytes());
@@ -641,8 +638,11 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     reader.read_exact(&mut bytes)?;
     let mut fields = [0_i64; REPLY_STATS_FIELD_COUNT];
-    for (field, chunk) in fields.iter_mut().zip(bytes.as_chunks::<I64_WIRE_BYTES>().0) {
-        *field = i64::from_le_bytes(*chunk);
+    for (field, chunk) in fields
+        .iter_mut()
+        .zip(bytes.chunks_exact(std::mem::size_of::<i64>()))
+    {
+        *field = i64::from_le_bytes(chunk.try_into().expect("i64 chunk size"));
     }
     Ok(reply_stats_from_fields(fields))
 }
@@ -682,6 +682,10 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_edge_stage_index,
         stats.prefill_edge_activation_bytes_max,
         stats.prefill_edge_observation_count,
+        stats.prefill_compute_us_at_slowest_rate,
+        stats.prefill_compute_stage_index,
+        stats.prefill_compute_token_count_at_slowest_rate,
+        stats.prefill_compute_observation_count,
     ]
 }
 
@@ -710,6 +714,10 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_stage_index: fields[20],
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
+        prefill_compute_us_at_slowest_rate: fields[23],
+        prefill_compute_stage_index: fields[24],
+        prefill_compute_token_count_at_slowest_rate: fields[25],
+        prefill_compute_observation_count: fields[26],
     }
 }
 

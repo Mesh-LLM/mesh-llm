@@ -10,9 +10,26 @@ use skippy_ffi::{
 use crate::error::ensure_ok;
 use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal};
 
+const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
+
+fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
+    // Template metadata can contain a large serialized PEG response parser,
+    // but native sampling only consults grammar fields. The renderer emits
+    // compact JSON, so an empty top-level grammar can use the minimal
+    // equivalent payload and avoid reparsing the unrelated PEG graph before
+    // first-token decode. Escaped JSON nested inside `chat_parser` cannot
+    // contain this unescaped byte sequence.
+    if metadata_json.contains(r#""grammar":"""#) {
+        EMPTY_CHAT_GRAMMAR_METADATA
+    } else {
+        metadata_json
+    }
+}
+
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
+    pub(crate) include_output: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -63,7 +80,7 @@ impl StageSession {
         prompt_token_count: u64,
         sampling: Option<&SamplingConfig>,
     ) -> Result<()> {
-        let metadata_json = CString::new(metadata_json)
+        let metadata_json = CString::new(chat_sampling_metadata_for_native(metadata_json))
             .context("chat sampling metadata contains an interior NUL byte")?;
         let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
@@ -143,6 +160,16 @@ impl StageSession {
         let status =
             unsafe { skippy_ffi::skippy_session_drop_sequence(self.raw, seq_id, &mut error) };
         ensure_ok(status, error)
+    }
+
+    pub fn memory_used_cells(&mut self) -> Result<u64> {
+        let mut used_cells = 0u64;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_memory_used_cells(self.raw, &mut used_cells, &mut error)
+        };
+        ensure_ok(status, error)?;
+        Ok(used_cells)
     }
 
     pub fn prefill_chunk(&mut self, token_ids: &[i32]) -> Result<()> {
@@ -400,7 +427,9 @@ impl Drop for StageSession {
 
 #[cfg(test)]
 mod tests {
-    use super::native_position_to_u64;
+    use super::{
+        EMPTY_CHAT_GRAMMAR_METADATA, chat_sampling_metadata_for_native, native_position_to_u64,
+    };
 
     #[test]
     fn native_position_conversion_accepts_non_negative_positions() {
@@ -412,5 +441,16 @@ mod tests {
     fn native_position_conversion_rejects_negative_positions() {
         assert!(native_position_to_u64(-1).is_err());
         assert!(native_position_to_u64(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn empty_chat_grammar_uses_minimal_native_metadata() {
+        let metadata = r#"{"chat_parser":"large","grammar":"","grammar_triggers":[]}"#;
+        assert_eq!(
+            chat_sampling_metadata_for_native(metadata),
+            EMPTY_CHAT_GRAMMAR_METADATA
+        );
+        let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
+        assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
 }

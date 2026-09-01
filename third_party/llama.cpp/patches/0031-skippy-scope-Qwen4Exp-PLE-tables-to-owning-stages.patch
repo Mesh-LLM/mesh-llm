@@ -1,8 +1,8 @@
-From c479053dd9c3a521ed47eb8bd4f085b0bf5d69b7 Mon Sep 17 00:00:00 2001
+From 063eb2c7d128cc1428f3f7838f6584bc230f578a Mon Sep 17 00:00:00 2001
 From: Jimmy
  <1fe240cd1a8cf775f6f3060f115e5a303181f3abf28ad4cb0c2515f4a02b36a8@meshllm.communities.buzz.xyz>
 Date: Sat, 29 Aug 2026 02:13:55 +1000
-Subject: [PATCH 29/34] skippy: scope Qwen4Exp PLE tables to owning stages
+Subject: [PATCH 29/32] skippy: scope Qwen4Exp PLE tables to owning stages
 
 Co-authored-by: michaelneale <14976+michaelneale@users.noreply.github.com>
 
@@ -14,7 +14,7 @@ Signed-off-by: michaelneale <14976+michaelneale@users.noreply.github.com>
  3 files changed, 75 insertions(+), 8 deletions(-)
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 9fbcd8a39..b831fa385 100644
+index 4eac8bb40..8ade72322 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -1116,6 +1116,19 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
@@ -37,7 +37,7 @@ index 9fbcd8a39..b831fa385 100644
  static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
      GGML_ASSERT(!buft_list->empty());
      for (const auto & cur : *buft_list) {
-@@ -1234,6 +1247,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1193,6 +1206,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
              return false;
          }
  
@@ -47,7 +47,7 @@ index 9fbcd8a39..b831fa385 100644
          bool keep = true;
          switch (info.layer) {
              case LLM_TENSOR_LAYER_INPUT:
-@@ -1264,11 +1280,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1223,11 +1239,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     (tn.tensor == LLM_TENSOR_ALTUP_PROJ && g_skippy_filter.include_embeddings) ||
                     (tn.tensor == LLM_TENSOR_ALTUP_UNEMBD_PROJ && g_skippy_filter.include_output);
          }

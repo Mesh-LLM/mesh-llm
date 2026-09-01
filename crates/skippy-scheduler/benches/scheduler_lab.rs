@@ -17,6 +17,7 @@ struct Scenario {
     name: String,
     requests: Vec<SimRequest>,
     max_consecutive_prefill_iterations: usize,
+    mixed_prefill_decode: bool,
     max_active_sequences: usize,
     group_waiting_prefixes: bool,
 }
@@ -34,6 +35,7 @@ fn main() {
     for scenario in scenarios() {
         let scenario_config = SchedulerConfig {
             max_consecutive_prefill_iterations: scenario.max_consecutive_prefill_iterations,
+            mixed_prefill_decode: scenario.mixed_prefill_decode,
             max_active_sequences: scenario.max_active_sequences,
             group_waiting_prefixes: scenario.group_waiting_prefixes,
             ..config.clone()
@@ -60,6 +62,7 @@ fn scenarios() -> Vec<Scenario> {
             name: format!("cold-burst-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 0),
             max_consecutive_prefill_iterations: usize::MAX,
+            mixed_prefill_decode: false,
             max_active_sequences: 32,
             group_waiting_prefixes: true,
         });
@@ -67,6 +70,7 @@ fn scenarios() -> Vec<Scenario> {
             name: format!("warm-divergent-n{concurrency}"),
             requests: burst_requests(concurrency, 4_096, 32, 4_080),
             max_consecutive_prefill_iterations: usize::MAX,
+            mixed_prefill_decode: false,
             max_active_sequences: 32,
             group_waiting_prefixes: true,
         });
@@ -75,6 +79,7 @@ fn scenarios() -> Vec<Scenario> {
         name: "staggered-prefill".to_string(),
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: usize::MAX,
+        mixed_prefill_decode: false,
         max_active_sequences: 32,
         group_waiting_prefixes: true,
     });
@@ -82,6 +87,15 @@ fn scenarios() -> Vec<Scenario> {
         name: "staggered-prefill-bounded".to_string(),
         requests: staggered_prefill_requests(),
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: false,
+        max_active_sequences: 32,
+        group_waiting_prefixes: true,
+    });
+    scenarios.push(Scenario {
+        name: "staggered-prefill-mixed".to_string(),
+        requests: staggered_prefill_requests(),
+        max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: true,
         max_active_sequences: 32,
         group_waiting_prefixes: true,
     });
@@ -110,6 +124,7 @@ fn scenarios() -> Vec<Scenario> {
         name: "radix-fcfs".to_string(),
         requests: fcfs,
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: false,
         max_active_sequences: 1,
         group_waiting_prefixes: true,
     });
@@ -117,6 +132,7 @@ fn scenarios() -> Vec<Scenario> {
         name: "radix-cache-aware".to_string(),
         requests: cache_aware,
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: false,
         max_active_sequences: 1,
         group_waiting_prefixes: true,
     });
@@ -129,6 +145,7 @@ fn scenarios() -> Vec<Scenario> {
         name: "waiting-prefix-fcfs".to_string(),
         requests: waiting_prefix_requests.clone(),
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: false,
         max_active_sequences: 1,
         group_waiting_prefixes: false,
     });
@@ -136,6 +153,7 @@ fn scenarios() -> Vec<Scenario> {
         name: "waiting-prefix-dfs".to_string(),
         requests: waiting_prefix_requests,
         max_consecutive_prefill_iterations: 1,
+        mixed_prefill_decode: false,
         max_active_sequences: 1,
         group_waiting_prefixes: true,
     });

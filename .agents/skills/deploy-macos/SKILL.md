@@ -66,24 +66,72 @@ scp -P <SSH_PORT> /tmp/mesh-llm-bundle.tar.gz user@host:
 ssh -p <SSH_PORT> user@host 'mkdir -p ~/bin && tar xzf mesh-llm-bundle.tar.gz -C ~/bin --strip-components=1'
 ```
 
-### Fix macOS quarantine — ALWAYS after scp
+### Clear quarantine and sign the final remote binary — ALWAYS after scp
 
-Files transferred via scp get provenance/quarantine xattrs that make macOS
-SIGKILL the binary on launch (exit 137). After every scp:
+Files transferred via scp can carry provenance/quarantine xattrs that make
+macOS SIGKILL the binary on launch (exit 137). Clear those attributes before
+signing, then sign the final remote binary once with the stable Apple-issued
+development identity used for that build:
 
 ```bash
-codesign -s - ~/bin/mesh-llm
 xattr -cr ~/bin/mesh-llm
+codesign --force --sign "<APPLE_DEVELOPMENT_IDENTITY>" ~/bin/mesh-llm
+codesign --verify --verbose=2 ~/bin/mesh-llm
+codesign -dv --verbose=4 ~/bin/mesh-llm 2>&1 | tee /tmp/mesh-llm-codesign.txt
 ```
 
-Verify: `xattr ~/bin/mesh-llm` should print nothing. Note codesign changes the
-file hash — don't compare local vs remote hashes after signing.
+`xattr ~/bin/mesh-llm` should print nothing. Do not ad-hoc sign the
+binary: that identity is not stable across builds and can invalidate the Local
+Network privacy decision. Signing changes the file hash, so do not compare
+local and remote hashes afterward.
 
 Verify the version on the remote matches what you built:
 
 ```bash
 ~/bin/mesh-llm --version
 ```
+
+### Authorize macOS Local Network access — BEFORE remote diagnosis
+
+macOS Local Network privacy is keyed to the **responsible code** and its code
+signature. Replacing or ad-hoc re-signing a development binary can therefore
+change the identity whose decision macOS remembers. A GUI app or launch agent
+may show a blocking Local Network alert on the logged-in desktop even though
+the same network is reachable from an interactive shell.
+
+For the first multi-node run of an exact app/binary identity:
+
+1. Sign it once with the stable Apple-issued development identity used for that
+   build. Do not repeatedly ad-hoc re-sign it between attempts. Verify with
+   `codesign --verify --verbose=2 <path>` and record
+   `codesign -dv --verbose=4 <path> 2>&1` in the lab evidence.
+2. Launch it once from the same responsible app/service context intended for
+   the test while a user is logged in at the Mac. Trigger a mesh join or mDNS
+   operation, then accept the Local Network alert on that Mac. Repeat on every
+   Mac participating in the test.
+3. Check **System Settings > Privacy & Security > Local Network**. If the
+   responsible app is listed, make sure access is enabled. macOS offers no
+   supported command to query or reset an individual program from the
+   undetermined state, so scripts must not claim this check passed merely
+   because a raw UDP probe worked.
+4. Authorize the exact launch context that will run the test. For a
+   CLI-launched repro over SSH, use the held foreground TTY described by
+   `remote-observable-process`. If a per-user launchd agent or GUI app will run
+   the workload, launch that exact agent/app while a user is logged in and
+   accept its prompt before diagnosis; an SSH TTY does not authorize a
+   different responsible app.
+5. Treat the network preflight as passed only after both nodes report an iroh
+   **direct** path, `observed_via_relay=false`, and an
+   `observed_direct_remote_addr` whose IP matches the intended LAN address of
+   the peer. `direct_addr_available=true` alone only proves that some direct
+   address was observed. An invitation containing a LAN candidate, a raw UDP
+   probe, or a working relay path does not prove the deployed process has Local
+   Network access.
+
+If no alert appears, keep the process alive after its first failed LAN
+operation: macOS can fail to display the alert for very short-lived processes.
+Do not debug iroh candidate selection until this gate is complete. See Apple
+TN3179, [Understanding local network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
 ## Launch
 
@@ -157,7 +205,7 @@ A clean stop removes the instance runtime dir under `~/.mesh-llm/runtime/`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Exit 137 immediately after scp | macOS quarantine/provenance xattr | `codesign -s - <bin>; xattr -cr <dir>` |
+| Exit 137 immediately after scp | macOS quarantine/provenance xattr | Clear xattrs, sign once with the stable Apple-issued development identity, and verify as above |
 | `mesh-llm: command not found` over SSH | `~/.local/bin` not on non-interactive PATH | Full path or `bash -lc` |
 | Empty `/v1/models` | Model still downloading/loading | Wait; watch skippy-native.log |
 | "No inference server available" | Election in progress or load failed | Check stderr + skippy-native.log |

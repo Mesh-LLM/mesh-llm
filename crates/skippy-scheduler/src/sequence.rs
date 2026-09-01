@@ -98,6 +98,14 @@ impl Sequence {
         self
     }
 
+    /// Resume scheduler ownership after an external cache-aware prefill has
+    /// already produced the first unconsumed token for this runtime session.
+    pub fn with_prefilled_generation(mut self, generated_tokens: Vec<i32>) -> Self {
+        self.generated_tokens = generated_tokens;
+        self.prefill_cursor = self.recompute_token_count();
+        self
+    }
+
     pub fn is_finished(&self) -> bool {
         matches!(
             self.status,
@@ -149,6 +157,12 @@ pub struct IterationWork {
     pub sample_last: bool,
     pub phase: IterationPhase,
     pub sampling: Option<SamplingConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IterationPrediction {
+    pub work_index: usize,
+    pub token: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

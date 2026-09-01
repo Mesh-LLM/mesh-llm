@@ -127,14 +127,11 @@ impl ExactStatePayload {
         }
     }
 
-    pub fn release_from(&self, blobs: &mut CacheBlobStore) {
+    pub fn release_from(&self, blobs: &mut CacheBlobStore) -> Result<()> {
         match self {
             Self::FullState { bytes } => blobs.release_bytes(bytes),
             Self::RecurrentOnly { recurrent } => blobs.release_bytes(recurrent),
-            Self::KvRecurrent { kv, recurrent } => {
-                blobs.release_bytes(kv);
-                blobs.release_bytes(recurrent);
-            }
+            Self::KvRecurrent { kv, recurrent } => blobs.release_bytes_batch(&[kv, recurrent]),
         }
     }
 }

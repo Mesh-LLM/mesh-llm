@@ -1,0 +1,91 @@
+name: Nightly KV Ownership Coverage
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+# This schedule expands deterministic state-machine coverage on a public
+# hosted runner. It always executes trusted main and has no write permission,
+# secrets, caller-selected ref, or privileged runner input.
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: nightly-kv-ownership-coverage
+  cancel-in-progress: false
+
+jobs:
+  ownership-state-machines:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_KV_COVERAGE_ENABLED != '0' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: ""
+      RUST_BACKTRACE: "1"
+      SKIPPY_CACHE_STATE_MACHINE_SEEDS: ${{ vars.MESH_NIGHTLY_KV_STATE_MACHINE_SEEDS || '256' }}
+      SKIPPY_CACHE_STATE_MACHINE_STEPS: ${{ vars.MESH_NIGHTLY_KV_STATE_MACHINE_STEPS || '10000' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify prebuilt test environment
+        run: verify-runner-image public cpu
+
+      - name: Run expanded KV ownership state machines
+        id: state_machines
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .kv-nightly-artifacts
+          cargo test --locked -p skippy-cache -- --nocapture 2>&1 \
+            | tee .kv-nightly-artifacts/skippy-cache.log
+
+      - name: Capture immutable run manifest
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg schema_version "1" \
+            --arg source_sha "$(git rev-parse HEAD)" \
+            --arg seeds "$SKIPPY_CACHE_STATE_MACHINE_SEEDS" \
+            --arg steps "$SKIPPY_CACHE_STATE_MACHINE_STEPS" \
+            --arg outcome "${{ steps.state_machines.outcome }}" \
+            '{
+              schema_version: ($schema_version | tonumber),
+              source_sha: $source_sha,
+              state_machine_seeds: ($seeds | tonumber),
+              steps_per_seed: ($steps | tonumber),
+              outcome: $outcome
+            }' > .kv-nightly-artifacts/manifest.json
+          {
+            echo "## Nightly KV ownership coverage"
+            echo
+            echo "- source: \`$(git rev-parse HEAD)\`"
+            echo "- seeds: \`$SKIPPY_CACHE_STATE_MACHINE_SEEDS\`"
+            echo "- steps per seed: \`$SKIPPY_CACHE_STATE_MACHINE_STEPS\`"
+            echo "- outcome: \`${{ steps.state_machines.outcome }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reproducible failure evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: nightly-kv-ownership-${{ github.run_number }}-${{ github.run_attempt }}
+          path: .kv-nightly-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail on ownership regression
+        if: ${{ !cancelled() && steps.state_machines.outcome == 'failure' }}
+        run: |
+          echo "The deterministic KV ownership state machines failed; inspect the uploaded seed/step log." >&2
+          exit 1

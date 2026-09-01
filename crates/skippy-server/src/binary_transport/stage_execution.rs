@@ -24,7 +24,7 @@ use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
         READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
-        WireReplyKind, activation_frame_flags_from_state_flags, send_ready,
+        WireReplyKind, activation_frame_flags_from_state_flags, sampling_flags, send_ready,
     },
 };
 use skippy_runtime::{
@@ -387,7 +387,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 23 * std::mem::size_of::<i64>();
+    const REPLY_STATS_BYTES: usize = 27 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
@@ -759,6 +759,7 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
     let sampling = sampling?;
     let mut config = SamplingConfig {
         enabled: true,
+        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,
@@ -787,7 +788,6 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         mirostat_entropy: sampling.mirostat_entropy,
         mirostat_learning_rate: sampling.mirostat_learning_rate,
         samplers: sampling.samplers.clone(),
-        ignore_eos: sampling.ignore_eos,
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling
@@ -933,7 +933,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
-        model_id: "org/model:Q4_K_M".to_string(),
+        model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
