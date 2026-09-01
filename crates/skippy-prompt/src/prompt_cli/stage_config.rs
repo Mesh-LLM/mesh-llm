@@ -67,6 +67,7 @@ fn write_local_configs(
             layer_start: stage.layer_start,
             layer_end: stage.layer_end,
             ctx_size: args.ctx_size,
+            transport_auth: None,
             lane_count: args.stage_max_inflight.max(1) as u32,
             n_batch: None,
             n_ubatch: None,
