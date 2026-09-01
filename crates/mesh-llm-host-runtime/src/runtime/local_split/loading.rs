@@ -248,71 +248,14 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await?
     };
     let first_downstream_stage_id = downstream.stage_id.clone();
-    let mut runtime_options = settings.runtime_options.clone();
-    runtime_options.config.run_id = spec.generation.run_id.clone();
-    runtime_options.config.topology_id = spec.generation.topology_id.clone();
-    runtime_options.config.model_id = spec.model_ref.to_string();
-    runtime_options.config.package_ref = Some(spec.package.package_ref.clone());
-    runtime_options.config.manifest_sha256 = Some(spec.package.manifest_sha256.clone());
-    let verified_stage0_model_path = if spec.local_source_required {
-        let mut stage0_load = split_runtime_stage_load_request(
-            spec,
-            &settings,
-            settings.stage0,
-            Some(downstream.clone()),
-            &stage0_return_endpoint,
-        );
-        let stage0_load = tokio::task::spawn_blocking(move || {
-            let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
-            anyhow::ensure!(verified, "local-required stage 0 was not content-verified");
-            anyhow::Ok(stage0_load)
-        })
-        .await
-        .context("join verify local-required stage 0 source task")??;
-        Some(
-            stage0_load
-                .model_path
-                .context("verified local-required stage 0 is missing its worker-local path")?,
-        )
-    } else {
-        None
-    };
-    let effective_model_path = verified_stage0_model_path.unwrap_or_else(|| {
-        stage_load_model_path(
-            settings.load_mode.clone(),
-            &spec.package.package_ref,
-            spec.model_path,
-        )
-    });
-    runtime_options.config.source_model_path = Some(effective_model_path.clone());
-    runtime_options.config.source_model_sha256 = Some(spec.package.source_model_sha256.clone());
-    runtime_options.config.source_model_bytes = Some(spec.package.source_model_bytes);
-    runtime_options.config.materialized_path = None;
-    runtime_options.config.materialized_pinned = false;
-    runtime_options.config.model_path = Some(effective_model_path);
-    if runtime_options.config.projector_path.is_none() {
-        runtime_options.config.projector_path = spec.projector_path.clone();
-    }
-    runtime_options.config.stage_id = settings.stage0.stage_id.clone();
-    runtime_options.config.stage_index = settings.stage0.stage_index;
-    runtime_options.config.layer_start = settings.stage0.layer_start;
-    runtime_options.config.layer_end = settings.stage0.layer_end;
-    runtime_options.config.ctx_size = spec.ctx_size;
-    runtime_options.config.lane_count = spec.slots as u32;
-    runtime_options.config.filter_tensors_on_load = true;
-    apply_split_generation_pinned_device(
-        &mut runtime_options.config,
-        spec.pinned_gpu,
-        spec.device_override,
-    );
-    runtime_options.config.load_mode = settings.load_mode.clone();
-    runtime_options.config.bind_addr = stage0_return_endpoint;
-    runtime_options.config.upstream = None;
-    runtime_options.config.downstream = Some(PeerConfig {
-        stage_id: downstream.stage_id,
-        stage_index: downstream.stage_index,
-        endpoint: downstream_endpoint,
-    });
+    let runtime_options = stage0_runtime_options(
+        spec,
+        &settings,
+        &downstream,
+        &downstream_endpoint,
+        &stage0_return_endpoint,
+    )
+    .await?;
     let media_capability_evidence = models::runtime_media_capability_evidence(
         runtime_options
             .config
@@ -406,6 +349,81 @@ pub(super) async fn load_split_runtime_generation_inner(
         coordinator_rx: None,
         coordinator_task: None,
     })
+}
+
+async fn stage0_runtime_options(
+    spec: &SplitGenerationLoadSpec<'_>,
+    settings: &SplitGenerationLoadSettings<'_>,
+    downstream: &skippy::StagePeerDescriptor,
+    downstream_endpoint: &str,
+    stage0_return_endpoint: &str,
+) -> Result<skippy_server::EmbeddedRuntimeOptions> {
+    let mut runtime_options = settings.runtime_options.clone();
+    runtime_options.config.run_id = spec.generation.run_id.clone();
+    runtime_options.config.topology_id = spec.generation.topology_id.clone();
+    runtime_options.config.model_id = spec.model_ref.to_string();
+    runtime_options.config.package_ref = Some(spec.package.package_ref.clone());
+    runtime_options.config.manifest_sha256 = Some(spec.package.manifest_sha256.clone());
+    let verified_stage0_model_path = if spec.local_source_required {
+        let mut stage0_load = split_runtime_stage_load_request(
+            spec,
+            settings,
+            settings.stage0,
+            Some(downstream.clone()),
+            stage0_return_endpoint,
+        );
+        let stage0_load = tokio::task::spawn_blocking(move || {
+            let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
+            anyhow::ensure!(verified, "local-required stage 0 was not content-verified");
+            anyhow::Ok(stage0_load)
+        })
+        .await
+        .context("join verify local-required stage 0 source task")??;
+        Some(
+            stage0_load
+                .model_path
+                .context("verified local-required stage 0 is missing its worker-local path")?,
+        )
+    } else {
+        None
+    };
+    let effective_model_path = verified_stage0_model_path.unwrap_or_else(|| {
+        stage_load_model_path(
+            settings.load_mode.clone(),
+            &spec.package.package_ref,
+            spec.model_path,
+        )
+    });
+    runtime_options.config.source_model_path = Some(effective_model_path.clone());
+    runtime_options.config.source_model_sha256 = Some(spec.package.source_model_sha256.clone());
+    runtime_options.config.source_model_bytes = Some(spec.package.source_model_bytes);
+    runtime_options.config.materialized_path = None;
+    runtime_options.config.materialized_pinned = false;
+    runtime_options.config.model_path = Some(effective_model_path);
+    if runtime_options.config.projector_path.is_none() {
+        runtime_options.config.projector_path = spec.projector_path.clone();
+    }
+    runtime_options.config.stage_id = settings.stage0.stage_id.clone();
+    runtime_options.config.stage_index = settings.stage0.stage_index;
+    runtime_options.config.layer_start = settings.stage0.layer_start;
+    runtime_options.config.layer_end = settings.stage0.layer_end;
+    runtime_options.config.ctx_size = spec.ctx_size;
+    runtime_options.config.lane_count = spec.slots as u32;
+    runtime_options.config.filter_tensors_on_load = true;
+    apply_split_generation_pinned_device(
+        &mut runtime_options.config,
+        spec.pinned_gpu,
+        spec.device_override,
+    );
+    runtime_options.config.load_mode = settings.load_mode.clone();
+    runtime_options.config.bind_addr = stage0_return_endpoint.to_string();
+    runtime_options.config.upstream = None;
+    runtime_options.config.downstream = Some(PeerConfig {
+        stage_id: downstream.stage_id.clone(),
+        stage_index: downstream.stage_index,
+        endpoint: downstream_endpoint.to_string(),
+    });
+    Ok(runtime_options)
 }
 
 pub(super) async fn load_downstream_split_runtime_stages(
