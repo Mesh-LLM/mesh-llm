@@ -3,10 +3,11 @@ name: Nightly Competitive Benchmark
 on:
   schedule:
     - cron: "17 11 * * *"
+  workflow_dispatch:
 
-# Scheduled workflows execute the definition from the default branch. This file intentionally has
-# no workflow_dispatch entry because a manually selected ref could otherwise execute untrusted
-# workflow content on the persistent GPU runner. Runner-group policy remains the external backstop.
+# Scheduled workflows execute the definition from the default branch. A manual dispatch is allowed
+# only when the selected workflow ref is main, so caller-selected branch content never acquires the
+# persistent GPU runner. The checkout is independently pinned to main with read-only credentials.
 permissions:
   contents: read
 
@@ -16,7 +17,13 @@ concurrency:
 
 jobs:
   benchmark:
-    if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.MESH_NIGHTLY_COMPETITIVE_ENABLED == '1' }}
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && vars.MESH_NIGHTLY_COMPETITIVE_ENABLED == '1')
+      )
     runs-on: ${{ fromJSON('["self-hosted","Linux","X64","amd64","gpu-nvidia","mesh-llm-amd64","mesh-llm"]') }}
     timeout-minutes: 780
     env:
