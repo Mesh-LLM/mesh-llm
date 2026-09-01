@@ -1,3 +1,4 @@
+use super::ConnectionWorkerControl;
 use super::async_forwarder::AsyncForwarder;
 use super::control_messages::{
     handle_generation_control, handle_prefix_cache_control, handle_session_control, handle_stop,
@@ -86,6 +87,7 @@ pub(super) fn handle_binary_connection(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
+    worker_control: &ConnectionWorkerControl,
     first_message: StageWireMessage,
 ) -> Result<()> {
     let mut session_tracker = ConnectionSessionTracker::default();
@@ -105,6 +107,7 @@ pub(super) fn handle_binary_connection(
         downstream_connect_timeout_secs,
         native_mtp_enabled,
         prediction_return_sinks,
+        worker_control,
         first_message,
         &mut session_tracker,
     );
@@ -134,6 +137,7 @@ fn handle_binary_connection_messages(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
+    worker_control: &ConnectionWorkerControl,
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
@@ -162,6 +166,7 @@ fn handle_binary_connection_messages(
         let recv_started = Instant::now();
         let Some(mut message) = receive_next_message(
             upstream,
+            worker_control,
             activation_width,
             next_message.take(),
             pending_prefill_replies,
