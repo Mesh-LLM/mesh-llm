@@ -192,9 +192,6 @@ pub fn materialize_stage_config(
 }
 
 fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<StagePackageInfo> {
-    // Deprecated planning hint only. Runtime wire contracts come from the
-    // constructed GGML stage graph and never from this manifest field.
-    let activation_width = info.activation_width.unwrap_or(0);
     Ok(StagePackageInfo {
         package_ref: package_ref.to_string(),
         package_dir: info.package_dir,
@@ -204,7 +201,7 @@ fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<Stage
         source_model_sha256: info.source_model_sha256,
         source_model_bytes: info.source_model_bytes,
         layer_count: info.layer_count,
-        activation_width,
+        activation_width: 0,
         generation: info.generation,
         projector_path: info
             .projectors
@@ -276,7 +273,6 @@ mod tests {
             },
             "format": "layer-package",
             "layer_count": 1,
-            "activation_width": 4096,
             "shared": {
                 "metadata": {
                     "path": "shared/metadata.gguf",
@@ -348,7 +344,6 @@ mod tests {
             generation_signal_window: None,
             selected_device: None,
             bind_addr: "127.0.0.1:0".to_string(),
-            activation_width: 4096,
             ctx_size: 8192,
             lane_count: 1,
             continuous_batching: true,
@@ -395,7 +390,6 @@ mod tests {
                 },
                 "format": "layer-package",
                 "layer_count": 1,
-                "activation_width": 4096,
                 "shared": {
                     "metadata": {
                         "path": "shared/metadata.gguf",
@@ -491,7 +485,6 @@ mod tests {
             generation_signal_window: None,
             selected_device: None,
             bind_addr: "127.0.0.1:0".to_string(),
-            activation_width: 4096,
             ctx_size: 512,
             lane_count: 1,
             continuous_batching: true,

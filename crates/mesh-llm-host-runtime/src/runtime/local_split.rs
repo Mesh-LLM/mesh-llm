@@ -11,7 +11,7 @@ use super::capacity::model_fits_runtime_capacity;
 use super::local::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
     OpenAiGuardrailPolicyHandle, alloc_local_port, mmproj_path_for_model, pinned_stage_device,
-    resolved_model_name, skippy_stage_activation_width,
+    resolved_model_name,
 };
 use super::local_package::{
     SplitParticipant, SplitParticipantExclusion, SplitParticipantSnapshot,

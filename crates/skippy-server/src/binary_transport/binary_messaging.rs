@@ -31,7 +31,7 @@ use crate::{
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use skippy_protocol::binary::{WireMessageKind, read_stage_message, send_ready};
-use skippy_runtime::{ActivationBoundaryDesc, GGML_TYPE_F32};
+use skippy_runtime::ActivationBoundaryDesc;
 
 pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
@@ -228,7 +228,6 @@ fn run_binary_stage(
         config,
         topology,
         bind_addr,
-        activation_width,
         metrics_otlp_grpc,
         telemetry_queue_capacity,
         telemetry_level,
@@ -269,19 +268,10 @@ fn run_binary_stage(
             runtime.output_activation_boundary(),
         )
     };
-    let input_activation_width = activation_width_from_graph(
-        "input",
-        input_boundary,
-        config.layer_start > 0,
-        activation_width,
-    )?;
-    let output_activation_width = activation_width_from_graph(
-        "output",
-        output_boundary,
-        config.downstream.is_some(),
-        activation_width,
-    )?;
-    boundary_observer(input_boundary, output_boundary);
+    let input_activation_width =
+        activation_width_from_graph("input", input_boundary, config.layer_start > 0)?;
+    let output_activation_width =
+        activation_width_from_graph("output", output_boundary, config.downstream.is_some())?;
     if max_inflight > 0 {
         let timer = Instant::now();
         let sessions = runtime
@@ -326,6 +316,7 @@ fn run_binary_stage(
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
+    boundary_observer(input_boundary, output_boundary);
     if let Some(openai_options) = openai {
         if config.stage_index != 0 || config.layer_start != 0 {
             bail!("--openai-bind-addr is only supported on stage 0");
@@ -545,48 +536,14 @@ fn activation_width_from_graph(
     edge: &str,
     descriptor: Option<ActivationBoundaryDesc>,
     required: bool,
-    legacy_width: i32,
 ) -> Result<i32> {
     let Some(descriptor) = descriptor else {
         if required {
             bail!("stage graph did not expose its {edge} activation boundary");
         }
-        return Ok(legacy_width);
+        return Ok(0);
     };
-    if descriptor.version != 1 {
-        bail!(
-            "unsupported {edge} activation boundary descriptor version {}",
-            descriptor.version
-        );
-    }
-    if descriptor.ggml_type != GGML_TYPE_F32 {
-        bail!(
-            "binary activation transport currently requires graph-observed F32; {edge} boundary uses ggml type {}",
-            descriptor.ggml_type
-        );
-    }
-    if descriptor.layout != 1 {
-        bail!(
-            "binary activation transport requires token-major layout; {edge} boundary uses layout {}",
-            descriptor.layout
-        );
-    }
-    if descriptor.elements_per_token == 0 {
-        bail!("graph-observed {edge} activation boundary has zero elements per token");
-    }
-    let expected_bytes = descriptor
-        .elements_per_token
-        .checked_mul(std::mem::size_of::<f32>() as u64)
-        .context("activation bytes per token overflow")?;
-    if descriptor.bytes_per_token != expected_bytes {
-        bail!(
-            "graph-observed {edge} activation boundary reports {} bytes for {} F32 elements",
-            descriptor.bytes_per_token,
-            descriptor.elements_per_token
-        );
-    }
-    i32::try_from(descriptor.elements_per_token)
-        .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
+    descriptor.raw_f32_width(edge)
 }
 
 #[cfg(test)]
@@ -620,36 +577,45 @@ mod shutdown_tests {
     }
 
     #[test]
-    fn graph_boundary_is_authoritative_over_legacy_width() {
+    fn graph_boundary_is_the_only_activation_width_authority() {
         assert_eq!(
-            activation_width_from_graph("output", Some(f32_boundary(1024)), true, 896)
+            activation_width_from_graph("output", Some(f32_boundary(1024)), true)
                 .expect("valid graph boundary"),
             1024
         );
     }
 
     #[test]
-    fn required_graph_boundary_cannot_fall_back_to_legacy_width() {
-        let error = activation_width_from_graph("input", None, true, 1024)
+    fn required_graph_boundary_cannot_be_omitted() {
+        let error = activation_width_from_graph("input", None, true)
             .expect_err("required graph boundary must be present");
         assert!(error.to_string().contains("did not expose"));
+    }
+
+    #[test]
+    fn absent_unused_graph_boundary_has_no_wire_width() {
+        assert_eq!(
+            activation_width_from_graph("input", None, false)
+                .expect("unused edge may omit a boundary"),
+            0
+        );
     }
 
     #[test]
     fn unsupported_graph_boundary_fails_closed() {
         let mut boundary = f32_boundary(1024);
         boundary.ggml_type = 1;
-        let error = activation_width_from_graph("output", Some(boundary), true, 1024)
+        let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("non-F32 graph boundary must not use the F32 codec");
         assert!(error.to_string().contains("requires graph-observed F32"));
 
         let mut boundary = f32_boundary(1024);
         boundary.bytes_per_token -= 1;
-        let error = activation_width_from_graph("output", Some(boundary), true, 1024)
+        let error = activation_width_from_graph("output", Some(boundary), true)
             .expect_err("inconsistent graph boundary must fail");
         assert!(error.to_string().contains("reports 4095 bytes"));
 
-        let error = activation_width_from_graph("output", Some(f32_boundary(0)), true, 1024)
+        let error = activation_width_from_graph("output", Some(f32_boundary(0)), true)
             .expect_err("empty graph boundary must fail");
         assert!(error.to_string().contains("zero elements"));
     }

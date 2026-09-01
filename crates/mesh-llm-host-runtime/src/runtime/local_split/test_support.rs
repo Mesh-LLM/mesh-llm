@@ -67,7 +67,6 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: 4096,
         ctx_size: 8192,
         lane_count: 4,
         continuous_batching: true,
@@ -339,7 +338,6 @@ pub(super) fn runtime_status_for_stage(
         layer_end: stage.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: 896,
         input_activation_boundary: None,
         output_activation_boundary: None,
         selected_device: None,
@@ -493,7 +491,7 @@ stop = ["END"]
         .expect("split settings should resolve");
 
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
-    assert_eq!(settings.activation_width, 2048);
+    assert_eq!(settings.embedded_openai.activation_width, 0);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
     assert_eq!(settings.runtime_options.config.ctx_size, 8192);
@@ -855,12 +853,12 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
-    let boundary = (load.activation_width > 0).then_some(skippy_runtime::ActivationBoundaryDesc {
+    let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
         version: 1,
         ggml_type: 0,
         layout: 1,
-        elements_per_token: load.activation_width as u64,
-        bytes_per_token: load.activation_width as u64 * std::mem::size_of::<f32>() as u64,
+        elements_per_token: 4096,
+        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
     });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
@@ -881,7 +879,6 @@ pub(super) fn test_stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: load.activation_width as u32,
         input_activation_boundary: load.upstream.as_ref().and(boundary),
         output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
@@ -920,7 +917,6 @@ pub(super) fn test_stage_status_from_stop(
         layer_end: 0,
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
         input_activation_boundary: None,
         output_activation_boundary: None,
         selected_device: None,

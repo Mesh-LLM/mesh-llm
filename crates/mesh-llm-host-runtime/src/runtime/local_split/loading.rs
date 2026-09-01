@@ -2,8 +2,8 @@ use super::attestation::{split_stage_source_is_ready, strict_ready_status_matche
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
     RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
-    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, skippy_stage_activation_width,
-    split_participant_labels, split_stage_plan_labels, stop_split_generation,
+    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, split_participant_labels,
+    split_stage_plan_labels, stop_split_generation,
 };
 use crate::inference::skippy;
 use crate::mesh;
@@ -106,7 +106,6 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) runtime_options: skippy_server::EmbeddedRuntimeOptions,
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
-    pub(super) activation_width: i32,
     pub(super) startup_timeout: Duration,
     pub(super) readiness_interval: Duration,
 }
@@ -555,6 +554,12 @@ fn validate_activation_edge(
     consumer_id: &str,
     consumer: ActivationBoundaryDesc,
 ) -> Result<()> {
+    producer
+        .raw_f32_width("output")
+        .with_context(|| format!("invalid graph boundary advertised by producer {producer_id}"))?;
+    consumer
+        .raw_f32_width("input")
+        .with_context(|| format!("invalid graph boundary advertised by consumer {consumer_id}"))?;
     anyhow::ensure!(
         producer == consumer,
         "activation boundary mismatch between producer {producer_id} and consumer {consumer_id}: producer={producer:?} consumer={consumer:?}"
@@ -650,7 +655,6 @@ pub(super) fn split_runtime_stage_load_request(
         generation_signal_window: resolved_config.generation_signal_window,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: settings.activation_width,
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
         continuous_batching: settings.embedded_openai.continuous_batching,
@@ -708,8 +712,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         .first()
         .context("split topology did not produce stage 0")?;
     let load_mode = split_generation_load_mode(spec.package);
-    let activation_width =
-        skippy_stage_activation_width(spec.package.activation_width, spec.model_ref)?;
     let mut resolved = skippy::resolve_skippy_config_for_selector(
         skippy::SkippyConfigResolveRequest {
             mesh_config: spec.mesh_config,
@@ -753,7 +755,9 @@ pub(super) async fn split_generation_load_settings<'a>(
     if let Some(device) = spec.device_override {
         resolved.hardware.device = Some(device.to_string());
     }
-    let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
+    // Stage zero replaces this placeholder with its graph-observed output
+    // boundary after the native runtime has been constructed.
+    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
@@ -771,7 +775,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         runtime_options,
         embedded_openai,
         load_mode,
-        activation_width,
         startup_timeout: lifecycle.startup_timeout,
         readiness_interval: lifecycle.readiness_interval,
     })
@@ -1216,10 +1219,74 @@ mod activation_boundary_tests {
     }
 
     #[test]
+    fn three_stage_topology_validates_each_edge_independently() {
+        let first_output = boundary(1024);
+        let middle_input = boundary(1024);
+        let middle_output = boundary(2048);
+        let final_input = boundary(2048);
+
+        validate_activation_edge("stage-0", first_output, "stage-1", middle_input)
+            .expect("first edge must match");
+        validate_activation_edge("stage-1", middle_output, "stage-2", final_input)
+            .expect("second edge must match even when its contract differs from the first");
+
+        let error = validate_activation_edge("stage-1", middle_output, "stage-2", boundary(1024))
+            .expect_err("a mismatch on the second edge must block the topology");
+        assert!(error.to_string().contains("stage-1"));
+        assert!(error.to_string().contains("stage-2"));
+    }
+
+    #[test]
     fn graph_boundary_mismatch_blocks_topology_activation() {
         let error = validate_activation_edge("stage-0", boundary(1024), "stage-1", boundary(896))
             .expect_err("different graph boundary contracts must not connect");
         assert!(error.to_string().contains("activation boundary mismatch"));
+    }
+
+    #[test]
+    fn every_graph_boundary_field_participates_in_edge_matching() {
+        let producer = boundary(1024);
+        let mutations = [
+            ActivationBoundaryDesc {
+                version: 2,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                ggml_type: 1,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                layout: 2,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                elements_per_token: 896,
+                bytes_per_token: 896 * std::mem::size_of::<f32>() as u64,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                bytes_per_token: producer.bytes_per_token + 4,
+                ..producer
+            },
+        ];
+
+        for consumer in mutations {
+            assert!(
+                validate_activation_edge("stage-0", producer, "stage-1", consumer).is_err(),
+                "mutated consumer contract must not activate: {consumer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identical_but_invalid_graph_boundaries_do_not_activate() {
+        let invalid = ActivationBoundaryDesc {
+            version: 99,
+            ..boundary(1024)
+        };
+        let error = validate_activation_edge("stage-0", invalid, "stage-1", invalid)
+            .expect_err("matching invalid descriptors must fail semantic validation");
+        assert!(error.to_string().contains("invalid graph boundary"));
     }
 
     #[test]

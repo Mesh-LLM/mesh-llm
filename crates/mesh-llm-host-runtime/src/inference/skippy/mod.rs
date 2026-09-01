@@ -878,7 +878,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_stage0_runtime_options_with_openai_args(
         mut runtime_options: EmbeddedRuntimeOptions,
-        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
@@ -928,6 +928,14 @@ impl SkippyModelHandle {
                 runtime_config.model_id, runtime_config.model_path
             )
         })?;
+        embedded_args.activation_width = if runtime_config.downstream.is_some() {
+            runtime
+                .output_activation_boundary()
+                .context("stage 0 graph did not expose its output activation boundary")?
+                .raw_f32_width("output")?
+        } else {
+            0
+        };
         let telemetry = Telemetry::new(
             telemetry.metrics_otlp_grpc.clone(),
             telemetry.queue_capacity,
@@ -980,7 +988,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_stage0_runtime_options_with_openai_args_and_open_events(
         mut runtime_options: EmbeddedRuntimeOptions,
-        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
@@ -1033,6 +1041,14 @@ impl SkippyModelHandle {
                         runtime_config.model_id, runtime_config.model_path
                     )
                 })?;
+        embedded_args.activation_width = if runtime_config.downstream.is_some() {
+            runtime
+                .output_activation_boundary()
+                .context("stage 0 graph did not expose its output activation boundary")?
+                .raw_f32_width("output")?
+        } else {
+            0
+        };
         let telemetry = Telemetry::new(
             telemetry.metrics_otlp_grpc.clone(),
             telemetry.queue_capacity,

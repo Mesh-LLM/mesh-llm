@@ -527,7 +527,6 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
     let info = skippy_runtime::package::inspect_layer_package(&local_ref)
         .with_context(|| format!("inspect layer package {package_ref}"))?;
 
-    let activation_width = layer_package_activation_width_hint(info.activation_width);
     let source_model_bytes = info
         .source_model_bytes
         .unwrap_or_else(|| info.layers.iter().map(|l| l.artifact_bytes).sum::<u64>());
@@ -547,7 +546,7 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
         source_files: Vec::new(),
         layer_weight_bytes,
         layer_count: info.layer_count,
-        activation_width,
+        activation_width: 0,
         tensor_count: info.layers.iter().map(|l| l.tensor_count as u64).sum(),
         generation: info.generation,
     })
@@ -622,12 +621,6 @@ fn canonical_layer_package_ref(package_ref: &str, local_ref: &str) -> String {
     hf_ref_from_cache_path(local_ref)
         .or_else(|| hf_ref_from_cache_path(package_ref))
         .unwrap_or_else(|| package_ref.to_string())
-}
-
-fn layer_package_activation_width_hint(activation_width: Option<u32>) -> u32 {
-    // Deprecated planning hint only. A missing value must not prevent loading;
-    // stage bring-up obtains the authoritative boundary from the GGML graph.
-    activation_width.unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -860,12 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn layer_package_activation_width_is_an_optional_hint() {
-        assert_eq!(layer_package_activation_width_hint(None), 0);
-        assert_eq!(layer_package_activation_width_hint(Some(1024)), 1024);
-    }
-
-    #[test]
     fn package_layer_weights_include_shared_model_bytes_at_endpoints() {
         let info = skippy_runtime::package::LayerPackageInfo {
             package_dir: PathBuf::from("/models/package"),
@@ -875,7 +862,6 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(120),
             layer_count: 2,
-            activation_width: Some(1024),
             generation: None,
             projectors: Vec::new(),
             layers: vec![
@@ -907,7 +893,6 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(70),
             layer_count: 2,
-            activation_width: Some(1024),
             generation: None,
             projectors: Vec::new(),
             layers: vec![

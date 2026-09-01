@@ -70,7 +70,6 @@ pub(super) fn stage_runtime_status_from_snapshot(
         layer_end: status.layer_end,
         state: status.state,
         bind_addr: status.bind_addr,
-        activation_width: status.activation_width,
         input_activation_boundary: status.input_activation_boundary,
         output_activation_boundary: status.output_activation_boundary,
         selected_device: status.selected_device,
@@ -112,7 +111,6 @@ pub(super) fn stage_snapshot_from_runtime_status(
         layer_end: status.layer_end,
         state,
         bind_addr: status.bind_addr.clone(),
-        activation_width: status.activation_width,
         input_activation_boundary: status.input_activation_boundary,
         output_activation_boundary: status.output_activation_boundary,
         selected_device: status.selected_device.clone(),
@@ -276,7 +274,6 @@ pub(super) fn stage_load_to_proto(
         generation_signal_window: load.generation_signal_window,
         selected_device: load.selected_device.map(stage_device_to_proto),
         bind_addr: load.bind_addr,
-        activation_width: load.activation_width.max(0) as u32,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
         continuous_batching: Some(load.continuous_batching),
@@ -503,8 +500,6 @@ pub(super) fn stage_load_from_proto(
             .map(stage_device_from_proto)
             .transpose()?,
         bind_addr: load.bind_addr,
-        activation_width: i32::try_from(load.activation_width)
-            .context("stage activation_width exceeds i32")?,
         ctx_size: load.ctx_size,
         lane_count: if load.lane_count == 0 {
             4
@@ -664,7 +659,6 @@ pub(super) fn stage_control_unavailable_response(
                 layer_end: 0,
                 state: crate::inference::skippy::StageRuntimeState::Failed,
                 bind_addr: String::new(),
-                activation_width: 0,
                 input_activation_boundary: None,
                 output_activation_boundary: None,
                 selected_device: None,
@@ -771,7 +765,6 @@ pub(super) fn stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: load.bind_addr.clone(),
-        activation_width: load.activation_width.max(0) as u32,
         input_activation_boundary: None,
         output_activation_boundary: None,
         selected_device: load.selected_device.clone(),
@@ -1218,7 +1211,6 @@ pub(super) fn stage_status_to_proto(
         layer_end: status.layer_end,
         state: stage_runtime_state_to_proto(status.state) as i32,
         bind_addr: status.bind_addr,
-        activation_width: status.activation_width,
         input_activation_boundary: status
             .input_activation_boundary
             .map(activation_boundary_to_proto),
@@ -1263,7 +1255,6 @@ pub(super) fn stage_status_from_proto(
         layer_end: status.layer_end,
         state: stage_runtime_state_from_proto(status.state),
         bind_addr: status.bind_addr,
-        activation_width: status.activation_width,
         input_activation_boundary: status
             .input_activation_boundary
             .map(activation_boundary_from_proto),
@@ -1565,5 +1556,21 @@ mod tests {
             stage_runtime_settings_from_proto(None),
             crate::inference::skippy::StageLoadRuntimeSettings::default()
         );
+    }
+
+    #[test]
+    fn activation_boundary_descriptor_wire_round_trip_preserves_every_field() {
+        let expected = skippy_runtime::ActivationBoundaryDesc {
+            version: 7,
+            ggml_type: 8,
+            layout: 3,
+            elements_per_token: 2_560,
+            bytes_per_token: 10_240,
+        };
+        let encoded = activation_boundary_to_proto(expected).encode_to_vec();
+        let decoded = skippy_stage_proto::ActivationBoundaryDescriptor::decode(encoded.as_slice())
+            .expect("decode activation boundary descriptor");
+
+        assert_eq!(activation_boundary_from_proto(decoded), expected);
     }
 }

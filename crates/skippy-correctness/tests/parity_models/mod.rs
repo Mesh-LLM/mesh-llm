@@ -79,6 +79,112 @@ pub(crate) fn activation_handoff_matches_full_model(spec: FamilySpec) -> Result<
     run_correctness_chain(&layout, spec, splits)
 }
 
+pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> Result<()> {
+    prepare_native_logs()?;
+    let Some(case) = resolve_case_for_ignored_test(spec)? else {
+        return Ok(());
+    };
+    let layout = case.layout()?;
+    if case.row.is_package_only() {
+        bail!(
+            "{} / {} requires a full-model artifact for graph boundary role coverage",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    let (first_cut, second_cut) = split_layers_for(case.row, layout.layer_count)?;
+    if first_cut >= second_cut {
+        bail!("graph boundary role coverage requires two ordered split layers");
+    }
+    let n_gpu_layers = case_n_gpu_layers(case.row);
+    let first_shape = StageShape {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: first_cut,
+        include_embeddings: true,
+        include_output: false,
+    };
+    let middle_shape = StageShape {
+        stage_index: 1,
+        layer_start: first_cut,
+        layer_end: second_cut,
+        include_embeddings: false,
+        include_output: false,
+    };
+    let final_shape = StageShape {
+        stage_index: 2,
+        layer_start: second_cut,
+        layer_end: layout.layer_count,
+        include_embeddings: false,
+        include_output: true,
+    };
+    let first = open_stage_model(
+        &stage_path(&layout, spec, first_shape)?,
+        first_shape,
+        n_gpu_layers,
+    )?;
+    let middle = open_stage_model(
+        &stage_path(&layout, spec, middle_shape)?,
+        middle_shape,
+        n_gpu_layers,
+    )?;
+    let final_stage = open_stage_model(
+        &stage_path(&layout, spec, final_shape)?,
+        final_shape,
+        n_gpu_layers,
+    )?;
+
+    if first.input_activation_boundary().is_some() {
+        bail!("first stage unexpectedly exposed an input activation boundary");
+    }
+    if final_stage.output_activation_boundary().is_some() {
+        bail!("final stage unexpectedly exposed an output activation boundary");
+    }
+    let first_output =
+        required_graph_boundary(first.output_activation_boundary(), "first stage output")?;
+    let middle_input =
+        required_graph_boundary(middle.input_activation_boundary(), "middle stage input")?;
+    let middle_output =
+        required_graph_boundary(middle.output_activation_boundary(), "middle stage output")?;
+    let final_input =
+        required_graph_boundary(final_stage.input_activation_boundary(), "final stage input")?;
+
+    for (edge, boundary) in [
+        ("first stage output", first_output),
+        ("middle stage input", middle_input),
+        ("middle stage output", middle_output),
+        ("final stage input", final_input),
+    ] {
+        boundary.raw_f32_width(edge)?;
+        if boundary.bytes_per_token
+            != boundary.elements_per_token * std::mem::size_of::<f32>() as u64
+        {
+            bail!("{edge} did not report its exact native F32 bytes per token");
+        }
+    }
+    if first_output != middle_input {
+        bail!("first-to-middle graph boundary contracts do not match");
+    }
+    if middle_output != final_input {
+        bail!("middle-to-final graph boundary contracts do not match");
+    }
+
+    let tokens = first.tokenize(case_prompt(case.row), true)?;
+    let mut session = first.create_session()?;
+    session.prefill_chunk_frame(&tokens, None, 0)?;
+    if first.output_activation_boundary() != Some(first_output) {
+        bail!("first stage graph boundary changed after prefill execution");
+    }
+    Ok(())
+}
+
+fn required_graph_boundary(
+    boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    edge: &str,
+) -> Result<skippy_runtime::ActivationBoundaryDesc> {
+    boundary.with_context(|| format!("{edge} did not expose a graph boundary descriptor"))
+}
+
 pub(crate) fn cache_state_restore_matches_recompute(spec: FamilySpec) -> Result<()> {
     prepare_native_logs()?;
     let Some(case) = resolve_case_for_ignored_test(spec)? else {

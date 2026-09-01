@@ -53,9 +53,9 @@ runtime settings into one loaded stage. Model execution flows through
 ```bash
 skippy-server example-config
 skippy-server serve --config stage.json
-skippy-server serve-binary --config stage.json --activation-width 576
+skippy-server serve-binary --config stage.json
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
-skippy-server serve-binary --config stage-0.json --topology topology.json --activation-width 576 --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
+skippy-server serve-binary --config stage-0.json --topology topology.json --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
 
 ## Embedding API

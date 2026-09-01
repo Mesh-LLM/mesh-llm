@@ -402,8 +402,6 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
     ]);
     if args.child_logs {
         stage_command
@@ -640,8 +638,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
     ]);
     configure_child_logs(&mut stage2_command, args.child_logs);
     let _stage2 = ChildGuard::spawn(stage2_command)?;
@@ -657,8 +653,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
     ]);
     configure_child_logs(&mut stage1_command, args.child_logs);
     let _stage1 = ChildGuard::spawn(stage1_command)?;
