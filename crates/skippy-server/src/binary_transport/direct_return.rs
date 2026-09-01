@@ -271,6 +271,25 @@ impl PredictionReturnReceiver {
         validate_expected_reply(reply, expected).map(Some)
     }
 
+    /// Event-driven bounded wait: blocks on the return channel and wakes the
+    /// moment a reply is delivered, unlike `try_recv_one_of` which only
+    /// samples. Returns `None` on timeout.
+    pub(crate) fn recv_one_of_timeout(
+        &self,
+        expected: &[WireReplyKind],
+        timeout: Duration,
+    ) -> Result<Option<StageReply>> {
+        let reply = match self.receiver.recv_timeout(timeout) {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(error)) => return Err(anyhow!(error)),
+            Err(RecvTimeoutError::Timeout) => return Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("prediction return channel disconnected"));
+            }
+        };
+        validate_expected_reply(reply, expected).map(Some)
+    }
+
     fn try_recv(&self) -> Result<Option<StageReply>> {
         match self.receiver.try_recv() {
             Ok(Ok(reply)) => Ok(Some(reply)),
