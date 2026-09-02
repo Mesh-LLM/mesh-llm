@@ -444,7 +444,7 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
     );
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Inventory(inventory) = decoded else {
         panic!("expected inventory response");
@@ -477,7 +477,7 @@ fn stage_control_prepare_response_round_trips_failed_status() {
     );
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::PrepareAccepted(accepted) = decoded else {
         panic!("expected prepare response");
@@ -510,7 +510,7 @@ fn stage_control_status_list_response_round_trips_all_statuses() {
         crate::inference::skippy::StageControlResponse::Status(vec![first.clone(), second.clone()]);
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
         panic!("expected status response");
@@ -526,31 +526,12 @@ fn empty_stage_control_status_list_response_round_trips_as_empty() {
     let response = crate::inference::skippy::StageControlResponse::Status(Vec::new());
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
         panic!("expected status response");
     };
     assert!(statuses.is_empty());
-}
-
-#[test]
-fn legacy_stage_control_status_response_still_decodes() {
-    let status = stage_status_from_load(
-        &test_stage_load_request(),
-        crate::inference::skippy::StageRuntimeState::Ready,
-    );
-    let response = crate::inference::skippy::StageControlResponse::Status(vec![status.clone()]);
-
-    let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, false))
-            .unwrap();
-
-    let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
-        panic!("expected status response");
-    };
-    assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].stage_id, status.stage_id);
 }
 
 #[test]

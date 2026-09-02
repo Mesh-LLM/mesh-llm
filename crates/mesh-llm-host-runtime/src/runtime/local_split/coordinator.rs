@@ -85,6 +85,7 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<String>,
     pub(super) slots: usize,
@@ -609,9 +610,12 @@ impl SplitTopologyCoordinator {
 
     fn local_model_fits(&self) -> bool {
         let local_capacity = self
-            .pinned_gpu
-            .as_ref()
-            .map(|gpu| gpu.allocatable_vram_bytes())
+            .capacity_budget_bytes
+            .or_else(|| {
+                self.pinned_gpu
+                    .as_ref()
+                    .map(|gpu| gpu.allocatable_vram_bytes())
+            })
             .unwrap_or_else(|| self.node.vram_bytes());
         // Use the package's source model bytes when available — layer-package
         // refs use `hf://` pseudo-paths that `total_model_bytes` cannot stat.
@@ -641,6 +645,7 @@ impl SplitTopologyCoordinator {
             projector_path: self.projector_path.clone(),
             ctx_size: self.ctx_size,
             compact_meta: &self.compact_meta,
+            capacity_budget_bytes: self.capacity_budget_bytes,
             cache_type_k_override: self.cache_type_k_override.as_deref(),
             cache_type_v_override: self.cache_type_v_override.as_deref(),
             n_batch_override: self.n_batch_override,

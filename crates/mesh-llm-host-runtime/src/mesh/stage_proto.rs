@@ -838,7 +838,6 @@ pub(super) fn stage_preparation_status_from_cancel(
 
 pub(super) fn stage_control_response_to_proto(
     response: crate::inference::skippy::StageControlResponse,
-    status_list_supported: bool,
 ) -> skippy_stage_proto::StageControlResponse {
     use skippy_stage_proto::stage_control_response::Response;
 
@@ -858,19 +857,9 @@ pub(super) fn stage_control_response_to_proto(
             })
         }
         crate::inference::skippy::StageControlResponse::Status(statuses) => {
-            if status_list_supported {
-                Response::StageStatuses(skippy_stage_proto::StageStatusList {
-                    statuses: statuses.into_iter().map(stage_status_to_proto).collect(),
-                })
-            } else {
-                Response::StageStatus(statuses.into_iter().next().map_or_else(
-                    || skippy_stage_proto::StageStatus {
-                        state: skippy_stage_proto::StageRuntimeState::Stopped as i32,
-                        ..Default::default()
-                    },
-                    stage_status_to_proto,
-                ))
-            }
+            Response::StageStatuses(skippy_stage_proto::StageStatusList {
+                statuses: statuses.into_iter().map(stage_status_to_proto).collect(),
+            })
         }
         crate::inference::skippy::StageControlResponse::Inventory(inventory) => {
             Response::LayerInventory(layer_inventory_to_proto(inventory))
@@ -932,11 +921,6 @@ pub(super) fn stage_control_response_from_proto(
                     status: stage_status_from_proto(status)?,
                     error: ready.error,
                 },
-            ))
-        }
-        Response::StageStatus(status) => {
-            Ok(crate::inference::skippy::StageControlResponse::Status(
-                vec![stage_status_from_proto(status)?],
             ))
         }
         Response::StageStatuses(statuses) => {

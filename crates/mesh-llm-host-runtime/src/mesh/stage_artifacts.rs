@@ -238,13 +238,7 @@ impl Node {
             .execute_stage_control_request_for_peer(remote, request)
             .await?;
         self.record_stage_control_response(&response).await;
-        let status_list_supported = self
-            .peer_supports_skippy_subprotocol_feature(
-                remote,
-                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
-            )
-            .await;
-        let proto_response = stage_control_response_to_proto(response, status_list_supported);
+        let proto_response = stage_control_response_to_proto(response);
         write_len_prefixed(&mut send, &proto_response.encode_to_vec()).await?;
         let _ = send.finish();
         Ok(())

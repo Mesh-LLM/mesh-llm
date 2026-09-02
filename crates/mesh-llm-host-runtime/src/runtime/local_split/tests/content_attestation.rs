@@ -138,6 +138,7 @@ async fn strict_multimodal_stage_loads() -> StrictMultimodalStageLoads {
         projector_path: Some(projector_path.to_string_lossy().into_owned()),
         ctx_size: 4096,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
         slots: 1,

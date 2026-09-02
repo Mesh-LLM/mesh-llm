@@ -34,7 +34,7 @@ pub use validation::{
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
     validate_stage_control_request, validate_stage_control_response, validate_stage_transport_open,
@@ -70,7 +70,7 @@ mod tests {
         stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
         StageFrameError, validate_stage_artifact_transfer_request,
         validate_stage_artifact_transfer_response, validate_stage_control_request,
         validate_stage_control_response, validate_stage_transport_open,
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }

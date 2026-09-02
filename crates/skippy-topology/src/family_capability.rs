@@ -1543,7 +1543,7 @@ fn capability_for_request(
 ) -> FamilyCapabilityRecord {
     let stored_layer_count = capability.layer_count;
     capability.layer_count = layer_count;
-    if activation_width != 0 {
+    if capability.activation_width == 0 && activation_width != 0 {
         capability.activation_width = activation_width;
     }
     for range in &mut capability.recurrent_ranges {

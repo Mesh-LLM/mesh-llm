@@ -368,7 +368,7 @@ pub(super) fn local_stage(
 }
 
 #[tokio::test]
-async fn split_generation_load_settings_consumes_resolved_skippy_config() {
+async fn split_generation_load_settings_preserves_unpinned_budget_and_resolved_config() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
@@ -470,6 +470,7 @@ stop = ["END"]
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: Some(6_000_000_000),
         pinned_gpu: None,
         device_override: None,
         slots: 4,
@@ -490,6 +491,7 @@ stop = ["END"]
         .await
         .expect("split settings should resolve");
 
+    assert_eq!(split_allocatable_memory_bytes(&spec), Some(6_000_000_000));
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
     assert_eq!(settings.activation_width, 2048);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
@@ -600,6 +602,7 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
+        capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
         slots: 1,
