@@ -7,8 +7,8 @@ use self::cache_runtime::{
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    direct_coalesce_target, effective_scheduler_lane_count, scheduler_safe_mode_from_value,
-    should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
+    DirectWorkArbiter, DirectWorkPolicy, direct_coalesce_target, effective_scheduler_lane_count,
+    scheduler_safe_mode_from_value, take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
@@ -42,6 +42,7 @@ const MAX_COMMANDS_PER_TURN: usize = 64;
 const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
+const DIRECT_WORK_POLICY_ENV: &str = "SKIPPY_DIRECT_WORK_POLICY";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct ScheduledGenerationStats {
@@ -364,7 +365,7 @@ struct SchedulerWorker {
     active_runtime_sessions: usize,
     direct_wave_full: bool,
     telemetry: Option<Telemetry>,
-    last_served_direct: bool,
+    direct_work_arbiter: DirectWorkArbiter,
     last_served_cache_runtime: bool,
     last_emitted_lifecycle_counters: (u64, u64, u64, u64),
 }
@@ -392,6 +393,8 @@ impl IterationScheduler {
             )
         };
         let safe_mode = scheduler_safe_mode_from_value(env::var(SAFE_MODE_ENV).ok().as_deref());
+        let direct_work_policy =
+            DirectWorkPolicy::from_value(env::var(DIRECT_WORK_POLICY_ENV).ok().as_deref())?;
         let scheduler_lane_count =
             effective_scheduler_lane_count(lane_count, safe_mode, continuous_batching);
         let scheduler_config = build_scheduler_config(
@@ -443,6 +446,10 @@ impl IterationScheduler {
                     "skippy.scheduler.cache_policy".to_string(),
                     json!("weighted_lpm_aging_dfs_waiting_prefix"),
                 ),
+                (
+                    "skippy.scheduler.direct_work_policy".to_string(),
+                    json!(direct_work_policy.as_str()),
+                ),
             ]),
         );
         let (commands, receiver) = std_mpsc::sync_channel(command_queue_capacity);
@@ -463,7 +470,7 @@ impl IterationScheduler {
                     active_runtime_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
-                    last_served_direct: false,
+                    direct_work_arbiter: DirectWorkArbiter::new(direct_work_policy),
                     last_served_cache_runtime: false,
                     last_emitted_lifecycle_counters: (0, 0, 0, 0),
                 }
@@ -1254,11 +1261,14 @@ impl SchedulerWorker {
         // Decide which queue owns this turn before planning scheduler work:
         // plan_iteration mutates sequence cursors and must only be called when
         // the resulting plan will actually execute.
-        let serve_direct = should_serve_direct(has_direct, has_planned, self.last_served_direct);
+        let serve_direct = self
+            .direct_work_arbiter
+            .should_serve_direct(has_direct, has_planned);
 
         if serve_direct {
-            self.last_served_direct = true;
+            let started = Instant::now();
             self.run_direct_iteration_batch();
+            self.direct_work_arbiter.observe_direct(started.elapsed());
             return;
         }
 
@@ -1268,7 +1278,6 @@ impl SchedulerWorker {
             return;
         }
 
-        self.last_served_direct = false;
         let mut setup_ids = BTreeSet::new();
         let mut setup = Vec::new();
         for work in &plan.work {
@@ -1321,6 +1330,8 @@ impl SchedulerWorker {
         let step = self.scheduler.complete_iteration(&plan, &predicted);
         self.finish_iteration(&plan, &predicted);
         self.emit_step_telemetry(&step, iteration_started.elapsed(), execution_elapsed);
+        self.direct_work_arbiter
+            .observe_planned(iteration_started.elapsed());
     }
 
     fn run_direct_iteration_batch(&mut self) {
@@ -1957,7 +1968,7 @@ mod tests {
                 active_runtime_sessions: 0,
                 direct_wave_full: false,
                 telemetry: None,
-                last_served_direct: false,
+                direct_work_arbiter: DirectWorkArbiter::default(),
                 last_served_cache_runtime: false,
                 last_emitted_lifecycle_counters: (0, 0, 0, 0),
             }
@@ -2125,7 +2136,7 @@ mod tests {
             active_runtime_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
-            last_served_direct: false,
+            direct_work_arbiter: DirectWorkArbiter::default(),
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
@@ -2247,7 +2258,7 @@ mod tests {
             active_runtime_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
-            last_served_direct: false,
+            direct_work_arbiter: DirectWorkArbiter::default(),
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
@@ -2303,7 +2314,7 @@ mod tests {
             active_runtime_sessions: 0,
             direct_wave_full: false,
             telemetry: None,
-            last_served_direct: false,
+            direct_work_arbiter: DirectWorkArbiter::default(),
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
@@ -2357,7 +2368,7 @@ mod tests {
                 active_runtime_sessions: 0,
                 direct_wave_full: false,
                 telemetry: None,
-                last_served_direct: false,
+                direct_work_arbiter: DirectWorkArbiter::default(),
                 last_served_cache_runtime: false,
                 last_emitted_lifecycle_counters: (0, 0, 0, 0),
             }
@@ -2489,7 +2500,7 @@ mod tests {
             active_runtime_sessions: 1,
             direct_wave_full: true,
             telemetry: None,
-            last_served_direct: true,
+            direct_work_arbiter: DirectWorkArbiter::default(),
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
@@ -2533,7 +2544,7 @@ mod tests {
             active_runtime_sessions: 1,
             direct_wave_full: true,
             telemetry: None,
-            last_served_direct: true,
+            direct_work_arbiter: DirectWorkArbiter::default(),
             last_served_cache_runtime: false,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         };
@@ -2569,12 +2580,68 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_planned_work_alternate_without_starvation() {
-        assert!(should_serve_direct(true, true, false));
-        assert!(!should_serve_direct(true, true, true));
-        assert!(should_serve_direct(true, false, true));
-        assert!(!should_serve_direct(false, true, false));
-        assert!(!should_serve_direct(false, false, false));
+    fn alternating_direct_work_policy_preserves_queue_fairness() {
+        let mut arbiter = DirectWorkArbiter::default();
+
+        assert!(arbiter.should_serve_direct(true, true));
+        assert!(!arbiter.should_serve_direct(true, true));
+        assert!(arbiter.should_serve_direct(true, false));
+        assert!(!arbiter.should_serve_direct(false, true));
+        assert!(!arbiter.should_serve_direct(false, false));
+    }
+
+    #[test]
+    fn decode_burst_reserves_eight_planned_turns_then_allows_prefill() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::DecodeBurst);
+
+        for _ in 0..8 {
+            assert!(!arbiter.should_serve_direct(true, true));
+        }
+        assert!(arbiter.should_serve_direct(true, true));
+        assert!(!arbiter.should_serve_direct(true, true));
+    }
+
+    #[test]
+    fn time_deficit_repays_measured_prefill_cost_with_planned_work() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::TimeDeficit);
+
+        assert!(arbiter.should_serve_direct(true, true));
+        arbiter.observe_direct(Duration::from_millis(100));
+        for _ in 0..3 {
+            assert!(!arbiter.should_serve_direct(true, true));
+            arbiter.observe_planned(Duration::from_millis(100));
+        }
+        assert!(arbiter.should_serve_direct(true, true));
+    }
+
+    #[test]
+    fn time_deficit_caps_decode_burst_so_prefill_cannot_starve() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::TimeDeficit);
+
+        assert!(arbiter.should_serve_direct(true, true));
+        arbiter.observe_direct(Duration::from_secs(60));
+        for _ in 0..64 {
+            assert!(!arbiter.should_serve_direct(true, true));
+            arbiter.observe_planned(Duration::from_millis(1));
+        }
+        assert!(arbiter.should_serve_direct(true, true));
+    }
+
+    #[test]
+    fn direct_work_policy_parser_defaults_safely_and_rejects_unknown_values() {
+        assert_eq!(
+            DirectWorkPolicy::from_value(Some("decode-burst")).unwrap(),
+            DirectWorkPolicy::DecodeBurst
+        );
+        assert_eq!(
+            DirectWorkPolicy::from_value(Some("TIME-DEFICIT")).unwrap(),
+            DirectWorkPolicy::TimeDeficit
+        );
+        assert_eq!(
+            DirectWorkPolicy::from_value(None).unwrap(),
+            DirectWorkPolicy::Alternate
+        );
+        assert!(DirectWorkPolicy::from_value(Some("unknown")).is_err());
     }
 
     #[test]
@@ -2623,7 +2690,7 @@ mod tests {
                 active_runtime_sessions: 0,
                 direct_wave_full: false,
                 telemetry: None,
-                last_served_direct: false,
+                direct_work_arbiter: DirectWorkArbiter::default(),
                 last_served_cache_runtime: false,
                 last_emitted_lifecycle_counters: (0, 0, 0, 0),
             }

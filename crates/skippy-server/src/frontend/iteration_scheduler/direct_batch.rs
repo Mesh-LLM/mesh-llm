@@ -1,16 +1,97 @@
 use super::{DirectIteration, MAX_NATIVE_ITERATION_TOKENS};
 use openai_frontend::{OpenAiError, OpenAiResult};
 use std::collections::{BTreeSet, VecDeque};
+use std::time::Duration;
 
-pub(super) fn should_serve_direct(
-    has_direct: bool,
-    has_planned: bool,
+const DECODE_BURST_TURNS: u32 = 8;
+const TIME_DEFICIT_PLANNED_SHARE: u32 = 3;
+const TIME_DEFICIT_MAX_PLANNED_TURNS: u32 = 64;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DirectWorkPolicy {
+    #[default]
+    Alternate,
+    DecodeBurst,
+    TimeDeficit,
+}
+
+impl DirectWorkPolicy {
+    pub(super) fn from_value(value: Option<&str>) -> OpenAiResult<Self> {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("decode-burst") => Ok(Self::DecodeBurst),
+            Some("time-deficit") => Ok(Self::TimeDeficit),
+            Some("alternate") | None => Ok(Self::Alternate),
+            Some(value) => Err(OpenAiError::invalid_request(format!(
+                "invalid direct work policy {value:?}; expected alternate, decode-burst, or time-deficit"
+            ))),
+        }
+    }
+
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Alternate => "alternate",
+            Self::DecodeBurst => "decode-burst",
+            Self::TimeDeficit => "time-deficit",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct DirectWorkArbiter {
+    policy: DirectWorkPolicy,
     last_served_direct: bool,
-) -> bool {
-    if has_direct && has_planned {
-        !last_served_direct
-    } else {
-        has_direct
+    planned_turns_since_direct: u32,
+    planned_time_debt: Duration,
+}
+
+impl DirectWorkArbiter {
+    pub(super) fn new(policy: DirectWorkPolicy) -> Self {
+        Self {
+            policy,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn should_serve_direct(&mut self, has_direct: bool, has_planned: bool) -> bool {
+        let serve_direct = match (has_direct, has_planned) {
+            (true, true) => match self.policy {
+                DirectWorkPolicy::Alternate => !self.last_served_direct,
+                DirectWorkPolicy::DecodeBurst => {
+                    self.planned_turns_since_direct >= DECODE_BURST_TURNS
+                }
+                DirectWorkPolicy::TimeDeficit => {
+                    self.planned_time_debt.is_zero()
+                        || self.planned_turns_since_direct >= TIME_DEFICIT_MAX_PLANNED_TURNS
+                }
+            },
+            (true, false) => true,
+            (false, _) => false,
+        };
+
+        if serve_direct {
+            self.last_served_direct = true;
+            self.planned_turns_since_direct = 0;
+        } else if has_planned {
+            self.last_served_direct = false;
+            if has_direct {
+                self.planned_turns_since_direct = self.planned_turns_since_direct.saturating_add(1);
+            }
+        }
+        serve_direct
+    }
+
+    pub(super) fn observe_direct(&mut self, elapsed: Duration) {
+        if self.policy == DirectWorkPolicy::TimeDeficit {
+            self.planned_time_debt = self
+                .planned_time_debt
+                .saturating_add(elapsed.saturating_mul(TIME_DEFICIT_PLANNED_SHARE));
+        }
+    }
+
+    pub(super) fn observe_planned(&mut self, elapsed: Duration) {
+        if self.policy == DirectWorkPolicy::TimeDeficit {
+            self.planned_time_debt = self.planned_time_debt.saturating_sub(elapsed);
+        }
     }
 }
 
