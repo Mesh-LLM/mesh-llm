@@ -96,6 +96,21 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
         self.assertEqual(failures, 1)
 
+    def test_runtime_slice_admission_rejects_diagnostic_literals_without_controls(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(controls=False), encoding="utf-8"
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 6)
+
     def test_runtime_slice_admission_accepts_architecture_independent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             llama_root = Path(tmp)
@@ -127,7 +142,7 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
     @staticmethod
     def runtime_slice_admission_source(
-        extra: str = "", implementation: str = ""
+        extra: str = "", implementation: str = "", controls: bool = True
     ) -> str:
         checks = (
             "layer_end exceeds model layer count",
@@ -137,13 +152,53 @@ class SkippyLlamaParityTests(unittest.TestCase):
             "stage graph did not expose a stable output activation boundary",
             "stage graph did not expose a stable input activation boundary",
         )
+        invalid_argument_checks = (
+            (
+                "config->layer_end > n_layer",
+                checks[0],
+            ),
+            (
+                "config->include_embeddings && config->layer_start != 0 && !config->include_output",
+                checks[1],
+            ),
+            (
+                "config->layer_start == 0 && !config->include_embeddings",
+                checks[2],
+            ),
+            (
+                "config->include_output && config->layer_end != n_layer",
+                checks[3],
+            ),
+        )
+        control_lines = tuple(
+            (
+                f"if ({guard}) {{ llama_model_free(model); "
+                f'const char * message = "{message}"; '
+                "skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message); "
+                "return SKIPPY_STATUS_INVALID_ARGUMENT; }"
+            )
+            for guard, message in invalid_argument_checks
+        )
+        if controls:
+            boundary_lines = (
+                "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                f'return fail_boundary_load("{checks[4]}"); }}',
+                "if (!stage_model->ctx->get_input_activation_boundary(type, elements, bytes)) { "
+                f'return fail_boundary_load("{checks[5]}"); }}',
+            )
+        else:
+            control_lines = ()
+            boundary_lines = tuple(
+                f'const char * diagnostic = "{check}";' for check in checks
+            )
         return "\n".join(
             (
                 "static enum skippy_status skippy_finish_model_open(",
                 extra,
+                *control_lines,
                 "skippy_model * stage_model = new skippy_model{};",
                 implementation,
-                *(f'const char * check = "{check}";' for check in checks),
+                *boundary_lines,
                 "enum skippy_status skippy_model_open_impl(",
             )
         )

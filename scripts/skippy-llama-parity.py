@@ -461,15 +461,67 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
         for architecture in architecture_guards:
             print(f"  - {architecture}", file=sys.stderr)
 
-    required_realized_checks = (
-        "layer_end exceeds model layer count",
-        "only the first runtime slice may include token embeddings",
-        "the first runtime slice must include token embeddings",
-        "only the final runtime slice may include output tensors",
-        "stage graph did not expose a stable output activation boundary",
-        "stage graph did not expose a stable input activation boundary",
+    invalid_argument_failure = (
+        r"[\s\S]{{0,900}}?llama_model_free\s*\(\s*model\s*\)\s*;"
+        r"[\s\S]{{0,900}}?const\s+char\s*\*\s*message\s*=\s*\"{message}\"\s*;"
+        r"[\s\S]{{0,900}}?skippy_set_error\s*\(\s*out_error\s*,\s*"
+        r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;"
+        r"[\s\S]{{0,200}}?return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;"
     )
-    missing_checks = [check for check in required_realized_checks if check not in admission]
+    required_contracts = (
+        (
+            "layer_end range",
+            r"if\s*\(\s*config->layer_end\s*>\s*n_layer\s*\)\s*\{"
+            + invalid_argument_failure.format(
+                message=re.escape("layer_end exceeds model layer count")
+            ),
+        ),
+        (
+            "embedding ownership",
+            r"if\s*\(\s*config->include_embeddings\s*&&\s*"
+            r"config->layer_start\s*!=\s*0\s*&&\s*!config->include_output\s*\)\s*\{"
+            + invalid_argument_failure.format(
+                message=re.escape(
+                    "only the first runtime slice may include token embeddings"
+                )
+            ),
+        ),
+        (
+            "first-slice embeddings",
+            r"if\s*\(\s*config->layer_start\s*==\s*0\s*&&\s*"
+            r"!config->include_embeddings\s*\)\s*\{"
+            + invalid_argument_failure.format(
+                message=re.escape("the first runtime slice must include token embeddings")
+            ),
+        ),
+        (
+            "output ownership",
+            r"if\s*\(\s*config->include_output\s*&&\s*"
+            r"config->layer_end\s*!=\s*n_layer\s*\)\s*\{"
+            + invalid_argument_failure.format(
+                message=re.escape("only the final runtime slice may include output tensors")
+            ),
+        ),
+        (
+            "output activation boundary",
+            r"if\s*\(\s*!stage_model->ctx->get_activation_boundary\s*\([^)]*\)\s*\)\s*\{"
+            r"\s*return\s+fail_boundary_load\s*\(\s*"
+            r"\"stage\ graph\ did\ not\ expose\ a\ stable\ output\ activation\ boundary\""
+            r"\s*\)\s*;\s*\}",
+        ),
+        (
+            "input activation boundary",
+            r"if\s*\(\s*!stage_model->ctx->get_input_activation_boundary\s*\([^)]*\)\s*\)\s*\{"
+            r"\s*return\s+fail_boundary_load\s*\(\s*"
+            r"\"stage\ graph\ did\ not\ expose\ a\ stable\ input\ activation\ boundary\""
+            r"\s*\)\s*;\s*\}",
+        ),
+    )
+    missing_checks = [
+        name
+        for name, pattern in required_contracts
+        if re.search(pattern, admission) is None
+    ]
     if missing_checks:
         failures += len(missing_checks)
         print(
