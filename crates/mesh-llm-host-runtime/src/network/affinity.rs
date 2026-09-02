@@ -243,6 +243,21 @@ impl AffinityRouter {
         }
     }
 
+    pub(crate) fn forget_cache_lease(&self, model: &str, prefix_hash: u64) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        let key = CacheLeaseKey {
+            model: model.to_string(),
+            prefix_hash,
+        };
+        let removed = state.cache_leases.remove(&key).is_some();
+        if removed
+            && let Some(position) = state.cache_lease_lru.iter().position(|item| item == &key)
+        {
+            state.cache_lease_lru.remove(position);
+        }
+        removed
+    }
+
     pub(crate) fn forget_cache_leases_for_target(
         &self,
         target: &election::InferenceTarget,
@@ -325,10 +340,7 @@ pub use shared_affinity::{PreparedTargets, TargetSelection};
 
 #[cfg(test)]
 pub(crate) fn extract_session_hint_from_body(body: &Value) -> Option<String> {
-    shared_affinity::extract_session_hint_from_body(
-        body,
-        &["prompt_cache_key", "user", "session_id"],
-    )
+    shared_affinity::extract_session_hint_from_body(body, &["user", "session_id"])
 }
 
 #[cfg(test)]
@@ -339,7 +351,8 @@ fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
 fn routing_keys(parsed_body: Option<&Value>) -> RoutingKeys {
     shared_affinity::routing_keys(
         parsed_body,
-        &["prompt_cache_key", "user", "session_id"],
+        &["prompt_cache_key"],
+        &["user", "session_id"],
         true,
     )
 }
@@ -369,6 +382,15 @@ impl crate::mesh::Node {
                 suffix_prefill_tokens,
                 queue_delay_micros,
             );
+    }
+
+    /// Remove provider-refuted local cache evidence immediately instead of
+    /// waiting for its bounded gossip TTL to expire.
+    pub(crate) fn invalidate_local_cache_evidence(&self, model: &str, prefix_hash: u64) -> bool {
+        self.cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidate(model, prefix_hash)
     }
 
     /// Probe bounded local and peer advertisements for the exact request
@@ -527,12 +549,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_hint_from_body_prompt_cache_key_preferred() {
+    fn test_extract_session_hint_from_body_user_preferred() {
         let body =
             parse_body(r#"{"prompt_cache_key":"cache-1","user":"bob","session_id":"sess-1"}"#);
         assert_eq!(
             extract_session_hint_from_body(&body),
-            Some("cache-1".to_string())
+            Some("bob".to_string())
         );
     }
 
@@ -595,7 +617,26 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_keys_prefix_is_namespaced_by_first_user() {
+    fn exact_cache_lease_invalidation_preserves_other_prefixes() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let target = remote(1);
+        affinity.remember_cache_lease(TEST_MODEL, 7, &target);
+        affinity.remember_cache_lease(TEST_MODEL, 8, &target);
+
+        assert!(affinity.forget_cache_lease(TEST_MODEL, 7));
+        assert!(!affinity.forget_cache_lease(TEST_MODEL, 7));
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 7, std::slice::from_ref(&target)),
+            None
+        );
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 8, std::slice::from_ref(&target)),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn test_routing_keys_prefix_is_shared_across_first_users() {
         let req_a = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
         );
@@ -606,7 +647,7 @@ mod tests {
         let keys_a = routing_keys(Some(&req_a));
         let keys_b = routing_keys(Some(&req_b));
 
-        assert_ne!(keys_a.prefix_hash, keys_b.prefix_hash);
+        assert_eq!(keys_a.prefix_hash, keys_b.prefix_hash);
         assert_eq!(keys_a.sticky_hash, None);
         assert_eq!(keys_b.sticky_hash, None);
     }
@@ -723,6 +764,24 @@ mod tests {
             node.select_cache_target("qwen", 0xfeed_beef, &candidates)
                 .await,
             Some(election::InferenceTarget::Local(9337))
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_confirmed_local_miss_invalidates_evidence() {
+        let node =
+            crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Host { http_port: 9337 })
+                .await
+                .expect("test node");
+        let candidates = vec![remote(1), election::InferenceTarget::Local(9337)];
+
+        node.record_local_cache_hit("qwen", 0xfeed_beef, 512, 24, 0);
+        assert!(node.invalidate_local_cache_evidence("qwen", 0xfeed_beef));
+
+        assert_eq!(
+            node.select_cache_target("qwen", 0xfeed_beef, &candidates)
+                .await,
+            None
         );
     }
 

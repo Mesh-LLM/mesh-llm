@@ -83,7 +83,12 @@ pub(crate) fn extract_session_hint_from_body(body: &Value) -> Option<String> {
 }
 
 fn routing_keys(parsed_body: Option<&Value>) -> RoutingKeys {
-    shared_affinity::routing_keys(parsed_body, &["user", "session_id"], false)
+    shared_affinity::routing_keys(
+        parsed_body,
+        &["prompt_cache_key"],
+        &["user", "session_id"],
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -176,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_keys_prefix_is_namespaced_by_first_user() {
+    fn test_routing_keys_prefix_is_shared_across_first_users() {
         let req_a = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
         );
@@ -187,7 +192,7 @@ mod tests {
         let keys_a = routing_keys(Some(&req_a));
         let keys_b = routing_keys(Some(&req_b));
 
-        assert_ne!(keys_a.prefix_hash, keys_b.prefix_hash);
+        assert_eq!(keys_a.prefix_hash, keys_b.prefix_hash);
         assert_eq!(keys_a.sticky_hash, None);
         assert_eq!(keys_b.sticky_hash, None);
     }
