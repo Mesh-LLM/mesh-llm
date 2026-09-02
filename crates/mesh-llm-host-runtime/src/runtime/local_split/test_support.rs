@@ -67,7 +67,6 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: 4096,
         ctx_size: 8192,
         lane_count: 4,
         continuous_batching: true,
@@ -339,7 +338,8 @@ pub(super) fn runtime_status_for_stage(
         layer_end: stage.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: 896,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,
@@ -374,16 +374,24 @@ async fn split_generation_load_settings_consumes_resolved_skippy_config() {
         .unwrap();
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
+    let draft_model_path = temp_dir.path().join("qwen-draft.gguf");
     let projector_path = temp_dir.path().join("config-mmproj.gguf");
     write_fake_gguf_model(&model_path);
+    write_fake_gguf_model(&draft_model_path);
     fs::write(&projector_path, b"mmproj").unwrap();
+    let model_path_toml =
+        toml::Value::String(model_path.to_string_lossy().into_owned()).to_string();
+    let draft_model_path_toml =
+        toml::Value::String(draft_model_path.to_string_lossy().into_owned()).to_string();
+    let projector_path_toml =
+        toml::Value::String(projector_path.to_string_lossy().into_owned()).to_string();
     let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
         r#"
 [[models]]
 model = "other/model"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 
 [models.throughput]
 threads = 17
@@ -400,10 +408,10 @@ cache_type_k = "q4_0"
 cache_type_v = "q5_0"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 device = "CUDA0"
 gpu_layers = 77
-mmproj = "{projector_path}"
+mmproj = {projector_path}
 
 [models.throughput]
 parallel = 2
@@ -417,7 +425,7 @@ prefill_chunk_size = 96
 [models.speculative]
 strategy = "disabled"
 mode = "draft"
-draft_model_path = "/models/draft.gguf"
+draft_model_path = {draft_model_path}
 draft_max_tokens = 7
 draft_gpu_layers = 11
 
@@ -426,8 +434,9 @@ max_tokens = 321
 temperature = 0.35
 stop = ["END"]
 "#,
-        model_path = model_path.display(),
-        projector_path = projector_path.display()
+        model_path = model_path_toml,
+        draft_model_path = draft_model_path_toml,
+        projector_path = projector_path_toml
     ))
     .expect("test mesh config should parse");
     let mut package = package(40);
@@ -482,7 +491,7 @@ stop = ["END"]
         .expect("split settings should resolve");
 
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
-    assert_eq!(settings.activation_width, 2048);
+    assert_eq!(settings.embedded_openai.activation_width, 0);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
     assert_eq!(settings.runtime_options.config.ctx_size, 8192);
@@ -521,32 +530,32 @@ stop = ["END"]
     assert_eq!(settings.embedded_openai.prefill_chunk_size, 96);
     assert_eq!(
         settings.embedded_openai.draft_model_path.as_deref(),
-        Some(Path::new("/models/draft.gguf"))
+        Some(draft_model_path.as_path())
     );
     assert_eq!(settings.embedded_openai.speculative_window, 7);
     assert_eq!(settings.embedded_openai.draft_n_gpu_layers, Some(11));
 }
 
 /// Split stage loading must resolve with the compact metadata scanned during
-/// planning: the family K/V default gets the same compatibility guard as the
-/// planner, so a family default the actual GGUF cannot load (here: Inkling →
-/// q4_0 with per-head widths not divisible by the q4_0 block size) degrades
-/// to f16 at stage load instead of failing the context build.
+/// planning: the architecture-driven K/V default gets the same compatibility
+/// guard as the planner, so a default the actual GGUF cannot load (here:
+/// Inkling → q4_0 with per-head widths not divisible by the q4_0 block size)
+/// degrades to f16 at stage load instead of failing the context build.
 ///
 /// The package is deliberately small (10 GB) so the size-tiered policy alone
-/// would pick q8_0: the observed q4_0-vs-f16 swing can only come from the
-/// (guarded) Inkling family default, pinning the plumbing rather than the
-/// size tier. Split load specifications require this metadata, so both the
+/// would pick q8_0: the observed q4_0-vs-f16 swing can only come from actual
+/// Inkling metadata, pinning the plumbing rather than a model-name heuristic.
+/// Split load specifications require this metadata, so both the
 /// initial-load and coordinator-replan constructors must carry it; dropping
 /// the final resolver handoff would regress this test to q4_0.
 #[tokio::test]
-async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
+async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9338 })
         .await
         .unwrap();
     let mesh_config = plugin::MeshConfig::default();
-    // Non-existent path on purpose: the family must resolve from the model
-    // ref (Inkling), not from scanning this file.
+    // Non-existent path on purpose: only the supplied compact metadata may
+    // identify the architecture; the model ref must not influence policy.
     let model_path = std::path::PathBuf::from("/models/inkling-ud-q2-k-xl.gguf");
     let mut identity = package(66);
     identity.package_ref = "hf://Mesh-LLM/test-inkling-package".to_string();
@@ -564,7 +573,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
     );
 
     // Per-head widths of 100 are not a multiple of the q4_0 block size (32),
-    // so the Inkling family's quantised default cannot load.
+    // so the Inkling architecture's quantised default cannot load.
     let incompatible_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -577,7 +586,7 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         ..Default::default()
     };
 
-    // With the planned metadata, the unloadable family default degrades to
+    // With the planned metadata, the unloadable architecture default degrades to
     // f16 — the same cache the split planner budgets for.
     let guarded_spec = SplitGenerationLoadSpec {
         node: &node,
@@ -612,13 +621,12 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
         .expect("guarded split settings should resolve");
     assert_eq!(
         guarded.runtime_options.config.cache_type_k, "f16",
-        "incompatible family default must degrade to f16 at stage load"
+        "incompatible architecture default must degrade to f16 at stage load"
     );
     assert_eq!(guarded.runtime_options.config.cache_type_v, "f16");
 
-    // Without metadata the (unguarded) Inkling family default wins over the
-    // q8_0 size tier — proving the family path, not the size tier, is under
-    // test.
+    // Without metadata the model name carries no architecture authority, so
+    // the generic q8_0 size tier remains in effect.
     let unguarded = skippy::resolve_skippy_config_for_selector(
         skippy::SkippyConfigResolveRequest {
             mesh_config: &mesh_config,
@@ -634,10 +642,10 @@ async fn split_stage_load_guards_family_kv_default_with_planned_metadata() {
     )
     .expect("unguarded resolver settings should resolve");
     assert_eq!(
-        unguarded.model_fit.cache_type_k, "q4_0",
-        "no-metadata stage load keeps the family default"
+        unguarded.model_fit.cache_type_k, "q8_0",
+        "no-metadata stage load keeps the generic size-tier default"
     );
-    assert_eq!(unguarded.model_fit.cache_type_v, "q4_0");
+    assert_eq!(unguarded.model_fit.cache_type_v, "q8_0");
 }
 
 #[tokio::test]
@@ -845,6 +853,15 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
+        version: 1,
+        ggml_type: 0,
+        layout: 1,
+        elements_per_token: 4096,
+        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
+        required_frame_flags: 0,
+        required_sidebands: 0,
+    });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -864,7 +881,8 @@ pub(super) fn test_stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: load.activation_width as u32,
+        input_activation_boundary: boundary.filter(|_| load.layer_start > 0),
+        output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -877,6 +895,16 @@ pub(super) fn test_stage_status_from_load(
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
     }
+}
+
+#[test]
+fn staged_status_fixture_exposes_input_boundary_for_middle_consumers() {
+    let middle = stage_load_request(LoadMode::RuntimeSlice);
+    assert!(middle.layer_start > 0);
+    assert!(middle.upstream.is_none());
+
+    let status = test_stage_status_from_load(&middle, skippy::StageRuntimeState::Ready);
+    assert!(status.input_activation_boundary.is_some());
 }
 
 pub(super) fn test_stage_status_from_stop(
@@ -901,7 +929,8 @@ pub(super) fn test_stage_status_from_stop(
         layer_end: 0,
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,

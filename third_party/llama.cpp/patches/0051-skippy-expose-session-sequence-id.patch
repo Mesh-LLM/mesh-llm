@@ -19,8 +19,8 @@ index e0024ede2..425aea03a 100644
 @@ -35,6 +35,6 @@ extern "C" {
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 44
-+#define SKIPPY_ABI_VERSION_PATCH 45
+-#define SKIPPY_ABI_VERSION_PATCH 47
++#define SKIPPY_ABI_VERSION_PATCH 48
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))

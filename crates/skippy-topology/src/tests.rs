@@ -1304,28 +1304,26 @@ fn infers_known_family_capabilities_from_model_identity() {
 }
 
 #[test]
-fn every_stage_runtime_llama_architecture_has_family_inference() {
-    for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
-        let capability = infer_family_capability(expected.llama_architecture, 12, 768)
-            .unwrap_or_else(|| {
-                panic!(
-                    "missing family inference for {}",
-                    expected.llama_architecture
-                )
-            });
-
-        assert_eq!(
-            capability.family_id, expected.family_id,
-            "{}",
+fn stage_runtime_test_catalog_has_unique_architectures() {
+    for (index, expected) in TEST_LLAMA_ARCHITECTURE_CATALOG.iter().enumerate() {
+        assert!(
+            TEST_LLAMA_ARCHITECTURE_CATALOG[index + 1..]
+                .iter()
+                .all(|other| other.llama_architecture != expected.llama_architecture),
+            "duplicate architecture in test-only coverage catalog: {}",
             expected.llama_architecture
         );
-        assert_eq!(
-            !capability.recurrent_ranges.is_empty(),
-            expected.recurrent_or_hybrid,
-            "{}",
-            expected.llama_architecture
-        );
+        assert!(!expected.family_id.is_empty());
     }
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_runtime_family_registry_stays_empty() {
+    assert!(
+        STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS.is_empty(),
+        "production family rows must not regain KV or topology authority"
+    );
 }
 
 #[derive(Debug, Deserialize)]
@@ -1351,7 +1349,7 @@ fn parity_candidate_manifest_covers_stage_runtime_architectures() {
         .map(|candidate| compact_identity(&candidate.llama_model))
         .collect();
 
-    for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
+    for expected in TEST_LLAMA_ARCHITECTURE_CATALOG {
         assert!(
             candidates.contains(&compact_identity(expected.llama_architecture)),
             "missing parity candidate row for {}",

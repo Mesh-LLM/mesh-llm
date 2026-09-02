@@ -13,8 +13,9 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::{
-    ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage,
-    ChatTemplateOptions, RuntimeConfig, RuntimeEvent, Status,
+    ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
+    ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelStateKind, RuntimeConfig,
+    RuntimeEvent, Status,
 };
 
 pub struct StageModel {
@@ -25,6 +26,7 @@ pub struct StageModel {
 struct StageModelInner {
     raw: *mut RawModel,
     include_output: bool,
+    capability: Option<LoadedModelCapability>,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -43,15 +45,65 @@ unsafe impl Sync for StageModelInner {}
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for StageModel {}
 
+fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> ModelStateKind {
+    if diffusion {
+        ModelStateKind::Diffusion
+    } else if hybrid {
+        ModelStateKind::Hybrid
+    } else if recurrent {
+        ModelStateKind::Recurrent
+    } else {
+        ModelStateKind::Dense
+    }
+}
+
+fn capability_from_state_probes(
+    recurrent: Option<bool>,
+    hybrid: Option<bool>,
+    diffusion: Option<bool>,
+) -> Option<LoadedModelCapability> {
+    Some(LoadedModelCapability {
+        state_kind: classify_model_state(recurrent?, hybrid?, diffusion?),
+    })
+}
+
+fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> {
+    let model = unsafe { skippy_ffi::skippy_model_llama_model(raw) };
+    if model.is_null() {
+        return None;
+    }
+    capability_from_state_probes(
+        unsafe { skippy_ffi::llama_model_is_recurrent(model) },
+        unsafe { skippy_ffi::llama_model_is_hybrid(model) },
+        unsafe { skippy_ffi::llama_model_is_diffusion(model) },
+    )
+}
+
 impl StageModel {
     pub fn new_dummy() -> Self {
         Self {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
                 include_output: true,
+                capability: None,
             }),
             media: None,
         }
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
+        let present = unsafe {
+            skippy_ffi::skippy_model_output_activation_boundary(self.inner.raw, &mut raw)
+        };
+        present.then(|| raw.into())
+    }
+
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
+        let present =
+            unsafe { skippy_ffi::skippy_model_input_activation_boundary(self.inner.raw, &mut raw) };
+        present.then(|| raw.into())
     }
 
     fn from_opened_raw(
@@ -62,6 +114,7 @@ impl StageModel {
         if raw.is_null() {
             return Err(anyhow!(null_handle_message));
         }
+        let capability = loaded_model_capability(raw);
         let media = config
             .projector_path
             .as_deref()
@@ -71,6 +124,7 @@ impl StageModel {
             inner: Arc::new(StageModelInner {
                 raw,
                 include_output: config.include_output,
+                capability,
             }),
             media,
         })
@@ -392,6 +446,10 @@ impl StageModel {
         StageModelReader {
             inner: Arc::clone(&self.inner),
         }
+    }
+
+    pub fn capability(&self) -> Option<&LoadedModelCapability> {
+        self.inner.capability.as_ref()
     }
 
     pub fn apply_chat_template(
@@ -878,9 +936,43 @@ impl Drop for StageModel {
 #[cfg(test)]
 mod output_capacity_tests {
     use super::{
-        OPTIMISTIC_OUTPUT_HEADROOM, optimistic_chat_metadata_capacity,
-        optimistic_chat_parse_capacity, optimistic_chat_prompt_capacity, optimistic_token_capacity,
+        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, capability_from_state_probes,
+        classify_model_state, optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
+        optimistic_chat_prompt_capacity, optimistic_token_capacity,
     };
+
+    #[test]
+    fn loaded_model_flags_classify_state_without_family_names() {
+        assert_eq!(
+            classify_model_state(false, false, false),
+            ModelStateKind::Dense
+        );
+        assert_eq!(
+            classify_model_state(true, false, false),
+            ModelStateKind::Recurrent
+        );
+        assert_eq!(
+            classify_model_state(true, true, false),
+            ModelStateKind::Hybrid
+        );
+        assert_eq!(
+            classify_model_state(true, true, true),
+            ModelStateKind::Diffusion
+        );
+    }
+
+    #[test]
+    fn missing_native_state_probe_fails_capability_closed() {
+        assert!(capability_from_state_probes(None, Some(false), Some(false)).is_none());
+        assert!(capability_from_state_probes(Some(false), None, Some(false)).is_none());
+        assert!(capability_from_state_probes(Some(false), Some(false), None).is_none());
+        assert_eq!(
+            capability_from_state_probes(Some(true), Some(true), Some(false))
+                .expect("all native probes are present")
+                .state_kind,
+            ModelStateKind::Hybrid
+        );
+    }
 
     #[test]
     fn token_capacity_is_optimistic_but_never_exceeds_bound() {

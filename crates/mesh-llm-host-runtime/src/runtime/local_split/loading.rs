@@ -2,8 +2,8 @@ use super::attestation::{split_stage_source_is_ready, strict_ready_status_matche
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
     RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
-    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, skippy_stage_activation_width,
-    split_participant_labels, split_stage_plan_labels, stop_split_generation,
+    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, split_participant_labels,
+    split_stage_plan_labels, stop_split_generation,
 };
 use crate::inference::skippy;
 use crate::mesh;
@@ -17,6 +17,7 @@ use crate::runtime::survey;
 use anyhow::{Context, Result};
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
+use skippy_runtime::ActivationBoundaryDesc;
 use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
 use std::future::Future;
@@ -105,7 +106,6 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) runtime_options: skippy_server::EmbeddedRuntimeOptions,
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
-    pub(super) activation_width: i32,
     pub(super) startup_timeout: Duration,
     pub(super) readiness_interval: Duration,
 }
@@ -247,6 +247,117 @@ pub(super) async fn load_split_runtime_generation_inner(
             )
             .await?
     };
+    let first_downstream_stage_id = downstream.stage_id.clone();
+    let runtime_options = stage0_runtime_options(
+        spec,
+        &settings,
+        &downstream,
+        &downstream_endpoint,
+        &stage0_return_endpoint,
+    )
+    .await?;
+    let media_capability_evidence = models::runtime_media_capability_evidence(
+        runtime_options
+            .config
+            .projector_path
+            .as_deref()
+            .map(std::path::PathBuf::from),
+    )
+    .await;
+    let node_for_hook = spec.node.clone();
+    let model_ref = spec.model_ref.to_string();
+    let reporter_model_ref = model_ref.clone();
+    let skippy_telemetry = spec.skippy_telemetry.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    let serving_hooks_factory = spec.serving_hooks_factory.clone();
+    let openai_guardrails =
+        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
+    let _ = emit_event(OutputEvent::ModelLoading {
+        model: model_ref.clone(),
+        source: None,
+    });
+    let handle = tokio::task::spawn_blocking(move || {
+        skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
+            runtime_options,
+            settings.embedded_openai.clone(),
+            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            skippy_telemetry,
+            Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
+            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
+            serving_hooks_factory,
+        )
+    })
+    .await
+    .context("join load skippy stage0 config task")??;
+    let stage0_output = handle
+        .output_activation_boundary()
+        .context("stage 0 graph did not expose its output activation boundary")?;
+    let first_downstream_status = ready_by_stage
+        .get(&first_downstream_stage_id)
+        .with_context(|| format!("missing ready status for {first_downstream_stage_id}"))?;
+    validate_activation_edge(
+        &settings.stage0.stage_id,
+        stage0_output,
+        &first_downstream_status.stage_id,
+        required_boundary(
+            first_downstream_status.input_activation_boundary,
+            &first_downstream_status.stage_id,
+            "input",
+        )?,
+    )?;
+    let _ = emit_event(OutputEvent::ModelLoaded {
+        model: model_ref,
+        bytes: None,
+    });
+    let http = handle.start_http(alloc_local_port().await?)?;
+    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
+    let capabilities = models::runtime_verified_model_capabilities(
+        spec.model_ref,
+        spec.model_path,
+        media_capability_evidence,
+    );
+
+    spec.node
+        .activate_stage_topology(split_stage_topology_instance(
+            &spec.generation.topology_id,
+            &spec.generation.run_id,
+            spec.model_ref,
+            spec.package,
+            &spec.generation.stages,
+            &ready_by_stage,
+        ))
+        .await;
+
+    Ok(SplitRuntimeGenerationHandle {
+        loaded_name: spec.model_ref.to_string(),
+        handle: LocalRuntimeModelHandle {
+            port: http.port(),
+            backend: "skippy".into(),
+            context_length: spec.ctx_size,
+            slots: spec.slots,
+            capabilities,
+            inner: LocalRuntimeBackendHandle::Skippy {
+                model: handle,
+                http,
+                _death_tx: death_tx,
+            },
+        },
+        death_rx,
+        cleanup: Some(SplitGenerationCleanup {
+            generation: spec.generation.clone(),
+        }),
+        coordinator_rx: None,
+        coordinator_task: None,
+    })
+}
+
+async fn stage0_runtime_options(
+    spec: &SplitGenerationLoadSpec<'_>,
+    settings: &SplitGenerationLoadSettings<'_>,
+    downstream: &skippy::StagePeerDescriptor,
+    downstream_endpoint: &str,
+    stage0_return_endpoint: &str,
+) -> Result<skippy_server::EmbeddedRuntimeOptions> {
     let mut runtime_options = settings.runtime_options.clone();
     runtime_options.config.run_id = spec.generation.run_id.clone();
     runtime_options.config.topology_id = spec.generation.topology_id.clone();
@@ -256,10 +367,10 @@ pub(super) async fn load_split_runtime_generation_inner(
     let verified_stage0_model_path = if spec.local_source_required {
         let mut stage0_load = split_runtime_stage_load_request(
             spec,
-            &settings,
+            settings,
             settings.stage0,
             Some(downstream.clone()),
-            &stage0_return_endpoint,
+            stage0_return_endpoint,
         );
         let stage0_load = tokio::task::spawn_blocking(move || {
             let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
@@ -305,90 +416,14 @@ pub(super) async fn load_split_runtime_generation_inner(
         spec.device_override,
     );
     runtime_options.config.load_mode = settings.load_mode.clone();
-    runtime_options.config.bind_addr = stage0_return_endpoint;
+    runtime_options.config.bind_addr = stage0_return_endpoint.to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = Some(PeerConfig {
-        stage_id: downstream.stage_id,
+        stage_id: downstream.stage_id.clone(),
         stage_index: downstream.stage_index,
-        endpoint: downstream_endpoint,
+        endpoint: downstream_endpoint.to_string(),
     });
-    let media_capability_evidence = models::runtime_media_capability_evidence(
-        runtime_options
-            .config
-            .projector_path
-            .as_deref()
-            .map(std::path::PathBuf::from),
-    )
-    .await;
-    let node_for_hook = spec.node.clone();
-    let model_ref = spec.model_ref.to_string();
-    let reporter_model_ref = model_ref.clone();
-    let skippy_telemetry = spec.skippy_telemetry.clone();
-    let guardrail_telemetry = spec.survey_telemetry.clone();
-    let serving_hooks_factory = spec.serving_hooks_factory.clone();
-    let openai_guardrails =
-        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
-    let _ = emit_event(OutputEvent::ModelLoading {
-        model: model_ref.clone(),
-        source: None,
-    });
-    let handle = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_stage0_runtime_options_with_openai_args_and_open_events(
-            runtime_options,
-            settings.embedded_openai.clone(),
-            Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
-            skippy_telemetry,
-            Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
-            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
-            serving_hooks_factory,
-        )
-    })
-    .await
-    .context("join load skippy stage0 config task")??;
-    let _ = emit_event(OutputEvent::ModelLoaded {
-        model: model_ref,
-        bytes: None,
-    });
-    let http = handle.start_http(alloc_local_port().await?)?;
-    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-    let capabilities = models::runtime_verified_model_capabilities(
-        spec.model_ref,
-        spec.model_path,
-        media_capability_evidence,
-    );
-
-    spec.node
-        .activate_stage_topology(split_stage_topology_instance(
-            &spec.generation.topology_id,
-            &spec.generation.run_id,
-            spec.model_ref,
-            spec.package,
-            &spec.generation.stages,
-            &ready_by_stage,
-        ))
-        .await;
-
-    Ok(SplitRuntimeGenerationHandle {
-        loaded_name: spec.model_ref.to_string(),
-        handle: LocalRuntimeModelHandle {
-            port: http.port(),
-            backend: "skippy".into(),
-            context_length: spec.ctx_size,
-            slots: spec.slots,
-            capabilities,
-            inner: LocalRuntimeBackendHandle::Skippy {
-                model: handle,
-                http,
-                _death_tx: death_tx,
-            },
-        },
-        death_rx,
-        cleanup: Some(SplitGenerationCleanup {
-            generation: spec.generation.clone(),
-        }),
-        coordinator_rx: None,
-        coordinator_task: None,
-    })
+    Ok(runtime_options)
 }
 
 pub(super) async fn load_downstream_split_runtime_stages(
@@ -488,6 +523,25 @@ pub(super) async fn load_downstream_split_runtime_stages(
                 stage.stage_id
             );
         }
+        if let Some(consumer) = downstream.as_ref() {
+            let consumer_status = ready_by_stage
+                .get(&consumer.stage_id)
+                .with_context(|| format!("missing ready status for {}", consumer.stage_id))?;
+            validate_activation_edge(
+                &ready.status.stage_id,
+                required_boundary(
+                    ready.status.output_activation_boundary,
+                    &ready.status.stage_id,
+                    "output",
+                )?,
+                &consumer_status.stage_id,
+                required_boundary(
+                    consumer_status.input_activation_boundary,
+                    &consumer_status.stage_id,
+                    "input",
+                )?,
+            )?;
+        }
         *downstream = Some(skippy::StagePeerDescriptor {
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
@@ -500,6 +554,35 @@ pub(super) async fn load_downstream_split_runtime_stages(
     downstream
         .clone()
         .context("split topology missing downstream stage")
+}
+
+fn required_boundary(
+    descriptor: Option<ActivationBoundaryDesc>,
+    stage_id: &str,
+    edge: &str,
+) -> Result<ActivationBoundaryDesc> {
+    descriptor.with_context(|| {
+        format!("stage {stage_id} did not advertise its graph-observed {edge} activation boundary")
+    })
+}
+
+fn validate_activation_edge(
+    producer_id: &str,
+    producer: ActivationBoundaryDesc,
+    consumer_id: &str,
+    consumer: ActivationBoundaryDesc,
+) -> Result<()> {
+    producer
+        .raw_f32_width("output")
+        .with_context(|| format!("invalid graph boundary advertised by producer {producer_id}"))?;
+    consumer
+        .raw_f32_width("input")
+        .with_context(|| format!("invalid graph boundary advertised by consumer {consumer_id}"))?;
+    anyhow::ensure!(
+        producer == consumer,
+        "activation boundary mismatch between producer {producer_id} and consumer {consumer_id}: producer={producer:?} consumer={consumer:?}"
+    );
+    Ok(())
 }
 
 pub(super) fn stage_source_prepare_timeout(
@@ -590,7 +673,6 @@ pub(super) fn split_runtime_stage_load_request(
         generation_signal_window: resolved_config.generation_signal_window,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: settings.activation_width,
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
         continuous_batching: settings.embedded_openai.continuous_batching,
@@ -648,8 +730,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         .first()
         .context("split topology did not produce stage 0")?;
     let load_mode = split_generation_load_mode(spec.package);
-    let activation_width =
-        skippy_stage_activation_width(spec.package.activation_width, spec.model_ref)?;
     let mut resolved = skippy::resolve_skippy_config_for_selector(
         skippy::SkippyConfigResolveRequest {
             mesh_config: spec.mesh_config,
@@ -693,7 +773,9 @@ pub(super) async fn split_generation_load_settings<'a>(
     if let Some(device) = spec.device_override {
         resolved.hardware.device = Some(device.to_string());
     }
-    let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
+    // Stage zero replaces this placeholder with its graph-observed output
+    // boundary after the native runtime has been constructed.
+    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
@@ -711,7 +793,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         runtime_options,
         embedded_openai,
         load_mode,
-        activation_width,
         startup_timeout: lifecycle.startup_timeout,
         readiness_interval: lifecycle.readiness_interval,
     })
@@ -1131,5 +1212,119 @@ pub(super) fn split_stage_topology_instance(
                 },
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod activation_boundary_tests {
+    use super::{required_boundary, validate_activation_edge};
+    use skippy_runtime::ActivationBoundaryDesc;
+
+    fn boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        ActivationBoundaryDesc {
+            version: 1,
+            ggml_type: 0,
+            layout: 1,
+            elements_per_token,
+            bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
+            required_frame_flags: 0,
+            required_sidebands: 0,
+        }
+    }
+
+    #[test]
+    fn matching_graph_boundaries_form_a_valid_stage_edge() {
+        validate_activation_edge("stage-0", boundary(1024), "stage-1", boundary(1024))
+            .expect("identical graph boundary contracts must match");
+    }
+
+    #[test]
+    fn three_stage_topology_validates_each_edge_independently() {
+        let first_output = boundary(1024);
+        let middle_input = boundary(1024);
+        let middle_output = boundary(2048);
+        let final_input = boundary(2048);
+
+        validate_activation_edge("stage-0", first_output, "stage-1", middle_input)
+            .expect("first edge must match");
+        validate_activation_edge("stage-1", middle_output, "stage-2", final_input)
+            .expect("second edge must match even when its contract differs from the first");
+
+        let error = validate_activation_edge("stage-1", middle_output, "stage-2", boundary(1024))
+            .expect_err("a mismatch on the second edge must block the topology");
+        assert!(error.to_string().contains("stage-1"));
+        assert!(error.to_string().contains("stage-2"));
+    }
+
+    #[test]
+    fn graph_boundary_mismatch_blocks_topology_activation() {
+        let error = validate_activation_edge("stage-0", boundary(1024), "stage-1", boundary(896))
+            .expect_err("different graph boundary contracts must not connect");
+        assert!(error.to_string().contains("activation boundary mismatch"));
+    }
+
+    #[test]
+    fn every_graph_boundary_field_participates_in_edge_matching() {
+        let producer = boundary(1024);
+        let mutations = [
+            ActivationBoundaryDesc {
+                version: 2,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                ggml_type: 1,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                layout: 2,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                elements_per_token: 896,
+                bytes_per_token: 896 * std::mem::size_of::<f32>() as u64,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                bytes_per_token: producer.bytes_per_token + 4,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                required_frame_flags: skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                required_sidebands: skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS,
+                ..producer
+            },
+        ];
+
+        for consumer in mutations {
+            assert!(
+                validate_activation_edge("stage-0", producer, "stage-1", consumer).is_err(),
+                "mutated consumer contract must not activate: {consumer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identical_but_invalid_graph_boundaries_do_not_activate() {
+        let invalid = ActivationBoundaryDesc {
+            version: 99,
+            ..boundary(1024)
+        };
+        let error = validate_activation_edge("stage-0", invalid, "stage-1", invalid)
+            .expect_err("matching invalid descriptors must fail semantic validation");
+        assert!(error.to_string().contains("invalid graph boundary"));
+    }
+
+    #[test]
+    fn missing_graph_boundary_is_not_reconstructed_from_manifest_width() {
+        let error = required_boundary(None, "stage-1", "input")
+            .expect_err("generation 7 requires graph-observed boundary descriptors");
+        assert!(
+            error
+                .to_string()
+                .contains("did not advertise its graph-observed input")
+        );
     }
 }

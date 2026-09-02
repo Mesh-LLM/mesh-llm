@@ -144,20 +144,10 @@ fn prompt_stage_kv_cache_config(
     }))
 }
 
-fn prompt_stage_cache_payload(args: &PromptArgs, stage: &LocalStage) -> StageKvCachePayload {
-    let identity = format!("{} {}", args.model_id, args.model_path.display());
-    let activation_width = u32::try_from(args.activation_width).unwrap_or_default();
-    match infer_family_capability(&identity, stage.layer_end, activation_width)
-        .map(|capability| capability.family_id)
-        .as_deref()
-    {
-        Some("qwen3next" | "qwen4exp" | "falcon_h1") => StageKvCachePayload::KvRecurrent,
-        Some(
-            "qwen3_dense" | "llama" | "deepseek2" | "deepseek3" | "glm4" | "olmo" | "gemma2"
-            | "gemma3" | "gemma4_a4b" | "gemma4_e4b" | "glm47_flash" | "minimax_m27",
-        ) => StageKvCachePayload::ResidentKv,
-        _ => StageKvCachePayload::Auto,
-    }
+fn prompt_stage_cache_payload(_args: &PromptArgs, _stage: &LocalStage) -> StageKvCachePayload {
+    // The concrete payload is selected only after llama.cpp loads the model
+    // and reports its actual dense/recurrent/hybrid state semantics.
+    StageKvCachePayload::Auto
 }
 
 fn prompt_stage_cache_max_bytes(

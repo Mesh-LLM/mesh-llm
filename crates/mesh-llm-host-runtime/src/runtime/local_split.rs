@@ -11,7 +11,7 @@ use super::capacity::model_fits_runtime_capacity;
 use super::local::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
     OpenAiGuardrailPolicyHandle, alloc_local_port, mmproj_path_for_model, pinned_stage_device,
-    resolved_model_name, skippy_stage_activation_width,
+    resolved_model_name,
 };
 use super::local_package::{
     SplitParticipant, SplitParticipantExclusion, SplitParticipantSnapshot,
@@ -358,7 +358,6 @@ async fn prepare_split_runtime_start(
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
         &package,
         &compact_meta,
-        model_ref,
         spec.cache_type_k_override,
         spec.cache_type_v_override,
     )?;

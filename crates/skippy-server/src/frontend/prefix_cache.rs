@@ -1322,7 +1322,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config)
+        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {
@@ -1399,7 +1399,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let cache = KvStageIntegration::from_config(&config)
+        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache");
         let identity = crate::kv_integration::PrefillKvIdentity {

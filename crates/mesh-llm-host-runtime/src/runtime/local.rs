@@ -851,9 +851,8 @@ async fn start_local_layer_package_model(
         )
         .await,
     );
-    let activation_width = skippy_stage_activation_width(package.activation_width, &model_name)?;
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
+    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
     let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(package.clone()),
@@ -985,14 +984,6 @@ pub(super) fn local_process_snapshot(
         start: None,
         health: Some("ready".into()),
     }
-}
-
-pub(super) fn skippy_stage_activation_width(activation_width: u32, model_ref: &str) -> Result<i32> {
-    i32::try_from(activation_width).with_context(|| {
-        format!(
-            "activation width {activation_width} for {model_ref} exceeds skippy stage ABI limit"
-        )
-    })
 }
 
 #[cfg(test)]

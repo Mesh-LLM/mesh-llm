@@ -5,7 +5,8 @@ mod harness;
 
 use harness::{
     activation_handoff_matches_full_model, assert_manifest_row_complete,
-    cache_state_restore_matches_recompute, mixed_iteration_matches_serial, p0_p1_manifest_rows,
+    cache_state_restore_matches_recompute, graph_boundary_contract_matches_stage_roles,
+    mixed_iteration_matches_serial, p0_p1_manifest_rows,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +54,39 @@ macro_rules! family_module {
 family_module!(p0_llama_llama, "p0", "llama", "llama");
 family_module!(p0_qwen2_qwen2, "p0", "qwen2", "qwen2");
 family_module!(p0_qwen3_qwen3_dense, "p0", "qwen3", "qwen3_dense");
+
+#[test]
+#[ignore = "downloads and loads the pinned Qwen3 GGUF artifact"]
+fn qwen3_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
+    graph_boundary_contract_matches_stage_roles(FamilySpec {
+        priority: "p0",
+        llama_model: "qwen3",
+        family: "qwen3_dense",
+    })
+    .unwrap();
+}
+
+#[test]
+#[ignore = "downloads and loads the pinned Gemma3n GGUF artifact"]
+fn gemma3n_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
+    graph_boundary_contract_matches_stage_roles(FamilySpec {
+        priority: "p0",
+        llama_model: "gemma3n",
+        family: "gemma3n",
+    })
+    .unwrap();
+}
+
+#[test]
+#[ignore = "loads the remote-only Qwen4Exp GGUF artifact"]
+fn qwen4exp_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
+    graph_boundary_contract_matches_stage_roles(FamilySpec {
+        priority: "p2",
+        llama_model: "qwen4exp",
+        family: "qwen4exp",
+    })
+    .unwrap();
+}
 family_module!(p0_qwen3next_qwen3next, "p0", "qwen3next", "qwen3next");
 family_module!(p0_qwen35moe_qwen35moe, "p0", "qwen35moe", "qwen35moe");
 family_module!(p0_qwen2vl_qwen2vl, "p0", "qwen2vl", "qwen2vl");
