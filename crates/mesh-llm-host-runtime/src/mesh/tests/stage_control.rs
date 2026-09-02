@@ -105,6 +105,36 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
     }
 }
 
+#[tokio::test]
+async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0xD2);
+    let mut peer = make_test_peer(peer_id, Some(10), 8);
+    peer.stage_protocol_generation_supported = false;
+    node.state.lock().await.peers.insert(peer_id, peer);
+
+    let error = node
+        .ensure_current_stage_control_peer(peer_id)
+        .await
+        .expect_err("legacy peer must not reach stage-control execution");
+    assert!(
+        error
+            .to_string()
+            .contains("does not advertise the required generation-7 control bundle"),
+        "unexpected error: {error:#}"
+    );
+
+    node.state
+        .lock()
+        .await
+        .peers
+        .get_mut(&peer_id)
+        .expect("test peer must remain present")
+        .stage_protocol_generation_supported = true;
+    node.ensure_current_stage_control_peer(peer_id).await?;
+    Ok(())
+}
+
 fn test_preparation_status(
     state: crate::inference::skippy::StagePreparationState,
 ) -> crate::inference::skippy::StagePreparationStatus {
@@ -444,7 +474,7 @@ fn stage_control_inventory_response_round_trips_plain_gguf_source() {
     );
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Inventory(inventory) = decoded else {
         panic!("expected inventory response");
@@ -477,7 +507,7 @@ fn stage_control_prepare_response_round_trips_failed_status() {
     );
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::PrepareAccepted(accepted) = decoded else {
         panic!("expected prepare response");
@@ -510,7 +540,7 @@ fn stage_control_status_list_response_round_trips_all_statuses() {
         crate::inference::skippy::StageControlResponse::Status(vec![first.clone(), second.clone()]);
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
         panic!("expected status response");
@@ -526,31 +556,12 @@ fn empty_stage_control_status_list_response_round_trips_as_empty() {
     let response = crate::inference::skippy::StageControlResponse::Status(Vec::new());
 
     let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, true)).unwrap();
+        stage_control_response_from_proto(stage_control_response_to_proto(response)).unwrap();
 
     let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
         panic!("expected status response");
     };
     assert!(statuses.is_empty());
-}
-
-#[test]
-fn legacy_stage_control_status_response_still_decodes() {
-    let status = stage_status_from_load(
-        &test_stage_load_request(),
-        crate::inference::skippy::StageRuntimeState::Ready,
-    );
-    let response = crate::inference::skippy::StageControlResponse::Status(vec![status.clone()]);
-
-    let decoded =
-        stage_control_response_from_proto(stage_control_response_to_proto(response, false))
-            .unwrap();
-
-    let crate::inference::skippy::StageControlResponse::Status(statuses) = decoded else {
-        panic!("expected status response");
-    };
-    assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].stage_id, status.stage_id);
 }
 
 #[test]

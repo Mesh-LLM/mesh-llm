@@ -4,8 +4,8 @@ package skippy.stage.v1;
 
 // Skippy owns these stage-control, artifact-transfer, and activation frames.
 // Control and artifact streams are carried inside the mesh STREAM_SUBPROTOCOL
-// envelope for skippy-stage/1. Activation transport remains on the
-// skippy-stage/1 QUIC ALPN.
+// envelope for skippy-stage/2. Activation transport remains on the
+// skippy-stage/2 QUIC ALPN.
 
 message StageControlRequest {
   uint32 gen = 1;
@@ -28,9 +28,10 @@ message StageControlRequest {
 
 message StageControlResponse {
   uint32 gen = 1;
+  reserved 3;
+  reserved "stage_status";
   oneof response {
     StageReady stage_ready = 2;
-    StageStatus stage_status = 3;
     LayerInventory layer_inventory = 4;
     PrepareStageAccepted prepare_stage_accepted = 5;
     StagePreparationStatus stage_preparation_status = 6;

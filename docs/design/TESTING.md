@@ -904,10 +904,12 @@ cached and a worker does not:
 - Current/current mesh: the worker may use mesh `STREAM_SUBPROTOCOL` (0x0d)
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
-- Current/released mixed mesh: a released coordinator without advertised
-  `skippy-stage/2` `artifact-transfer`, `stage-generation-6`, and
-  `direct-prediction-return` support must not be selected for a generation-5
-  split topology; the worker must fall back to local/HF package resolution.
+- Current/released mixed mesh: a released coordinator without the complete
+  `stage-generation-7` control/status/content-identity bundle and
+  `direct-prediction-return` support must not be selected for a generation-7
+  split topology. Missing `artifact-transfer` only prevents peer cache
+  sourcing; the worker may still participate when local/HF package resolution
+  provides an independent source.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node
   must advertise no `artifact-transfer` feature, reject inbound artifact
   transfer requests, and continue through local/HF fallback resolution.

@@ -29,7 +29,12 @@ fn compile_proto() {
     // starts; no application threads can observe this environment mutation.
     unsafe { std::env::set_var("PROTOC", protoc) };
 
-    prost_build::Config::new()
+    let mut config = prost_build::Config::new();
+    config.enum_attribute(
+        ".skippy.stage.v1.StageControlResponse.response",
+        "#[allow(clippy::large_enum_variant)]",
+    );
+    config
         .compile_protos(&["proto/stage.proto"], &["proto"])
         .expect("compile skippy stage proto");
 }
