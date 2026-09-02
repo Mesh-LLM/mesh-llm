@@ -111,6 +111,20 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
         self.assertEqual(failures, 6)
 
+    def test_runtime_slice_admission_rejects_detached_failure_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(detached_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
     def test_runtime_slice_admission_accepts_architecture_independent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             llama_root = Path(tmp)
@@ -142,7 +156,10 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
     @staticmethod
     def runtime_slice_admission_source(
-        extra: str = "", implementation: str = "", controls: bool = True
+        extra: str = "",
+        implementation: str = "",
+        controls: bool = True,
+        detached_failure: bool = False,
     ) -> str:
         checks = (
             "layer_end exceeds model layer count",
@@ -170,15 +187,25 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 checks[3],
             ),
         )
-        control_lines = tuple(
-            (
-                f"if ({guard}) {{ llama_model_free(model); "
+        def invalid_argument_failure(message: str) -> str:
+            return (
+                "llama_model_free(model); "
                 f'const char * message = "{message}"; '
                 "skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message); "
-                "return SKIPPY_STATUS_INVALID_ARGUMENT; }"
+                "return SKIPPY_STATUS_INVALID_ARGUMENT;"
             )
+
+        control_lines = tuple(
+            f"if ({guard}) {{ {invalid_argument_failure(message)} }}"
             for guard, message in invalid_argument_checks
         )
+        if detached_failure:
+            guard, message = invalid_argument_checks[0]
+            control_lines = (
+                f"if ({guard}) {{ }}",
+                f"{{ {invalid_argument_failure(message)} }}",
+                *control_lines[1:],
+            )
         if controls:
             boundary_lines = (
                 "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "

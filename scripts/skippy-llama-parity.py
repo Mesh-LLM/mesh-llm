@@ -429,6 +429,51 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
     return failures
 
 
+def extract_braced_block(source: str, header_pattern: str) -> str | None:
+    match = re.search(header_pattern + r"\s*\{", source)
+    if match is None:
+        return None
+    open_brace = source.find("{", match.start(), match.end())
+    depth = 0
+    state = "code"
+    index = open_brace
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "line-comment":
+            if char == "\n":
+                state = "code"
+        elif state == "block-comment":
+            if char == "*" and next_char == "/":
+                state = "code"
+                index += 1
+        elif state in {"single-quote", "double-quote"}:
+            if char == "\\":
+                index += 1
+            elif (state == "single-quote" and char == "'") or (
+                state == "double-quote" and char == '"'
+            ):
+                state = "code"
+        elif char == "/" and next_char == "/":
+            state = "line-comment"
+            index += 1
+        elif char == "/" and next_char == "*":
+            state = "block-comment"
+            index += 1
+        elif char == "'":
+            state = "single-quote"
+        elif char == '"':
+            state = "double-quote"
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace + 1 : index]
+        index += 1
+    return None
+
+
 def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     llama_root = llama_root or ROOT / ".deps/llama.cpp"
     model_loading = llama_root / "src/skippy/model_loading.cpp"
@@ -461,67 +506,69 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
         for architecture in architecture_guards:
             print(f"  - {architecture}", file=sys.stderr)
 
-    invalid_argument_failure = (
-        r"[\s\S]{{0,900}}?llama_model_free\s*\(\s*model\s*\)\s*;"
-        r"[\s\S]{{0,900}}?const\s+char\s*\*\s*message\s*=\s*\"{message}\"\s*;"
-        r"[\s\S]{{0,900}}?skippy_set_error\s*\(\s*out_error\s*,\s*"
-        r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;"
-        r"[\s\S]{{0,200}}?return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;"
-    )
-    required_contracts = (
+    invalid_argument_contracts = (
         (
             "layer_end range",
-            r"if\s*\(\s*config->layer_end\s*>\s*n_layer\s*\)\s*\{"
-            + invalid_argument_failure.format(
-                message=re.escape("layer_end exceeds model layer count")
-            ),
+            r"if\s*\(\s*config->layer_end\s*>\s*n_layer\s*\)",
+            "layer_end exceeds model layer count",
         ),
         (
             "embedding ownership",
             r"if\s*\(\s*config->include_embeddings\s*&&\s*"
-            r"config->layer_start\s*!=\s*0\s*&&\s*!config->include_output\s*\)\s*\{"
-            + invalid_argument_failure.format(
-                message=re.escape(
-                    "only the first runtime slice may include token embeddings"
-                )
-            ),
+            r"config->layer_start\s*!=\s*0\s*&&\s*!config->include_output\s*\)",
+            "only the first runtime slice may include token embeddings",
         ),
         (
             "first-slice embeddings",
             r"if\s*\(\s*config->layer_start\s*==\s*0\s*&&\s*"
-            r"!config->include_embeddings\s*\)\s*\{"
-            + invalid_argument_failure.format(
-                message=re.escape("the first runtime slice must include token embeddings")
-            ),
+            r"!config->include_embeddings\s*\)",
+            "the first runtime slice must include token embeddings",
         ),
         (
             "output ownership",
             r"if\s*\(\s*config->include_output\s*&&\s*"
-            r"config->layer_end\s*!=\s*n_layer\s*\)\s*\{"
-            + invalid_argument_failure.format(
-                message=re.escape("only the final runtime slice may include output tensors")
-            ),
+            r"config->layer_end\s*!=\s*n_layer\s*\)",
+            "only the final runtime slice may include output tensors",
         ),
+    )
+    missing_checks = []
+    for name, guard, message in invalid_argument_contracts:
+        body = extract_braced_block(admission, guard)
+        required_failure_paths = (
+            r"llama_model_free\s*\(\s*model\s*\)\s*;",
+            r"const\s+char\s*\*\s*message\s*=\s*"
+            + re.escape(f'"{message}"')
+            + r"\s*;",
+            r"skippy_set_error\s*\(\s*out_error\s*,\s*"
+            r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;",
+            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;",
+        )
+        if body is None or any(
+            re.search(pattern, body) is None for pattern in required_failure_paths
+        ):
+            missing_checks.append(name)
+
+    boundary_contracts = (
         (
             "output activation boundary",
-            r"if\s*\(\s*!stage_model->ctx->get_activation_boundary\s*\([^)]*\)\s*\)\s*\{"
-            r"\s*return\s+fail_boundary_load\s*\(\s*"
-            r"\"stage\ graph\ did\ not\ expose\ a\ stable\ output\ activation\ boundary\""
-            r"\s*\)\s*;\s*\}",
+            r"if\s*\(\s*!stage_model->ctx->get_activation_boundary\s*\([^)]*\)\s*\)",
+            "stage graph did not expose a stable output activation boundary",
         ),
         (
             "input activation boundary",
-            r"if\s*\(\s*!stage_model->ctx->get_input_activation_boundary\s*\([^)]*\)\s*\)\s*\{"
-            r"\s*return\s+fail_boundary_load\s*\(\s*"
-            r"\"stage\ graph\ did\ not\ expose\ a\ stable\ input\ activation\ boundary\""
-            r"\s*\)\s*;\s*\}",
+            r"if\s*\(\s*!stage_model->ctx->get_input_activation_boundary\s*\([^)]*\)\s*\)",
+            "stage graph did not expose a stable input activation boundary",
         ),
     )
-    missing_checks = [
-        name
-        for name, pattern in required_contracts
-        if re.search(pattern, admission) is None
-    ]
+    for name, guard, message in boundary_contracts:
+        body = extract_braced_block(admission, guard)
+        failure_path = (
+            r"return\s+fail_boundary_load\s*\(\s*"
+            + re.escape(f'"{message}"')
+            + r"\s*\)\s*;"
+        )
+        if body is None or re.search(failure_path, body) is None:
+            missing_checks.append(name)
     if missing_checks:
         failures += len(missing_checks)
         print(
