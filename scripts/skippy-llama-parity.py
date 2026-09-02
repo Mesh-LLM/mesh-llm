@@ -429,11 +429,53 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
     return failures
 
 
+def mask_cpp_comments(source: str) -> str:
+    masked = list(source)
+    state = "code"
+    index = 0
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "line-comment":
+            if char == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+        elif state == "block-comment":
+            masked[index] = "\n" if char == "\n" else " "
+            if char == "*" and next_char == "/":
+                masked[index + 1] = " "
+                state = "code"
+                index += 1
+        elif state in {"single-quote", "double-quote"}:
+            if char == "\\":
+                index += 1
+            elif (state == "single-quote" and char == "'") or (
+                state == "double-quote" and char == '"'
+            ):
+                state = "code"
+        elif char == "/" and next_char == "/":
+            masked[index] = masked[index + 1] = " "
+            state = "line-comment"
+            index += 1
+        elif char == "/" and next_char == "*":
+            masked[index] = masked[index + 1] = " "
+            state = "block-comment"
+            index += 1
+        elif char == "'":
+            state = "single-quote"
+        elif char == '"':
+            state = "double-quote"
+        index += 1
+    return "".join(masked)
+
+
 def extract_braced_block(source: str, header_pattern: str) -> str | None:
-    match = re.search(header_pattern + r"\s*\{", source)
+    executable_source = mask_cpp_comments(source)
+    match = re.search(header_pattern + r"\s*\{", executable_source)
     if match is None:
         return None
-    open_brace = source.find("{", match.start(), match.end())
+    open_brace = executable_source.find("{", match.start(), match.end())
     depth = 0
     state = "code"
     index = open_brace
@@ -493,8 +535,14 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
         print("Cannot locate Skippy runtime-slice validation boundary", file=sys.stderr)
         return 1
     validation = admission[:validation_end]
+    executable_validation = mask_cpp_comments(validation)
     architecture_guards = sorted(
-        set(re.findall(r"model->arch\s*[!=]=\s*LLM_ARCH_([A-Z0-9_]+)", validation))
+        set(
+            re.findall(
+                r"model->arch\s*[!=]=\s*LLM_ARCH_([A-Z0-9_]+)",
+                executable_validation,
+            )
+        )
     )
     failures = 0
     if architecture_guards:
@@ -534,6 +582,7 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     missing_checks = []
     for name, guard, message in invalid_argument_contracts:
         body = extract_braced_block(admission, guard)
+        executable_body = mask_cpp_comments(body) if body is not None else ""
         required_failure_paths = (
             r"llama_model_free\s*\(\s*model\s*\)\s*;",
             r"const\s+char\s*\*\s*message\s*=\s*"
@@ -544,7 +593,8 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;",
         )
         if body is None or any(
-            re.search(pattern, body) is None for pattern in required_failure_paths
+            re.search(pattern, executable_body) is None
+            for pattern in required_failure_paths
         ):
             missing_checks.append(name)
 
@@ -562,12 +612,13 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     )
     for name, guard, message in boundary_contracts:
         body = extract_braced_block(admission, guard)
+        executable_body = mask_cpp_comments(body) if body is not None else ""
         failure_path = (
             r"return\s+fail_boundary_load\s*\(\s*"
             + re.escape(f'"{message}"')
             + r"\s*\)\s*;"
         )
-        if body is None or re.search(failure_path, body) is None:
+        if body is None or re.search(failure_path, executable_body) is None:
             missing_checks.append(name)
     if missing_checks:
         failures += len(missing_checks)
