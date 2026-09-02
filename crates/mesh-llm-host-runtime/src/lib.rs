@@ -1,4 +1,8 @@
 #![recursion_limit = "256"]
+#![allow(
+    unfulfilled_lint_expectations,
+    reason = "workspace feature unification can make compatibility helpers live"
+)]
 
 mod api;
 mod capture;

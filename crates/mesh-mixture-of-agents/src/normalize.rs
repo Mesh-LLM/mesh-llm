@@ -465,7 +465,7 @@ fn extract_json_object(text: &str) -> Option<String> {
     None
 }
 
-/// Clean passthrough content for display: strip think tags, orphan </think>,
+/// Clean passthrough content for display: strip think tags, orphan `</think>`,
 /// and any KV envelope lines (kind:/confidence:/payload:) that leaked.
 pub fn strip_passthrough_content(text: &str) -> String {
     let stripped = strip_thinking_tags(text);

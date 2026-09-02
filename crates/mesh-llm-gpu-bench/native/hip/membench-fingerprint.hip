@@ -281,11 +281,11 @@ int main(int argc, char** argv) {
             if (dev < deviceCount - 1) printf("\n");
         }
 
-        hipFree(dSrc);
-        hipFree(dSink);
-        hipFree(dComputeSink);
-        hipEventDestroy(evStart);
-        hipEventDestroy(evStop);
+        check(hipFree(dSrc), "hipFree src");
+        check(hipFree(dSink), "hipFree sink");
+        check(hipFree(dComputeSink), "hipFree compute sink");
+        check(hipEventDestroy(evStart), "hipEventDestroy start");
+        check(hipEventDestroy(evStop), "hipEventDestroy stop");
     }
 
     return 0;

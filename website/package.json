@@ -5,6 +5,11 @@
   "engines": {
     "node": ">=20"
   },
+  "allowScripts": {
+    "@parcel/watcher@2.5.1": true,
+    "fsevents@2.3.3": true,
+    "fsevents@2.3.2": true
+  },
   "scripts": {
     "generate:cli": "node ./scripts/generate-cli-inventory.mjs",
     "check:cli": "node ./scripts/generate-cli-inventory.mjs --check",

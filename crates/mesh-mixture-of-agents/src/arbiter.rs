@@ -4,7 +4,7 @@
 //! Models are only called (via the reducer) when there's genuine ambiguity.
 //!
 //! This arbiter handles the text path only. Tool-bearing turns take the
-//! asymmetric actor path in [`crate::tool_turn`], where the best tool-caller
+//! asymmetric actor path in `crate::tool_turn`, where the best tool-caller
 //! acts and references only advise — so no tool proposal ever reaches here.
 //! Any tool-shaped text on the text path was demoted to `Uncertainty` by
 //! `enforce_tool_call_contract` (tools disabled ⇒ empty allow-list).
