@@ -461,10 +461,6 @@ def launch_cell(
     stage0_log_path = cell_dir / "stage-0.log"
     stage1_log_path = cell_dir / "stage-1.log"
     common = [
-        "--activation-width",
-        str(args.activation_width),
-        "--activation-wire-dtype",
-        args.activation_wire_dtype,
         "--max-inflight",
         str(args.lanes),
         "--telemetry-level",
@@ -900,8 +896,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="split into two local pipeline stages after this layer",
     )
-    parser.add_argument("--activation-width", type=int, required=True)
-    parser.add_argument("--activation-wire-dtype", default="f16")
     parser.add_argument("--n-gpu-layers", type=int, default=999)
     parser.add_argument("--adaptive-target-ms", type=float, default=100.0)
     parser.add_argument(
@@ -1058,7 +1052,6 @@ def main() -> int:
                 "prefill_adaptive_max": args.prefill_adaptive_max,
                 "layer_end": args.layer_end,
                 "split_layer": args.split_layer,
-                "activation_width": args.activation_width,
                 "adaptive_target_ms": args.adaptive_target_ms,
                 "adaptive_target_new_only": args.adaptive_target_new_only,
             },
