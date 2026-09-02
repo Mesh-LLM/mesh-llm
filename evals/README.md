@@ -73,6 +73,57 @@ prompts; it does not measure answer quality or claim byte-identical production
 traffic. Treat small deltas as directional unless a larger cohort and repeated
 passes show a consistent separation.
 
+### KV-cache acceptance with captured harness traffic
+
+The Thoughtworks corpus is useful for broad agentic load, but it is not a
+substitute for the exact Buzz, OpenCode, Goose, or Pi prefix whose cache behavior
+is being certified. `run` therefore also accepts `--trajectory-manifest` in
+place of `--dataset-file`. Captured trajectories may include their exact `tools`
+array; the runner sends those schemas unchanged because tool-schema tokens are
+part of the reusable prefix identity.
+
+Use `--replay-mode final` to measure each captured trajectory at its longest
+recorded prefix. The optional gates make a qualifying run fail closed while
+retaining its complete artifact:
+
+```bash
+python3 evals/agentic-replay.py run \
+  --ref parent=<parent-commit> \
+  --ref candidate=<candidate-commit> \
+  --model '<model-uri>' \
+  --trajectory-manifest /path/to/captured-harnesses.json \
+  --replay-mode final \
+  --passes 2 \
+  --require-framework buzz \
+  --require-framework opencode \
+  --require-framework goose \
+  --prompt-token-range 18000:22000 \
+  --min-cache-pct 70 \
+  --require-output-match \
+  --max-ttft-regression-pct 5 \
+  --output /path/to/artifact
+```
+
+The manifest uses the same `warmup`, `1`, `2`, and `4` cohort names as the
+generated workload. Each trajectory has `session_id`, `source_dataset`,
+`agent_framework`, nullable `recorded_model`, ordered `messages`, and an
+optional exact OpenAI `tools` array. Include real captures from the required
+harnesses as distinct `agent_framework` values. Do not commit private captures;
+the artifact records and hashes the supplied manifest for reproducibility.
+
+Each repeated `--require-framework` value must be represented in every measured
+concurrency cohort. This preflight runs before any ref is built, preventing a
+long acceptance run from silently omitting Buzz or one of the comparison agent
+harnesses.
+
+`--prompt-token-range` is checked against server-reported token counts for every
+successful measured request, not a character estimate. `--min-cache-pct` checks
+the aggregate server-reported cached-token share in every ref/concurrency cell.
+`--require-output-match` compares generated-content hashes and failure identities
+across refs and passes. `--max-ttft-regression-pct` bounds candidate median TTFT
+relative to the first ref. Any configured failure is written into `run.json` and
+the Markdown report before the command exits non-zero.
+
 For the pinned Mesh-versus-raw-llama.cpp scheduler matrix across CUDA, Metal,
 dense/MoE/recurrent/hybrid models, llama-benchy, and Thoughtworks agent traces, see
 [`docs/skippy/COMPETITIVE_BENCHMARK.md`](../docs/skippy/COMPETITIVE_BENCHMARK.md).
