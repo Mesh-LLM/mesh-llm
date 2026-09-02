@@ -18,8 +18,12 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use skippy_cache::{
+    ExactStatePayload, GeometryBlock, GeometryKind, L3Tier, PayloadGeometry, StoreLimits,
+};
 use skippy_runtime::{
-    GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, StageModel, StageSession,
+    GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, StageModel,
+    StageSession,
 };
 
 use super::{
@@ -38,8 +42,16 @@ struct TurnReport {
     segments: usize,
     /// Segments whose digest was already stored by an earlier turn.
     reused_segments: usize,
-    /// What the store would physically write for this turn.
+    /// What the store would physically write for this turn, cutting at fixed
+    /// byte offsets.
     physical_bytes: u64,
+    /// What the real L3 tier writes for this turn, cutting on the page's own
+    /// geometry. This is the number that ships.
+    tier_physical_bytes: u64,
+    /// `tier_physical_bytes` over `ideal_bytes`.
+    tier_amplification: f64,
+    /// Whether the tier accepted the geometry rather than falling back.
+    geometry_accepted: bool,
     /// What an ideal append-only layout would write: the payload growth.
     ideal_bytes: u64,
     /// physical / ideal. The §13.4 gate is 1.2.
@@ -65,6 +77,8 @@ struct GrowthReport {
     turns: Vec<TurnReport>,
     /// Worst per-turn amplification: the number the gate has to clear.
     max_amplification: f64,
+    /// The same for the real tier, which is what §13.4 actually gates.
+    max_tier_amplification: f64,
     /// True when every turn kept the previous payload byte-identical at offset 0.
     append_only: bool,
 }
@@ -145,6 +159,24 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         .create_session()
         .context("failed to create growth probe session")?;
 
+    // The real store, so the reported number is the one that ships rather than
+    // a simulation of it. A fresh root per run: leftover segments from an
+    // earlier run would dedupe against this one and flatter the result.
+    let tier_root = std::env::temp_dir().join(format!(
+        "skippy-kv-page-growth-{}-{}",
+        std::process::id(),
+        args.segment_bytes
+    ));
+    let _ = std::fs::remove_dir_all(&tier_root);
+    let tier = L3Tier::open_with_limits(
+        &tier_root,
+        StoreLimits::new(0, 0),
+        "blake3:kv-page-growth".to_string(),
+        usize::try_from(args.segment_bytes).context("segment size exceeds usize")?,
+    )
+    .context("open L3 tier for the probe")?;
+    let mut tier_written = 0u64;
+
     let mut seen_digests: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut previous_payload: Vec<u8> = Vec::new();
     let mut turns = Vec::with_capacity(args.turns);
@@ -164,7 +196,7 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
 
         let page = export_page(&mut session, layer_end, 0, cursor as u64)
             .with_context(|| format!("full-prefix KV export failed on turn {turn}"))?;
-        let payload = page.payload;
+        let payload = page.payload.clone();
 
         let common_prefix_bytes = common_prefix_len(&previous_payload, &payload) as u64;
         let mut segments = 0usize;
@@ -192,6 +224,28 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
             physical_bytes as f64 / ideal_bytes as f64
         };
 
+        // Spill through the real tier with the geometry the server derives
+        // from the page descriptor, and read what it actually wrote.
+        let geometry = page_geometry(&page.desc, payload.len() as u64, args.segment_bytes);
+        let exact_state = ExactStatePayload::kv_recurrent(payload.clone(), Vec::new());
+        tier.spill(
+            "probe",
+            &tokens[..cursor],
+            &exact_state,
+            None,
+            geometry.as_ref(),
+        )
+        .with_context(|| format!("tier spill failed on turn {turn}"))?;
+        let activity = tier.status().context("tier status")?.activity;
+        let tier_physical_bytes = activity.bytes_written - tier_written;
+        tier_written = activity.bytes_written;
+        let tier_amplification = if ideal_bytes == 0 {
+            f64::INFINITY
+        } else {
+            tier_physical_bytes as f64 / ideal_bytes as f64
+        };
+        let geometry_accepted = geometry.is_some() && activity.geometry_rejected == 0;
+
         // The alternative design: store only the new window rather than
         // re-cutting the whole prefix. Turn 0 has no preceding window.
         let windowed_export = if turn == 0 {
@@ -215,7 +269,9 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         println!(
             "turn={turn} tokens={cursor} payload={} common_prefix={common_prefix_bytes} \
              segments={segments} reused={reused_segments} physical={physical_bytes} \
-             ideal={ideal_bytes} amplification={amplification:.2}",
+             ideal={ideal_bytes} amplification={amplification:.2} \
+             tier_physical={tier_physical_bytes} tier_amplification={tier_amplification:.2} \
+             geometry={geometry_accepted}",
             payload.len()
         );
 
@@ -229,6 +285,9 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
             physical_bytes,
             ideal_bytes,
             amplification,
+            tier_physical_bytes,
+            tier_amplification,
+            geometry_accepted,
             windowed_export,
         });
         previous_payload = payload;
@@ -245,6 +304,11 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         .skip(1)
         .map(|turn| turn.amplification)
         .fold(0.0_f64, f64::max);
+    let max_tier_amplification = turns
+        .iter()
+        .skip(1)
+        .map(|turn| turn.tier_amplification)
+        .fold(0.0_f64, f64::max);
 
     let report = GrowthReport {
         model: args.runtime.model.display().to_string(),
@@ -253,17 +317,19 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         turn_tokens: args.turn_tokens,
         turns,
         max_amplification,
+        max_tier_amplification,
         append_only,
     };
     println!(
-        "kv_page_growth append_only={append_only} max_amplification={max_amplification:.2} \
-         gate=1.20 verdict={}",
-        if append_only && max_amplification <= 1.2 {
-            "fixed-offset chunking holds"
+        "kv_page_growth append_only={append_only} fixed_amplification={max_amplification:.2} \
+         tier_amplification={max_tier_amplification:.2} gate=1.20 verdict={}",
+        if max_tier_amplification <= 1.2 {
+            "geometry cutting holds the gate"
         } else {
-            "fixed-offset chunking fails the gate"
+            "FAILS the gate"
         }
     );
+    let _ = std::fs::remove_dir_all(&tier_root);
     if let Some(path) = args.json.as_deref() {
         let rendered = serde_json::to_string_pretty(&report).context("render growth report")?;
         std::fs::write(path, rendered)
@@ -279,6 +345,58 @@ fn export_page(
     token_count: u64,
 ) -> Result<RuntimeKvPage> {
     session.export_kv_page(0, layer_end, token_start, token_count)
+}
+
+/// Mirrors `kv_page_geometry` in `skippy-server`'s kv_integration: every
+/// layer's K rows, then every layer's V rows, in fixed token windows.
+fn page_geometry(
+    desc: &RuntimeKvPageDesc,
+    payload_bytes: u64,
+    segment_bytes: u64,
+) -> Option<PayloadGeometry> {
+    if desc.component_count != 0 || desc.token_count == 0 || desc.layer_count == 0 {
+        return None;
+    }
+    let k_stride = u64::from(desc.k_row_bytes);
+    let v_stride = u64::from(desc.v_row_bytes);
+    if k_stride == 0 || desc.flags & skippy_runtime::KV_PAGE_FLAG_V_TRANSPOSED != 0 {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    for layer in 0..desc.layer_count {
+        blocks.push(GeometryBlock {
+            stride: k_stride,
+            kind: GeometryKind::Key,
+            layer,
+            column: 0,
+        });
+    }
+    if v_stride > 0 {
+        for layer in 0..desc.layer_count {
+            blocks.push(GeometryBlock {
+                stride: v_stride,
+                kind: GeometryKind::Value,
+                layer,
+                column: 0,
+            });
+        }
+    }
+    let widest = blocks.iter().map(|block| block.stride).max()?;
+    let window_rows = (segment_bytes / widest.max(1))
+        .clamp(1, 512)
+        .next_power_of_two()
+        .min(512);
+    let geometry = PayloadGeometry {
+        blocks,
+        rows: desc.token_count,
+        window_rows,
+        tail_bytes: 0,
+    };
+    let tail = payload_bytes.checked_sub(geometry.total_bytes())?;
+    Some(PayloadGeometry {
+        tail_bytes: tail,
+        ..geometry
+    })
 }
 
 fn common_prefix_len(left: &[u8], right: &[u8]) -> usize {

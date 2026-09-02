@@ -14,8 +14,9 @@ pub use identity::{
     prefix_identity, prefix_identity_with_namespace, prefix_namespace_hash,
 };
 pub use l3::{
-    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, ManifestPin,
-    Reservation, SegmentPut, StoreLimits, StoreUsage, WriteRefusal, segment_digest,
+    GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
+    MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentPut, StoreLimits,
+    StoreUsage, WriteRefusal, segment_digest,
 };
 pub use payload::{
     CacheBlobStore, CacheBytes, CacheBytesReconstructStats, CacheDedupeStats, ExactStatePayload,
