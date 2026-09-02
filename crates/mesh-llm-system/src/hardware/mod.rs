@@ -327,6 +327,10 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
 }
 
 #[cfg(any(feature = "skippy-devices", test))]
+#[cfg_attr(
+    not(any(feature = "skippy-devices", target_os = "linux", target_os = "windows")),
+    allow(dead_code)
+)]
 fn cpu_only_budget_system_ram() -> u64 {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
@@ -348,6 +352,10 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     survey: &mut HardwareSurvey,
     metrics: &[Metric],
     probe: Result<Vec<GpuFacts>, E>,
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows")),
+        allow(unused_variables)
+    )]
     cpu_only_system_ram: impl FnOnce() -> u64,
 ) -> bool {
     let gpus = match probe {
