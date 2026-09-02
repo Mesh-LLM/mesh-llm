@@ -85,6 +85,7 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
+    pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<String>,
     pub(super) slots: usize,
@@ -161,15 +162,19 @@ impl SplitTopologyCoordinator {
     }
 
     async fn evaluate_replan(&mut self, reason: &'static str) -> bool {
+        let local_capacity_override = split_replan_local_capacity_override(
+            self.capacity_budget_bytes,
+            self.pinned_gpu
+                .as_ref()
+                .map(|gpu| gpu.allocatable_vram_bytes()),
+        );
         let snapshot = collect_split_participants(
             &self.node,
             &self.model_name,
             &self.model_ref,
             &self.runtime_profile,
             &self.package,
-            self.pinned_gpu
-                .as_ref()
-                .map(|gpu| gpu.allocatable_vram_bytes()),
+            local_capacity_override,
             self.local_source_required,
         )
         .await;
@@ -608,11 +613,13 @@ impl SplitTopologyCoordinator {
     }
 
     fn local_model_fits(&self) -> bool {
-        let local_capacity = self
-            .pinned_gpu
-            .as_ref()
-            .map(|gpu| gpu.allocatable_vram_bytes())
-            .unwrap_or_else(|| self.node.vram_bytes());
+        let local_capacity = split_replan_local_capacity_override(
+            self.capacity_budget_bytes,
+            self.pinned_gpu
+                .as_ref()
+                .map(|gpu| gpu.allocatable_vram_bytes()),
+        )
+        .unwrap_or_else(|| self.node.vram_bytes());
         // Use the package's source model bytes when available — layer-package
         // refs use `hf://` pseudo-paths that `total_model_bytes` cannot stat.
         let model_bytes = if self.package.source_model_bytes > 0 {
@@ -641,6 +648,7 @@ impl SplitTopologyCoordinator {
             projector_path: self.projector_path.clone(),
             ctx_size: self.ctx_size,
             compact_meta: &self.compact_meta,
+            capacity_budget_bytes: self.capacity_budget_bytes,
             cache_type_k_override: self.cache_type_k_override.as_deref(),
             cache_type_v_override: self.cache_type_v_override.as_deref(),
             n_batch_override: self.n_batch_override,
@@ -737,6 +745,15 @@ impl SplitTopologyCoordinator {
             Err(_) => anyhow::bail!("runtime loop dropped split topology withdrawal ack"),
         }
     }
+}
+
+pub(super) fn split_replan_local_capacity_override(
+    capacity_budget_bytes: Option<u64>,
+    pinned_gpu_capacity_bytes: Option<u64>,
+) -> Option<u64> {
+    capacity_budget_bytes
+        .filter(|bytes| *bytes > 0)
+        .or(pinned_gpu_capacity_bytes)
 }
 
 fn split_candidate_stage0_is_local(

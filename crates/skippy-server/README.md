@@ -104,7 +104,8 @@ deadline handling.
 
 - `serve-binary` is the tuned binary stage-to-stage path.
 - `serve-binary` participates in the breaking generation-7 stage protocol.
-  Stage compatibility requires `stage-generation-7`; direct prediction return and
+  Stage compatibility requires the complete `stage-generation-7` control,
+  status-list, and strict-content-identity bundle; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
   generation-7 topology. Generation 6 is historical and is not accepted by the
@@ -133,7 +134,13 @@ deadline handling.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
   `--generation-admission-timeout-secs` bounds predicted and actual queue wait
-  (default 60 seconds). Embedded serving exposes the same controls with the
+  (default 60 seconds). KV restore and prefill-record work runs on a separate
+  prompt-scaled deadline: admission timeout plus about one minute per 4,000
+  prompt tokens, clamped to at least 60 seconds and at most 30 minutes. A
+  legitimate prompt-sized prefill is therefore not killed by the queue-wait
+  bound; when the work deadline does expire the request fails with a
+  `timeout` error frame in the stream, not an empty response. Embedded serving
+  exposes the same controls with the
   `--openai-` prefix. Keep all three explicit in benchmark reports because
   they determine active execution, overload behavior, and tail latency.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface

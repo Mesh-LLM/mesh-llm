@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+mod capacity_budget;
 mod content_attestation;
 
 fn lifecycle_config() -> plugin::MeshConfig {
@@ -1342,6 +1343,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
         slots: 1,

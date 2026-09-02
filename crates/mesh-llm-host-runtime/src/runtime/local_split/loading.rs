@@ -86,6 +86,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
     pub(super) compact_meta: &'a models::gguf::GgufCompactMeta,
+    pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
     pub(super) device_override: Option<&'a str>,
     pub(super) slots: usize,
@@ -736,7 +737,7 @@ pub(super) async fn split_generation_load_settings<'a>(
             model_id: spec.model_ref,
             model_path: spec.model_path,
             model_bytes: spec.package.source_model_bytes,
-            allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
+            allocatable_memory_bytes: split_allocatable_memory_bytes(spec),
             request_defaults: None,
             package_generation: spec.package.generation.as_ref(),
             // Split stage load uses the compact metadata scanned during planning
@@ -796,6 +797,12 @@ pub(super) async fn split_generation_load_settings<'a>(
         startup_timeout: lifecycle.startup_timeout,
         readiness_interval: lifecycle.readiness_interval,
     })
+}
+
+pub(super) fn split_allocatable_memory_bytes(spec: &SplitGenerationLoadSpec<'_>) -> Option<u64> {
+    spec.capacity_budget_bytes
+        .filter(|bytes| *bytes > 0)
+        .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
 }
 
 pub(super) fn apply_split_generation_pinned_device(

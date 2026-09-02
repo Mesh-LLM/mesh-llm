@@ -427,18 +427,68 @@ fn proto_announcement_without_current_stage_generation_is_not_stage_compatible()
 }
 
 #[test]
-fn proto_announcement_without_stage_control_is_not_stage_compatible() {
-    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xCE; 32]).public());
+fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
+    for missing in [
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+    ] {
+        let features = [
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+        ]
+        .into_iter()
+        .filter(|feature| *feature != missing)
+        .map(str::to_string)
+        .collect();
+        let proto_pa = crate::proto::node::PeerAnnouncement {
+            endpoint_id: peer_id.as_bytes().to_vec(),
+            role: crate::proto::node::NodeRole::Worker as i32,
+            subprotocols: vec![crate::proto::node::MeshSubprotocol {
+                name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+                major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+                features,
+            }],
+            ..Default::default()
+        };
+
+        let (_, ann) = proto_ann_to_local(&proto_pa).expect("proto announcement should decode");
+        assert!(
+            !ann.stage_protocol_generation_supported,
+            "missing {missing} must reject the generation-7 bundle"
+        );
+    }
+}
+
+#[test]
+fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD1; 32]).public());
     let proto_pa = crate::proto::node::PeerAnnouncement {
         endpoint_id: peer_id.as_bytes().to_vec(),
         role: crate::proto::node::NodeRole::Worker as i32,
-        subprotocols: vec![crate::proto::node::MeshSubprotocol {
-            name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
-            major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
-            features: vec![
-                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7.to_string(),
-            ],
-        }],
+        subprotocols: vec![
+            crate::proto::node::MeshSubprotocol {
+                name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+                major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+                features: vec![
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7
+                        .to_string(),
+                ],
+            },
+            crate::proto::node::MeshSubprotocol {
+                name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+                major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+                features: vec![
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST.to_string(),
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string(),
+                ],
+            },
+        ],
         ..Default::default()
     };
 
@@ -459,7 +509,7 @@ fn legacy_stage_announcement_does_not_gain_local_gguf_content_id_support() {
             features: vec![
                 skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
                 // Frozen legacy wire token: the current protocol intentionally
-                // exports only its V6 capability.
+                // exports only its V7 capability.
                 "stage-generation-5".to_string(),
                 skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST.to_string(),
             ],

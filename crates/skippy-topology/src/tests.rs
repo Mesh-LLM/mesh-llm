@@ -876,6 +876,17 @@ fn infers_known_family_capabilities_from_model_identity() {
     .expect("reviewed llama");
     assert_eq!(llama.family_id, "llama");
     assert_eq!(llama.exact_state_mobility, ExactStateMobility::Accepted);
+    let reviewed_width = llama.activation_width;
+    let mismatched_package_width = infer_family_capability(
+        "/Volumes/External/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        16,
+        reviewed_width * 4,
+    )
+    .expect("reviewed llama with mismatched package estimate");
+    assert_eq!(
+        mismatched_package_width.activation_width, reviewed_width,
+        "package metadata must not replace a reviewed pre-load estimate"
+    );
 
     let laguna = infer_family_capability(
         "poolside/Laguna-S-2.1-GGUF@edd093522473dc7313b0738d8b4116b7f8b9745f/laguna-s-2.1-Q4_K_M.gguf",
