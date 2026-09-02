@@ -1,0 +1,144 @@
+<!doctype html>
+<html
+  lang="en"
+  data-theme="dark"
+  data-theme-preference="auto"
+  data-accent="blue"
+  data-density="normal"
+  data-panel-style="soft"
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171b24" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="MeshLLM clean-room app UI" />
+    <title>MeshLLM</title>
+    <script>
+      ;(() => {
+        const defaults = {
+          theme: 'auto',
+          accent: 'blue',
+          density: 'normal',
+          panelStyle: 'soft',
+          panelStyleOverride: false
+        }
+        const backgrounds = { dark: 'oklch(0.17 0.015 250)', light: 'oklch(0.985 0.003 80)' }
+        const panelStyles = { dark: 'soft', light: 'solid' }
+        const themeColors = { dark: '#171b24', light: '#fbfaf7' }
+        const storageKey = 'mesh-llm:preferences:v1'
+        const root = document.documentElement
+
+        function oneOf(value, values) {
+          return values.indexOf(value) !== -1
+        }
+
+        function systemTheme() {
+          return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+
+        function apply(preferences) {
+          const theme = preferences.theme === 'auto' ? systemTheme() : preferences.theme
+          const panelStyle = preferences.panelStyleOverride ? preferences.panelStyle : panelStyles[theme]
+          root.dataset.theme = theme
+          root.dataset.themePreference = preferences.theme
+          root.dataset.accent = preferences.accent
+          root.dataset.density = preferences.density
+          root.dataset.panelStyle = panelStyle
+          root.style.setProperty('--initial-background', backgrounds[theme])
+          root.style.setProperty('--initial-color-scheme', theme)
+          let meta = document.querySelector('meta[name="theme-color"][data-mesh-theme-color="runtime"]')
+          if (!meta) {
+            meta = document.createElement('meta')
+            meta.setAttribute('name', 'theme-color')
+            meta.setAttribute('data-mesh-theme-color', 'runtime')
+            document.head.append(meta)
+          }
+          meta.setAttribute('content', themeColors[theme])
+        }
+
+        try {
+          const stored = window.localStorage.getItem(storageKey)
+          const parsed = stored ? JSON.parse(stored) : defaults
+          const hasMigratedPanelStyle =
+            oneOf(parsed.panelStyle, ['solid', 'soft']) || oneOf(parsed.configPanelStyle, ['solid', 'soft'])
+          const parsedPanelStyle = oneOf(parsed.panelStyle, ['solid', 'soft'])
+            ? parsed.panelStyle
+            : oneOf(parsed.configPanelStyle, ['solid', 'soft'])
+              ? parsed.configPanelStyle
+              : defaults.panelStyle
+          const panelStyleOverride =
+            typeof parsed.panelStyleOverride === 'boolean'
+              ? parsed.panelStyleOverride && oneOf(parsed.panelStyle, ['solid', 'soft'])
+              : hasMigratedPanelStyle && parsedPanelStyle === 'soft'
+          apply({
+            theme: oneOf(parsed.theme, ['auto', 'light', 'dark']) ? parsed.theme : defaults.theme,
+            accent: oneOf(parsed.accent, ['blue', 'cyan', 'violet', 'green', 'amber', 'pink'])
+              ? parsed.accent
+              : defaults.accent,
+            density: oneOf(parsed.density, ['compact', 'normal', 'sparse']) ? parsed.density : defaults.density,
+            panelStyle: parsedPanelStyle,
+            panelStyleOverride
+          })
+        } catch {
+          apply(defaults)
+        }
+      })()
+    </script>
+    <style>
+      :root {
+        color-scheme: var(--initial-color-scheme, dark);
+        background: var(--initial-background, oklch(0.17 0.015 250));
+      }
+
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        background: var(--initial-background, oklch(0.17 0.015 250));
+      }
+
+      body {
+        margin: 0;
+      }
+    </style>
+    <link rel="icon" href="/meshllm-favicon.ico?v=20260430" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/meshllm-favicon-32.png?v=20260430" />
+    <link rel="apple-touch-icon" href="/meshllm-apple-touch-icon.png?v=20260430" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <script type="module" crossorigin src="/assets/index-D02HyNXh.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-Dd_uD5pT.js">
+    <link rel="modulepreload" crossorigin href="/assets/jsx-runtime-BpzPEenQ.js">
+    <link rel="modulepreload" crossorigin href="/assets/cn-QXz-fYGy.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-wT_q1WzM.js">
+    <link rel="modulepreload" crossorigin href="/assets/useRouter-BKyEUoUu.js">
+    <link rel="modulepreload" crossorigin href="/assets/useMatch-D4JXZ9Xc.js">
+    <link rel="modulepreload" crossorigin href="/assets/data-mode-Ch3FU52s.js">
+    <link rel="modulepreload" crossorigin href="/assets/network-BsG8GzXY.js">
+    <link rel="modulepreload" crossorigin href="/assets/data-CjxilQZG.js">
+    <link rel="modulepreload" crossorigin href="/assets/feature-flags-MesGXJt9.js">
+    <link rel="modulepreload" crossorigin href="/assets/copy-DpB4dw_e.js">
+    <link rel="modulepreload" crossorigin href="/assets/chevron-up-D2WZNH2A.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-DsnxFYaQ.js">
+    <link rel="modulepreload" crossorigin href="/assets/tooltip-DXhJG_wl.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-CgotmrpW.js">
+    <link rel="modulepreload" crossorigin href="/assets/lib-Bcc3SnWB.js">
+    <link rel="modulepreload" crossorigin href="/assets/preload-helper-Czpn1I53.js">
+    <link rel="modulepreload" crossorigin href="/assets/MarkdownMessage-BQ0b5JYW.js">
+    <link rel="modulepreload" crossorigin href="/assets/query-keys-BhaDzi6e.js">
+    <link rel="modulepreload" crossorigin href="/assets/errors-DPPAN-em.js">
+    <link rel="modulepreload" crossorigin href="/assets/SegmentedControl-Cijn1odD.js">
+    <link rel="modulepreload" crossorigin href="/assets/log-search-DIgRrgqn.js">
+    <link rel="stylesheet" crossorigin href="/assets/MarkdownMessage-Ddr6Z9Sf.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-BI4lA9fH.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
