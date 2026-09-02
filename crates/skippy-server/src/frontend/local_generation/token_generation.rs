@@ -36,7 +36,7 @@ use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
 
@@ -1366,6 +1366,7 @@ impl StageOpenAiBackend {
         let mut restored_prefill = false;
         let mut restored_prefill_tokens = 0usize;
         let mut protected_resident_seq_id = None;
+        let kv_restore_started = Instant::now();
         let kv_restore_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
         match kv.restore_exact_state(runtime, session_id, identities) {
             Ok(Some(restored)) => {
@@ -1490,6 +1491,9 @@ impl StageOpenAiBackend {
                 self.telemetry
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
+        }
+        if cache_stats.cached_prompt_tokens > 0 {
+            cache_stats.restore_ms = kv_restore_started.elapsed().as_secs_f64() * 1_000.0;
         }
         if let Some(kv_restore_timer) = kv_restore_timer {
             let mut attrs = self.openai_attrs(ids);

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
 mod fused_decode;
 mod lifecycle;
@@ -117,6 +118,7 @@ impl StageOpenAiBackend {
                     };
                 }
                 let prefix_restore_allowed = !request.native_mtp_enabled;
+                let prefix_restore_started = Instant::now();
                 if !prefix_restore_allowed && self.kv.is_some() {
                     let mut attrs = self.openai_attrs(request.ids);
                     attrs.insert(
@@ -218,6 +220,10 @@ impl StageOpenAiBackend {
                     );
                     cache_stats.status = "hit";
                     cache_stats.hit_kind = Some("chain_prefix");
+                }
+                if cache_stats.cached_prompt_tokens > 0 {
+                    cache_stats.restore_ms =
+                        prefix_restore_started.elapsed().as_secs_f64() * 1_000.0;
                 }
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
                 let mut chunk_index = 0usize;

@@ -263,20 +263,23 @@ fn handle_route_model_attempt_result(
     state: &mut RouteModelState,
 ) -> RouteModelDisposition {
     match attempt_result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
-            handle_delivered_route_model_attempt(
-                DeliveredRouteModelContext {
-                    node,
-                    model,
-                    target,
-                    selection,
-                    affinity,
-                    state,
-                },
-                status_code,
-                usage,
-            )
-        }
+        RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+        } => handle_delivered_route_model_attempt(
+            DeliveredRouteModelContext {
+                node,
+                model,
+                target,
+                selection,
+                affinity,
+                state,
+            },
+            status_code,
+            usage,
+            cache_cost,
+        ),
         RouteAttemptResult::RetryableContextOverflow => {
             handle_retryable_route_model_context(target)
         }
@@ -320,8 +323,9 @@ fn handle_delivered_route_model_attempt(
     context: DeliveredRouteModelContext<'_>,
     status_code: u16,
     usage: Option<TokenUsage>,
+    cache_cost: Option<CacheCostObservation>,
 ) -> RouteModelDisposition {
-    update_local_cache_evidence(&context, status_code, usage.as_ref());
+    update_local_cache_evidence(&context, status_code, usage.as_ref(), cache_cost);
     context.node.record_routed_request(
         Some(context.model),
         context.state.attempts,
@@ -345,6 +349,7 @@ fn update_local_cache_evidence(
     context: &DeliveredRouteModelContext<'_>,
     status_code: u16,
     usage: Option<&TokenUsage>,
+    cache_cost: Option<CacheCostObservation>,
 ) {
     if !(200..400).contains(&status_code) {
         return;
@@ -361,15 +366,24 @@ fn update_local_cache_evidence(
             .and_then(|usage| usage.prompt_tokens)
             .unwrap_or(cached_tokens)
             .saturating_sub(cached_tokens);
-        context.node.record_local_cache_hit(
+        context.node.record_local_cache_hit_with_cost(
             context.model,
             prefix_hash,
             u32::try_from(cached_tokens).unwrap_or(u32::MAX),
             u32::try_from(suffix).unwrap_or(u32::MAX),
-            0,
+            crate::network::affinity::LocalCacheCost {
+                queue_delay_micros: cache_cost.map_or(0, |cost| cost.queue_delay_micros),
+                restore_micros: cache_cost.map_or(0, |cost| cost.restore_micros),
+                prefill_micros_per_token: cache_cost.and_then(|cost| cost.prefill_micros_per_token),
+            },
         );
         return;
     }
+
+    context.node.observe_local_prefill_cost(
+        context.model,
+        cache_cost.and_then(|cost| cost.prefill_micros_per_token),
+    );
 
     let inventory_invalidated = context
         .node
@@ -523,6 +537,7 @@ mod tests {
                 cached_prompt_tokens: Some(0),
                 ..TokenUsage::default()
             }),
+            None,
         );
 
         assert_eq!(
@@ -559,6 +574,7 @@ mod tests {
                 cached_prompt_tokens: None,
                 ..TokenUsage::default()
             }),
+            None,
         );
 
         assert_eq!(
@@ -570,5 +586,44 @@ mod tests {
             affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
             Some(target)
         );
+    }
+
+    #[tokio::test]
+    async fn local_hit_records_measured_queue_restore_and_prefill_costs() {
+        let prefix_hash = 0xfeed_beef;
+        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(512),
+                ..TokenUsage::default()
+            }),
+            Some(CacheCostObservation {
+                queue_delay_micros: 4_000,
+                restore_micros: 8_000,
+                prefill_micros_per_token: Some(250),
+            }),
+        );
+
+        let entry = node
+            .cache_affinity_inventory
+            .lock()
+            .unwrap()
+            .probe_local("qwen", prefix_hash)
+            .expect("measured local evidence");
+        assert_eq!(entry.queue_delay_micros, 4_000);
+        assert_eq!(entry.restore_micros, 8_000);
+        assert_eq!(entry.prefill_micros_per_token, 250);
     }
 }

@@ -31,6 +31,11 @@ pub struct CacheAffinityEntry {
     pub tier: CacheTier,
     pub restore_micros: u64,
     pub queue_delay_micros: u64,
+    /// Measured node/model prefill service cost. Zero means the producer has
+    /// not collected a usable sample yet and receivers must use their bounded
+    /// fallback.
+    #[serde(default)]
+    pub prefill_micros_per_token: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +96,7 @@ struct Observation {
     tier: CacheTier,
     restore_micros: u64,
     queue_delay_micros: u64,
+    prefill_micros_per_token: u64,
     observed_at: Instant,
     order: u64,
 }
@@ -103,6 +109,7 @@ pub struct CacheInventory {
     next_order: u64,
     max_entries: usize,
     ttl: Duration,
+    model_prefill_micros_per_token: HashMap<String, u64>,
 }
 
 impl CacheInventory {
@@ -123,7 +130,31 @@ impl CacheInventory {
             tier: observation.tier,
             restore_micros: observation.restore_micros,
             queue_delay_micros: observation.queue_delay_micros,
+            prefill_micros_per_token: observation.prefill_micros_per_token,
         })
+    }
+
+    /// Calibrate this node/model from provider-reported prefill timing. The
+    /// bounded integer EWMA damps one-off scheduling and timer noise without
+    /// putting floating-point values on the gossip wire.
+    pub fn observe_prefill_cost(&mut self, model: &str, prefill_micros_per_token: u64) {
+        if prefill_micros_per_token == 0 {
+            return;
+        }
+        if !self.model_prefill_micros_per_token.contains_key(model)
+            && self.model_prefill_micros_per_token.len() >= self.max_entries
+        {
+            return;
+        }
+        self.model_prefill_micros_per_token
+            .entry(model.to_string())
+            .and_modify(|previous| {
+                *previous = previous
+                    .saturating_mul(3)
+                    .saturating_add(prefill_micros_per_token)
+                    / 4;
+            })
+            .or_insert(prefill_micros_per_token);
     }
 
     pub fn record_l1_hit(
@@ -132,6 +163,25 @@ impl CacheInventory {
         prefix_hash: u64,
         matched_tokens: u32,
         suffix_prefill_tokens: u32,
+        queue_delay_micros: u64,
+    ) {
+        self.record_l1_hit_with_cost(
+            model,
+            prefix_hash,
+            matched_tokens,
+            suffix_prefill_tokens,
+            0,
+            queue_delay_micros,
+        );
+    }
+
+    pub fn record_l1_hit_with_cost(
+        &mut self,
+        model: &str,
+        prefix_hash: u64,
+        matched_tokens: u32,
+        suffix_prefill_tokens: u32,
+        restore_micros: u64,
         queue_delay_micros: u64,
     ) {
         if matched_tokens == 0 {
@@ -146,8 +196,14 @@ impl CacheInventory {
             previous.matched_tokens != matched_tokens
                 || previous.suffix_prefill_tokens != suffix_prefill_tokens
                 || previous.tier != CacheTier::L1
-                || previous.restore_micros != 0
+                || previous.restore_micros != restore_micros
                 || previous.queue_delay_micros != queue_delay_micros
+                || previous.prefill_micros_per_token
+                    != self
+                        .model_prefill_micros_per_token
+                        .get(model)
+                        .copied()
+                        .unwrap_or_default()
         });
         if let Some(previous) = self.entries.remove(&key) {
             self.lru.remove(&previous.order);
@@ -159,8 +215,13 @@ impl CacheInventory {
                 matched_tokens,
                 suffix_prefill_tokens,
                 tier: CacheTier::L1,
-                restore_micros: 0,
+                restore_micros,
                 queue_delay_micros,
+                prefill_micros_per_token: self
+                    .model_prefill_micros_per_token
+                    .get(model)
+                    .copied()
+                    .unwrap_or_default(),
                 observed_at: Instant::now(),
                 order,
             },
@@ -209,6 +270,7 @@ impl CacheInventory {
                     tier: observation.tier,
                     restore_micros: observation.restore_micros,
                     queue_delay_micros: observation.queue_delay_micros,
+                    prefill_micros_per_token: observation.prefill_micros_per_token,
                 })
             })
             .collect();
@@ -273,6 +335,7 @@ impl Default for CacheInventory {
             next_order: 0,
             max_entries: CACHE_AFFINITY_MAX_ENTRIES,
             ttl: CACHE_AFFINITY_TTL,
+            model_prefill_micros_per_token: HashMap::new(),
         }
     }
 }
@@ -312,6 +375,7 @@ mod tests {
     #[test]
     fn advertisement_contains_only_salted_digest_and_positive_hits() {
         let mut inventory = CacheInventory::default();
+        inventory.observe_prefill_cost("model", 750);
         inventory.record_l1_hit("model", 0xfeed_beef, 512, 32, 10);
         inventory.record_l1_hit("model", 17, 0, 0, 0);
 
@@ -319,6 +383,7 @@ mod tests {
 
         assert_eq!(advertisement.entries.len(), 1);
         assert_eq!(advertisement.entries[0].matched_tokens, 512);
+        assert_eq!(advertisement.entries[0].prefill_micros_per_token, 750);
         assert_eq!(
             advertisement.probe("model", 0xfeed_beef, 1_001),
             Some(advertisement.entries[0].clone())
@@ -332,6 +397,22 @@ mod tests {
         let mut future = advertisement.clone();
         future.generated_at_unix_ms = CACHE_AFFINITY_MAX_FUTURE_SKEW_MS + 1_002;
         assert!(future.probe("model", 0xfeed_beef, 1_001).is_none());
+    }
+
+    #[test]
+    fn prefill_cost_uses_a_bounded_integer_ewma() {
+        let mut inventory = CacheInventory::default();
+        inventory.observe_prefill_cost("model", 1_000);
+        inventory.observe_prefill_cost("model", 2_000);
+        inventory.record_l1_hit("model", 7, 512, 32, 0);
+
+        assert_eq!(
+            inventory
+                .probe_local("model", 7)
+                .expect("local hit")
+                .prefill_micros_per_token,
+            1_250
+        );
     }
 
     #[test]

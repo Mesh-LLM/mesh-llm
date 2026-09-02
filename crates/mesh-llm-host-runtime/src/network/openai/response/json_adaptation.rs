@@ -1,6 +1,6 @@
 use super::common::{
-    ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
-    retryable_quality_result,
+    ResponseRetryPolicy, RouteAttemptResult, parse_cache_cost_from_json_body,
+    parse_token_usage_from_json_body, retryable_quality_result,
 };
 use super::probe::{
     ResponseBodyReadLimits, ResponseProbe, read_transformed_response_body,
@@ -55,6 +55,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     }
     let translated_body = response_adapter::translate_chat_completion_to_responses(body)?;
     let usage = parse_token_usage_from_json_body(&translated_body);
+    let cache_cost = parse_cache_cost_from_json_body(body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         translated_body.len()
@@ -66,6 +67,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage,
+        cache_cost,
     })
 }
 
@@ -103,6 +105,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         return Ok(result);
     }
     let usage = parse_token_usage_from_json_body(&normalized_body);
+    let cache_cost = parse_cache_cost_from_json_body(&normalized_body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         normalized_body.len()
@@ -114,6 +117,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage,
+        cache_cost,
     })
 }
 
@@ -217,6 +221,7 @@ mod tests {
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),
+                cache_cost: None,
             }
         );
         assert_eq!(
@@ -283,6 +288,7 @@ mod tests {
                     completion_tokens: Some(4),
                     total_tokens: Some(6),
                 }),
+                cache_cost: None,
             }
         );
     }

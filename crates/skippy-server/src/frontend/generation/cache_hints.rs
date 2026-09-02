@@ -239,6 +239,8 @@ pub(in crate::frontend) struct GenerationCacheStats {
         Option<crate::frontend::speculative::OpenAiSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
+    pub(in crate::frontend) queue_wait_ms: f64,
+    pub(in crate::frontend) restore_ms: f64,
 }
 
 impl Default for GenerationCacheStats {
@@ -255,6 +257,8 @@ impl Default for GenerationCacheStats {
             speculative_stats: None,
             prompt_ms: 0.0,
             predicted_ms: 0.0,
+            queue_wait_ms: 0.0,
+            restore_ms: 0.0,
         }
     }
 }

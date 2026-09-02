@@ -628,6 +628,7 @@ fn local_cache_affinity_to_proto(
                 },
                 restore_micros: entry.restore_micros,
                 queue_delay_micros: entry.queue_delay_micros,
+                prefill_micros_per_token: entry.prefill_micros_per_token,
             })
             .collect(),
     }
@@ -669,8 +670,9 @@ fn proto_cache_affinity_to_local(
                 matched_tokens: entry.matched_tokens,
                 suffix_prefill_tokens: entry.suffix_prefill_tokens,
                 tier: CacheTier::L1,
-                restore_micros: 0,
+                restore_micros: entry.restore_micros,
                 queue_delay_micros: entry.queue_delay_micros,
+                prefill_micros_per_token: entry.prefill_micros_per_token,
             })
         })
         .collect();

@@ -24,6 +24,7 @@ use openai_frontend::OpenAiResult;
 use openai_frontend::Usage;
 use serde_json::Value;
 use skippy_runtime::StageModelReader;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -35,7 +36,7 @@ pub(in crate::frontend) enum GenerationStreamEvent {
     Delta(String),
     ReasoningDelta(String),
     ToolCalls(Value),
-    Usage(Usage),
+    Usage(Usage, Option<BTreeMap<String, Value>>),
     Done(FinishReason),
 }
 
@@ -256,6 +257,7 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }),
         GenerationStreamEvent::ToolCalls(tool_calls) => Ok(ChatCompletionChunk {
             id: openai_frontend::completion_id("chatcmpl"),
@@ -274,10 +276,11 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }),
-        GenerationStreamEvent::Usage(usage) => {
-            Ok(ChatCompletionChunk::usage(model.to_string(), usage))
-        }
+        GenerationStreamEvent::Usage(usage, timings) => Ok(
+            ChatCompletionChunk::usage_with_timings(model.to_string(), usage, timings),
+        ),
         GenerationStreamEvent::Done(reason) => Ok(ChatCompletionChunk::done_with_reason(
             model.to_string(),
             reason,
@@ -295,7 +298,11 @@ pub(in crate::frontend) fn generation_event_to_completion_chunk(
             Ok(CompletionChunk::delta(model.to_string(), ""))
         }
         GenerationStreamEvent::ToolCalls(_) => Ok(CompletionChunk::delta(model.to_string(), "")),
-        GenerationStreamEvent::Usage(usage) => Ok(CompletionChunk::usage(model.to_string(), usage)),
+        GenerationStreamEvent::Usage(usage, timings) => Ok(CompletionChunk::usage_with_timings(
+            model.to_string(),
+            usage,
+            timings,
+        )),
         GenerationStreamEvent::Done(reason) => {
             Ok(CompletionChunk::done_with_reason(model.to_string(), reason))
         }
@@ -493,6 +500,8 @@ where
             speculative_stats: cache_stats.speculative_stats,
             prompt_ms: cache_stats.prompt_ms,
             predicted_ms: cache_stats.predicted_ms,
+            queue_wait_ms: cache_stats.queue_wait_ms,
+            restore_ms: cache_stats.restore_ms,
             text: self.text,
             finish_reason: self.finish_reason,
             detokenize_ms: self.metrics.detokenize_ms,
