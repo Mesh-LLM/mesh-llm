@@ -429,7 +429,9 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
     return failures
 
 
-def mask_cpp_comments(source: str) -> str:
+def executable_cpp(
+    source: str, preserved_string_literals: tuple[str, ...] = ()
+) -> str:
     masked = list(source)
     state = "code"
     index = 0
@@ -447,13 +449,6 @@ def mask_cpp_comments(source: str) -> str:
                 masked[index + 1] = " "
                 state = "code"
                 index += 1
-        elif state in {"single-quote", "double-quote"}:
-            if char == "\\":
-                index += 1
-            elif (state == "single-quote" and char == "'") or (
-                state == "double-quote" and char == '"'
-            ):
-                state = "code"
         elif char == "/" and next_char == "/":
             masked[index] = masked[index + 1] = " "
             state = "line-comment"
@@ -462,16 +457,40 @@ def mask_cpp_comments(source: str) -> str:
             masked[index] = masked[index + 1] = " "
             state = "block-comment"
             index += 1
-        elif char == "'":
-            state = "single-quote"
-        elif char == '"':
-            state = "double-quote"
+        else:
+            raw_match = None
+            if index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_"):
+                raw_match = re.match(
+                    r'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(', source[index:]
+                )
+            if raw_match is not None:
+                delimiter = raw_match.group(1)
+                close = f'){delimiter}"'
+                end = source.find(close, index + raw_match.end())
+                end = len(source) if end < 0 else end + len(close)
+                for mask_index in range(index, end):
+                    if source[mask_index] != "\n":
+                        masked[mask_index] = " "
+                index = end - 1
+            elif char in {"'", '"'}:
+                quote = char
+                end = index + 1
+                while end < len(source):
+                    if source[end] == "\\":
+                        end += 2
+                        continue
+                    end += 1
+                    if source[end - 1] == quote:
+                        break
+                literal = source[index:end]
+                preserve = quote == '"' and literal in preserved_string_literals
+                if not preserve:
+                    for mask_index in range(index, min(end, len(source))):
+                        if source[mask_index] != "\n":
+                            masked[mask_index] = " "
+                index = end - 1
         index += 1
     return "".join(masked)
-
-
-def executable_cpp(source: str) -> str:
-    return mask_cpp_comments(source)
 
 
 def mask_nested_blocks(source: str) -> str:
@@ -519,36 +538,10 @@ def extract_braced_block(source: str, header_pattern: str) -> str | None:
         return None
     open_brace = executable_source.find("{", match.start(), match.end())
     depth = 0
-    state = "code"
     index = open_brace
     while index < len(source):
-        char = source[index]
-        next_char = source[index + 1] if index + 1 < len(source) else ""
-        if state == "line-comment":
-            if char == "\n":
-                state = "code"
-        elif state == "block-comment":
-            if char == "*" and next_char == "/":
-                state = "code"
-                index += 1
-        elif state in {"single-quote", "double-quote"}:
-            if char == "\\":
-                index += 1
-            elif (state == "single-quote" and char == "'") or (
-                state == "double-quote" and char == '"'
-            ):
-                state = "code"
-        elif char == "/" and next_char == "/":
-            state = "line-comment"
-            index += 1
-        elif char == "/" and next_char == "*":
-            state = "block-comment"
-            index += 1
-        elif char == "'":
-            state = "single-quote"
-        elif char == '"':
-            state = "double-quote"
-        elif char == "{":
+        char = executable_source[index]
+        if char == "{":
             depth += 1
         elif char == "}":
             depth -= 1
@@ -565,8 +558,13 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
         return 0
 
     source = model_loading.read_text(encoding="utf-8")
-    function_start = source.find("static enum skippy_status skippy_finish_model_open(")
-    function_end = source.find("enum skippy_status skippy_model_open_impl(", function_start)
+    executable_source = executable_cpp(source)
+    function_start = executable_source.find(
+        "static enum skippy_status skippy_finish_model_open("
+    )
+    function_end = executable_source.find(
+        "enum skippy_status skippy_model_open_impl(", function_start
+    )
     if function_start < 0 or function_end < 0:
         print("Cannot locate Skippy runtime-slice admission function", file=sys.stderr)
         return 1
@@ -634,7 +632,9 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     for name, guard, message in invalid_argument_contracts:
         body = extract_braced_block(admission, guard)
         executable_body = (
-            mask_nested_blocks(executable_cpp(body)) if body is not None else ""
+            mask_nested_blocks(executable_cpp(body, (f'"{message}"',)))
+            if body is not None
+            else ""
         )
         required_failure_path = (
             r"llama_model_free\s*\(\s*model\s*\)\s*;"
@@ -655,6 +655,8 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             or first_return is None
             or expected_return is None
             or first_return.start() != expected_return.start()
+            or re.search(r"\b(?:if|for|while|switch|do|try|catch)\b", executable_body)
+            is not None
         ):
             missing_checks.append(name)
 
@@ -673,7 +675,9 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     for name, guard, message in boundary_contracts:
         body = extract_braced_block(admission, guard)
         executable_body = (
-            mask_nested_blocks(executable_cpp(body)) if body is not None else ""
+            mask_nested_blocks(executable_cpp(body, (f'"{message}"',)))
+            if body is not None
+            else ""
         )
         failure_path = (
             r"return\s+fail_boundary_load\s*\(\s*"
@@ -687,6 +691,8 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             or failure_match is None
             or first_return is None
             or first_return.start() != failure_match.start()
+            or re.search(r"\b(?:if|for|while|switch|do|try|catch)\b", executable_body)
+            is not None
         ):
             missing_checks.append(name)
     if missing_checks:

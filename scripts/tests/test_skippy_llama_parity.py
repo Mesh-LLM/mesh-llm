@@ -197,6 +197,50 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
         self.assertEqual(failures, 1)
 
+    def test_runtime_slice_admission_rejects_unbraced_invalid_argument_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(unbraced_invalid_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
+    def test_runtime_slice_admission_rejects_unbraced_boundary_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(unbraced_boundary_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
+    def test_runtime_slice_admission_rejects_raw_string_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(raw_string_controls=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 6)
+
     def test_runtime_slice_admission_accepts_architecture_independent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             llama_root = Path(tmp)
@@ -237,6 +281,9 @@ class SkippyLlamaParityTests(unittest.TestCase):
         nested_invalid_failure: bool = False,
         nested_boundary_failure: bool = False,
         early_return_failure: bool = False,
+        unbraced_invalid_failure: bool = False,
+        unbraced_boundary_failure: bool = False,
+        raw_string_controls: bool = False,
     ) -> str:
         checks = (
             "layer_end exceeds model layer count",
@@ -298,6 +345,12 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 f"{invalid_argument_failure(message)} }}",
                 *control_lines[1:],
             )
+        if unbraced_invalid_failure:
+            guard, message = invalid_argument_checks[0]
+            control_lines = (
+                f"if ({guard}) {{ if (false) {invalid_argument_failure(message)} }}",
+                *control_lines[1:],
+            )
         if controls:
             boundary_lines = (
                 "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
@@ -309,6 +362,12 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 boundary_lines = (
                     "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
                     f'if (false) {{ return fail_boundary_load("{checks[4]}"); }} }}',
+                    boundary_lines[1],
+                )
+            if unbraced_boundary_failure:
+                boundary_lines = (
+                    "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                    f'if (false) return fail_boundary_load("{checks[4]}"); }}',
                     boundary_lines[1],
                 )
         else:
@@ -325,6 +384,11 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 "#endif",
                 "#endif",
             )
+        if raw_string_controls:
+            fake_controls = "\n".join((*control_lines, *boundary_lines))
+            extra = f'const char * fake = R"FAKE({fake_controls})FAKE";'
+            control_lines = ()
+            boundary_lines = ()
         return "\n".join(
             (
                 "static enum skippy_status skippy_finish_model_open(",
