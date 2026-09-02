@@ -2775,15 +2775,15 @@
   ],
   "crates/mesh-llm/src/lib.rs": [
     {
-      "line": 289,
+      "line": 302,
       "macro_name": "print!"
     },
     {
-      "line": 341,
+      "line": 400,
       "macro_name": "print!"
     },
     {
-      "line": 342,
+      "line": 401,
       "macro_name": "eprintln!"
     }
   ],
