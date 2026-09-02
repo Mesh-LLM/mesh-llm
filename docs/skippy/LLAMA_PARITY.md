@@ -28,10 +28,9 @@ enough to promote.
    scripts/skippy-llama-parity.py validate
    ```
 
-   When `.deps/llama.cpp` is prepared, validation also checks that every
-   staged graph implementation is admitted by the Skippy stage ABI allowlist
-   and that every allowlisted family has a staged graph or shared staged
-   implementation.
+   When `.deps/llama.cpp` is prepared, validation also rejects architecture-
+   named runtime-slice admission gates and requires the structural and realized
+   graph-boundary checks that make staged loading fail closed.
 
 2. See which cheap representatives are not downloaded yet:
 
@@ -256,8 +255,8 @@ scripts/download-skippy-parity-candidates.sh --dry-run
 
 `scripts/skippy-llama-parity.py validate` now requires every pinned
 llama.cpp `src/models/*.cpp` implementation to have a manifest row, and it
-checks stage ABI allowlist drift when the prepared llama.cpp checkout is
-available. Current classification:
+checks architecture-independent runtime-slice admission when the prepared
+llama.cpp checkout is available. Current classification:
 
 | Status | Count | Meaning |
 | --- | ---: | --- |
@@ -387,7 +386,7 @@ Rows with distributed evidence call out the second backend explicitly.
 | `mistral3` | `lmstudio-community/Ministral-3-3B-Instruct-2512-GGUF` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 88.40x cache-hit speedup |
 | `baichuan` | see `target/family-certify/llama-parity-baichuan-runtime-slice-1` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 130.11x cache-hit speedup |
 | `phi` | see `target/family-certify/llama-parity-phi-runtime-slice-1` | `single-step`, `chain`, and f16 dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 2645.30x cache-hit speedup |
-| `phimoe` | see `target/family-certify/llama-parity-phimoe-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed after PhiMoE ABI allowlist support | validated | accepted | `ResidentKv` native-sequence remap cache smoke passed |
+| `phimoe` | see `target/family-certify/llama-parity-phimoe-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed after PhiMoE staged-graph support | validated | accepted | `ResidentKv` native-sequence remap cache smoke passed |
 | `bloom` | see `target/family-certify/llama-parity-bloom-runtime-slice-1` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 328.66x cache-hit speedup |
 | `gptneox` | see `target/family-certify/llama-parity-gptneox-runtime-slice-1` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 282.70x cache-hit speedup |
 | `stablelm` | see `target/family-certify/llama-parity-stablelm-runtime-slice-1` | `single-step`, `chain`, and f16 dtype matrix passed | rejected | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 211.80x cache-hit speedup |
@@ -406,7 +405,7 @@ Rows with distributed evidence call out the second backend explicitly.
 | `internlm2` | see `target/family-certify/llama-parity-internlm2-runtime-slice-1` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` borrowed-hit smoke passed, 64-token prefix, 80.78x cache-hit speedup |
 | `granite` | see `target/family-certify/llama-parity-dense-tranche-2-granite-fix2` and `/tmp/skippy-cache-correctness-dense-medium` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` cache smoke passed; fixed staged activation rescaling |
 | `granite_hybrid` | see `target/family-certify/llama-parity-granite-hybrid-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed | validated | rejected-too-large for full-state | `KvRecurrent` cache smoke passed; fixed Granite-Hybrid graph stage filtering |
-| `granite_moe` | see `target/family-certify/llama-parity-granite-moe-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` cache smoke passed on tiny random layout probe; fixed Granite-MoE ABI allowlist |
+| `granite_moe` | see `target/family-certify/llama-parity-granite-moe-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` cache smoke passed on tiny random layout probe; fixed Granite-MoE staged-graph support |
 | `hunyuan_dense` | see `target/family-certify/llama-parity-hunyuan-dense-runtime-slice-2` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` cache smoke passed; fixed Hunyuan-Dense graph stage filtering |
 | `hunyuan_moe` | see `target/family-certify/llama-parity-hunyuan-moe-runtime-slice-1` | `single-step`, `chain`, and dtype matrix passed | validated | accepted | `ResidentKv` cache smoke passed on real A13B MoE GGUF; fixed Hunyuan-MoE graph stage filtering |
 | `kimi_linear` | see `target/family-certify/llama-parity-kimi-linear-20260507h` | `single-step`, `chain`, and dtype matrix passed after sparse K-only MLA KV export/import support | validated | rejected-too-large for full-state | `KvRecurrent` handoff passed with source/target sequence remap, suffix prefill, repeated hit stability, 64,512 KV bytes, and 44,892,668 recurrent bytes |
@@ -584,9 +583,9 @@ inference.
 - `granite_hybrid` required a llama.cpp stage-filter fix for its hybrid graph
   and uses `KvRecurrent`; the exact full-state payload is too large to move as a
   production cache value.
-- `granite_moe` reuses the Granite graph and only needed the skippy ABI
-  allowlist. Current evidence uses a tiny random GGUF, so it certifies graph and
-  tensor-layout support rather than model quality.
+- `granite_moe` reuses the Granite graph. Current evidence uses a tiny random
+  GGUF, so it certifies graph and tensor-layout support rather than model
+  quality.
 - `phi2` required a llama.cpp stage-filter fix for filtered fused-QKV tensors:
   when a merged QKV weight is skipped for a slice, the matching merged QKV bias
   must also be accounted for instead of falling back to separate Q/K/V tensors.

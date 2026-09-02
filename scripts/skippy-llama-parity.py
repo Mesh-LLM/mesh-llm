@@ -424,84 +424,60 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
                 file=sys.stderr,
             )
 
-    failures += validate_stage_abi_allowlist()
+    failures += validate_runtime_slice_admission()
 
     return failures
 
 
-def validate_stage_abi_allowlist() -> int:
-    llama_src = ROOT / ".deps/llama.cpp/src"
-    skippy_cpp = llama_src / "skippy.cpp"
-    arch_cpp = llama_src / "llama-arch.cpp"
-    models_dir = llama_src / "models"
-    if not skippy_cpp.exists() or not arch_cpp.exists() or not models_dir.is_dir():
+def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
+    llama_root = llama_root or ROOT / ".deps/llama.cpp"
+    model_loading = llama_root / "src/skippy/model_loading.cpp"
+    if not model_loading.exists():
         return 0
 
-    def normalized(name: str) -> str:
-        return name.replace("_", "").replace("-", "")
+    source = model_loading.read_text(encoding="utf-8")
+    function_start = source.find("static enum skippy_status skippy_finish_model_open(")
+    function_end = source.find("enum skippy_status skippy_model_open_impl(", function_start)
+    if function_start < 0 or function_end < 0:
+        print("Cannot locate Skippy runtime-slice admission function", file=sys.stderr)
+        return 1
 
-    arch_names: dict[str, str] = {}
-    for match in re.finditer(
-        r'\{\s*LLM_ARCH_([A-Z0-9_]+),\s+"([^"]+)"\s*\}',
-        arch_cpp.read_text(encoding="utf-8"),
-    ):
-        arch_names[match.group(1).lower()] = match.group(2)
-
-    allowed = {
-        arch_names.get(match.group(1).lower(), match.group(1).lower())
-        for match in re.finditer(
-            r"model->arch != LLM_ARCH_([A-Z0-9_]+)",
-            skippy_cpp.read_text(encoding="utf-8"),
-        )
-    }
-    if "gpt-oss" in allowed:
-        allowed.add("openai-moe")
-
-    stage_hooked = set()
-    for path in models_dir.glob("*.cpp"):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if "skippy_graph_get_filter" in text and "stage_boundary" in text:
-            stage_hooked.add(path.stem)
-
-    # llama.cpp dispatches these architectures through another staged graph, or
-    # uses a model file name that differs from the architecture string.
-    stage_hooked.update(
-        {
-            "gpt-oss",
-            "deepseek2-ocr",
-            "mamba2",
-            "granite_moe",
-            "hunyuan_dense",
-            "phimoe",
-            "lfm2moe",
-            "minicpm",
-            "mistral4",
-            "nemotron_h_moe",
-        }
+    admission = source[function_start:function_end]
+    validation_end = admission.find("skippy_model * stage_model")
+    if validation_end < 0:
+        print("Cannot locate Skippy runtime-slice validation boundary", file=sys.stderr)
+        return 1
+    validation = admission[:validation_end]
+    architecture_guards = sorted(
+        set(re.findall(r"model->arch\s*[!=]=\s*LLM_ARCH_([A-Z0-9_]+)", validation))
     )
-
-    allowed_by_norm = {normalized(name): name for name in allowed}
-    hooked_by_norm = {normalized(name): name for name in stage_hooked}
-    allowed_without_hook = sorted(set(allowed_by_norm) - set(hooked_by_norm))
-    hooked_but_not_allowed = sorted(set(hooked_by_norm) - set(allowed_by_norm))
-
     failures = 0
-    if allowed_without_hook:
-        failures += len(allowed_without_hook)
+    if architecture_guards:
+        failures += len(architecture_guards)
         print(
-            "Stage ABI allowlist contains architectures without detected staged graph support:",
+            "Runtime-slice admission must not depend on a model-architecture allowlist:",
             file=sys.stderr,
         )
-        for key in allowed_without_hook:
-            print(f"  - {allowed_by_norm[key]}", file=sys.stderr)
-    if hooked_but_not_allowed:
-        failures += len(hooked_but_not_allowed)
+        for architecture in architecture_guards:
+            print(f"  - {architecture}", file=sys.stderr)
+
+    required_realized_checks = (
+        "layer_end exceeds model layer count",
+        "only the first runtime slice may include token embeddings",
+        "the first runtime slice must include token embeddings",
+        "only the final runtime slice may include output tensors",
+        "stage graph did not expose a stable output activation boundary",
+        "stage graph did not expose a stable input activation boundary",
+    )
+    missing_checks = [check for check in required_realized_checks if check not in admission]
+    if missing_checks:
+        failures += len(missing_checks)
         print(
-            "Staged graph implementations are missing from the stage ABI allowlist:",
+            "Runtime-slice admission is missing realized-contract checks:",
             file=sys.stderr,
         )
-        for key in hooked_but_not_allowed:
-            print(f"  - {hooked_by_norm[key]}", file=sys.stderr)
+        for check in missing_checks:
+            print(f"  - {check}", file=sys.stderr)
 
     return failures
 
