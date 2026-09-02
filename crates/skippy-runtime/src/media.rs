@@ -225,6 +225,7 @@ impl StageModel {
         if n_past < 0 {
             return Err(anyhow!("skippy session is not initialized"));
         }
+        let seq_id = session.native_sequence_id()?;
         let n_batch = unsafe { skippy_ffi::skippy_session_batch_size(session.raw) };
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
@@ -262,7 +263,7 @@ impl StageModel {
                 lctx,
                 chunks.raw,
                 n_past,
-                0,
+                seq_id,
                 n_batch,
                 true,
                 &mut new_n_past,
@@ -409,6 +410,7 @@ impl StageModel {
         if n_past < 0 {
             return Err(anyhow!("skippy session is not initialized"));
         }
+        let seq_id = session.native_sequence_id()?;
         let n_batch = unsafe { skippy_ffi::skippy_session_batch_size(session.raw) };
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
@@ -524,7 +526,7 @@ impl StageModel {
                     lctx,
                     chunk,
                     n_past,
-                    0,
+                    seq_id,
                     n_batch,
                     false,
                     &mut new_n_past,

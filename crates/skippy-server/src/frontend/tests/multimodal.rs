@@ -231,6 +231,13 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
 }
 
 fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompletionRequest> {
+    multimodal_chat_request_with_max_tokens(fixture, fixture.max_tokens)
+}
+
+fn multimodal_chat_request_with_max_tokens(
+    fixture: &MultimodalSmokeFixture,
+    max_tokens: u32,
+) -> Result<ChatCompletionRequest> {
     let image = fs::read(&fixture.image_path)
         .with_context(|| format!("read smoke image {}", fixture.image_path.display()))?;
     let mime_type = match fixture
@@ -255,13 +262,31 @@ fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompl
                     {"type": "image_url", "image_url": {"url": format!("data:{mime_type};base64,{encoded}")}}
                 ]
             }],
-            "max_tokens": fixture.max_tokens,
+            "max_tokens": max_tokens,
             "temperature": 0.0
         }))
         .context("build multimodal smoke request")
 }
 
-fn assert_nonempty_chat_response(response: ChatCompletionResponse) {
+fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
+    serde_json::from_value(json!({
+        "model": "mm-smoke",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image briefly."},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64,aGVsbG8="
+                }}
+            ]
+        }],
+        "max_tokens": 1,
+        "temperature": 0.0
+    }))
+    .expect("malformed multimodal request should deserialize")
+}
+
+fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
     let content = response
         .choices
         .first()
@@ -312,7 +337,86 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
         .chat_completion(multimodal_chat_request(&fixture)?)
         .await?;
 
-    assert_nonempty_chat_response(response);
+    assert_nonempty_chat_response(&response);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_multimodal_local_prefill_failure_releases_lane_when_fixture_is_set() -> Result<()> {
+    let Some(fixture) = multimodal_smoke_fixture()? else {
+        return Ok(());
+    };
+    let config = multimodal_stage_config(
+        &fixture,
+        "stage-0",
+        0,
+        0,
+        fixture.layer_end,
+        available_loopback_addr()?,
+    );
+    let backend = local_openai_backend(config)?;
+
+    for attempt in 0..2 {
+        let result = backend
+            .chat_completion(malformed_multimodal_chat_request())
+            .await;
+        assert!(
+            result.is_err(),
+            "malformed media prefill attempt {attempt} unexpectedly succeeded"
+        );
+
+        let stats = backend
+            .runtime
+            .lock()
+            .expect("runtime mutex poisoned")
+            .session_stats();
+        assert_eq!(
+            stats.active_sessions, 0,
+            "failed multimodal prefill attempt {attempt} leaked an active lane: {stats:?}"
+        );
+        assert_eq!(
+            stats.tracked_token_counts, 0,
+            "failed multimodal prefill attempt {attempt} leaked session bookkeeping: {stats:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_multimodal_length_limit_then_next_image_uses_clean_lane_when_fixture_is_set()
+-> Result<()> {
+    let Some(fixture) = multimodal_smoke_fixture()? else {
+        return Ok(());
+    };
+    let mut config = multimodal_stage_config(
+        &fixture,
+        "stage-0",
+        0,
+        0,
+        fixture.layer_end,
+        available_loopback_addr()?,
+    );
+    config.lane_count = 2;
+    let backend = local_openai_backend(config)?;
+    backend
+        .runtime
+        .lock()
+        .expect("runtime mutex poisoned")
+        .prewarm_idle_sessions(2)?;
+
+    let limited = backend
+        .chat_completion(multimodal_chat_request_with_max_tokens(&fixture, 1)?)
+        .await?;
+    assert_eq!(
+        limited.choices[0].finish_reason,
+        Some(FinishReason::Length),
+        "one-token multimodal generation should finish by length"
+    );
+
+    let next = backend
+        .chat_completion(multimodal_chat_request(&fixture)?)
+        .await?;
+    assert_nonempty_chat_response(&next);
     Ok(())
 }
 
@@ -437,7 +541,8 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         .await;
     stage1_handle.shutdown().await?;
 
-    assert_nonempty_chat_response(response?);
+    let response = response?;
+    assert_nonempty_chat_response(&response);
     Ok(())
 }
 
