@@ -933,16 +933,7 @@ impl Node {
         }
         let frame = stage_control_request_to_proto(self.endpoint.id(), request)?;
         let response = tokio::time::timeout(timeout, async {
-            anyhow::ensure!(
-                self.peer_supports_skippy_subprotocol_feature(
-                    peer_id,
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-                )
-                .await,
-                "stage peer {} does not advertise the required generation-{} control bundle",
-                peer_id.fmt_short(),
-                skippy_protocol::STAGE_PROTOCOL_GENERATION
-            );
+            self.ensure_current_stage_control_peer(peer_id).await?;
             let (mut send, mut recv) = self
                 .open_skippy_stage_mesh_stream(peer_id, skippy_protocol::STAGE_STREAM_CONTROL)
                 .await?;

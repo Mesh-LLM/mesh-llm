@@ -105,6 +105,36 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
     }
 }
 
+#[tokio::test]
+async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0xD2);
+    let mut peer = make_test_peer(peer_id, Some(10), 8);
+    peer.stage_protocol_generation_supported = false;
+    node.state.lock().await.peers.insert(peer_id, peer);
+
+    let error = node
+        .ensure_current_stage_control_peer(peer_id)
+        .await
+        .expect_err("legacy peer must not reach stage-control execution");
+    assert!(
+        error
+            .to_string()
+            .contains("does not advertise the required generation-7 control bundle"),
+        "unexpected error: {error:#}"
+    );
+
+    node.state
+        .lock()
+        .await
+        .peers
+        .get_mut(&peer_id)
+        .expect("test peer must remain present")
+        .stage_protocol_generation_supported = true;
+    node.ensure_current_stage_control_peer(peer_id).await?;
+    Ok(())
+}
+
 fn test_preparation_status(
     state: crate::inference::skippy::StagePreparationState,
 ) -> crate::inference::skippy::StagePreparationStatus {

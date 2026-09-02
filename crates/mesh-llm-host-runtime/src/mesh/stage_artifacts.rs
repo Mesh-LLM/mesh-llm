@@ -212,6 +212,7 @@ impl Node {
         use prost::Message as _;
 
         let frame = self.decode_stage_control_request(remote, &mut recv).await?;
+        self.ensure_current_stage_control_peer(remote).await?;
         let request_kind = Self::stage_control_request_kind(&frame);
         tracing::debug!(
             "handle_stage_control: received {request_kind} from {}",
@@ -387,6 +388,23 @@ impl Node {
             }
             _ => false,
         }
+    }
+
+    pub(crate) async fn ensure_current_stage_control_peer(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.peer_supports_skippy_subprotocol_feature(
+                peer_id,
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+            )
+            .await,
+            "stage peer {} does not advertise the required generation-{} control bundle",
+            peer_id.fmt_short(),
+            skippy_protocol::STAGE_PROTOCOL_GENERATION
+        );
+        Ok(())
     }
 
     pub(crate) async fn fetch_stage_package_artifacts_from_peer(
