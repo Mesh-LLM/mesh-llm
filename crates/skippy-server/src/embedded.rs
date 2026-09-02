@@ -8,11 +8,11 @@ use anyhow::{Context, Result};
 use axum::Router;
 use openai_frontend::{OpenAiBackend, OpenAiFrontendConfig, OpenAiLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
-use skippy_runtime::MtpSource;
+use skippy_runtime::{ActivationBoundaryDesc, MtpSource};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
-    binary_transport::{BinaryStageOptions, serve_binary_stage_with_shutdown},
+    binary_transport::BinaryStageOptions,
     config::validate_config,
     frontend::{EmbeddedOpenAiArgs, serve_embedded_openai_with_shutdown},
     http::{StageHttpOptions, serve_stage_http_with_shutdown},
@@ -67,6 +67,8 @@ pub struct EmbeddedServerStatus {
     pub started_at_unix_nanos: i64,
     pub stopped_at_unix_nanos: Option<i64>,
     pub last_error: Option<String>,
+    pub input_activation_boundary: Option<ActivationBoundaryDesc>,
+    pub output_activation_boundary: Option<ActivationBoundaryDesc>,
 }
 
 #[derive(Clone)]
@@ -115,6 +117,20 @@ struct RuntimeHandleState {
 }
 
 impl SkippyRuntimeHandle {
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .input_activation_boundary()
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.runtime
+            .lock()
+            .expect("runtime lock poisoned")
+            .output_activation_boundary()
+    }
+
     /// Assemble a ready handle around an already-loaded runtime.
     ///
     /// Shared by both loaders so the stats cache is primed exactly once, in one
@@ -323,6 +339,8 @@ struct ServerHandleState {
     started_at_unix_nanos: i64,
     stopped_at_unix_nanos: Option<i64>,
     last_error: Option<String>,
+    input_activation_boundary: Option<ActivationBoundaryDesc>,
+    output_activation_boundary: Option<ActivationBoundaryDesc>,
 }
 
 impl EmbeddedServerHandle {
@@ -335,6 +353,8 @@ impl EmbeddedServerHandle {
             started_at_unix_nanos: status.started_at_unix_nanos,
             stopped_at_unix_nanos: status.stopped_at_unix_nanos,
             last_error: status.last_error.clone(),
+            input_activation_boundary: status.input_activation_boundary,
+            output_activation_boundary: status.output_activation_boundary,
         }
     }
 
@@ -408,6 +428,8 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
         started_at_unix_nanos: now_unix_nanos(),
         stopped_at_unix_nanos: None,
         last_error: None,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
@@ -490,18 +512,25 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
         started_at_unix_nanos: now_unix_nanos(),
         stopped_at_unix_nanos: None,
         last_error: None,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
     let runtime = tokio::runtime::Handle::current();
     let task = tokio::task::spawn_blocking(move || {
-        {
-            let mut status = task_status.lock().expect("server status lock poisoned");
-            status.state = EmbeddedState::Ready;
-        }
-        let result = runtime.block_on(serve_binary_stage_with_shutdown(options, async move {
-            let _ = shutdown_rx.await;
-        }));
+        let boundary_status = task_status.clone();
+        let result = runtime.block_on(
+            crate::binary_transport::serve_binary_stage_with_shutdown_and_boundary_observer(
+                options,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+                move |input, output| {
+                    publish_binary_stage_boundaries(&boundary_status, input, output);
+                },
+            ),
+        );
         finish_server_status(&task_status, &result);
         result
     });
@@ -510,6 +539,17 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
         shutdown: Some(shutdown_tx),
         task: Some(task),
     }
+}
+
+fn publish_binary_stage_boundaries(
+    status: &Arc<Mutex<ServerHandleState>>,
+    input: Option<ActivationBoundaryDesc>,
+    output: Option<ActivationBoundaryDesc>,
+) {
+    let mut status = status.lock().expect("server status lock poisoned");
+    status.input_activation_boundary = input;
+    status.output_activation_boundary = output;
+    status.state = EmbeddedState::Ready;
 }
 
 fn spawn_async_server<F, Fut>(
@@ -528,6 +568,8 @@ where
         started_at_unix_nanos: now_unix_nanos(),
         stopped_at_unix_nanos: None,
         last_error: None,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
     }));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_status = status.clone();
@@ -610,6 +652,43 @@ mod tests {
     use skippy_protocol::LoadMode;
 
     use super::*;
+
+    #[test]
+    fn binary_stage_cannot_be_ready_before_boundaries_are_published() {
+        let status = Arc::new(Mutex::new(ServerHandleState {
+            name: "binary-stage",
+            bind_addr: "127.0.0.1:0".parse().expect("bind address"),
+            state: EmbeddedState::Starting,
+            started_at_unix_nanos: 1,
+            stopped_at_unix_nanos: None,
+            last_error: None,
+            input_activation_boundary: None,
+            output_activation_boundary: None,
+        }));
+        let boundary = ActivationBoundaryDesc {
+            version: 1,
+            ggml_type: skippy_runtime::GGML_TYPE_F32,
+            layout: 1,
+            elements_per_token: 1024,
+            bytes_per_token: 4096,
+            required_frame_flags: 0,
+            required_sidebands: 0,
+        };
+
+        {
+            let status = status.lock().expect("server status lock poisoned");
+            assert_eq!(status.state, EmbeddedState::Starting);
+            assert!(status.input_activation_boundary.is_none());
+            assert!(status.output_activation_boundary.is_none());
+        }
+
+        publish_binary_stage_boundaries(&status, Some(boundary), Some(boundary));
+
+        let status = status.lock().expect("server status lock poisoned");
+        assert_eq!(status.state, EmbeddedState::Ready);
+        assert_eq!(status.input_activation_boundary, Some(boundary));
+        assert_eq!(status.output_activation_boundary, Some(boundary));
+    }
 
     /// A ready handle over a modelless runtime.
     ///

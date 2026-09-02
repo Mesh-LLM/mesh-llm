@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+mod capacity_budget;
 mod content_attestation;
 
 fn lifecycle_config() -> plugin::MeshConfig {
@@ -1084,16 +1085,6 @@ fn stage_load_model_path_uses_local_path_outside_layer_packages() {
 }
 
 #[test]
-fn skippy_stage_activation_width_rejects_i32_overflow() {
-    let error = skippy_stage_activation_width(i32::MAX as u32 + 1, "overflow-model")
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("exceeds skippy stage ABI limit"));
-    assert!(error.contains("overflow-model"));
-}
-
-#[test]
 fn split_participant_signature_includes_vram_for_stability() {
     let node_id = make_id(9);
     let first = vec![SplitParticipant::new(node_id, 16_000_000_000, None)];
@@ -1352,6 +1343,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
         slots: 1,

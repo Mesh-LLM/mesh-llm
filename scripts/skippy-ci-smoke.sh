@@ -690,7 +690,6 @@ echo "smoke: prompt exact-prefix hit and live-session reuse"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   "$STAGE_SERVER_BIN" serve-binary \
     --config "$PROMPT_CONFIG" \
-    --activation-width 2048 \
     --max-inflight 4 \
     >"$PROMPT_LOG" 2>&1 &
 SERVER_PID="$!"

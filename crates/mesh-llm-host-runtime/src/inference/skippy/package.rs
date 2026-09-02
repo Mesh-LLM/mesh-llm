@@ -527,8 +527,6 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
     let info = skippy_runtime::package::inspect_layer_package(&local_ref)
         .with_context(|| format!("inspect layer package {package_ref}"))?;
 
-    let activation_width =
-        required_layer_package_activation_width(package_ref, info.activation_width)?;
     let source_model_bytes = info
         .source_model_bytes
         .unwrap_or_else(|| info.layers.iter().map(|l| l.artifact_bytes).sum::<u64>());
@@ -548,7 +546,7 @@ pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIde
         source_files: Vec::new(),
         layer_weight_bytes,
         layer_count: info.layer_count,
-        activation_width,
+        activation_width: 0,
         tensor_count: info.layers.iter().map(|l| l.tensor_count as u64).sum(),
         generation: info.generation,
     })
@@ -623,17 +621,6 @@ fn canonical_layer_package_ref(package_ref: &str, local_ref: &str) -> String {
     hf_ref_from_cache_path(local_ref)
         .or_else(|| hf_ref_from_cache_path(package_ref))
         .unwrap_or_else(|| package_ref.to_string())
-}
-
-fn required_layer_package_activation_width(
-    package_ref: &str,
-    activation_width: Option<u32>,
-) -> Result<u32> {
-    activation_width.with_context(|| {
-        format!(
-            "layer package {package_ref} is missing activation_width; rebuild the package manifest"
-        )
-    })
 }
 
 #[cfg(test)]
@@ -866,17 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn layer_package_activation_width_is_required() {
-        let error =
-            required_layer_package_activation_width("hf://meshllm/Qwen3-layers@abc123", None)
-                .unwrap_err()
-                .to_string();
-
-        assert!(error.contains("missing activation_width"));
-        assert!(error.contains("rebuild the package manifest"));
-    }
-
-    #[test]
     fn package_layer_weights_include_shared_model_bytes_at_endpoints() {
         let info = skippy_runtime::package::LayerPackageInfo {
             package_dir: PathBuf::from("/models/package"),
@@ -886,7 +862,6 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(120),
             layer_count: 2,
-            activation_width: Some(1024),
             generation: None,
             projectors: Vec::new(),
             layers: vec![
@@ -918,7 +893,6 @@ mod tests {
             source_model_sha256: "source".to_string(),
             source_model_bytes: Some(70),
             layer_count: 2,
-            activation_width: Some(1024),
             generation: None,
             projectors: Vec::new(),
             layers: vec![

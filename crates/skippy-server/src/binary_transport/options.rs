@@ -16,7 +16,6 @@ pub struct BinaryStageOptions {
     pub config: StageConfig,
     pub topology: Option<StageTopology>,
     pub bind_addr: SocketAddr,
-    pub activation_width: i32,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -63,9 +62,6 @@ pub struct EmbeddedOpenAiStageOptions {
 
 impl BinaryStageOptions {
     pub fn from_cli_args(args: ServeBinaryArgs) -> Result<Self> {
-        if args.activation_width <= 0 {
-            bail!("activation_width must be greater than zero");
-        }
         if args.openai_generation_concurrency == Some(0) {
             bail!("--openai-generation-concurrency must be greater than zero");
         }
@@ -145,7 +141,6 @@ impl BinaryStageOptions {
             config,
             topology,
             bind_addr,
-            activation_width: args.activation_width,
             metrics_otlp_grpc: args.metrics_otlp_grpc,
             telemetry_queue_capacity: args.telemetry_queue_capacity,
             telemetry_level: args.telemetry_level,
@@ -295,8 +290,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
             "--openai-speculative-config",
@@ -335,8 +328,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
             "--openai-generation-concurrency",
@@ -383,8 +374,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
             "--openai-speculative-config",
@@ -427,8 +416,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
         ])
         .expect("parse binary stage CLI");
         let Command::ServeBinary(args) = cli.command else {

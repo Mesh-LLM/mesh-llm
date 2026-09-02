@@ -67,7 +67,6 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: 4096,
         ctx_size: 8192,
         lane_count: 4,
         continuous_batching: true,
@@ -339,7 +338,8 @@ pub(super) fn runtime_status_for_stage(
         layer_end: stage.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: 896,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,
@@ -368,7 +368,7 @@ pub(super) fn local_stage(
 }
 
 #[tokio::test]
-async fn split_generation_load_settings_consumes_resolved_skippy_config() {
+async fn split_generation_load_settings_preserves_unpinned_budget_and_resolved_config() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
@@ -458,7 +458,7 @@ stop = ["END"]
         ],
     );
 
-    let spec = SplitGenerationLoadSpec {
+    let mut spec = SplitGenerationLoadSpec {
         node: &node,
         mesh_config: &mesh_config,
         model_ref: "served-qwen",
@@ -470,6 +470,7 @@ stop = ["END"]
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: Some(6_000_000_000),
         pinned_gpu: None,
         device_override: None,
         slots: 4,
@@ -490,8 +491,9 @@ stop = ["END"]
         .await
         .expect("split settings should resolve");
 
+    assert_eq!(split_allocatable_memory_bytes(&spec), Some(6_000_000_000));
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
-    assert_eq!(settings.activation_width, 2048);
+    assert_eq!(settings.embedded_openai.activation_width, 0);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
     assert_eq!(settings.runtime_options.config.ctx_size, 8192);
@@ -534,6 +536,12 @@ stop = ["END"]
     );
     assert_eq!(settings.embedded_openai.speculative_window, 7);
     assert_eq!(settings.embedded_openai.draft_n_gpu_layers, Some(11));
+    spec.capacity_budget_bytes = Some(0);
+    assert_eq!(
+        split_allocatable_memory_bytes(&spec),
+        None,
+        "a zero optional budget is unset when no pinned-device fallback exists"
+    );
 }
 
 /// Split stage loading must resolve with the compact metadata scanned during
@@ -600,6 +608,7 @@ async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
         projector_path: None,
         ctx_size: 4096,
         compact_meta: &incompatible_meta,
+        capacity_budget_bytes: None,
         pinned_gpu: None,
         device_override: None,
         slots: 1,
@@ -853,6 +862,15 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
+        version: 1,
+        ggml_type: 0,
+        layout: 1,
+        elements_per_token: 4096,
+        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
+        required_frame_flags: 0,
+        required_sidebands: 0,
+    });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -872,7 +890,8 @@ pub(super) fn test_stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: load.activation_width as u32,
+        input_activation_boundary: boundary.filter(|_| load.layer_start > 0),
+        output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -885,6 +904,16 @@ pub(super) fn test_stage_status_from_load(
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
     }
+}
+
+#[test]
+fn staged_status_fixture_exposes_input_boundary_for_middle_consumers() {
+    let middle = stage_load_request(LoadMode::RuntimeSlice);
+    assert!(middle.layer_start > 0);
+    assert!(middle.upstream.is_none());
+
+    let status = test_stage_status_from_load(&middle, skippy::StageRuntimeState::Ready);
+    assert!(status.input_activation_boundary.is_some());
 }
 
 pub(super) fn test_stage_status_from_stop(
@@ -909,7 +938,8 @@ pub(super) fn test_stage_status_from_stop(
         layer_end: 0,
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,

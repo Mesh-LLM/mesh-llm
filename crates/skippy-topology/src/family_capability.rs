@@ -1543,7 +1543,11 @@ fn capability_for_request(
 ) -> FamilyCapabilityRecord {
     let stored_layer_count = capability.layer_count;
     capability.layer_count = layer_count;
-    if activation_width != 0 {
+    // This is a per-request fallback, not a persistent latch: the reviewed
+    // record is deserialized into a fresh capability above on every lookup.
+    // A reviewed nonzero width therefore always remains authoritative, while
+    // a reviewed zero width can use the current package estimate on each call.
+    if capability.activation_width == 0 && activation_width != 0 {
         capability.activation_width = activation_width;
     }
     for range in &mut capability.recurrent_ranges {

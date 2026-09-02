@@ -223,6 +223,8 @@ pub enum PlanReasonCode {
 pub struct FamilyCapabilityRecord {
     pub family_id: String,
     pub layer_count: u32,
+    /// Scalar pre-load estimate used only for topology diagnostics and wire budgeting.
+    /// It is not a runtime activation-frame contract.
     pub activation_width: u32,
     pub exact_state_mobility: ExactStateMobility,
     #[serde(default)]

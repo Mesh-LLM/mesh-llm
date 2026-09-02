@@ -445,8 +445,6 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         source_config_path
             .to_str()
             .context("source config path is not valid UTF-8")?,
-        "--activation-width",
-        &stage_activation_width.to_string(),
         "--max-inflight",
         &args.max_inflight.to_string(),
     ]);
@@ -494,8 +492,6 @@ fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStat
         restore_config_path
             .to_str()
             .context("restore config path is not valid UTF-8")?,
-        "--activation-width",
-        &stage_activation_width.to_string(),
         "--max-inflight",
         &args.max_inflight.to_string(),
     ]);

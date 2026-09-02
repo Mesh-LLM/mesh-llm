@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationDesc,
-    BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc, LlamaLogCallback,
-    LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext, MtmdContextParams,
-    MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
+    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
+    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
+    MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
     MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
     NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
     SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, SlicePlan, Status, TensorInfo,
@@ -178,6 +178,8 @@ dynamic_symbols! {
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
+    skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
+    skippy_model_input_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;

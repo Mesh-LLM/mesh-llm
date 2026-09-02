@@ -15,7 +15,7 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 6
+tip, and activations flow through the stage chain. Stage protocol generation 7
 is a compatibility-breaking contract: prediction-bearing replies return
 directly from the final/readout tip to the driver-facing stage instead of being
 relayed back through intermediate stages. Middle-out is the prefill optimization
@@ -53,9 +53,9 @@ runtime settings into one loaded stage. Model execution flows through
 ```bash
 skippy-server example-config
 skippy-server serve --config stage.json
-skippy-server serve-binary --config stage.json --activation-width 576
+skippy-server serve-binary --config stage.json
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
-skippy-server serve-binary --config stage-0.json --topology topology.json --activation-width 576 --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
+skippy-server serve-binary --config stage-0.json --topology topology.json --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
 
 ## Embedding API
@@ -103,11 +103,13 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-6 stage protocol.
-  Stage compatibility requires `stage-generation-6`; direct prediction return and
+- `serve-binary` participates in the breaking generation-7 stage protocol.
+  Stage compatibility requires the complete `stage-generation-7` control,
+  status-list, and strict-content-identity bundle; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-6 topology.
+  generation-7 topology. Generation 6 is historical and is not accepted by the
+  current serve binary.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -123,7 +125,7 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-6 prediction returns flow directly from the final stage to stage 0.
+  generation-7 prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.

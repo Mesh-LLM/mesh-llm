@@ -448,8 +448,6 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         topology_path
             .to_str()
             .context("topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
         "--max-inflight",
         &args.max_inflight.to_string(),
     ]);
@@ -475,8 +473,6 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         topology_path
             .to_str()
             .context("topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
         "--max-inflight",
         &args.max_inflight.to_string(),
     ]);

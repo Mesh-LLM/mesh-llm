@@ -352,7 +352,6 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             config: stage1_config,
             topology: None,
             bind_addr: stage1_addr,
-            activation_width: fixture.activation_width,
             metrics_otlp_grpc: None,
             telemetry_queue_capacity: 1,
             telemetry_level: crate::telemetry::TelemetryLevel::Off,

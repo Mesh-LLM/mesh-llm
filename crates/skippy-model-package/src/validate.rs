@@ -7,7 +7,6 @@ use serde::Serialize;
 use skippy_ffi::TensorRole;
 use skippy_runtime::{ModelInfo, TensorInfo};
 
-use crate::gguf_header::activation_width;
 use crate::hash::file_sha256;
 use crate::package::{PackageArtifact, PackageManifest, PackageProjector};
 use crate::plan::layer_count;
@@ -40,9 +39,6 @@ pub(crate) struct PackageValidateOutput {
     pub(crate) full_tensor_count: usize,
     pub(crate) layer_count: u32,
     pub(crate) manifest_layer_count_matches_model: bool,
-    pub(crate) activation_width_matches_model: bool,
-    pub(crate) expected_activation_width: u32,
-    pub(crate) manifest_activation_width: Option<u32>,
     pub(crate) source_sha256_matches_manifest: bool,
     pub(crate) required_owned_tensor_count: usize,
     pub(crate) missing_owned_tensors: Vec<String>,
@@ -185,11 +181,6 @@ pub(crate) fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
     .with_context(|| format!("parse {}", manifest_path.display()))?;
     let source_sha256_matches_manifest = file_sha256(&full)? == manifest.source_model.sha256;
     let manifest_layer_count_matches_model = manifest.layer_count == full_layer_count;
-    let expected_activation_width = activation_width(&full)?;
-    let manifest_activation_width = manifest.activation_width;
-    let activation_width_matches_model =
-        manifest_activation_width == Some(expected_activation_width);
-
     let expected_layers = (0..manifest.layer_count).collect::<BTreeSet<_>>();
     let mut layer_occurrences = BTreeMap::<u32, usize>::new();
     for layer in &manifest.layers {
@@ -255,7 +246,6 @@ pub(crate) fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
         .collect::<Vec<_>>();
     let valid = source_sha256_matches_manifest
         && manifest_layer_count_matches_model
-        && activation_width_matches_model
         && missing_layers.is_empty()
         && duplicate_layers.is_empty()
         && missing_owned_tensors.is_empty()
@@ -278,9 +268,6 @@ pub(crate) fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
         full_tensor_count: full_tensors.len(),
         layer_count: manifest.layer_count,
         manifest_layer_count_matches_model,
-        activation_width_matches_model,
-        expected_activation_width,
-        manifest_activation_width,
         source_sha256_matches_manifest,
         required_owned_tensor_count: required_owned_tensors.len(),
         missing_owned_tensors,
