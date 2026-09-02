@@ -1,7 +1,7 @@
 use crate::frontend::generation::StageOpenAiBackend;
 use openai_frontend::{OpenAiError, OpenAiResult};
 use skippy_runtime::{IterationBatchPhase, SamplingConfig};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MAX_NATIVE_ITERATION_TOKENS: usize = 2_048;
 
@@ -35,7 +35,7 @@ impl StageOpenAiBackend {
         suffix: &[i32],
         sampling: Option<&SamplingConfig>,
         sample_last: bool,
-        deadline: Instant,
+        stall_timeout: Duration,
         cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> OpenAiResult<SuffixPrefillOutcome> {
         if suffix.is_empty() {
@@ -54,6 +54,7 @@ impl StageOpenAiBackend {
         let mut runtime_lock_wait_ms = 0.0;
         let mut runtime_lock_hold_ms = 0.0;
         for (chunk, should_sample) in suffix.chunks(chunk_tokens).zip(sample_flags) {
+            let deadline = cache_progress_deadline(stall_timeout);
             ensure_suffix_prefill_active(deadline, cancellation)?;
             let outcome = self.iteration_scheduler.execute_iteration_on(
                 &channel,
@@ -82,6 +83,11 @@ impl StageOpenAiBackend {
             runtime_lock_hold_ms,
         })
     }
+}
+
+fn cache_progress_deadline(stall_timeout: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(stall_timeout).unwrap_or(now)
 }
 
 fn ensure_suffix_prefill_active(

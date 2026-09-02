@@ -7,7 +7,6 @@ use skippy_protocol::binary::StageReplyStats;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -33,7 +32,6 @@ pub const CONTEXT_BUDGET_MAX_TOKENS: u32 = u32::MAX;
 /// request is silently clamped to whatever remaining budget exists
 /// rather than rejected — see [`GenerationTokenLimit::resolve`].
 pub const DEFAULT_EMBEDDED_MAX_TOKENS: u32 = 4096;
-pub(in crate::frontend) const GENERATION_TOKEN_BUDGET_TIMEOUT: Duration = Duration::from_secs(10);
 pub(in crate::frontend) const GENERATION_RETRY_AFTER_SECS: u64 = 1;
 pub(in crate::frontend) const MAX_EXACT_REPLAY_TOKENS: usize = 8;
 

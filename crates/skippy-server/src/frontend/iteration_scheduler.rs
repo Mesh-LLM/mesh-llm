@@ -99,7 +99,7 @@ pub(crate) struct DirectIterationChannel {
 
 pub(crate) struct CacheAwareRuntimeRequest<'a> {
     pub(crate) operation_id: String,
-    pub(crate) deadline: Instant,
+    pub(crate) stall_timeout: Duration,
     pub(crate) cancellation: Option<&'a openai_frontend::CancellationToken>,
     pub(crate) prompt_tokens: Arc<[i32]>,
     pub(crate) priority: u64,
@@ -179,7 +179,9 @@ const CACHE_OPERATION_DEADLINE_EXCEEDED: u8 = 2;
 #[derive(Clone)]
 pub(crate) struct CacheRuntimeContext {
     operation_id: String,
-    deadline: Instant,
+    stall_timeout: Duration,
+    progress_deadline: Arc<Mutex<Option<Instant>>>,
+    progress_updates: Arc<AtomicUsize>,
     cancellation: Option<openai_frontend::CancellationToken>,
     state: Arc<AtomicU8>,
 }
@@ -187,15 +189,35 @@ pub(crate) struct CacheRuntimeContext {
 impl CacheRuntimeContext {
     fn new(
         operation_id: String,
-        deadline: Instant,
+        stall_timeout: Duration,
         cancellation: Option<&openai_frontend::CancellationToken>,
     ) -> Self {
         Self {
             operation_id,
-            deadline,
+            stall_timeout,
+            progress_deadline: Arc::new(Mutex::new(None)),
+            progress_updates: Arc::new(AtomicUsize::new(0)),
             cancellation: cancellation.cloned(),
             state: Arc::new(AtomicU8::new(CACHE_OPERATION_ACTIVE)),
         }
+    }
+
+    fn mark_started(&self) -> OpenAiResult<()> {
+        self.record_progress()
+    }
+
+    pub(crate) fn record_progress(&self) -> OpenAiResult<()> {
+        self.ensure_active()?;
+        let now = Instant::now();
+        let deadline = now.checked_add(self.stall_timeout).unwrap_or(now);
+        *self.progress_deadline.lock().map_err(|_| {
+            OpenAiError::backend(format!(
+                "cache runtime operation {} progress lock poisoned",
+                self.operation_id
+            ))
+        })? = Some(deadline);
+        self.progress_updates.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
     pub(crate) fn ensure_active(&self) -> OpenAiResult<()> {
@@ -205,8 +227,16 @@ impl CacheRuntimeContext {
             .is_some_and(openai_frontend::CancellationToken::is_cancelled)
         {
             self.cancel(CACHE_OPERATION_CANCELLED);
-        } else if Instant::now() >= self.deadline {
-            self.cancel(CACHE_OPERATION_DEADLINE_EXCEEDED);
+        } else {
+            let deadline = *self.progress_deadline.lock().map_err(|_| {
+                OpenAiError::backend(format!(
+                    "cache runtime operation {} progress lock poisoned",
+                    self.operation_id
+                ))
+            })?;
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                self.cancel(CACHE_OPERATION_DEADLINE_EXCEEDED);
+            }
         }
         match self.state.load(Ordering::Acquire) {
             CACHE_OPERATION_ACTIVE => Ok(()),
@@ -232,6 +262,20 @@ impl CacheRuntimeContext {
             Ordering::AcqRel,
             Ordering::Acquire,
         );
+    }
+
+    fn poll_interval(&self) -> OpenAiResult<Duration> {
+        let deadline = *self.progress_deadline.lock().map_err(|_| {
+            OpenAiError::backend(format!(
+                "cache runtime operation {} progress lock poisoned",
+                self.operation_id
+            ))
+        })?;
+        Ok(deadline.map_or(CANCELLATION_POLL_INTERVAL, |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(CANCELLATION_POLL_INTERVAL)
+        }))
     }
 }
 
@@ -275,7 +319,7 @@ where
 fn cache_runtime_operation<T>(
     label: &'static str,
     operation_id: String,
-    deadline: Instant,
+    stall_timeout: Duration,
     cancellation: Option<&openai_frontend::CancellationToken>,
     operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> OpenAiResult<T> + Send + 'static,
 ) -> (
@@ -288,7 +332,7 @@ where
 {
     let (reply, result) = std_mpsc::sync_channel(1);
     let enqueued_at = Instant::now();
-    let control = CacheRuntimeContext::new(operation_id, deadline, cancellation);
+    let control = CacheRuntimeContext::new(operation_id, stall_timeout, cancellation);
     let worker_control = control.clone();
     let runtime_operation = RuntimeOperation {
         label,
@@ -296,7 +340,7 @@ where
         run: Box::new(move |runtime: &Arc<Mutex<RuntimeState>>| {
             let queue_wait_ms = enqueued_at.elapsed().as_secs_f64() * 1_000.0;
             let lock_started = Instant::now();
-            let outcome = worker_control.ensure_active().and_then(|()| {
+            let outcome = worker_control.mark_started().and_then(|()| {
                 runtime
                     .lock()
                     .map_err(|_| OpenAiError::backend("runtime lock poisoned"))
@@ -763,7 +807,7 @@ impl IterationScheduler {
         &self,
         label: &'static str,
         operation_id: String,
-        deadline: Instant,
+        stall_timeout: Duration,
         cancellation: Option<&openai_frontend::CancellationToken>,
         operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
     ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
@@ -773,7 +817,7 @@ impl IterationScheduler {
         let (runtime_operation, result, control) = cache_runtime_operation(
             label,
             operation_id,
-            deadline,
+            stall_timeout,
             cancellation,
             |runtime, _control| operation(runtime),
         );
@@ -797,7 +841,7 @@ impl IterationScheduler {
         let (runtime_operation, result, control) = cache_runtime_operation(
             label,
             request.operation_id,
-            request.deadline,
+            request.stall_timeout,
             request.cancellation,
             operation,
         );
@@ -830,11 +874,7 @@ fn wait_for_cache_runtime<T>(
 ) -> OpenAiResult<SchedulerRuntimeOutcome<T>> {
     loop {
         control.ensure_active()?;
-        let remaining = control
-            .deadline
-            .saturating_duration_since(Instant::now())
-            .min(CANCELLATION_POLL_INTERVAL);
-        match result.recv_timeout(remaining) {
+        match result.recv_timeout(control.poll_interval()?) {
             Ok(outcome) => return outcome,
             Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -1092,6 +1132,19 @@ impl SchedulerWorker {
                         CACHE_OPERATION_DEADLINE_EXCEEDED => "deadline_exceeded",
                         _ => "invalid",
                     }),
+                );
+                attrs.insert(
+                    "skippy.scheduler.cache_stall_timeout_ms".to_string(),
+                    json!(cache_operation.stall_timeout.as_secs_f64() * 1_000.0),
+                );
+                attrs.insert(
+                    "skippy.scheduler.cache_progress_renewals".to_string(),
+                    json!(
+                        cache_operation
+                            .progress_updates
+                            .load(Ordering::Relaxed)
+                            .saturating_sub(1)
+                    ),
                 );
             }
             if let Some(cache) = cache {
@@ -2466,7 +2519,7 @@ mod tests {
         let (operation, result, _) = cache_runtime_operation(
             "cancelled-cache",
             "request-7".to_string(),
-            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
             Some(&cancellation),
             move |_, _| {
                 worker_executions.fetch_add(1, Ordering::Relaxed);
@@ -2484,14 +2537,14 @@ mod tests {
     }
 
     #[test]
-    fn expired_cache_runtime_is_rejected_before_runtime_or_user_work() {
+    fn stalled_cache_runtime_is_rejected_before_runtime_or_user_work() {
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let executions = Arc::new(AtomicUsize::new(0));
         let worker_executions = executions.clone();
         let (operation, result, _) = cache_runtime_operation(
             "expired-cache",
             "request-8".to_string(),
-            Instant::now(),
+            Duration::ZERO,
             None,
             move |_, _| {
                 worker_executions.fetch_add(1, Ordering::Relaxed);
@@ -2522,7 +2575,7 @@ mod tests {
         let (operation, result, _) = cache_runtime_operation(
             "in-flight-cancelled-cache",
             "request-9".to_string(),
-            Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
             Some(&cancellation),
             move |_, control| {
                 worker_executions.fetch_add(1, Ordering::Relaxed);
@@ -2545,6 +2598,47 @@ mod tests {
         let error = result.recv().unwrap().unwrap_err();
         assert!(error.to_string().contains("request-9 was cancelled"));
         assert_eq!(executions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cache_runtime_stall_timeout_excludes_scheduler_queue_wait() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+        let executions = Arc::new(AtomicUsize::new(0));
+        let worker_executions = executions.clone();
+        let (operation, result, _) = cache_runtime_operation(
+            "queued-cache",
+            "request-10".to_string(),
+            Duration::from_millis(10),
+            None,
+            move |_, _| {
+                worker_executions.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        thread::sleep(Duration::from_millis(20));
+        (operation.run)(&runtime);
+
+        result.recv().unwrap().unwrap();
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cache_runtime_progress_renews_stall_timeout() {
+        let control =
+            CacheRuntimeContext::new("request-11".to_string(), Duration::from_millis(40), None);
+        control.mark_started().unwrap();
+        thread::sleep(Duration::from_millis(25));
+        control.record_progress().unwrap();
+        thread::sleep(Duration::from_millis(25));
+        control.ensure_active().unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let error = control.ensure_active().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("request-11 exceeded its deadline")
+        );
     }
 
     #[test]

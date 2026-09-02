@@ -1,9 +1,8 @@
 use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::generation::{
-    EmbeddedStageZeroGeneration, GENERATION_TOKEN_BUDGET_TIMEOUT, GeneratedText,
-    GenerationTokenLimit, LocalGeneration, OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer,
-    PreparedGenerationPrompt, PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector,
-    emulation_generation_active,
+    EmbeddedStageZeroGeneration, GeneratedText, GenerationTokenLimit, LocalGeneration,
+    OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
+    PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use openai_frontend::{ChatCompletionRequest, OpenAiError, OpenAiResult};
@@ -118,11 +117,39 @@ impl StageOpenAiBackend {
             return Err(OpenAiError::backend("request cancelled"));
         }
         let token_admit_timer = PhaseTimer::start();
-        let token_budget_reservation = self.generation_token_budget.reserve_cancellable(
+        let token_budget_reservation = match self.generation_token_budget.reserve_cancellable(
             GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
-            GENERATION_TOKEN_BUDGET_TIMEOUT,
+            self.generation_admission_timeout,
             cancellation,
-        )?;
+        ) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let mut attrs = self.openai_attrs(&ids);
+                attrs.insert(
+                    "llama_stage.prompt_token_count".to_string(),
+                    json!(prompt_token_ids.len()),
+                );
+                attrs.insert("llama_stage.max_tokens".to_string(), json!(max_tokens));
+                attrs.insert(
+                    "llama_stage.kv_capacity_tokens".to_string(),
+                    json!(self.generation_token_budget.capacity_tokens()),
+                );
+                attrs.insert(
+                    "llama_stage.kv_admission_timeout_ms".to_string(),
+                    json!(self.generation_admission_timeout.as_secs_f64() * 1_000.0),
+                );
+                attrs.insert(
+                    "llama_stage.kv_admission_status".to_string(),
+                    json!("rejected"),
+                );
+                self.emit_openai_phase(
+                    "stage.openai_generation_token_admit",
+                    token_admit_timer,
+                    attrs,
+                );
+                return Err(error);
+            }
+        };
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }
@@ -143,6 +170,14 @@ impl StageOpenAiBackend {
         token_admit_attrs.insert(
             "llama_stage.kv_capacity_tokens".to_string(),
             json!(self.generation_token_budget.capacity_tokens()),
+        );
+        token_admit_attrs.insert(
+            "llama_stage.kv_admission_timeout_ms".to_string(),
+            json!(self.generation_admission_timeout.as_secs_f64() * 1_000.0),
+        );
+        token_admit_attrs.insert(
+            "llama_stage.kv_admission_status".to_string(),
+            json!("admitted"),
         );
         self.emit_openai_phase(
             "stage.openai_generation_token_admit",

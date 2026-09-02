@@ -1,4 +1,4 @@
-use super::cache_deadline::cache_operation_deadline;
+use super::cache_deadline::cache_operation_stall_timeout;
 use super::native_mtp_decode::NativeMtpSpanProgress;
 use crate::frontend::NativeMtpDecodeOptions;
 use crate::frontend::NativeMtpDraft;
@@ -102,7 +102,7 @@ fn ensure_cache_operation_active(
         let _ = runtime.drop_session_timed(session_id);
         return Err(error);
     }
-    Ok(())
+    cache_operation.record_progress()
 }
 
 fn prefill_cache_chunks(
@@ -778,7 +778,7 @@ impl StageOpenAiBackend {
         let scheduler_prefill_tokens = Arc::clone(&prefill_tokens);
         let record_prefill_tokens = Arc::clone(&prefill_tokens);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
-        let cache_operation_deadline = cache_operation_deadline(
+        let cache_operation_stall_timeout = cache_operation_stall_timeout(
             self.generation_admission_timeout,
             request.prompt_token_ids.len(),
         );
@@ -786,7 +786,7 @@ impl StageOpenAiBackend {
             "feature-kv-restore-prefill-record",
             super::super::iteration_scheduler::CacheAwareRuntimeRequest {
                 operation_id: request.ids.request_id_string(),
-                deadline: cache_operation_deadline,
+                stall_timeout: cache_operation_stall_timeout,
                 cancellation: request.cancellation,
                 prompt_tokens: Arc::clone(&prefill_tokens),
                 priority: 0,
@@ -855,7 +855,7 @@ impl StageOpenAiBackend {
                     &request.prompt_token_ids[suffix_start..boundary],
                     None,
                     false,
-                    cache_operation_deadline,
+                    cache_operation_stall_timeout,
                     request.cancellation,
                 )?;
                 prefill_chunk_count = prefill_chunk_count
@@ -876,7 +876,7 @@ impl StageOpenAiBackend {
                     self.iteration_scheduler.execute_runtime_timed_bounded(
                         "feature-kv-shared-checkpoint",
                         request.ids.request_id_string(),
-                        cache_operation_deadline,
+                        cache_operation_stall_timeout,
                         request.cancellation,
                         move |runtime| {
                             let recorded = scheduler_backend.record_exact_state_at_tokens(
@@ -914,7 +914,7 @@ impl StageOpenAiBackend {
                 &request.prompt_token_ids[suffix_start..],
                 request.sampling.enabled.then_some(request.sampling),
                 true,
-                cache_operation_deadline,
+                cache_operation_stall_timeout,
                 request.cancellation,
             )?;
             prompt_prefill_sample =
@@ -945,7 +945,7 @@ impl StageOpenAiBackend {
                     self.iteration_scheduler.execute_runtime_timed_bounded(
                         "feature-kv-final-state",
                         request.ids.request_id_string(),
-                        cache_operation_deadline,
+                        cache_operation_stall_timeout,
                         request.cancellation,
                         move |runtime| {
                             let recorded = scheduler_backend.record_exact_state_at_tokens(
@@ -983,7 +983,7 @@ impl StageOpenAiBackend {
                 let record_outcome = self.iteration_scheduler.execute_runtime_timed_bounded(
                     "feature-kv-record",
                     request.ids.request_id_string(),
-                    cache_operation_deadline,
+                    cache_operation_stall_timeout,
                     request.cancellation,
                     move |runtime| {
                         let record = scheduler_backend.record_and_evict_kv(
@@ -1607,9 +1607,18 @@ impl StageOpenAiBackend {
                         "skippy.kv.resident_entries".to_string(),
                         json!(record.entries),
                     );
+                    attrs.insert("skippy.kv.record_stored".to_string(), json!(record.stored));
                     attrs.insert(
                         "skippy.kv.evicted_entries".to_string(),
                         json!(record.evicted_entries),
+                    );
+                    attrs.insert(
+                        "skippy.kv.evicted_tokens".to_string(),
+                        json!(record.evicted_tokens),
+                    );
+                    attrs.insert(
+                        "skippy.kv.resident_tokens".to_string(),
+                        json!(record.resident_tokens),
                     );
                     self.telemetry
                         .emit("stage.openai_kv_record_decision", attrs);
