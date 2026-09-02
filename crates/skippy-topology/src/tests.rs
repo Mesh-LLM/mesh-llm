@@ -1317,6 +1317,15 @@ fn stage_runtime_test_catalog_has_unique_architectures() {
     }
 }
 
+#[test]
+#[allow(deprecated)]
+fn legacy_runtime_family_registry_stays_empty() {
+    assert!(
+        STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS.is_empty(),
+        "production family rows must not regain KV or topology authority"
+    );
+}
+
 #[derive(Debug, Deserialize)]
 struct ParityCandidateManifest {
     candidates: Vec<ParityCandidate>,

@@ -98,17 +98,11 @@ pub(crate) fn family_policy_for_stage_config(config: &StageConfig) -> FamilyPoli
     generic_model_policy(metadata.as_ref())
 }
 
-pub(crate) fn family_policy_for_compact_meta(
-    meta: &GgufCompactMeta,
-    _model_id: Option<&str>,
-) -> FamilyPolicy {
+pub(crate) fn family_policy_for_compact_meta(meta: &GgufCompactMeta) -> FamilyPolicy {
     generic_model_policy(Some(meta))
 }
 
-pub(crate) fn family_policy_for_model_path(
-    path: impl AsRef<Path>,
-    _model_id: Option<&str>,
-) -> FamilyPolicy {
+pub(crate) fn family_policy_for_model_path(path: impl AsRef<Path>) -> FamilyPolicy {
     let metadata = scan_stage_cache_meta(path.as_ref());
     generic_model_policy(metadata.as_ref())
 }
@@ -255,13 +249,11 @@ mod tests {
     #[test]
     fn gguf_architecture_only_controls_required_native_kv_storage_type() {
         assert_eq!(
-            family_policy_for_compact_meta(&kv_meta("inkling"), Some("wrong/name"))
-                .default_kv_cache_type,
+            family_policy_for_compact_meta(&kv_meta("inkling")).default_kv_cache_type,
             Some("q4_0")
         );
         assert_eq!(
-            family_policy_for_compact_meta(&kv_meta("nemotron_h_moe"), Some("nemotron"))
-                .default_kv_cache_type,
+            family_policy_for_compact_meta(&kv_meta("nemotron_h_moe")).default_kv_cache_type,
             None
         );
     }

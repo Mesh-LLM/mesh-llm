@@ -28,6 +28,27 @@ pub use planning::{
 };
 pub use validation::PlanError;
 
+/// Legacy source-compatibility shape for callers that imported the former
+/// runtime-family registry. Production capability discovery now comes from the
+/// model loaded by llama.cpp; no runtime family rows are published here.
+#[deprecated(
+    note = "runtime family inference was removed; use loaded-model capability metadata instead"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StageRuntimeFamilyExpectation {
+    pub llama_architecture: &'static str,
+    pub family_id: &'static str,
+    pub recurrent_or_hybrid: bool,
+}
+
+/// Deprecated compatibility export. Intentionally empty so production code
+/// cannot recover KV semantics from a hand-maintained family table.
+#[allow(deprecated)]
+#[deprecated(
+    note = "runtime family inference was removed; use loaded-model capability metadata instead"
+)]
+pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectation] = &[];
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyPlanRequest {
     pub topology_id: String,

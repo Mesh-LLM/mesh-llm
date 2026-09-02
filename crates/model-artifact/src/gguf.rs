@@ -414,7 +414,10 @@ impl GgufCompactMeta {
         }
 
         // Some models expose a generic full-attention cadence rather than an
-        // explicit mask. Use the metadata directly, without naming families.
+        // explicit mask. Mirror llama.cpp's `%s.full_attention_interval`
+        // contract: layers are one-based at the cadence boundary, so every
+        // `interval`th layer is full attention and the intervening layers are
+        // recurrent. This is metadata-driven and does not name model families.
         if self.full_attention_interval > 0 {
             let interval = self.full_attention_interval as usize;
             return (0..layer_count)
@@ -1113,6 +1116,22 @@ mod tests {
 
         assert_eq!(recurrent.recurrent_layer_mask(), vec![true; 3]);
         assert_eq!(dense.recurrent_layer_mask(), vec![false; 3]);
+    }
+
+    #[test]
+    fn recurrent_mask_uses_llama_one_based_full_attention_cadence() {
+        let meta = GgufCompactMeta {
+            architecture: "future_hybrid_arch".to_string(),
+            layer_count: 6,
+            full_attention_interval: 3,
+            ssm_state_size: 64,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            meta.recurrent_layer_mask(),
+            vec![true, true, false, true, true, false]
+        );
     }
 
     fn push_tokenizer_inventory_kvs(bytes: &mut Vec<u8>) {

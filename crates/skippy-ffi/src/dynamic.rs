@@ -178,7 +178,6 @@ dynamic_symbols! {
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
-    llama_model_meta_val_str(model: *const Opaque, key: *const c_char, buf: *mut c_char, buf_size: usize) -> i32;
     llama_model_is_recurrent(model: *const Opaque) -> bool;
     llama_model_is_hybrid(model: *const Opaque) -> bool;
     llama_model_is_diffusion(model: *const Opaque) -> bool;

@@ -1228,7 +1228,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         "skippy stage layer range must satisfy layer_start < layer_end"
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let family_policy = family_policy_for_model_path(&options.model_path, Some(&options.model_id));
+    let family_policy = family_policy_for_model_path(&options.model_path);
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),

@@ -1832,8 +1832,7 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     let mut identity = package(66);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
-    let planned =
-        split_runtime_kv_bytes_per_token(&identity, &meta, "tml/inkling-q2", None, None).unwrap();
+    let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
     let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)
@@ -1841,14 +1840,8 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     assert_eq!(planned, expected_q4);
 
     // Explicit user overrides still win over the family default.
-    let overridden = split_runtime_kv_bytes_per_token(
-        &identity,
-        &meta,
-        "tml/inkling-q2",
-        Some("f16"),
-        Some("f16"),
-    )
-    .unwrap();
+    let overridden =
+        split_runtime_kv_bytes_per_token(&identity, &meta, Some("f16"), Some("f16")).unwrap();
     assert!(overridden > planned);
 }
 
@@ -1876,8 +1869,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
     let mut identity = package(66);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
-    let planned =
-        split_runtime_kv_bytes_per_token(&identity, &meta, "tml/inkling-q2", None, None).unwrap();
+    let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
     let expected_f16 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("f16", "f16")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)
@@ -1889,14 +1881,8 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
 
     // An explicit override is never guarded — it still selects q4_0 even
     // though the metadata cannot load it (fails loudly at load instead).
-    let overridden = split_runtime_kv_bytes_per_token(
-        &identity,
-        &meta,
-        "tml/inkling-q2",
-        Some("q4_0"),
-        Some("q4_0"),
-    )
-    .unwrap();
+    let overridden =
+        split_runtime_kv_bytes_per_token(&identity, &meta, Some("q4_0"), Some("q4_0")).unwrap();
     let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)
@@ -1927,8 +1913,7 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
         meta.context_length
     );
 
-    let model_ref = "unsloth/inkling-GGUF:UD-Q2_K_XL";
-    let policy = crate::inference::skippy::family_policy_for_compact_meta(&meta, Some(model_ref));
+    let policy = crate::inference::skippy::family_policy_for_compact_meta(&meta);
     eprintln!(
         "FAMILY default_kv_cache_type={:?}",
         policy.default_kv_cache_type
@@ -1937,8 +1922,7 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
     let mut identity = package(meta.layer_count);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
-    let planned =
-        split_runtime_kv_bytes_per_token(&identity, &meta, model_ref, None, None).unwrap();
+    let planned = split_runtime_kv_bytes_per_token(&identity, &meta, None, None).unwrap();
     let expected_q4 = crate::models::gguf::GgufKvCacheQuant::from_llama_args("q4_0", "q4_0")
         .unwrap()
         .kv_cache_bytes_per_token(&meta)

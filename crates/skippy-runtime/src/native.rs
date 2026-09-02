@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
@@ -62,52 +62,12 @@ fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> 
     if model.is_null() {
         return None;
     }
-    let architecture = loaded_model_metadata(model, "general.architecture").unwrap_or_default();
     let state_kind = classify_model_state(
         unsafe { skippy_ffi::llama_model_is_recurrent(model) },
         unsafe { skippy_ffi::llama_model_is_hybrid(model) },
         unsafe { skippy_ffi::llama_model_is_diffusion(model) },
     );
-    Some(LoadedModelCapability {
-        architecture,
-        state_kind,
-    })
-}
-
-fn loaded_model_metadata(model: *const skippy_ffi::Opaque, key: &str) -> Result<String> {
-    let key = CString::new(key).context("model metadata key contains an interior NUL byte")?;
-    let length =
-        unsafe { skippy_ffi::llama_model_meta_val_str(model, key.as_ptr(), ptr::null_mut(), 0) };
-    if length < 0 {
-        return Err(anyhow!(
-            "loaded model metadata {} is unavailable",
-            key.to_string_lossy()
-        ));
-    }
-    let capacity = usize::try_from(length)
-        .context("loaded model metadata length is invalid")?
-        .checked_add(1)
-        .context("loaded model metadata length overflow")?;
-    let mut output = vec![0_u8; capacity];
-    let written = unsafe {
-        skippy_ffi::llama_model_meta_val_str(
-            model,
-            key.as_ptr(),
-            output.as_mut_ptr().cast(),
-            output.len(),
-        )
-    };
-    if written < 0 {
-        return Err(anyhow!(
-            "loaded model metadata {} could not be read",
-            key.to_string_lossy()
-        ));
-    }
-    CStr::from_bytes_until_nul(&output)
-        .context("loaded model metadata is not NUL terminated")?
-        .to_str()
-        .context("loaded model metadata is not UTF-8")
-        .map(str::to_owned)
+    Some(LoadedModelCapability { state_kind })
 }
 
 impl StageModel {

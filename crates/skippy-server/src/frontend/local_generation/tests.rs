@@ -159,7 +159,7 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv = KvStageIntegration::from_config(&config)?
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)?
         .map(Arc::new)
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);

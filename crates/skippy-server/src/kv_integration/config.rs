@@ -19,6 +19,10 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
+// Recurrent and hybrid payloads share the native n_ctx cell pool across
+// sequence lanes, so their exact-state catalog must remain deliberately small.
+const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
+
 impl KvStageIntegration {
     pub fn from_loaded_model(
         config: &StageConfig,
@@ -53,8 +57,19 @@ impl KvStageIntegration {
             );
             return Ok(None);
         }
+        if matches!(model_capability, ModelKvCapability::KnownDense)
+            && matches!(payload, StagePrefixCachePayload::KvRecurrent)
+        {
+            emit_cache_disabled_warning(
+                config,
+                "recurrent KV state was requested for a dense model",
+            );
+            return Ok(None);
+        }
+        // FullState is architecture-neutral: the native runtime serializes the
+        // complete session state for both dense and recurrent model families.
         if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
-            cache_config.max_entries = cache_config.max_entries.min(16);
+            cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
@@ -136,13 +151,10 @@ impl KvStageIntegration {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_config(config: &StageConfig) -> Result<Option<Self>> {
-        let model_state_kind = match config.kv_cache.as_ref().map(|cache| cache.payload) {
-            Some(StageKvCachePayload::KvRecurrent | StageKvCachePayload::FullState) => {
-                ModelStateKind::Recurrent
-            }
-            _ => ModelStateKind::Dense,
-        };
+    pub(crate) fn from_config(
+        config: &StageConfig,
+        model_state_kind: ModelStateKind,
+    ) -> Result<Option<Self>> {
         Self::from_loaded_model(config, Some(model_state_kind))
     }
 }
@@ -486,6 +498,31 @@ mod tests {
     }
 
     #[test]
+    fn explicit_recurrent_kv_is_rejected_for_loaded_dense_model() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::KvRecurrent;
+
+        assert!(
+            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_full_state_remains_architecture_neutral() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::FullState;
+
+        for state_kind in [ModelStateKind::Dense, ModelStateKind::Recurrent] {
+            let kv = KvStageIntegration::from_loaded_model(&config, Some(state_kind))
+                .unwrap()
+                .expect("full-state caching should support every loaded model state kind");
+            assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        }
+    }
+
+    #[test]
     fn recurrent_cache_cardinality_is_capped_after_load() {
         let mut config = enabled_auto_config("future/model");
         config.ctx_size = 65_536;
@@ -494,7 +531,7 @@ mod tests {
             .expect("recurrent loaded model should enable exact-state caching");
 
         assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
-        assert_eq!(kv.exact_max_entries, 16);
+        assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
     }
 
     #[test]

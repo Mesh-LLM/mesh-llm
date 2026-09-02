@@ -24,7 +24,6 @@ pub enum ModelStateKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
-    pub architecture: String,
     pub state_kind: ModelStateKind,
 }
 
