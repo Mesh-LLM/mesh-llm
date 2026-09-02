@@ -898,25 +898,30 @@ impl StageOpenAiBackend {
                 let scheduler_backend = self.clone();
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();
-                if let Ok(checkpoint_outcome) = self.iteration_scheduler.execute_runtime_timed(
-                    "feature-kv-shared-checkpoint",
-                    move |runtime| {
-                        let recorded = scheduler_backend.record_exact_state_at_tokens(
-                            runtime,
-                            &scheduler_session_id,
-                            &scheduler_ids,
-                            &checkpoint_tokens,
-                            "shared_prefill_checkpoint",
-                        );
-                        Ok((
-                            recorded,
-                            scheduler_backend
-                                .telemetry
-                                .is_debug_enabled()
-                                .then(|| runtime.session_stats()),
-                        ))
-                    },
-                ) {
+                if let Ok(checkpoint_outcome) =
+                    self.iteration_scheduler.execute_runtime_timed_bounded(
+                        "feature-kv-shared-checkpoint",
+                        request.ids.request_id_string(),
+                        cache_operation_deadline,
+                        request.cancellation,
+                        move |runtime| {
+                            let recorded = scheduler_backend.record_exact_state_at_tokens(
+                                runtime,
+                                &scheduler_session_id,
+                                &scheduler_ids,
+                                &checkpoint_tokens,
+                                "shared_prefill_checkpoint",
+                            );
+                            Ok((
+                                recorded,
+                                scheduler_backend
+                                    .telemetry
+                                    .is_debug_enabled()
+                                    .then(|| runtime.session_stats()),
+                            ))
+                        },
+                    )
+                {
                     let (recorded, sessions_after) = checkpoint_outcome.value;
                     runtime_lock_wait_ms += checkpoint_outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms += checkpoint_outcome.runtime_lock_hold_ms;
@@ -962,25 +967,30 @@ impl StageOpenAiBackend {
                 let scheduler_backend = self.clone();
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();
-                if let Ok(final_record_outcome) = self.iteration_scheduler.execute_runtime_timed(
-                    "feature-kv-final-state",
-                    move |runtime| {
-                        let recorded = scheduler_backend.record_exact_state_at_tokens(
-                            runtime,
-                            &scheduler_session_id,
-                            &scheduler_ids,
-                            &final_prompt_tokens,
-                            "final_prefill_state",
-                        );
-                        Ok((
-                            recorded,
-                            scheduler_backend
-                                .telemetry
-                                .is_debug_enabled()
-                                .then(|| runtime.session_stats()),
-                        ))
-                    },
-                ) {
+                if let Ok(final_record_outcome) =
+                    self.iteration_scheduler.execute_runtime_timed_bounded(
+                        "feature-kv-final-state",
+                        request.ids.request_id_string(),
+                        cache_operation_deadline,
+                        request.cancellation,
+                        move |runtime| {
+                            let recorded = scheduler_backend.record_exact_state_at_tokens(
+                                runtime,
+                                &scheduler_session_id,
+                                &scheduler_ids,
+                                &final_prompt_tokens,
+                                "final_prefill_state",
+                            );
+                            Ok((
+                                recorded,
+                                scheduler_backend
+                                    .telemetry
+                                    .is_debug_enabled()
+                                    .then(|| runtime.session_stats()),
+                            ))
+                        },
+                    )
+                {
                     let (recorded, sessions_after) = final_record_outcome.value;
                     runtime_lock_wait_ms += final_record_outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms += final_record_outcome.runtime_lock_hold_ms;
@@ -996,8 +1006,11 @@ impl StageOpenAiBackend {
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();
                 let emit_debug = self.telemetry.is_debug_enabled();
-                let record_outcome = self.iteration_scheduler.execute_runtime_timed(
+                let record_outcome = self.iteration_scheduler.execute_runtime_timed_bounded(
                     "feature-kv-record",
+                    request.ids.request_id_string(),
+                    cache_operation_deadline,
+                    request.cancellation,
                     move |runtime| {
                         let record = scheduler_backend.record_and_evict_kv(
                             runtime,

@@ -745,6 +745,34 @@ impl IterationScheduler {
         })?
     }
 
+    /// Deadline-bounded variant of [`Self::execute_runtime_timed`] for
+    /// cache-side work (KV record/evict, checkpoint export) that must not
+    /// hold a scheduler lane or a caller past the cache operation deadline.
+    /// Unlike [`Self::execute_cache_aware_runtime_timed`] the operation does
+    /// not join the radix-affinity cache queue; it runs on the plain runtime
+    /// command path as soon as the scheduler can take it.
+    pub(crate) fn execute_runtime_timed_bounded<T>(
+        &self,
+        label: &'static str,
+        operation_id: String,
+        deadline: Instant,
+        cancellation: Option<&openai_frontend::CancellationToken>,
+        operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
+    ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
+    where
+        T: Send + 'static,
+    {
+        let (runtime_operation, result, control) = cache_runtime_operation(
+            label,
+            operation_id,
+            deadline,
+            cancellation,
+            |runtime, _control| operation(runtime),
+        );
+        self.enqueue_command(SchedulerCommand::ExecuteRuntime(runtime_operation))?;
+        wait_for_cache_runtime(result, &control)
+    }
+
     /// Queue cache restore/prefill work by stage-local radix affinity while
     /// retaining aging and decode-turn fairness.
     pub(crate) fn execute_cache_aware_runtime_timed<T>(
