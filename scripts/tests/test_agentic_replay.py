@@ -697,6 +697,10 @@ class AgenticReplayTest(unittest.TestCase):
             )
             self.assertIn("Decode tok/s", report.read_text(encoding="utf-8"))
             self.assertIn("Slot use", report.read_text(encoding="utf-8"))
+            self.assertIn(
+                "other cohort sizes use rank/count labels",
+                report.read_text(encoding="utf-8"),
+            )
 
     def test_plan_records_exact_default_server_command(self) -> None:
         args = SimpleNamespace(

@@ -1474,7 +1474,7 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
             f"- Selected trajectories: `{selected_trajectories}` unique whole sessions across disjoint concurrency cohorts.",
             f"- Recorded source steps: `{selected_turns}` assistant turns are represented across the selected trajectories.",
             f"- Replay mode: `{run_document['config'].get('replay_mode', 'all')}`. Checkpoint mode measures one request per trajectory; skipped recorded turns are still appended in order to reconstruct the exact prefix.",
-            "- Within each framework's four trajectories, checkpoint mode deterministically assigns early, middle, late, and final stages. Different trajectories may overlap up to the offered client concurrency.",
+            "- Within each framework's trajectories, checkpoint mode deterministically spreads one measured turn per trajectory across the trajectory timeline. Four trajectories are labeled early, middle, late, and final; other cohort sizes use rank/count labels. Different trajectories may overlap up to the offered client concurrency.",
             "- Realized concurrency is the time-weighted mean number of in-flight requests. Slot use makes cohort tail drain explicit; do not interpret offered-concurrency scaling as steady-state when utilization is low.",
             "- Each next request uses the recorded conversation history, so experiment arms receive identical growing prefixes and tool observations.",
             "- Per-turn output budgets approximate each recorded assistant action from its character length, capped by the configured maximum; generated output is measured but never fed into the next turn.",
