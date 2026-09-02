@@ -45,7 +45,10 @@ pub use multimodal::{
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams, MtmdInputChunkType,
     MtmdInputChunks, MtmdInputText,
 };
-pub use runtime::{NativeRuntimeLoadError, abi_features, try_abi_features};
+pub use runtime::{
+    NativeRuntimeLoadError, abi_features, llama_model_is_diffusion, llama_model_is_hybrid,
+    llama_model_is_recurrent, try_abi_features,
+};
 pub use sampling::{
     GenerationSignalWindow, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
     MAX_SAMPLERS, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig, TokenSignal,
@@ -66,8 +69,7 @@ pub use runtime::skippy_abi_features;
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
-    ggml_log_set, llama_log_set, llama_model_is_diffusion, llama_model_is_hybrid,
-    llama_model_is_recurrent, llama_model_quantize, llama_model_quantize_default_params,
+    ggml_log_set, llama_log_set, llama_model_quantize, llama_model_quantize_default_params,
     load_native_runtime_libraries, load_native_runtime_library, mtmd_bitmap_free,
     mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker, mtmd_free,
     mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single, mtmd_helper_eval_chunks,
@@ -108,8 +110,7 @@ pub use dynamic::{
 
 #[cfg(not(feature = "dynamic-runtime"))]
 pub use static_bindings::{
-    ggml_log_set, llama_log_set, llama_model_is_diffusion, llama_model_is_hybrid,
-    llama_model_is_recurrent, llama_model_quantize, llama_model_quantize_default_params,
+    ggml_log_set, llama_log_set, llama_model_quantize, llama_model_quantize_default_params,
     mtmd_bitmap_free, mtmd_context_params_default, mtmd_decode_use_mrope, mtmd_default_marker,
     mtmd_free, mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunks, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,

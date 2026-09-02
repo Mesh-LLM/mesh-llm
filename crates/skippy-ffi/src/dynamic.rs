@@ -178,9 +178,6 @@ dynamic_symbols! {
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
-    llama_model_is_recurrent(model: *const Opaque) -> bool;
-    llama_model_is_hybrid(model: *const Opaque) -> bool;
-    llama_model_is_diffusion(model: *const Opaque) -> bool;
     skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
@@ -315,6 +312,7 @@ type SkippyParseChatResponseJsonFn = unsafe extern "C" fn(
     out_message_json_bytes: *mut usize,
     out_error: *mut *mut Error,
 ) -> Status;
+pub(crate) type LlamaModelStateFn = unsafe extern "C" fn(model: *const Opaque) -> bool;
 
 impl Symbols {
     fn lookup_optional<Sym>(&self, name: &[u8]) -> Option<Sym>
@@ -334,6 +332,26 @@ pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
     static CACHE: OnceLock<Option<SkippyAbiFeaturesFn>> = OnceLock::new();
     *CACHE
         .get_or_init(|| symbols().lookup_optional::<SkippyAbiFeaturesFn>(b"skippy_abi_features\0"))
+}
+
+pub(crate) fn llama_model_is_recurrent_fn() -> Option<LlamaModelStateFn> {
+    static CACHE: OnceLock<Option<LlamaModelStateFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<LlamaModelStateFn>(b"llama_model_is_recurrent\0")
+    })
+}
+
+pub(crate) fn llama_model_is_hybrid_fn() -> Option<LlamaModelStateFn> {
+    static CACHE: OnceLock<Option<LlamaModelStateFn>> = OnceLock::new();
+    *CACHE
+        .get_or_init(|| symbols().lookup_optional::<LlamaModelStateFn>(b"llama_model_is_hybrid\0"))
+}
+
+pub(crate) fn llama_model_is_diffusion_fn() -> Option<LlamaModelStateFn> {
+    static CACHE: OnceLock<Option<LlamaModelStateFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<LlamaModelStateFn>(b"llama_model_is_diffusion\0")
+    })
 }
 
 pub fn skippy_model_open_with_events_fn() -> Option<SkippyModelOpenWithEventsFn> {

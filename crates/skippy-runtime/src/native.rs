@@ -57,17 +57,26 @@ fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> Model
     }
 }
 
+fn capability_from_state_probes(
+    recurrent: Option<bool>,
+    hybrid: Option<bool>,
+    diffusion: Option<bool>,
+) -> Option<LoadedModelCapability> {
+    Some(LoadedModelCapability {
+        state_kind: classify_model_state(recurrent?, hybrid?, diffusion?),
+    })
+}
+
 fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> {
     let model = unsafe { skippy_ffi::skippy_model_llama_model(raw) };
     if model.is_null() {
         return None;
     }
-    let state_kind = classify_model_state(
+    capability_from_state_probes(
         unsafe { skippy_ffi::llama_model_is_recurrent(model) },
         unsafe { skippy_ffi::llama_model_is_hybrid(model) },
         unsafe { skippy_ffi::llama_model_is_diffusion(model) },
-    );
-    Some(LoadedModelCapability { state_kind })
+    )
 }
 
 impl StageModel {
@@ -912,8 +921,8 @@ impl Drop for StageModel {
 #[cfg(test)]
 mod output_capacity_tests {
     use super::{
-        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, classify_model_state,
-        optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
+        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, capability_from_state_probes,
+        classify_model_state, optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
         optimistic_chat_prompt_capacity, optimistic_token_capacity,
     };
 
@@ -934,6 +943,19 @@ mod output_capacity_tests {
         assert_eq!(
             classify_model_state(true, true, true),
             ModelStateKind::Diffusion
+        );
+    }
+
+    #[test]
+    fn missing_native_state_probe_fails_capability_closed() {
+        assert!(capability_from_state_probes(None, Some(false), Some(false)).is_none());
+        assert!(capability_from_state_probes(Some(false), None, Some(false)).is_none());
+        assert!(capability_from_state_probes(Some(false), Some(false), None).is_none());
+        assert_eq!(
+            capability_from_state_probes(Some(true), Some(true), Some(false))
+                .expect("all native probes are present")
+                .state_kind,
+            ModelStateKind::Hybrid
         );
     }
 
