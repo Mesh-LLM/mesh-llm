@@ -302,6 +302,7 @@ impl StageOpenAiBackend {
         }
         KvRecordResult {
             resident_recorded_pages,
+            resident_enqueued_checkpoints: 0,
             proactive_eviction_status,
             proactive_eviction_error_kind: proactive_eviction_error_kind_attr,
             proactive_eviction_target_tokens,
