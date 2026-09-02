@@ -689,8 +689,6 @@ fn start_stage0(
             "serve-binary",
             "--config",
             path_str(config_path)?,
-            "--activation-width",
-            &args.activation_width.to_string(),
             "--max-inflight",
             &args.server.max_inflight.to_string(),
         ])

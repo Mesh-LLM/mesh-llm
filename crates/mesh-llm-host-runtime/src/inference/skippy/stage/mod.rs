@@ -479,27 +479,6 @@ impl StageControlState {
         let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
-        if effective_load.local_source_required {
-            let expected_sha256 = effective_load
-                .source_model_sha256
-                .as_deref()
-                .context("local-required stage load is missing expected SHA-256")?;
-            let identity = crate::inference::skippy::verify_registered_content_source(
-                &effective_load.model_id,
-                &effective_load.package_ref,
-                &effective_load.manifest_sha256,
-                expected_sha256,
-            )?;
-            effective_load.model_path = Some(
-                identity
-                    .source_model_path
-                    .to_str()
-                    .context("verified local GGUF path is not valid UTF-8")?
-                    .to_string(),
-            );
-            effective_load.source_model_bytes = Some(identity.source_model_bytes);
-            effective_load.source_model_sha256 = Some(identity.source_model_sha256);
-        }
         super::configure_materialized_stage_cache();
         let package_request = effective_load.clone();
         let mut resolved_package = None;
@@ -518,7 +497,6 @@ impl StageControlState {
             config,
             topology: None,
             bind_addr,
-            activation_width: effective_load.activation_width,
             metrics_otlp_grpc: self.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: self.telemetry.queue_capacity,
             telemetry_level: self.telemetry.level,
@@ -1035,7 +1013,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         layer_end: stage.load.layer_end,
         state,
         bind_addr: server.bind_addr.to_string(),
-        activation_width: stage.load.activation_width.max(0) as u32,
+        input_activation_boundary: server.input_activation_boundary,
+        output_activation_boundary: server.output_activation_boundary,
         selected_device: stage.load.selected_device.clone(),
         ctx_size: stage.load.ctx_size,
         lane_count: stage.load.lane_count,
@@ -1070,7 +1049,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         layer_end: 0,
         state: StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,
@@ -1111,7 +1091,8 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         layer_end: load.layer_end,
         state: StageRuntimeState::Failed,
         bind_addr: load.bind_addr.clone(),
-        activation_width: load.activation_width.max(0) as u32,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,

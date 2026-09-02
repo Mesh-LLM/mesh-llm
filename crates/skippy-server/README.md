@@ -53,9 +53,9 @@ runtime settings into one loaded stage. Model execution flows through
 ```bash
 skippy-server example-config
 skippy-server serve --config stage.json
-skippy-server serve-binary --config stage.json --activation-width 576
+skippy-server serve-binary --config stage.json
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
-skippy-server serve-binary --config stage-0.json --topology topology.json --activation-width 576 --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
+skippy-server serve-binary --config stage-0.json --topology topology.json --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
 
 ## Embedding API
@@ -108,7 +108,8 @@ deadline handling.
   status-list, and strict-content-identity bundle; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-7 topology.
+  generation-7 topology. Generation 6 is historical and is not accepted by the
+  current serve binary.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

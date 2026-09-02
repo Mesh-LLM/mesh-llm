@@ -336,10 +336,6 @@ def launch_cell(
     environment["SKIPPY_TELEMETRY_STDERR"] = "1"
     environment["SKIPPY_NATIVE_MTP_GREEDY_SAMPLING_FASTPATH"] = "1"
     common = [
-        "--activation-width",
-        str(args.activation_width),
-        "--activation-wire-dtype",
-        args.activation_wire_dtype,
         "--max-inflight",
         "2",
         "--reply-credit-limit",
@@ -642,8 +638,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ctx-size", type=int, default=32768)
     parser.add_argument("--layer-end", type=int, default=27)
     parser.add_argument("--split-layer", type=int, default=14)
-    parser.add_argument("--activation-width", type=int, default=2048)
-    parser.add_argument("--activation-wire-dtype", default="f16")
     parser.add_argument("--n-gpu-layers", type=int, default=999)
     parser.add_argument("--adaptive-target-ms", type=float, default=100.0)
     parser.add_argument("--startup-timeout-secs", type=float, default=900)

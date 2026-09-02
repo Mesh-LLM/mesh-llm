@@ -21,7 +21,7 @@ mod types;
 
 pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
 pub use config::{
-    FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GlmDsaPolicy,
+    FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GlmDsaPolicy,
     LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,
     SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SplitMode, parse_cache_type,
 };
@@ -45,13 +45,14 @@ pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_SIDEBAND_TOKEN_IDS,
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
 };
 pub use types::{
-    ActivationDesc, ActivationFrame, ChatReasoningFormat, ChatTemplateJsonOptions,
-    ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions, DecodeFrameBatchOutput,
-    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
-    LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
+    ActivationBoundaryDesc, ActivationDesc, ActivationFrame, ChatReasoningFormat,
+    ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage, ChatTemplateOptions,
+    DecodeFrameBatchOutput, DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput,
+    IterationSample, LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
     MediaPrefillChunkFrame, MediaPrefillFrame, ModelStateKind, RuntimeKvPage, RuntimeKvPageDesc,
     SamplingConfig, TensorInfo, TokenSignal, XtcSamplingConfig,
 };

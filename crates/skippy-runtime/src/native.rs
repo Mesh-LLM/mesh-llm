@@ -13,9 +13,9 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::{
-    ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage,
-    ChatTemplateOptions, LoadedModelCapability, ModelStateKind, RuntimeConfig, RuntimeEvent,
-    Status,
+    ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
+    ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelStateKind, RuntimeConfig,
+    RuntimeEvent, Status,
 };
 
 pub struct StageModel {
@@ -89,6 +89,21 @@ impl StageModel {
             }),
             media: None,
         }
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
+        let present = unsafe {
+            skippy_ffi::skippy_model_output_activation_boundary(self.inner.raw, &mut raw)
+        };
+        present.then(|| raw.into())
+    }
+
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        let mut raw = skippy_ffi::ActivationBoundaryDesc::default();
+        let present =
+            unsafe { skippy_ffi::skippy_model_input_activation_boundary(self.inner.raw, &mut raw) };
+        present.then(|| raw.into())
     }
 
     fn from_opened_raw(

@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 44;
+pub const ABI_VERSION_PATCH: u32 = 47;
 
 mod abi;
 mod activation;
@@ -26,16 +26,20 @@ pub use abi::{
     AbiVersion, ActivationDType, ActivationLayout, BACKEND_DEVICE_CAP_ASYNC,
     BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
     BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
-    FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_ITERATION_BATCH,
-    FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENTS, IterationRequest,
-    LlamaLogCallback, LoadMode, Model, ModelInfo, MtmdProgressCallback, MtpSource, NgramCache,
-    Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO,
-    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
+    FEATURE_ACTIVATION_BOUNDARY, FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM,
+    FEATURE_ITERATION_BATCH, FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT,
+    FEATURE_RUNTIME_EVENTS, IterationRequest, LlamaLogCallback, LoadMode, Model, ModelInfo,
+    MtmdProgressCallback, MtpSource, NgramCache, Opaque, RuntimeConfig, Session,
+    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback,
+    SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode,
+    SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1,
+    SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE,
+    TensorRole, runtime_abi_supported,
 };
-pub use activation::{ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationDesc, LogitBias, TensorInfo};
+pub use activation::{
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_SIDEBAND_TOKEN_IDS,
+    ActivationBoundaryDesc, ActivationDesc, LogitBias, TensorInfo,
+};
 pub use model::{
     GgmlType, LlamaFileType, LlamaModelImatrixData, LlamaModelKvOverride, LlamaModelKvOverrideType,
     LlamaModelKvOverrideValue, LlamaModelQuantizeParams, LlamaModelTensorOverride,
@@ -88,9 +92,10 @@ pub use dynamic::{
     skippy_import_kv_page, skippy_import_recurrent_state, skippy_import_state,
     skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model_fn, skippy_model_free,
     skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
-    skippy_model_info_tensor_count, skippy_model_llama_model, skippy_model_open,
-    skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
-    skippy_model_open_with_events_fn, skippy_ngram_cache_append, skippy_ngram_cache_create,
+    skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
+    skippy_model_llama_model, skippy_model_open, skippy_model_open_from_parts,
+    skippy_model_open_from_parts_with_events_fn, skippy_model_open_with_events_fn,
+    skippy_model_output_activation_boundary, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
     skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,
@@ -127,8 +132,9 @@ pub use static_bindings::{
     skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
     skippy_import_state, skippy_iteration_batch_sampled, skippy_model_attach_mtp_draft_model,
     skippy_model_free, skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
-    skippy_model_info_tensor_count, skippy_model_llama_model, skippy_model_open,
-    skippy_model_open_from_parts, skippy_ngram_cache_append, skippy_ngram_cache_create,
+    skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
+    skippy_model_llama_model, skippy_model_open, skippy_model_open_from_parts,
+    skippy_model_output_activation_boundary, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
     skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,

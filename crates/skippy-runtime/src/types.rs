@@ -1,6 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::{
-    ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
+    ActivationBoundaryDesc as RawActivationBoundaryDesc, ActivationDType,
+    ActivationDesc as RawActivationDesc, ActivationLayout,
     GenerationSignalWindow as RawGenerationSignalWindow,
     KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
     LogitBias as RawLogitBias, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
@@ -8,6 +9,12 @@ use skippy_ffi::{
 };
 
 pub const MAX_LOGIT_BIAS: usize = 256;
+pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 1;
+pub const ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR: u32 = 1;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS: u64 =
+    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS: u64 =
+    skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS;
 
 /// Runtime memory semantics reported by the loaded llama.cpp model.
 ///
@@ -25,6 +32,93 @@ pub enum ModelStateKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelCapability {
     pub state_kind: ModelStateKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActivationBoundaryDesc {
+    pub version: u32,
+    pub ggml_type: u32,
+    pub layout: u32,
+    pub elements_per_token: u64,
+    pub bytes_per_token: u64,
+    pub required_frame_flags: u64,
+    pub required_sidebands: u64,
+}
+
+impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
+    fn from(raw: RawActivationBoundaryDesc) -> Self {
+        Self {
+            version: raw.version,
+            ggml_type: raw.ggml_type,
+            layout: raw.layout,
+            elements_per_token: raw.elements_per_token,
+            bytes_per_token: raw.bytes_per_token,
+            required_frame_flags: raw.required_frame_flags,
+            required_sidebands: raw.required_sidebands,
+        }
+    }
+}
+
+impl ActivationBoundaryDesc {
+    /// Validate the graph-observed contract against the currently supported
+    /// raw-F32 activation transport and return its element width.
+    pub fn raw_f32_width(self, edge: &str) -> Result<i32> {
+        if self.version != ACTIVATION_BOUNDARY_DESC_VERSION {
+            bail!(
+                "unsupported {edge} activation boundary descriptor version {}",
+                self.version
+            );
+        }
+        if self.ggml_type != crate::GGML_TYPE_F32 {
+            bail!(
+                "raw activation transport requires graph-observed F32; {edge} boundary uses ggml type {}",
+                self.ggml_type
+            );
+        }
+        if self.layout != ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR {
+            bail!(
+                "raw activation transport requires token-major layout; {edge} boundary uses layout {}",
+                self.layout
+            );
+        }
+        if self.elements_per_token == 0 {
+            bail!("graph-observed {edge} activation boundary has zero elements per token");
+        }
+        let unsupported_required_frame_flags =
+            self.required_frame_flags & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS;
+        if unsupported_required_frame_flags != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported frame flags {unsupported_required_frame_flags:#x}"
+            );
+        }
+        let unsupported_required_sidebands =
+            self.required_sidebands & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS;
+        if unsupported_required_sidebands != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported sidebands {unsupported_required_sidebands:#x}"
+            );
+        }
+        let expected_bytes = self
+            .elements_per_token
+            .checked_mul(std::mem::size_of::<f32>() as u64)
+            .context("activation bytes per token overflow")?;
+        if self.bytes_per_token != expected_bytes {
+            bail!(
+                "graph-observed {edge} activation boundary reports {} bytes for {} F32 elements",
+                self.bytes_per_token,
+                self.elements_per_token
+            );
+        }
+        i32::try_from(self.elements_per_token)
+            .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
+    }
+
+    pub fn payload_bytes(self, edge: &str, token_count: u32) -> Result<u64> {
+        self.raw_f32_width(edge)?;
+        self.bytes_per_token
+            .checked_mul(u64::from(token_count))
+            .context("activation payload bytes overflow")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -708,6 +802,98 @@ impl Default for ChatTemplateJsonOptions {
 pub struct ChatTemplateJsonResult {
     pub prompt: String,
     pub metadata_json: String,
+}
+
+#[cfg(test)]
+mod activation_boundary_descriptor_tests {
+    use super::*;
+
+    fn f32_boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        ActivationBoundaryDesc {
+            version: ACTIVATION_BOUNDARY_DESC_VERSION,
+            ggml_type: crate::GGML_TYPE_F32,
+            layout: ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR,
+            elements_per_token,
+            bytes_per_token: elements_per_token.saturating_mul(std::mem::size_of::<f32>() as u64),
+            required_frame_flags: 0,
+            required_sidebands: 0,
+        }
+    }
+
+    #[test]
+    fn raw_f32_boundary_accepts_exact_graph_contract() {
+        let boundary = f32_boundary(1024);
+        assert_eq!(boundary.raw_f32_width("output").unwrap(), 1024);
+        assert_eq!(boundary.payload_bytes("output", 128).unwrap(), 524_288);
+    }
+
+    #[test]
+    fn raw_f32_boundary_rejects_each_invalid_semantic() {
+        let mut cases = Vec::new();
+
+        let mut unsupported_version = f32_boundary(1024);
+        unsupported_version.version += 1;
+        cases.push((unsupported_version, "descriptor version"));
+
+        let mut unsupported_type = f32_boundary(1024);
+        unsupported_type.ggml_type = crate::GGML_TYPE_F16;
+        cases.push((unsupported_type, "requires graph-observed F32"));
+
+        let mut unsupported_layout = f32_boundary(1024);
+        unsupported_layout.layout += 1;
+        cases.push((unsupported_layout, "requires token-major layout"));
+
+        cases.push((f32_boundary(0), "zero elements"));
+
+        let mut inconsistent_bytes = f32_boundary(1024);
+        inconsistent_bytes.bytes_per_token -= 1;
+        cases.push((inconsistent_bytes, "reports 4095 bytes"));
+
+        let mut unsupported_required_frame_flags = f32_boundary(1024);
+        unsupported_required_frame_flags.required_frame_flags = 1 << 63;
+        cases.push((
+            unsupported_required_frame_flags,
+            "requires unsupported frame flags",
+        ));
+
+        let mut unsupported_required_sidebands = f32_boundary(1024);
+        unsupported_required_sidebands.required_sidebands = 1 << 63;
+        cases.push((
+            unsupported_required_sidebands,
+            "requires unsupported sidebands",
+        ));
+
+        let mut byte_overflow = f32_boundary(1);
+        byte_overflow.elements_per_token = u64::MAX;
+        byte_overflow.bytes_per_token = u64::MAX;
+        cases.push((byte_overflow, "bytes per token overflow"));
+
+        let too_wide = f32_boundary(i32::MAX as u64 + 1);
+        cases.push((too_wide, "width exceeds i32"));
+
+        for (boundary, expected) in cases {
+            let error = boundary
+                .raw_f32_width("input")
+                .expect_err("invalid graph contract must fail closed");
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?} in {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn payload_size_overflow_fails_closed() {
+        let boundary = ActivationBoundaryDesc {
+            elements_per_token: i32::MAX as u64,
+            bytes_per_token: i32::MAX as u64 * std::mem::size_of::<f32>() as u64,
+            ..f32_boundary(1)
+        };
+        let error = boundary
+            .payload_bytes("output", u32::MAX)
+            .expect_err("overflowing payload size must fail");
+        assert!(error.to_string().contains("payload bytes overflow"));
+    }
 }
 
 #[cfg(test)]

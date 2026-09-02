@@ -716,13 +716,12 @@ fn stage_server_command(
         .map(|mbps| format!(" --downstream-wire-mbps {mbps}"))
         .unwrap_or_default();
     format!(
-        "{} serve-binary --config {} --topology {} --activation-width {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
+        "{} serve-binary --config {} --topology {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
         shell_quote(bin),
         shell_quote(config_path),
         shell_quote(
             &stage_remote_topology_path(stage).unwrap_or_else(|_| "topology.json".to_string())
         ),
-        args.activation_width,
         shell_quote(&plan.metrics_otlp_grpc),
         args.stage_telemetry_queue_capacity,
         shell_quote(&args.stage_telemetry_level),
