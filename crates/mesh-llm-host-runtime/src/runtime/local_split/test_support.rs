@@ -881,7 +881,7 @@ pub(super) fn test_stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        input_activation_boundary: load.upstream.as_ref().and(boundary),
+        input_activation_boundary: boundary.filter(|_| load.layer_start > 0),
         output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
@@ -895,6 +895,16 @@ pub(super) fn test_stage_status_from_load(
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
     }
+}
+
+#[test]
+fn staged_status_fixture_exposes_input_boundary_for_middle_consumers() {
+    let middle = stage_load_request(LoadMode::RuntimeSlice);
+    assert!(middle.layer_start > 0);
+    assert!(middle.upstream.is_none());
+
+    let status = test_stage_status_from_load(&middle, skippy::StageRuntimeState::Ready);
+    assert!(status.input_activation_boundary.is_some());
 }
 
 pub(super) fn test_stage_status_from_stop(

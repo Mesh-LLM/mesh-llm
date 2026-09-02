@@ -527,19 +527,7 @@ fn embedded_openai_args_from(
             .map_err(|_| anyhow::anyhow!("runtime lock poisoned"))?
             .output_activation_boundary()
             .context("stage 0 graph did not expose its output activation boundary")?;
-        anyhow::ensure!(
-            descriptor.version == 1
-                && descriptor.ggml_type == skippy_runtime::GGML_TYPE_F32
-                && descriptor.layout == 1
-                && descriptor.elements_per_token > 0
-                && descriptor
-                    .elements_per_token
-                    .checked_mul(std::mem::size_of::<f32>() as u64)
-                    == Some(descriptor.bytes_per_token),
-            "stage 0 graph output is not supported by raw F32 activation transport: {descriptor:?}"
-        );
-        i32::try_from(descriptor.elements_per_token)
-            .context("stage 0 graph activation width exceeds i32")?
+        descriptor.raw_f32_width("output")?
     } else {
         embedded_args.activation_width
     };

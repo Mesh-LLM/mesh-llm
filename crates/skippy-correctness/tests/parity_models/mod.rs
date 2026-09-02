@@ -113,7 +113,10 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
         stage_index: 2,
         layer_start: second_cut,
         layer_end: layout.layer_count,
-        include_embeddings: false,
+        // Layer packages include token embeddings on the final stage for tied
+        // output weights. A downstream consumer must still expose its input
+        // boundary when those tensors happen to be present.
+        include_embeddings: true,
         include_output: true,
     };
     let first = open_stage_model(
