@@ -526,6 +526,19 @@ def stream_request(
                 event = json.loads(event_bytes)
             except json.JSONDecodeError:
                 continue
+            server_error = event.get("error")
+            if server_error is not None:
+                if isinstance(server_error, dict):
+                    message = server_error.get("message")
+                    if not isinstance(message, str) or not message:
+                        message = json.dumps(server_error, sort_keys=True)
+                else:
+                    message = str(server_error)
+                return {
+                    "request_id": request_id,
+                    **metadata,
+                    "error": f"stream failed with server error: {message}",
+                }
             usage = event.get("usage")
             if isinstance(usage, dict):
                 completion_tokens = int(usage.get("completion_tokens") or completion_tokens)

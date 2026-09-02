@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -112,6 +113,50 @@ class AgenticReplayTest(unittest.TestCase):
             BENCH.stream_request = original
 
         self.assertEqual([result["request_id"] for result in results], ["session-1:0"])
+
+    def test_stream_request_preserves_in_stream_server_errors(self) -> None:
+        class ErrorResponse:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+                        b'data: {"error":{"message":"cache operation deadline exceeded","type":"timeout"}}\n',
+                        b"data: [DONE]\n",
+                    ]
+                )
+
+        class ErrorConnection:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return ErrorResponse()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(BENCH.http.client, "HTTPConnection", ErrorConnection):
+            result = BENCH.stream_request(
+                "request-1",
+                [{"role": "user", "content": "task"}],
+                [],
+                {"session_id": "session-1"},
+                "model",
+                128,
+                10,
+            )
+
+        self.assertEqual(result["request_id"], "request-1")
+        self.assertEqual(result["session_id"], "session-1")
+        self.assertEqual(
+            result["error"],
+            "stream failed with server error: cache operation deadline exceeded",
+        )
 
     def test_checkpoint_replay_reconstructs_full_recorded_prefix(self) -> None:
         trajectory = {
