@@ -6,6 +6,8 @@ use std::time::Duration;
 const DECODE_BURST_TURNS: u32 = 8;
 const TIME_DEFICIT_PLANNED_SHARE: u32 = 3;
 const TIME_DEFICIT_MAX_PLANNED_TURNS: u32 = 64;
+const PHASE_BURST_DECODE_TURNS: u32 = 8;
+const DECODE_FIRST_MAX_TURNS: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum DirectWorkPolicy {
@@ -13,6 +15,8 @@ pub(super) enum DirectWorkPolicy {
     Alternate,
     DecodeBurst,
     TimeDeficit,
+    PhaseBurst,
+    DecodeFirst,
 }
 
 impl DirectWorkPolicy {
@@ -20,9 +24,11 @@ impl DirectWorkPolicy {
         match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
             Some("decode-burst") => Ok(Self::DecodeBurst),
             Some("time-deficit") => Ok(Self::TimeDeficit),
+            Some("phase-burst") => Ok(Self::PhaseBurst),
+            Some("decode-first") => Ok(Self::DecodeFirst),
             Some("alternate") | None => Ok(Self::Alternate),
             Some(value) => Err(OpenAiError::invalid_request(format!(
-                "invalid direct work policy {value:?}; expected alternate, decode-burst, or time-deficit"
+                "invalid direct work policy {value:?}; expected alternate, decode-burst, time-deficit, phase-burst, or decode-first"
             ))),
         }
     }
@@ -32,6 +38,8 @@ impl DirectWorkPolicy {
             Self::Alternate => "alternate",
             Self::DecodeBurst => "decode-burst",
             Self::TimeDeficit => "time-deficit",
+            Self::PhaseBurst => "phase-burst",
+            Self::DecodeFirst => "decode-first",
         }
     }
 }
@@ -42,6 +50,7 @@ pub(super) struct DirectWorkArbiter {
     last_served_direct: bool,
     planned_turns_since_direct: u32,
     planned_time_debt: Duration,
+    direct_decode_turns_since_prefill: u32,
 }
 
 impl DirectWorkArbiter {
@@ -62,6 +71,9 @@ impl DirectWorkArbiter {
                 DirectWorkPolicy::TimeDeficit => {
                     self.planned_time_debt.is_zero()
                         || self.planned_turns_since_direct >= TIME_DEFICIT_MAX_PLANNED_TURNS
+                }
+                DirectWorkPolicy::PhaseBurst | DirectWorkPolicy::DecodeFirst => {
+                    !self.last_served_direct
                 }
             },
             (true, false) => true,
@@ -91,6 +103,40 @@ impl DirectWorkArbiter {
     pub(super) fn observe_planned(&mut self, elapsed: Duration) {
         if self.policy == DirectWorkPolicy::TimeDeficit {
             self.planned_time_debt = self.planned_time_debt.saturating_sub(elapsed);
+        }
+    }
+
+    pub(super) fn direct_phase_filter(
+        &mut self,
+        has_decode: bool,
+        has_prefill: bool,
+    ) -> Option<super::IterationBatchPhase> {
+        let max_decode_turns = match self.policy {
+            DirectWorkPolicy::PhaseBurst => PHASE_BURST_DECODE_TURNS,
+            DirectWorkPolicy::DecodeFirst => DECODE_FIRST_MAX_TURNS,
+            DirectWorkPolicy::Alternate
+            | DirectWorkPolicy::DecodeBurst
+            | DirectWorkPolicy::TimeDeficit => return None,
+        };
+        match (has_decode, has_prefill) {
+            (true, true) if self.direct_decode_turns_since_prefill < max_decode_turns => {
+                self.direct_decode_turns_since_prefill =
+                    self.direct_decode_turns_since_prefill.saturating_add(1);
+                Some(super::IterationBatchPhase::Decode)
+            }
+            (true, true) => {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Prefill)
+            }
+            (true, false) => {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Decode)
+            }
+            (false, true) => {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Prefill)
+            }
+            (false, false) => None,
         }
     }
 }
@@ -126,10 +172,11 @@ pub(super) const fn effective_scheduler_lane_count(
     }
 }
 
-pub(super) fn take_direct_iteration_batch(
+pub(super) fn take_direct_iteration_batch_for_phase(
     queue: &mut VecDeque<DirectIteration>,
     max_batch_size: usize,
     mut token_budget: usize,
+    phase: Option<super::IterationBatchPhase>,
 ) -> Vec<DirectIteration> {
     let mut batch = Vec::new();
     let mut batched_sessions = BTreeSet::new();
@@ -142,6 +189,10 @@ pub(super) fn take_direct_iteration_batch(
         let Some(request) = queue.pop_front() else {
             break;
         };
+        if phase.is_some_and(|phase| request.phase != phase) {
+            deferred.push_back(request);
+            continue;
+        }
         if batched_sessions.contains(&request.session_id) {
             deferred.push_back(request);
             continue;

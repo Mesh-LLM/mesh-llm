@@ -8,7 +8,8 @@ use self::cache_runtime::{
 };
 use self::direct_batch::{
     DirectWorkArbiter, DirectWorkPolicy, direct_coalesce_target, effective_scheduler_lane_count,
-    scheduler_safe_mode_from_value, take_direct_iteration_batch, validate_direct_iteration,
+    scheduler_safe_mode_from_value, take_direct_iteration_batch_for_phase,
+    validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
@@ -1335,10 +1336,22 @@ impl SchedulerWorker {
     }
 
     fn run_direct_iteration_batch(&mut self) {
-        let batch = take_direct_iteration_batch(
+        let has_decode = self
+            .direct_iterations
+            .iter()
+            .any(|request| request.phase == IterationBatchPhase::Decode);
+        let has_prefill = self
+            .direct_iterations
+            .iter()
+            .any(|request| request.phase == IterationBatchPhase::Prefill);
+        let phase = self
+            .direct_work_arbiter
+            .direct_phase_filter(has_decode, has_prefill);
+        let batch = take_direct_iteration_batch_for_phase(
             &mut self.direct_iterations,
             self.max_direct_batch_size,
             MAX_NATIVE_ITERATION_TOKENS,
+            phase,
         );
         debug_assert!(!batch.is_empty(), "validated direct queue must yield work");
 
@@ -1932,6 +1945,14 @@ mod tests {
     use super::*;
 
     fn direct_iteration(session_id: &str, token_count: usize) -> DirectIteration {
+        direct_iteration_for_phase(session_id, token_count, IterationBatchPhase::Prefill)
+    }
+
+    fn direct_iteration_for_phase(
+        session_id: &str,
+        token_count: usize,
+        phase: IterationBatchPhase,
+    ) -> DirectIteration {
         let (reply, _result) = std_mpsc::sync_channel(1);
         DirectIteration {
             session_id: session_id.to_string(),
@@ -1941,7 +1962,7 @@ mod tests {
             sampling: None,
             input: None,
             sample_last: true,
-            phase: IterationBatchPhase::Prefill,
+            phase,
             deadline: None,
             cancellation: None,
             enqueued_at: Instant::now(),
@@ -2077,15 +2098,17 @@ mod tests {
             direct_iteration("session-b", 1),
         ]);
 
-        let enabled_batch = take_direct_iteration_batch(
+        let enabled_batch = take_direct_iteration_batch_for_phase(
             &mut enabled,
             effective_scheduler_lane_count(2, false, true),
             2,
+            None,
         );
-        let disabled_batch = take_direct_iteration_batch(
+        let disabled_batch = take_direct_iteration_batch_for_phase(
             &mut disabled,
             effective_scheduler_lane_count(2, false, false),
             2,
+            None,
         );
 
         assert_eq!(enabled_batch.len(), 2);
@@ -2227,7 +2250,7 @@ mod tests {
             direct_iteration("other", 1),
         ]);
 
-        let batch = take_direct_iteration_batch(&mut queue, 3, 8);
+        let batch = take_direct_iteration_batch_for_phase(&mut queue, 3, 8, None);
 
         assert_eq!(
             batch
@@ -2238,6 +2261,31 @@ mod tests {
         );
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.front().unwrap().session_id, "same");
+    }
+
+    #[test]
+    fn direct_iteration_batch_phase_filter_keeps_decode_out_of_prefill_work() {
+        let mut queue = VecDeque::from([
+            direct_iteration_for_phase("prefill-a", 8, IterationBatchPhase::Prefill),
+            direct_iteration_for_phase("decode", 1, IterationBatchPhase::Decode),
+            direct_iteration_for_phase("prefill-b", 8, IterationBatchPhase::Prefill),
+        ]);
+
+        let batch = take_direct_iteration_batch_for_phase(
+            &mut queue,
+            3,
+            32,
+            Some(IterationBatchPhase::Decode),
+        );
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].session_id, "decode");
+        assert_eq!(queue.len(), 2);
+        assert!(
+            queue
+                .iter()
+                .all(|request| request.phase == IterationBatchPhase::Prefill)
+        );
     }
 
     #[test]
@@ -2628,6 +2676,61 @@ mod tests {
     }
 
     #[test]
+    fn phase_burst_runs_eight_decode_batches_before_one_prefill_batch() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::PhaseBurst);
+
+        for _ in 0..8 {
+            assert_eq!(
+                arbiter.direct_phase_filter(true, true),
+                Some(IterationBatchPhase::Decode)
+            );
+        }
+        assert_eq!(
+            arbiter.direct_phase_filter(true, true),
+            Some(IterationBatchPhase::Prefill)
+        );
+        assert_eq!(
+            arbiter.direct_phase_filter(true, true),
+            Some(IterationBatchPhase::Decode)
+        );
+    }
+
+    #[test]
+    fn decode_first_caps_decode_burst_at_sixty_four_batches() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::DecodeFirst);
+
+        for _ in 0..64 {
+            assert_eq!(
+                arbiter.direct_phase_filter(true, true),
+                Some(IterationBatchPhase::Decode)
+            );
+        }
+        assert_eq!(
+            arbiter.direct_phase_filter(true, true),
+            Some(IterationBatchPhase::Prefill)
+        );
+    }
+
+    #[test]
+    fn direct_phase_burst_only_counts_contended_decode_batches() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::PhaseBurst);
+
+        assert_eq!(
+            arbiter.direct_phase_filter(true, false),
+            Some(IterationBatchPhase::Decode)
+        );
+        assert_eq!(
+            arbiter.direct_phase_filter(false, true),
+            Some(IterationBatchPhase::Prefill)
+        );
+        assert_eq!(arbiter.direct_phase_filter(false, false), None);
+        assert_eq!(
+            arbiter.direct_phase_filter(true, true),
+            Some(IterationBatchPhase::Decode)
+        );
+    }
+
+    #[test]
     fn direct_work_policy_parser_defaults_safely_and_rejects_unknown_values() {
         assert_eq!(
             DirectWorkPolicy::from_value(Some("decode-burst")).unwrap(),
@@ -2636,6 +2739,14 @@ mod tests {
         assert_eq!(
             DirectWorkPolicy::from_value(Some("TIME-DEFICIT")).unwrap(),
             DirectWorkPolicy::TimeDeficit
+        );
+        assert_eq!(
+            DirectWorkPolicy::from_value(Some("phase-burst")).unwrap(),
+            DirectWorkPolicy::PhaseBurst
+        );
+        assert_eq!(
+            DirectWorkPolicy::from_value(Some("DECODE-FIRST")).unwrap(),
+            DirectWorkPolicy::DecodeFirst
         );
         assert_eq!(
             DirectWorkPolicy::from_value(None).unwrap(),
