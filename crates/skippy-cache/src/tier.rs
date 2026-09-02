@@ -323,22 +323,27 @@ impl L3Tier {
             }
         };
         let mut new_bytes = 0u64;
+        // Held until after the commit below: until the manifest names them
+        // these segments are unreferenced, and an eviction triggered by
+        // another writer would collect them mid-build.
+        let mut held = Vec::with_capacity(manifest.segments.capacity());
         for (index, (offset, len, label)) in cuts.into_iter().enumerate() {
             let start = usize::try_from(offset).context("segment offset exceeds usize")?;
             let end = start
                 .checked_add(usize::try_from(len).context("segment length exceeds usize")?)
                 .context("segment range overflows")?;
-            let (digest, put) = self.store.put_segment(&wire[start..end])?;
-            if put.new {
-                new_bytes = new_bytes.saturating_add(put.bytes);
+            let stored = self.store.put_segment(&wire[start..end])?;
+            if stored.put.new {
+                new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
             manifest.segments.push(HandoffSegmentRef {
                 index: index as u32,
                 offset,
                 bytes: len,
-                digest,
+                digest: stored.digest.clone(),
                 meta_json: (!label.is_empty()).then_some(label),
             });
+            held.push(stored);
         }
         self.store.commit(&manifest)?;
         self.store.link_prefix(
@@ -347,6 +352,7 @@ impl L3Tier {
             &l3_prefix_key(namespace, token_ids),
             &payload_digest,
         )?;
+        drop(held);
         self.activity.writes.fetch_add(1, Ordering::Relaxed);
         self.activity
             .bytes_written
