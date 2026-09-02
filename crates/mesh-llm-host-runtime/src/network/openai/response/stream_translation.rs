@@ -224,18 +224,18 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
             progress.done_seen = true;
             return Ok(());
         }
-        if sse_data_frame_is_openai_error(&data) {
+        if sse_data_frame_is_openai_error(data) {
             // The upstream backend framed a mid-stream failure. Relay the
             // frame as-is so the client still sees the error body, but do
             // not treat it as stream progress or terminal success.
-            write_captured_sse_event(tcp_stream, response_capture, Some("error"), &data).await?;
+            write_captured_sse_event(tcp_stream, response_capture, Some("error"), data).await?;
             progress.upstream_error_seen = true;
             return Ok(());
         }
-        if !should_parse_stream_chunk(&data, state.model.is_empty(), state.usage.is_none()) {
+        if !should_parse_stream_chunk(data, state.model.is_empty(), state.usage.is_none()) {
             return Ok(());
         }
-        process_translated_responses_frame(tcp_stream, response_capture, state, &data).await?;
+        process_translated_responses_frame(tcp_stream, response_capture, state, data).await?;
         if progress.first_chunk_seen {
             route_observer.stream_chunk();
         } else {
