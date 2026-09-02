@@ -152,7 +152,9 @@ fn install_cli_operational_audit_bridge() {
     };
 
     let bridge: mesh_llm_commands::operational_logging::CliOperationalAuditBridge = Arc::new(
-        |family: mesh_llm_events::CliCommandFamily, outcome: mesh_llm_events::CliCommandOutcome| {
+        |family: mesh_llm_events::CliCommandFamily,
+         outcome: mesh_llm_events::CliCommandOutcome,
+         summary: Option<mesh_llm_events::CliCommandSummary>| {
             let Some(state) = mesh_llm_host_runtime::logging_runtime_state() else {
                 return;
             };
@@ -171,7 +173,8 @@ fn install_cli_operational_audit_bridge() {
                 .with_context(
                     OperationalAuditContext::new()
                         .subject(OperationalAuditSubjectKind::CliCommand, family.as_str())
-                        .outcome(outcome.as_str()),
+                        .outcome(outcome.as_str())
+                        .command_summary(summary.as_ref().map_or("", |summary| summary.as_str())),
                 );
             let _ = state.write_operational_audit(record);
         },
@@ -394,8 +397,6 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         split_topology_lock: cli.split_topology_lock,
         ctx_size: cli.ctx_size,
         max_vram: cli.max_vram,
-        kv_cache_disk: cli.kv_cache_disk,
-        kv_cache_disk_dir: cli.kv_cache_disk_dir,
         no_enumerate_host: cli.no_enumerate_host,
         bin_dir: cli.bin_dir,
         llama_flavor: cli.llama_flavor.map(map_binary_flavor),

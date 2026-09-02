@@ -2,7 +2,7 @@ use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
     UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
     layer_required_bytes, layer_weight_bytes, minimum_valid_context, parallel_lane_candidates,
-    sum_u64, usable_nodes, validate_input,
+    recurrent_bytes_by_layer, sum_u64, usable_nodes, validate_input,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,11 +25,16 @@ pub fn plan_locked_topology(
         minimum_context,
         input.context_length_override,
     )?;
-    let lane_candidates = parallel_lane_candidates(input.parallel_lanes_override)?;
     let nodes = usable_nodes(&input.nodes);
     let locked_nodes = locked_stage_nodes(&nodes, locked_stages)?;
 
     for context_length in context_candidates {
+        let lane_candidates = parallel_lane_candidates(
+            input.parallel_lanes_override,
+            context_length,
+            input.kv_bytes_per_token,
+            input.reserved_sequence_ids,
+        )?;
         for parallel_lanes in lane_candidates.iter().copied() {
             if let Some(candidate) = fit_locked_candidate(
                 input,
@@ -120,8 +125,14 @@ fn fit_locked_candidate(
     let kv_per_layer = input
         .kv_bytes_per_token
         .div_ceil(u64::from(input.layer_count));
-    let layer_required_bytes =
-        layer_required_bytes(&layer_weights, kv_per_layer, context_length, parallel_lanes)?;
+    let recurrent_by_layer = recurrent_bytes_by_layer(input);
+    let layer_required_bytes = layer_required_bytes(
+        &layer_weights,
+        &recurrent_by_layer,
+        kv_per_layer,
+        context_length,
+        parallel_lanes,
+    )?;
     let mut stages = Vec::with_capacity(locked_stages.len());
     let mut minimum_remaining_vram = u64::MAX;
     let mut total_remaining_vram = 0u128;
@@ -187,6 +198,8 @@ mod tests {
             model_weight_bytes: 40 * GIB,
             layer_weight_bytes: Vec::new(),
             kv_bytes_per_token: 64 * 1024,
+            recurrent_bytes_per_sequence_by_layer: Vec::new(),
+            reserved_sequence_ids: 16,
             minimum_nodes: 2,
             nodes,
             context_length_override: None,

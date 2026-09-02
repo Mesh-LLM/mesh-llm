@@ -46,8 +46,8 @@ installed binary:
 
 - [Mesh workflows](https://meshllm.cloud/MESHES.md)
 - [Skippy split serving](https://meshllm.cloud/SKIPPY_SPLITS.md)
-- [Agent harnesses](https://meshllm.cloud/docs/agents/)
-- [Configuration](https://meshllm.cloud/docs/config-reference/)
+- [Agent harnesses](https://meshllm.cloud/docs/pages/agents/)
+- [Configuration](https://meshllm.cloud/docs/pages/config-reference/)
 
 Do not make a mesh public unless the user explicitly asks. Do not post an
 invite token, credentials, host inventory, or private paths to a public service.

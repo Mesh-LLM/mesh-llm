@@ -5,18 +5,11 @@ import { parseLogsSseFrame, type LogsSseFilter } from '@/features/logs/api/sse'
 import type { LogAuditEntry, LogRequest } from '@/features/logs/api/schemas'
 import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
 import { resolveRelativeTime, type LogsLedgerSearch } from '@/features/logs/lib/log-search'
+import { useAuditLiveRecovery } from './use-audit-live-recovery'
 
 const POLL_INTERVAL_MS = 5_000
 const FALLBACK_DELAY_MS = 1_000
 const DEFAULT_CHANNELS: readonly LogReplayChannel[] = ['requests', 'operations']
-/**
- * Returned when audit streaming is disabled. Must be a shared module-level
- * value, not a fresh `[]` literal: a new identity per render invalidates the
- * ledger memo chain, which hands the events chart a new `data` array on every
- * render and drives recharts into a synchronous re-dispatch loop until React's
- * nested-update ceiling trips the `/logs` error boundary.
- */
-const EMPTY_AUDIT_ENTRIES: readonly LogAuditEntry[] = []
 
 export type LogsLiveConnectionState = 'connected' | 'reconnecting' | 'polling' | 'gap' | 'stale'
 
@@ -47,6 +40,7 @@ export type LogsLiveRecovery = {
   readonly requestUpdates: readonly LogRequest[]
   readonly excludedRequestIds: readonly string[]
   readonly auditEntries: readonly LogAuditEntry[]
+  readonly fallbackPollingActive: boolean
   readonly pollingEnabled: boolean
   readonly togglePolling: () => void
 }
@@ -135,10 +129,6 @@ function mergeLiveRequests(current: readonly LiveRequest[], next: LiveRequest): 
   return sortByOccurredAt([...current.filter((entry) => entry.requestId !== next.requestId), next]).slice(-32)
 }
 
-function mergeAuditEntries(current: readonly LogAuditEntry[], next: LogAuditEntry): LogAuditEntry[] {
-  return sortByOccurredAt([...current.filter((entry) => entry.entryId !== next.entryId), next]).slice(-64)
-}
-
 function requestMatchesSearch(request: LogRequest, search: LogsLedgerSearch) {
   const bounds = search.timeRange ? resolveRelativeTime(search.timeRange) : { from: search.from, to: search.to }
   const createdAt = Date.parse(request.createdAt)
@@ -184,9 +174,8 @@ export function useLogsLiveRecovery({
   eventSourceFactory: createEventSource = eventSourceFactory
 }: LogsLiveRecoveryOptions): LogsLiveRecovery {
   const [lifecycleState, setLifecycleState] = useState<LogsLiveConnectionState>('reconnecting')
-  const [auditState, setAuditState] = useState<LogsLiveConnectionState>('reconnecting')
   const [liveRequests, setLiveRequests] = useState<LiveRequestState>({ subscriptionKey: '', entries: [] })
-  const [liveAuditEntries, setLiveAuditEntries] = useState<readonly LogAuditEntry[]>([])
+  const [lifecycleFallbackPollingActive, setLifecycleFallbackPollingActive] = useState(false)
   const [pollingEnabled, setPollingEnabled] = useState(true)
   const pollingEnabledRef = useRef(true)
   const sequenceByChannelRef = useRef(new Map<LogReplayChannel, number>())
@@ -197,19 +186,9 @@ export function useLogsLiveRecovery({
   const hydratePendingRef = useRef(false)
   const hydratePendingClearGapRef = useRef(false)
   const latestCursorRef = useRef<LogReplayCursor | LogAuditCursor | undefined>(undefined)
-  const latestAuditCursorRef = useRef<LogAuditCursor | undefined>(undefined)
-  const auditSequenceRef = useRef<bigint>(0n)
-  const auditHydrateInFlightRef = useRef(false)
-  const auditHydratePendingRef = useRef(false)
-  const auditHydratePendingClearGapRef = useRef(false)
-  const hydrateAuditRef = useRef(hydrateAudit)
   const searchRef = useRef(search)
   const restoredCursorValueRef = useRef<string | undefined>(undefined)
   const previousAuthoritativeSnapshotRef = useRef(authoritativeSnapshot)
-
-  useEffect(() => {
-    hydrateAuditRef.current = hydrateAudit
-  }, [hydrateAudit])
 
   useEffect(() => {
     searchRef.current = search
@@ -225,16 +204,6 @@ export function useLogsLiveRecovery({
       entries: current.entries.filter((entry) => entry.request === undefined || entry.revision > authoritativeRevision)
     }))
   }, [authoritativeSnapshot])
-
-  useEffect(() => {
-    if (
-      auditCursor &&
-      (!latestAuditCursorRef.current || auditCursor.sequence() > latestAuditCursorRef.current.sequence())
-    ) {
-      latestAuditCursorRef.current = auditCursor
-      auditSequenceRef.current = auditCursor.sequence()
-    }
-  }, [auditCursor])
 
   const togglePolling = useCallback(() => {
     setPollingEnabled((current) => {
@@ -316,9 +285,9 @@ export function useLogsLiveRecovery({
     }
 
     const clearPolling = () => {
-      if (pollingTimer === undefined) return
-      window.clearInterval(pollingTimer)
+      if (pollingTimer !== undefined) window.clearInterval(pollingTimer)
       pollingTimer = undefined
+      setLifecycleFallbackPollingActive(false)
     }
 
     const clearFallback = () => {
@@ -372,11 +341,12 @@ export function useLogsLiveRecovery({
 
     const startPolling = () => {
       if (pollingTimer !== undefined) return
-      setLifecycleState('polling')
+      setLifecycleState(source ? 'reconnecting' : 'polling')
       if (pollingEnabledRef.current) hydrateAuthoritatively(false)
       pollingTimer = window.setInterval(() => {
         if (pollingEnabledRef.current) hydrateAuthoritatively(false)
       }, POLL_INTERVAL_MS)
+      setLifecycleFallbackPollingActive(true)
     }
 
     const queuePollingFallback = () => {
@@ -482,145 +452,23 @@ export function useLogsLiveRecovery({
       clearPolling()
       closeSource()
     }
-  }, [channels, createEventSource, enabled, filterScope, hydrate, key, search.replayCursor, subscriptionFilters])
+  }, [channels, createEventSource, enabled, hydrate, key, search.replayCursor, subscriptionFilters])
 
-  useEffect(() => {
-    if (!auditEnabled) return
-
-    let disposed = false
-    let source: LogsEventSource | undefined
-    let reconciliationTimer: number | undefined
-    let fallbackTimer: number | undefined
-
-    const clearReconciliation = () => {
-      if (reconciliationTimer === undefined) return
-      window.clearInterval(reconciliationTimer)
-      reconciliationTimer = undefined
-    }
-    const clearFallback = () => {
-      if (fallbackTimer === undefined) return
-      window.clearTimeout(fallbackTimer)
-      fallbackTimer = undefined
-    }
-    const closeSource = () => {
-      if (!source) return
-      source.onopen = null
-      source.onerror = null
-      source.close()
-      source = undefined
-    }
-    const hydrateAuditAuthoritatively = (clearGap: boolean) => {
-      if (disposed) return
-      if (auditHydrateInFlightRef.current) {
-        auditHydratePendingRef.current = true
-        auditHydratePendingClearGapRef.current ||= clearGap
-        return
-      }
-      auditHydrateInFlightRef.current = true
-      void Promise.resolve(hydrateAuditRef.current())
-        .then(() => {
-          if (!disposed && clearGap) setAuditState(source ? 'connected' : 'polling')
-        })
-        .catch(() => {
-          if (!disposed) setAuditState('stale')
-        })
-        .finally(() => {
-          auditHydrateInFlightRef.current = false
-          if (!disposed && auditHydratePendingRef.current) {
-            auditHydratePendingRef.current = false
-            const pendingClearGap = auditHydratePendingClearGapRef.current
-            auditHydratePendingClearGapRef.current = false
-            hydrateAuditAuthoritatively(pendingClearGap)
-          }
-        })
-    }
-    const startReconciliation = () => {
-      if (reconciliationTimer !== undefined) return
-      reconciliationTimer = window.setInterval(() => {
-        if (pollingEnabledRef.current) hydrateAuditAuthoritatively(false)
-      }, POLL_INTERVAL_MS)
-    }
-    const startPolling = () => {
-      setAuditState('polling')
-      if (reconciliationTimer !== undefined) return
-      if (pollingEnabledRef.current) hydrateAuditAuthoritatively(false)
-      startReconciliation()
-    }
-    const queuePollingFallback = () => {
-      if (fallbackTimer !== undefined) return
-      setAuditState('reconnecting')
-      fallbackTimer = window.setTimeout(() => {
-        fallbackTimer = undefined
-        startPolling()
-      }, FALLBACK_DELAY_MS)
-    }
-    const acceptAuditEvent = (event: MessageEvent<string>) => {
-      if (disposed) return
-      try {
-        const frame = parseLogsSseFrame({ event: event.type, lastEventId: event.lastEventId, data: event.data })
-        if (!(frame.cursor instanceof LogAuditCursor)) {
-          setAuditState('stale')
-          hydrateAuditAuthoritatively(true)
-          return
-        }
-        latestAuditCursorRef.current = frame.cursor
-        if (frame.type === 'audit_gap') {
-          setAuditState('gap')
-          hydrateAuditAuthoritatively(true)
-          return
-        }
-        if (frame.type === 'stream_error') {
-          setAuditState('stale')
-          hydrateAuditAuthoritatively(true)
-          return
-        }
-        if (frame.type !== 'audit_entry') {
-          setAuditState('stale')
-          hydrateAuditAuthoritatively(true)
-          return
-        }
-        const sequence = BigInt(frame.entry.sequence)
-        if (sequence <= auditSequenceRef.current) return
-        auditSequenceRef.current = sequence
-        setLiveAuditEntries((current) => mergeAuditEntries(current, frame.entry))
-      } catch {
-        setAuditState('stale')
-        hydrateAuditAuthoritatively(true)
-      }
-    }
-
-    const url = new LogsApiClient().logsEventSourceUrl({
-      channels: [],
-      audit: { cursor: latestAuditCursorRef.current }
-    })
-    try {
-      const connectedSource = createEventSource(url)
-      source = connectedSource
-      connectedSource.onopen = () => {
-        if (disposed) return
-        clearFallback()
-        clearReconciliation()
-        setAuditState('connected')
-      }
-      connectedSource.onerror = () => {
-        if (!disposed) queuePollingFallback()
-      }
-      connectedSource.addEventListener('audit_entry', acceptAuditEvent)
-      connectedSource.addEventListener('replay_gap', acceptAuditEvent)
-      connectedSource.addEventListener('stream_error', acceptAuditEvent)
-    } catch {
-      startPolling()
-    }
-
-    return () => {
-      disposed = true
-      clearFallback()
-      clearReconciliation()
-      closeSource()
-    }
-  }, [auditEnabled, createEventSource])
+  const {
+    state: auditState,
+    entries: auditEntries,
+    fallbackPollingActive: auditFallbackPollingActive
+  } = useAuditLiveRecovery({
+    enabled: auditEnabled,
+    hydrate: hydrateAudit,
+    cursor: auditCursor,
+    pollingEnabledRef,
+    eventSourceFactory: createEventSource
+  })
 
   const state = combinedConnectionState(lifecycleState, auditState, enabled, auditEnabled)
+  const fallbackPollingActive =
+    (enabled && lifecycleFallbackPollingActive) || (auditEnabled && auditFallbackPollingActive)
   const activeLiveRequests = useMemo(
     () => (enabled && liveRequests.subscriptionKey === key ? liveRequests.entries : []),
     [enabled, key, liveRequests]
@@ -640,7 +488,8 @@ export function useLogsLiveRecovery({
     liveRequestIds,
     requestUpdates,
     excludedRequestIds,
-    auditEntries: auditEnabled ? liveAuditEntries : EMPTY_AUDIT_ENTRIES,
+    auditEntries,
+    fallbackPollingActive,
     pollingEnabled,
     togglePolling
   }

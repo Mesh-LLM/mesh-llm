@@ -14,9 +14,18 @@ mod native_mtp_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod speculative_tests;
+
+#[cfg(test)]
+mod exact_head_tests;
+
+#[cfg(test)]
+mod hardware_tests;
+
+#[cfg(test)]
 pub(crate) use resolution::resolve_skippy_config;
+pub(crate) use resolution::resolve_skippy_config_for_selector;
 pub(crate) use types::{
-    ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedRequestDefaultsConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
-    ResolvedSpeculativeConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
 };

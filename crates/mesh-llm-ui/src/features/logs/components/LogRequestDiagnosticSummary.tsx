@@ -79,7 +79,7 @@ function SummaryGrid({ metrics }: { readonly metrics: readonly DiagnosticMetric[
   return (
     <dl
       aria-label="Diagnostic summary"
-      className="grid gap-px overflow-hidden rounded-[var(--radius)] bg-border-soft sm:grid-cols-2"
+      className="grid min-w-0 gap-px overflow-hidden rounded-[var(--radius)] bg-border-soft sm:grid-cols-2"
     >
       {metrics.map((metric, metricIndex) => (
         <div
@@ -90,7 +90,7 @@ function SummaryGrid({ metrics }: { readonly metrics: readonly DiagnosticMetric[
           key={metric.label}
         >
           <dt className="type-label text-fg-faint">{metric.label}</dt>
-          <dd className="mt-1 break-words font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground">
+          <dd className="mt-1 min-w-0 break-words font-mono tabular-nums text-[length:var(--density-type-caption-lg)] text-foreground [overflow-wrap:anywhere]">
             {metric.value}
           </dd>
         </div>
@@ -135,16 +135,16 @@ function TerminalRecord({ request }: { readonly request: LogRequest }) {
   return (
     <section
       aria-label="Terminal record"
-      className="rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-3"
+      className="min-w-0 rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 px-[var(--panel-x)] py-[var(--panel-y)]"
     >
       <h3 className="type-label text-fg-faint">Terminal record</h3>
-      <p className="mt-2 break-words font-mono text-[length:var(--density-type-caption)] text-foreground">
+      <p className="mt-2 min-w-0 font-mono text-[length:var(--density-type-caption)] text-foreground [overflow-wrap:anywhere]">
         {machineValue(request.terminalAt)} / HTTP {machineValue(request.statusCode)}
       </p>
-      <p className="mt-1 break-words font-mono text-[length:var(--density-type-caption)] text-fg-dim">
+      <p className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption)] text-fg-dim [overflow-wrap:anywhere]">
         route {machineValue(request.route)} / model {machineValue(request.model)}
       </p>
-      <p className="mt-1 break-words font-mono text-[length:var(--density-type-caption)] text-fg-dim">
+      <p className="mt-1 min-w-0 font-mono text-[length:var(--density-type-caption)] text-fg-dim [overflow-wrap:anywhere]">
         provider {machineValue(request.provider)} / engine {machineValue(request.engine)}
       </p>
     </section>
@@ -173,7 +173,7 @@ export function LogRequestDiagnosticSummary({ request, evidence, successful }: L
   return (
     <>
       <div
-        className="flex flex-wrap items-start gap-3 rounded-[var(--radius)] border border-border bg-panel p-3"
+        className="flex min-w-0 flex-wrap items-start gap-2 rounded-[var(--radius)] border border-border bg-panel px-[var(--panel-x)] py-[var(--panel-y)] sm:gap-3"
         data-diagnostic-state={summaryState}
         role="status"
       >
@@ -183,9 +183,9 @@ export function LogRequestDiagnosticSummary({ request, evidence, successful }: L
         />
         <div className="min-w-0 flex-1">
           <h2 className="type-panel-title text-foreground">{summaryTitle}</h2>
-          <p className="mt-1 type-caption text-fg-dim">{summaryDetail}</p>
+          <p className="mt-1 break-words type-caption text-fg-dim">{summaryDetail}</p>
         </div>
-        <StatusBadge dot size="caption" tone={summaryTone}>
+        <StatusBadge className="max-w-full shrink-0" dot size="caption" tone={summaryTone}>
           {request.outcome}
         </StatusBadge>
       </div>

@@ -2,6 +2,32 @@
 
 ## Local inspection
 
+### Process-environment mutation contract
+
+Rust 2024 makes `std::env::set_var` and `std::env::remove_var` unsafe on
+platforms where another thread could read the process environment. Tests that
+need an environment override therefore follow one contract across the
+workspace:
+
+- mark the owning test `#[serial]` (from `serial_test`);
+- snapshot and restore each key with a semantically owned guard/helper in that
+  crate; and
+- keep a `// SAFETY:` comment beside every mutation explaining the serialized
+  scope.
+
+The crates intentionally do not share a Rust dev-dependency just for this
+test helper. Build scripts have an isolated process boundary; runtime startup
+code retains explicit safety notes and audit TODOs until its single-threaded
+ordering is proven. The repository-level census check covers
+all 17 files from the original 128-comment audit and rejects a test mutation
+that is not covered by `#[serial]`:
+
+```bash
+just check-env-mutation-contract
+```
+
+The same check runs through `scripts/tests` in the normal CI validation path.
+
 ### 0. Inspect local GPUs
 
 ```bash
@@ -41,8 +67,13 @@ mesh-llm serve
 
 - Both configured startup models should be considered for launch
 - If `[[models]]` is empty, `mesh-llm serve` should print a `⚠️` warning, show help, and exit cleanly
-- Explicit `--model` or `--gguf` should ignore configured `[[models]]`
+- Explicit `--model` or `--gguf` should ignore configured `[[models]]` for
+  model selection and tuning, except that an exact, unique `--model` ref may
+  inherit its configured pinned GPU selector
 - Explicit `--ctx-size` should override configured `ctx_size`
+- Explicit `--device` should override persisted device selectors under pinned
+  or automatic assignment. Backend names resolve to a detected device, `CPU`
+  bypasses GPU-only preflight, and `auto` retains the inherited selector.
 - `mesh-llm benchmark tune` is the measured local model-serving tuning companion for these startup configs. It only accepts already-downloaded targets, rejects remote-only or not-downloaded refs without fetching them, and runs isolated throughput trials. For speculative decoding changes, run a small sweep that includes the disabled baseline plus `mtp`, `mtp-ngram`, or draft candidates as applicable, then inspect trial logs/telemetry for native MTP or draft acceptance statistics in addition to decode tok/s.
 
 ### 0b. Pinned startup smoke
@@ -75,8 +106,16 @@ mesh-llm serve
 
 - Startup should succeed only when `gpu_id` matches a valid local pinnable stable ID from `mesh-llm gpus`
 - If the pinned ID is missing, ambiguous, unsupported, or stale, startup should fail closed before local launch
-- Explicit `mesh-llm serve --model ...` should still bypass configured `[[models]]` and therefore bypass config-owned pinned IDs
+- Explicit `mesh-llm serve --model ...` keeps the CLI model path, context, and
+  projector choices. When the ref exactly matches one configured model, only
+  that model's effective pinned GPU selector is carried forward and resolved
+  from its stable ID to the backend device name. Unmatched refs and all
+  `--gguf` paths carry no configured model identity but may inherit only
+  `defaults.hardware.device`; duplicate configured refs are rejected as
+  ambiguous because the CLI has no profile selector.
 - Do not use GPU indexes, `index:*`, or backend-device names like `CUDA0` / `HIP0` / `MTL0` as `gpu_id`
+- Backend-device names are accepted only through the explicit CLI `--device`
+  override. Persisted `gpu_id` values remain stable IDs.
 
 ### 0c. Requirement-aware mesh smoke
 
@@ -222,6 +261,14 @@ repository content. It is intentionally evidence-producing and non-required:
 failed nightlies should guide stabilization work, not block unrelated pull
 requests.
 
+The reusable run also invokes `qa-kv-tool-loop-stability.py` by default. Use
+`MESH_NIGHTLY_KV_MODELS` to select the direct model IDs and the bounded
+`MESH_NIGHTLY_KV_{ATTEMPTS,PRESSURE_TURNS,OVERLAP_REQUESTS,MIN_CACHED_TOKENS,SUFFIX_PREFILL_LIMIT}`
+variables to tune the live probe. A manual run may set `skip_kv_tool_loop` for
+a deliberately narrower diagnosis. Both harnesses run to completion, publish
+their summaries and evidence, and then preserve either failure as the job
+result.
+
 ### 0f. KV/tool-loop stability certification
 
 Run the KV/tool-loop certification probe when changing Skippy KV slot cleanup,
@@ -267,6 +314,42 @@ This certification is deliberately a lab/release-confidence check, not a
 required PR gate. Use it to prove KV/cache stability on a real direct-model
 endpoint after local unit tests and before relying on agent workloads such as
 Goose, Pi, or OpenCode for broad smoke coverage.
+
+The separate `nightly-kv-coverage.yml` schedule expands the deterministic
+radix-lease and blob-ownership state machines on a pinned public CPU image. It
+records exact seed and step budgets plus the source SHA, and preserves the
+seed/step trace in its uploaded log. Repository variables
+`MESH_NIGHTLY_KV_STATE_MACHINE_SEEDS` and
+`MESH_NIGHTLY_KV_STATE_MACHINE_STEPS` may raise or lower the bounded corpus;
+set `MESH_NIGHTLY_KV_COVERAGE_ENABLED=0` to disable the scheduled run. Manual
+dispatch still executes trusted `main` on GitHub-hosted infrastructure.
+
+The unchanged-pin daily llama canary uses the `nightly` cadence in
+`ci/llama-canary/family-certified.json`: Qwen3 dense, Falcon-H1 hybrid,
+Qwen3Next composite, and Mamba recurrent. Llama bumps and explicit forced
+certification retain the full 33-family battery.
+
+The trusted CUDA competitive benchmark normalizes every completed
+Thoughtworks cell with `scripts/performance-history.py`. When
+`MESH_PERFORMANCE_HISTORY_ENABLED=1`, set
+`MESH_PERFORMANCE_HISTORY_DATASET=meshllm/performance-history` and provide the
+write token as the `MESH_PERFORMANCE_HISTORY_HF_TOKEN` GitHub secret. The
+workflow runs on its daily schedule or by a manual dispatch explicitly
+selected from `main`; non-`main` dispatches cannot acquire the persistent GPU
+runner. The fixed `[self-hosted, Linux, X64, cuda]` selector must resolve to
+the runner named `white`, and
+`MESH_NIGHTLY_COMPETITIVE_HF_CLI` must name its pre-baked `hf` executable when
+history is enabled. It downloads prior immutable JSONL shards, requires the Hub
+schema to match `ci/performance-history/schema.json`, reports only exact-cohort
+drift, and uploads one source/run-addressed shard. Three prior complete
+matching runs are required before performance drift is classified; thresholds
+remain report-only during baseline collection. After the baseline window, set
+`MESH_PERFORMANCE_HISTORY_GATE_ENABLED=1` to make statistically sustained
+throughput or TTFT regressions fail the nightly job. Missing stable GPU
+fingerprints fail closed, and external backend runtime digests are part of the
+comparison cohort while the candidate Mesh binary digest remains an observed
+field. The Hub Dataset Viewer materializes the JSONL shards as Parquet without
+adding a runtime conversion dependency to the trusted benchmark runner.
 
 ### 0g. Logging workflow certification
 
@@ -822,8 +905,8 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a released coordinator without advertised
-  `skippy-stage/2` `artifact-transfer`, `stage-generation-4`, and
-  `direct-prediction-return` support must not be selected for a generation-4
+  `skippy-stage/2` `artifact-transfer`, `stage-generation-6`, and
+  `direct-prediction-return` support must not be selected for a generation-5
   split topology; the worker must fall back to local/HF package resolution.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node
   must advertise no `artifact-transfer` feature, reject inbound artifact

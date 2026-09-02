@@ -36,6 +36,137 @@ fn proactive_eviction_attrs_are_bounded_and_request_free() {
 }
 
 #[test]
+fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
+        config.lane_count,
+        8,
+    );
+    let before = runtime.session_stats();
+
+    let first = kv
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1, None)
+        .unwrap();
+    let second = kv
+        .admit_resident_capacity(&mut runtime, "request", 9, 1, 1, None)
+        .unwrap();
+    let recovered = kv
+        .admit_resident_capacity(&mut runtime, "request", 4, 1, 1, None)
+        .unwrap();
+
+    assert!(!first.admitted);
+    assert!(recovered.admitted);
+    assert_eq!(second.active_tokens, first.active_tokens);
+    assert_eq!(
+        second.admission_deficit_tokens,
+        first.admission_deficit_tokens
+    );
+    assert_eq!(runtime.session_stats(), before);
+
+    let response = crate::frontend::local_generation::resident_capacity_admission_error(&first)
+        .into_response();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers().get("retry-after").unwrap(), "1");
+}
+
+#[test]
+fn resident_capacity_unknown_fails_closed() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
+
+    let decision = kv
+        .admit_resident_capacity(&mut runtime, "unknown", 1, 0, 0, None)
+        .unwrap();
+
+    assert!(!decision.capacity_known);
+    assert!(!decision.admitted);
+    assert_eq!(decision.admission_deficit_tokens, 1);
+}
+
+#[test]
+fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
+    let config = StageConfig {
+        ctx_size: 131_072,
+        lane_count: 4,
+        kv_cache: Some(StageKvCacheConfig {
+            max_entries: 32,
+            min_tokens: 64,
+            ..prefix_cache_test_config()
+                .kv_cache
+                .expect("test cache config")
+        }),
+        ..prefix_cache_test_config()
+    };
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
+        config.lane_count,
+        config.ctx_size,
+    );
+
+    // The failed qualification's warm-up left 98,028 resident cells. Model
+    // that physical occupancy with sixteen independent resident paths.
+    for index in 0..16 {
+        let token_count = if index < 12 { 6_127 } else { 6_126 };
+        let mut base = prefix_cache_test_base();
+        base.chat_template_id = Some(format!("warm-family-{index}"));
+        let tokens = (0..token_count).collect::<Vec<_>>();
+        let identity = kv.prefill_identity(&config, &base, 0, &tokens);
+        seed_resident_prefix(&kv, &identity);
+    }
+    assert_eq!(kv.radix.lock().unwrap().stats().resident_tokens, 98_028);
+
+    // Four unrelated requests restore only the shared chat-template prefix.
+    // Their outstanding suffix plus bounded decode demand is 47,419 tokens.
+    let wave = [
+        ("measured-1", 147_u64, 9_209_u64),
+        ("measured-2", 81, 10_551),
+        ("measured-3", 146, 12_439),
+        ("measured-4", 146, 15_092),
+    ];
+    let mut reservations = Vec::new();
+    for (session_id, restored_tokens, suffix_tokens) in wave {
+        runtime.track_session_tokens_for_test(session_id, restored_tokens);
+        reservations.push(
+            kv.reserve_resident_capacity(
+                session_id,
+                restored_tokens
+                    .saturating_add(suffix_tokens)
+                    .saturating_add(32),
+            )
+            .unwrap()
+            .expect("resident reservation"),
+        );
+    }
+
+    let decision = kv
+        .admit_resident_capacity(&mut runtime, "measured-1", 9_241, 2_048, 2_080, None)
+        .unwrap();
+
+    assert_eq!(decision.inflight_reservations, 4);
+    assert_eq!(decision.inflight_outstanding_tokens, 47_419);
+    assert_eq!(decision.request_tokens, 47_419);
+    assert!(decision.admitted);
+    assert!(decision.evicted_entries >= 3);
+    assert!(decision.physical_evicted_tokens >= 16_455);
+    assert!(decision.projected_free_tokens >= 2_048);
+
+    drop(reservations);
+    let after_release = kv
+        .admit_resident_capacity(&mut runtime, "measured-1", 0, 0, 0, None)
+        .unwrap();
+    assert_eq!(after_release.inflight_reservations, 0);
+    assert_eq!(after_release.inflight_outstanding_tokens, 0);
+}
+
+#[test]
 fn openai_cache_stats_default_to_disabled() {
     let stats = GenerationCacheStats::default();
 
@@ -130,7 +261,7 @@ fn cold_resident_prefix_lookup_misses_before_recording() {
 }
 
 #[test]
-fn resident_prefix_cache_hits_shared_prefix_grid() {
+fn resident_prefix_cache_hits_radix_common_prefix_without_a_record_ladder() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -138,7 +269,8 @@ fn resident_prefix_cache_hits_shared_prefix_grid() {
     let base = prefix_cache_test_base();
     let recorded_tokens = (0..2214).collect::<Vec<_>>();
     let mut lookup_tokens = recorded_tokens.clone();
-    lookup_tokens.extend(100_000..100_017);
+    lookup_tokens[2176] = 100_000;
+    lookup_tokens.extend(100_001..100_017);
     let record_plan = crate::frontend::prefix_cache::stage0_full_prefill_record_identities(
         &kv,
         &config,
@@ -146,26 +278,53 @@ fn resident_prefix_cache_hits_shared_prefix_grid() {
         &recorded_tokens,
     );
     let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
+    assert_eq!(record_plan.len(), 1);
+    assert_eq!(lookup_plan.len(), 1);
+    let recorded = &record_plan[0];
+    let lookup = &lookup_plan[0];
 
-    seed_resident_prefix(&kv, recorded_shared);
+    seed_resident_prefix(&kv, recorded);
     let hit = kv
-        .probe_resident_prefix(lookup_shared)
-        .expect("different-tail prompt should hit shared prefix grid");
+        .probe_resident_prefix(lookup)
+        .expect("different-tail prompt should hit the radix common prefix");
 
-    assert_eq!(hit.page_id, recorded_shared.page_id);
+    assert_eq!(hit.page_id, recorded.page_id);
     assert_eq!(hit.token_count, 2176);
 }
 
 #[test]
-fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
+fn resident_prefix_cache_rejects_common_prefix_below_configured_minimum() {
+    let config = StageConfig {
+        kv_cache: Some(StageKvCacheConfig {
+            min_tokens: 64,
+            ..prefix_cache_test_config()
+                .kv_cache
+                .expect("test cache config")
+        }),
+        ..prefix_cache_test_config()
+    };
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let donor = prefix_cache_base_with_request("donor-request", "donor-session");
+    let receiver = prefix_cache_base_with_request("receiver-request", "receiver-session");
+    let recorded_tokens = (0..20_751).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens[..27].to_vec();
+    lookup_tokens.extend(100_000..128_065);
+    let recorded = kv.prefill_identity(&config, &donor, 0, &recorded_tokens);
+    let lookup = kv.prefill_identity(&config, &receiver, 0, &lookup_tokens);
+
+    seed_resident_prefix(&kv, &recorded);
+
+    assert!(kv.probe_resident_prefix(&lookup).is_none());
+    assert_eq!(
+        kv.peek_cache_affinity(&config, &[lookup]),
+        skippy_scheduler::CacheAffinity::default()
+    );
+}
+
+#[test]
+fn stage0_full_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -192,32 +351,14 @@ fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
         .map(|identity| identity.identity.token_count)
         .collect::<Vec<_>>();
 
-    assert_eq!(record_counts, vec![2214, 2176]);
-    assert!(lookup_counts.contains(&2176));
-
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
-    let recorded_exact = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2214)
-        .expect("record plan should keep exact first prompt");
-    let lookup_exact = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2231)
-        .expect("lookup plan should probe exact second prompt");
-
-    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
-    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    assert_eq!(record_counts, vec![2214]);
+    assert_eq!(lookup_counts, vec![2231]);
+    assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
+    assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
 }
 
 #[test]
-fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
+fn stage0_chunked_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
     let kv = KvStageIntegration::from_config(&config)
         .unwrap()
@@ -245,26 +386,8 @@ fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
         .map(|identity| identity.identity.token_count)
         .collect::<Vec<_>>();
 
-    assert_eq!(record_counts, vec![2214, 2176]);
-    assert!(lookup_counts.contains(&2176));
-
-    let recorded_shared = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("chunked record plan should include shared grid prefix");
-    let lookup_shared = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2176)
-        .expect("lookup plan should probe shared grid prefix");
-    let recorded_exact = record_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2214)
-        .expect("chunked record plan should keep exact first prompt");
-    let lookup_exact = lookup_plan
-        .iter()
-        .find(|identity| identity.identity.token_count == 2231)
-        .expect("lookup plan should probe exact second prompt");
-
-    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
-    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    assert_eq!(record_counts, vec![2214]);
+    assert_eq!(lookup_counts, vec![2231]);
+    assert_eq!(record_plan[0].namespace, lookup_plan[0].namespace);
+    assert_ne!(record_plan[0].page_id, lookup_plan[0].page_id);
 }

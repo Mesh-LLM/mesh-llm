@@ -93,6 +93,7 @@ runs:
           "ggml/src/libggml.a"
           "ggml/src/libggml-base.a"
           "tools/mtmd/libmtmd.a"
+          "vendor/hash/libvendor-hash.a"
         )
         test -s "$build_stamp"
         test -s "$patched_sha_file"

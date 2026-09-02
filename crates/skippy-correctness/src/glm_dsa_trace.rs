@@ -31,7 +31,7 @@ use crate::{
         GlmDsaTimingReport, GlmDsaTopKComparisonReport, GlmDsaTraceKeyReport,
         GlmDsaTraceParityMismatchReport, GlmDsaTraceParityReport, GlmDsaTraceVariantReport,
     },
-    support::{ChildGuard, parse_wire_dtype},
+    support::ChildGuard,
 };
 
 #[derive(Debug, Clone)]
@@ -185,7 +185,6 @@ pub fn glm_dsa_stage0_trace(args: GlmDsaStage0TraceArgs) -> Result<()> {
         case_root: case_root.to_string_lossy().into_owned(),
         stage_layer_end: args.stage_layer_end,
         activation_width: args.activation_width,
-        activation_wire_dtype: args.activation_wire_dtype,
         prefill_chunk_size: args.prefill_chunk_size,
         max_new_tokens: args.max_new_tokens,
         trace_filter: args.trace_filter,
@@ -218,7 +217,6 @@ fn ensure_supported_args(args: &GlmDsaStage0TraceArgs) -> Result<()> {
     if args.stage_layer_end == 0 {
         bail!("--stage-layer-end must be greater than zero");
     }
-    parse_wire_dtype(&args.activation_wire_dtype)?;
     Ok(())
 }
 
@@ -625,8 +623,10 @@ fn causal_visible_width(pos_start: i32, token_index: usize) -> usize {
 
 fn decode_i32_values(raw_bytes: &[u8]) -> Vec<i32> {
     raw_bytes
-        .chunks_exact(std::mem::size_of::<i32>())
-        .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("exact i32 chunk")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| i32::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -691,8 +691,6 @@ fn start_stage0(
             path_str(config_path)?,
             "--activation-width",
             &args.activation_width.to_string(),
-            "--activation-wire-dtype",
-            &args.activation_wire_dtype,
             "--max-inflight",
             &args.server.max_inflight.to_string(),
         ])
@@ -749,8 +747,6 @@ fn run_prompt(
             "0",
             "--activation-width",
             &args.activation_width.to_string(),
-            "--activation-wire-dtype",
-            &args.activation_wire_dtype,
             "--prefill-chunk-size",
             &args.prefill_chunk_size.to_string(),
             "--max-new-tokens",
@@ -869,8 +865,7 @@ impl FakeDownstreamGuard {
                                     return Err(anyhow!(error).context("read stage message"));
                                 }
                             };
-                            let activation_f32_payload =
-                                message.activation_f32_payload(activation_width).ok();
+                            let activation_f32_payload = message.activation_f32_payload().ok();
                             let summary = FakeDownstreamMessage {
                                 kind: message.kind,
                                 pos_start: message.pos_start,
@@ -1323,11 +1318,13 @@ fn compare_activation_payloads(
     let mut sq_sum = 0.0f64;
     let mut ref_sq_sum = 0.0f64;
     for (fused_chunk, direct_chunk) in fused
-        .chunks_exact(std::mem::size_of::<f32>())
-        .zip(direct.chunks_exact(std::mem::size_of::<f32>()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(direct.as_chunks::<4>().0.iter())
     {
-        let fused_value = f32::from_le_bytes(fused_chunk.try_into().ok()?);
-        let direct_value = f32::from_le_bytes(direct_chunk.try_into().ok()?);
+        let fused_value = f32::from_le_bytes(*fused_chunk);
+        let direct_value = f32::from_le_bytes(*direct_chunk);
         count += 1;
         if !fused_value.is_finite() || !direct_value.is_finite() {
             non_finite_pair_count += 1;
@@ -1380,8 +1377,8 @@ fn activation_f32_stats(bytes: &[u8]) -> Option<GlmDsaActivationStatsReport> {
     let mut non_finite_count = 0usize;
     let mut sum = 0.0f64;
     let mut max_abs = 0.0f32;
-    for chunk in bytes.chunks_exact(std::mem::size_of::<f32>()) {
-        let value = f32::from_le_bytes(chunk.try_into().ok()?);
+    for chunk in bytes.as_chunks::<4>().0 {
+        let value = f32::from_le_bytes(*chunk);
         count += 1;
         if value.is_finite() {
             sum += f64::from(value);

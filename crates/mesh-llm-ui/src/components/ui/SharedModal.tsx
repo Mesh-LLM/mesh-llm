@@ -78,7 +78,7 @@ function SharedModalActionStrip({ className, ...props }: React.HTMLAttributes<HT
   return (
     <div
       className={cn(
-        'flex flex-col-reverse gap-2.5 border-t border-border-soft bg-panel-strong/70 px-5 py-3 sm:flex-row sm:justify-end',
+        'flex flex-col gap-2.5 border-t border-border-soft bg-panel-strong/70 px-5 py-3 sm:flex-row sm:justify-end',
         className
       )}
       {...props}

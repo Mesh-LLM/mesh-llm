@@ -36,6 +36,9 @@ export default function(eleventyConfig) {
   eleventyConfig.addPassthroughCopy("src/mesh-llm-logo.svg");
   eleventyConfig.addPassthroughCopy("src/CNAME");
   eleventyConfig.addPassthroughCopy("src/assets");
+  eleventyConfig.addPassthroughCopy({
+    "node_modules/d3/dist/d3.min.js": "assets/d3.min.js",
+  });
   eleventyConfig.addPassthroughCopy({ "../install.sh": "install.sh" });
   eleventyConfig.addPassthroughCopy({ "../install.ps1": "install.ps1" });
   eleventyConfig.addPassthroughCopy({ "../install.md": "setup-mesh" });
@@ -70,6 +73,15 @@ export default function(eleventyConfig) {
   });
 
   eleventyConfig.addFilter("json", (value) => JSON.stringify(value));
+  eleventyConfig.addFilter("jsonScript", (value) =>
+    JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => ({
+      "<": "\\u003C",
+      ">": "\\u003E",
+      "&": "\\u0026",
+      "\u2028": "\\u2028",
+      "\u2029": "\\u2029",
+    })[character])
+  );
   eleventyConfig.addFilter("tocHeadings", (content) => {
     if (typeof content !== "string") return [];
 

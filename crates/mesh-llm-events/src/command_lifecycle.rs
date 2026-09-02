@@ -9,6 +9,9 @@ use super::{LogFormat, OutputEvent, OutputLevel, OutputSink, output_sink};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "command_summary_grammar.rs"]
+mod command_summary_grammar;
+
 /// Stable family for a parsed command. The enum intentionally groups commands
 /// by responsibility instead of carrying user-supplied subcommand names or
 /// arguments.
@@ -28,6 +31,44 @@ pub enum CliCommandFamily {
     Runtime,
     Skills,
     Unknown,
+}
+
+/// A grammar-validated summary of a parsed CLI command.
+///
+/// External callers must use [`CliCommandSummary::sanitize`] to construct a
+/// summary.
+///
+/// ```compile_fail
+/// use mesh_llm_events::CliCommandSummary;
+///
+/// let _summary = CliCommandSummary::new("mesh-llm status");
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CliCommandSummary(String);
+
+impl CliCommandSummary {
+    fn new(value: &str) -> Option<Self> {
+        let token_count = value.split_whitespace().count();
+        (!value.is_empty()
+            && token_count > 0
+            && token_count <= 32
+            && value.chars().count() <= 256
+            && !value.chars().any(char::is_control))
+        .then(|| Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn sanitize(value: &str) -> Option<Self> {
+        let summary = Self::new(value)?;
+        is_safe_summary(&summary.0).then_some(summary)
+    }
+}
+
+fn is_safe_summary(value: &str) -> bool {
+    command_summary_grammar::is_safe_summary(value)
 }
 
 impl CliCommandFamily {
@@ -164,7 +205,10 @@ fn write_cli_command_event_to_stderr<W: Write>(
     stderr: &mut W,
 ) -> io::Result<()> {
     let OutputEvent::CliCommandLifecycle { family, outcome } = event else {
-        unreachable!("CLI command event adapter received a different event variant");
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CLI command event adapter received a different event variant",
+        ));
     };
 
     writeln!(
@@ -178,161 +222,5 @@ fn write_cli_command_event_to_stderr<W: Write>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{clear_output_sink, set_output_sink};
-    use std::sync::{Arc, Mutex};
-
-    struct RecordingSink {
-        mode: LogFormat,
-        events: Mutex<Vec<OutputEvent>>,
-    }
-
-    impl RecordingSink {
-        fn new(mode: LogFormat) -> Self {
-            Self {
-                mode,
-                events: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    impl OutputSink for RecordingSink {
-        fn emit_event(&self, event: OutputEvent) -> io::Result<()> {
-            self.events.lock().expect("recording sink lock").push(event);
-            Ok(())
-        }
-
-        fn mode(&self) -> LogFormat {
-            self.mode
-        }
-    }
-
-    struct VerboseResetGuard;
-
-    impl Drop for VerboseResetGuard {
-        fn drop(&mut self) {
-            set_cli_command_event_verbose(false);
-        }
-    }
-
-    struct OutputSinkResetGuard;
-
-    impl Drop for OutputSinkResetGuard {
-        fn drop(&mut self) {
-            clear_output_sink();
-        }
-    }
-
-    #[test]
-    fn public_emit_is_silent_unless_verbose_enabled() {
-        let sink = Arc::new(RecordingSink::new(LogFormat::Pretty));
-        let _sink_guard = OutputSinkResetGuard;
-        let _verbose_guard = VerboseResetGuard;
-        set_output_sink(sink.clone());
-
-        set_cli_command_event_verbose(false);
-        emit_cli_command_event(CliCommandFamily::Runtime, CliCommandOutcome::Started)
-            .expect("silent emission must succeed");
-        assert!(
-            sink.events.lock().expect("recording sink lock").is_empty(),
-            "without --debug the command event must not be presented"
-        );
-
-        set_cli_command_event_verbose(true);
-        emit_cli_command_event(CliCommandFamily::Runtime, CliCommandOutcome::Completed)
-            .expect("verbose emission must succeed");
-        assert_eq!(
-            *sink.events.lock().expect("recording sink lock"),
-            vec![OutputEvent::CliCommandLifecycle {
-                family: CliCommandFamily::Runtime,
-                outcome: CliCommandOutcome::Completed,
-            }],
-            "with --debug the command event must reach the pretty sink"
-        );
-    }
-
-    #[test]
-    fn pretty_sink_receives_typed_command_event() {
-        let sink = RecordingSink::new(LogFormat::Pretty);
-        let mut stderr = Vec::new();
-        let event = OutputEvent::CliCommandLifecycle {
-            family: CliCommandFamily::Runtime,
-            outcome: CliCommandOutcome::Started,
-        };
-
-        emit_cli_command_event_with_sink(&event, Some(&sink), &mut stderr)
-            .expect("pretty sink should receive command event");
-
-        assert_eq!(
-            *sink.events.lock().expect("recording sink lock"),
-            vec![event]
-        );
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn json_sink_keeps_command_event_off_stdout() {
-        let sink = RecordingSink::new(LogFormat::Json);
-        let mut stderr = Vec::new();
-        let event = OutputEvent::CliCommandLifecycle {
-            family: CliCommandFamily::Models,
-            outcome: CliCommandOutcome::Completed,
-        };
-
-        emit_cli_command_event_with_sink(&event, Some(&sink), &mut stderr)
-            .expect("stderr fallback should write command event");
-
-        assert!(sink.events.lock().expect("recording sink lock").is_empty());
-        assert_eq!(
-            String::from_utf8(stderr).expect("stderr must be utf-8"),
-            "mesh-llm command event: family=models code=cli_command_completed outcome=completed\n"
-        );
-    }
-
-    #[test]
-    fn command_event_vocabulary_is_bounded_and_static() {
-        let families = [
-            CliCommandFamily::Agent,
-            CliCommandFamily::Benchmark,
-            CliCommandFamily::Configuration,
-            CliCommandFamily::Diagnostics,
-            CliCommandFamily::Discovery,
-            CliCommandFamily::Hardware,
-            CliCommandFamily::Identity,
-            CliCommandFamily::Installation,
-            CliCommandFamily::Models,
-            CliCommandFamily::Plugin,
-            CliCommandFamily::Process,
-            CliCommandFamily::Runtime,
-            CliCommandFamily::Skills,
-            CliCommandFamily::Unknown,
-        ];
-        let outcomes = [
-            CliCommandOutcome::Started,
-            CliCommandOutcome::Completed,
-            CliCommandOutcome::Failed,
-            CliCommandOutcome::Rejected,
-            CliCommandOutcome::ParseFailed,
-        ];
-
-        for family in families {
-            assert!(family.as_str().len() <= 24);
-            assert!(
-                family
-                    .as_str()
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-            );
-        }
-        for outcome in outcomes {
-            assert!(outcome.code().len() <= 48);
-            assert!(
-                outcome
-                    .code()
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-            );
-        }
-    }
-}
+#[path = "command_lifecycle/tests.rs"]
+mod tests;

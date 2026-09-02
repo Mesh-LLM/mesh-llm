@@ -6,6 +6,7 @@ import { formatTokenUsage } from '@/features/logs/lib/log-token-usage'
 import { sortByOccurredAt } from '@/features/logs/lib/log-instant'
 import { isStreamEvent } from '@/features/logs/lib/log-request-details'
 import { attemptStatus, attemptTone, elapsedMilliseconds, eventTone } from '@/features/logs/lib/log-timeline'
+import { formatElapsedMs } from '@/lib/format-duration'
 
 type EvidenceEntry =
   | {
@@ -81,7 +82,7 @@ function EventEvidence({
           </code>
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[length:var(--density-type-caption)] text-fg-faint">
-          {deltaMs !== undefined ? <span>+{deltaMs.toLocaleString()} ms</span> : null}
+          {deltaMs !== undefined ? <span>{formatElapsedMs(deltaMs, { prefix: '+' })}</span> : null}
           <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString()}</time>
         </div>
       </div>
@@ -91,7 +92,7 @@ function EventEvidence({
           {event.provider !== undefined ? <span>provider {event.provider}</span> : null}
           {event.engine !== undefined ? <span>engine {event.engine}</span> : null}
           {event.statusCode !== undefined ? <span>HTTP {event.statusCode}</span> : null}
-          {event.durationMs !== undefined ? <span>{event.durationMs.toLocaleString()} ms</span> : null}
+          {event.durationMs !== undefined ? <span>{formatElapsedMs(event.durationMs)}</span> : null}
           {tokenUsage !== undefined ? <span>{tokenUsage}</span> : null}
         </div>
       ) : null}
@@ -127,8 +128,8 @@ function AttemptEvidence({
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[length:var(--density-type-caption)] text-fg-faint">
         {attempt.provider !== undefined ? <span>provider {attempt.provider}</span> : null}
         {attempt.engine !== undefined ? <span>engine {attempt.engine}</span> : null}
-        {durationMs !== undefined ? <span>{durationMs.toLocaleString()} ms</span> : null}
-        {deltaMs !== undefined ? <span>+{deltaMs.toLocaleString()} ms</span> : null}
+        {durationMs !== undefined ? <span>{formatElapsedMs(durationMs)}</span> : null}
+        {deltaMs !== undefined ? <span>{formatElapsedMs(deltaMs, { prefix: '+' })}</span> : null}
         <time dateTime={attempt.occurredAt}>{new Date(attempt.occurredAt).toLocaleTimeString()}</time>
       </div>
     </article>

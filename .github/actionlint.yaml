@@ -5,6 +5,8 @@ self-hosted-runner:
     - X64
     - amd64
     - gpu-nvidia
+    - cuda
+    - family-certify
     - mesh-llm-amd64
     - mesh-llm-arm64
     - depot-ubuntu-24.04

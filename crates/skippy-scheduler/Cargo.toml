@@ -1,0 +1,26 @@
+[package]
+name = "skippy-scheduler"
+version.workspace = true
+edition = { workspace = true }
+license = { workspace = true }
+description = "Iteration-level scheduler for concurrent staged serving with unified KV"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+categories = ["concurrency", "artificial-intelligence"]
+
+[features]
+scheduler-lab = ["skippy-runtime/dynamic-native-runtime"]
+
+[dependencies]
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc9" }
+thiserror = "2"
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+skippy-cache = { path = "../skippy-cache", version = "0.76.0-rc9" }
+
+[[bench]]
+name = "scheduler_lab"
+harness = false
+required-features = ["scheduler-lab"]

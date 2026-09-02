@@ -32,9 +32,6 @@ permissions:
   contents: read
   packages: read
 
-env:
-  CACHE_NAMESPACE: mesh-llm
-
 jobs:
   runner_policy:
     name: Select console artifact runner
@@ -90,17 +87,20 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - name: Configure isolated pnpm store
-        run: pnpm config set store-dir ~/.pnpm-store
-      - name: Restore pnpm store
-        id: pnpm_cache
-        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/.pnpm-store
-          key: ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-${{ hashFiles('crates/mesh-llm-ui/pnpm-lock.yaml', '.github/cache-version.txt') }}
-          restore-keys: |
-            ${{ env.CACHE_NAMESPACE }}-pnpm-${{ runner.os }}-
+      # The container image bakes a warm pnpm store at
+      # /home/runner/.local/share/pnpm/store (mesh-llm-runner-images
+      # scripts/warm-dependencies.sh). Point pnpm at it directly instead of
+      # the Actions cache: containerized jobs fix $HOME to /github/home, so
+      # neither pnpm's default store-dir resolution nor a plain HOME
+      # override can find the baked store from in here, and restoring
+      # ~/.pnpm-store from the Actions cache reported a hit but the files
+      # didn't land where pnpm looks for them (#1392). Using the image's
+      # own store sidesteps both and needs no cache round trip at all — this
+      # also removes the restore-with-no-publisher race this job used to
+      # have against ui_quality's save (three lanes restored a key only
+      # ui_quality ever saved).
+      - name: Point pnpm at the image's baked store
+        run: pnpm config set store-dir /home/runner/.local/share/pnpm/store
       - name: Install UI dependencies
         run: pnpm i --frozen-lockfile
       - name: Build console distribution

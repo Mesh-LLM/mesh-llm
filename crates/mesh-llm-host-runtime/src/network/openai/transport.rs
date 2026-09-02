@@ -5,17 +5,18 @@
 
 use crate::inference::election;
 use crate::logging::{
-    OpenAiLifecycleAttachment, OpenAiRouteAttempt, OpenAiRouteObserver, ProxyAttemptFinish,
+    CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteAttempt, OpenAiRouteObserver,
+    ProxyAttemptFinish,
 };
 use crate::mesh;
 use crate::network::affinity::{
     AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
 use crate::network::openai::auto_route;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_quality::ResponseQualityFailure;
 use crate::network::router;
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
 
 pub use super::request_normalize::{ResponseAdapter, release_request_objects};
 pub(crate) use super::request_parse::read_http_request_with_plugin_manager_with_context;
@@ -46,6 +47,13 @@ use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 
 const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
+
+#[path = "transport_route_model.rs"]
+mod route_model;
+pub(crate) use route_model::RouteModelRequestContext;
+#[cfg(test)]
+pub(crate) use route_model::finalize_route_model_result;
+pub use route_model::route_model_request;
 
 /// Response result returned to the ingress boundary. Unlike the historical
 /// boolean, this preserves the downstream HTTP status and distinguishes a
@@ -148,7 +156,7 @@ const LEGACY_LIFECYCLE_ROUTE_MESSAGE: &str =
     "model lifecycle routes moved to the trusted local management API at :3131/api/runtime/models";
 
 pub(crate) async fn reject_legacy_lifecycle_request(
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
     response_outcome(
@@ -188,7 +196,6 @@ enum MeshTargetResolution {
 struct MeshRequestPlan {
     effective_model: Option<String>,
     auto_session_key: Option<u64>,
-    prepared: PreparedTargets,
     target_hosts: Vec<iroh::EndpointId>,
 }
 
@@ -211,7 +218,7 @@ enum MeshAttemptDisposition {
 }
 
 enum MeshRouteResult {
-    Exhausted(TcpStream),
+    Exhausted(ClientStream),
     Finished(RouteAttemptResult),
 }
 
@@ -221,19 +228,24 @@ pub(crate) struct RouteSelectionMetadata<'a> {
     pub(crate) engine: Option<&'a str>,
 }
 
-fn should_learn_affinity(status_code: u16) -> bool {
-    (200..400).contains(&status_code)
-}
-
 fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
     &request.client_path
 }
 
-fn attach_request_logging(request: &mut BufferedHttpRequest) -> OpenAiLifecycleAttachment {
+fn attach_request_logging(
+    request: &mut BufferedHttpRequest,
+    source_addr: Option<std::net::SocketAddr>,
+) -> OpenAiLifecycleAttachment {
+    let caller_addr = source_addr.map(|addr| addr.to_string());
     let metadata =
         crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
             .with_source(Some("mesh_forwarded"))
-            .with_method(Some(&request.method));
+            .with_method(Some(&request.method))
+            .with_caller_identity(
+                None,
+                caller_addr.as_deref(),
+                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+            );
     let lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
@@ -248,10 +260,10 @@ fn attach_request_logging(request: &mut BufferedHttpRequest) -> OpenAiLifecycleA
 
 async fn handle_mesh_control_request(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     request: &BufferedHttpRequest,
     lifecycle: &mut OpenAiLifecycleAttachment,
-) -> Option<TcpStream> {
+) -> Option<ClientStream> {
     if is_legacy_lifecycle_path(&request.path) {
         let outcome = reject_legacy_lifecycle_request(tcp_stream, lifecycle.route_observer()).await;
         lifecycle.terminal(outcome.terminal_outcome());
@@ -284,7 +296,7 @@ async fn handle_mesh_control_request(
 /// Set `track_demand` to record requests for demand-based rebalancing.
 pub async fn handle_mesh_request(
     node: mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     track_demand: bool,
     affinity: AffinityRouter,
 ) {
@@ -305,7 +317,7 @@ pub async fn handle_mesh_request(
     };
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
-    let mut lifecycle = attach_request_logging(&mut request);
+    let mut lifecycle = attach_request_logging(&mut request, source_addr);
     if node.swarm_capture_enabled() {
         node.capture_http_request(crate::mesh::HttpCaptureEvent {
             event: "openai_ingress_http_request",
@@ -401,10 +413,10 @@ pub async fn handle_mesh_request(
 
 async fn route_mesh_moa_or_passthrough(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     request: &mut BufferedHttpRequest,
     route_observer: OpenAiRouteObserver<'_>,
-) -> Result<TcpStream, RouteDispatchOutcome> {
+) -> Result<ClientStream, RouteDispatchOutcome> {
     if request.is_tokenize_request() {
         return Ok(tcp_stream);
     }
@@ -503,7 +515,7 @@ async fn build_mesh_request_plan(
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
 
-    let prepared = prepare_mesh_targets(
+    let mut prepared = prepare_mesh_targets(
         request,
         effective_model.as_deref(),
         &resolved_hosts,
@@ -513,14 +525,13 @@ async fn build_mesh_request_plan(
         node,
         effective_model.as_deref(),
         required_tokens,
-        &prepared,
+        &mut prepared,
         affinity,
     )
     .await;
     Ok(MeshRequestPlan {
         effective_model,
         auto_session_key,
-        prepared,
         target_hosts,
     })
 }
@@ -545,7 +556,7 @@ fn prepare_mesh_targets(
     target_hosts: &[iroh::EndpointId],
     affinity: &AffinityRouter,
 ) -> PreparedTargets {
-    if !request.is_tokenize_request() && effective_model.is_some() && target_hosts.len() > 1 {
+    if !request.is_tokenize_request() && effective_model.is_some() && !target_hosts.is_empty() {
         request.ensure_body_json();
     }
     let body_json = request.body_json.as_ref();
@@ -557,8 +568,8 @@ fn prepare_mesh_targets(
                 .copied()
                 .map(election::InferenceTarget::Remote)
                 .collect(),
-            learn_prefix_hash: None,
-            cached_target: None,
+            prefix_hash: None,
+            cache_target: None,
         })
 }
 
@@ -566,7 +577,7 @@ async fn order_mesh_target_hosts(
     node: &mesh::Node,
     effective_model: Option<&str>,
     required_tokens: Option<u32>,
-    prepared: &PreparedTargets,
+    prepared: &mut PreparedTargets,
     affinity: &AffinityRouter,
 ) -> Vec<iroh::EndpointId> {
     let target_hosts: Vec<iroh::EndpointId> = prepared
@@ -582,19 +593,30 @@ async fn order_mesh_target_hosts(
     };
     let mut ordered =
         order_remote_hosts_by_context(node, name, required_tokens, &target_hosts).await;
-    if let (Some(prefix_hash), Some(election::InferenceTarget::Remote(cached_host))) =
-        (prepared.learn_prefix_hash, prepared.cached_target.as_ref())
+    if affinity.prefix_enabled()
+        && let Some(prefix_hash) = prepared.prefix_hash
     {
-        let cached_context = node.peer_model_context_length(*cached_host, name).await;
-        if matches!((required_tokens, cached_context), (Some(required), Some(context)) if context < required)
+        let candidates: Vec<_> = ordered
+            .iter()
+            .copied()
+            .map(election::InferenceTarget::Remote)
+            .collect();
+        prepared.cache_target = match affinity.lookup_cache_lease(name, prefix_hash, &candidates) {
+            Some(target) => Some(target),
+            None => {
+                let selected = node
+                    .select_cache_target(name, prefix_hash, &candidates)
+                    .await;
+                if let Some(target) = selected.as_ref() {
+                    affinity.remember_cache_lease(name, prefix_hash, target);
+                }
+                selected
+            }
+        };
+        affinity.record_cache_probe(prepared.cache_target.is_some());
+        if let Some(election::InferenceTarget::Remote(cache_host)) = prepared.cache_target.as_ref()
         {
-            affinity.forget_target(
-                name,
-                prefix_hash,
-                &election::InferenceTarget::Remote(*cached_host),
-            );
-        } else {
-            move_target_first(&mut ordered, cached_host);
+            move_target_first(&mut ordered, cache_host);
         }
     }
     ordered
@@ -602,7 +624,7 @@ async fn order_mesh_target_hosts(
 
 async fn handle_mesh_request_failure(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     request: &BufferedHttpRequest,
     failure: MeshRequestFailure,
     route_observer: OpenAiRouteObserver<'_>,
@@ -655,7 +677,7 @@ async fn handle_mesh_request_failure(
 
 async fn route_mesh_request_attempts(
     node: &mesh::Node,
-    mut tcp_stream: TcpStream,
+    mut tcp_stream: ClientStream,
     request: &BufferedHttpRequest,
     plan: &MeshRequestPlan,
     affinity: &AffinityRouter,
@@ -663,7 +685,6 @@ async fn route_mesh_request_attempts(
 ) -> MeshRouteResult {
     let effective_model = plan.effective_model.as_deref();
     let auto_session_key = plan.auto_session_key;
-    let prepared = &plan.prepared;
     let target_hosts = &plan.target_hosts;
     let total_targets = target_hosts.len();
     let mut state = MeshAttemptState {
@@ -707,8 +728,6 @@ async fn route_mesh_request_attempts(
             node,
             effective_model,
             auto_session_key,
-            prepared,
-            attempt_target: &attempt_target,
             target_host: *target_host,
             state: &mut state,
             affinity,
@@ -818,8 +837,6 @@ struct MeshAttemptResultContext<'a> {
     node: &'a mesh::Node,
     effective_model: Option<&'a str>,
     auto_session_key: Option<u64>,
-    prepared: &'a PreparedTargets,
-    attempt_target: &'a election::InferenceTarget,
     target_host: iroh::EndpointId,
     state: &'a mut MeshAttemptState,
     affinity: &'a AffinityRouter,
@@ -831,6 +848,18 @@ fn handle_mesh_attempt_result(
 ) -> MeshAttemptDisposition {
     match attempt_result {
         RouteAttemptResult::Delivered { status_code, usage } => {
+            let outcome = request_outcome_for_status(
+                status_code,
+                crate::network::metrics::RequestService::Remote,
+            );
+            if let Some(usage) = usage.as_ref() {
+                context.node.record_prompt_shape(
+                    context.effective_model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
             handle_delivered_mesh_attempt(context, status_code);
             MeshAttemptDisposition::Return(RouteAttemptResult::Delivered { status_code, usage })
         }
@@ -854,15 +883,7 @@ fn handle_mesh_attempt_result(
 }
 
 fn handle_delivered_mesh_attempt(context: &MeshAttemptResultContext<'_>, status_code: u16) {
-    if should_learn_affinity(status_code) {
-        if let (Some(name), Some(prefix_hash)) =
-            (context.effective_model, context.prepared.learn_prefix_hash)
-        {
-            context
-                .affinity
-                .learn_target(name, prefix_hash, context.attempt_target);
-        }
-    } else if let Some(key) = context
+    if let Some(key) = context
         .auto_session_key
         .filter(|_| (500..600).contains(&status_code))
     {
@@ -940,16 +961,11 @@ fn terminal_outcome_for_mesh_request_failure(
 fn handle_retryable_context_overflow(
     context: &mut MeshAttemptResultContext<'_>,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         "Host {} rejected request with context overflow-style 400, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     MeshAttemptDisposition::Continue
 }
@@ -958,17 +974,12 @@ fn handle_retryable_mesh_response_quality(
     context: &mut MeshAttemptResultContext<'_>,
     failure: ResponseQualityFailure,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         reason = failure.label(),
         "Host {} returned low-quality success response, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     MeshAttemptDisposition::Continue
 }
@@ -980,6 +991,7 @@ fn handle_retryable_mesh_timeout(
         "Host {} timed out, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     spawn_mesh_refresh_once(context.node, &mut context.state.refreshed);
     MeshAttemptDisposition::Continue
@@ -988,34 +1000,25 @@ fn handle_retryable_mesh_timeout(
 fn handle_retryable_mesh_unavailable(
     context: &mut MeshAttemptResultContext<'_>,
 ) -> MeshAttemptDisposition {
-    forget_mesh_cached_target(
-        context.effective_model,
-        context.prepared,
-        context.attempt_target,
-        context.affinity,
-    );
     tracing::warn!(
         "Failed to tunnel to host {}, trying next",
         context.target_host.fmt_short()
     );
+    forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
     spawn_mesh_refresh_once(context.node, &mut context.state.refreshed);
     MeshAttemptDisposition::Continue
 }
 
-fn forget_mesh_cached_target(
-    effective_model: Option<&str>,
-    prepared: &PreparedTargets,
-    failed_target: &election::InferenceTarget,
-    affinity: &AffinityRouter,
-) {
-    if let (Some(name), Some(prefix_hash), Some(cached_target)) = (
-        effective_model,
-        prepared.learn_prefix_hash,
-        prepared.cached_target.as_ref(),
-    ) && cached_target == failed_target
-    {
-        affinity.forget_target(name, prefix_hash, failed_target);
+fn forget_failed_target_cache_leases(context: &MeshAttemptResultContext<'_>) {
+    let target = election::InferenceTarget::Remote(context.target_host);
+    let invalidated = context.affinity.forget_cache_leases_for_target(&target);
+    if invalidated > 0 {
+        tracing::debug!(
+            target = %context.target_host.fmt_short(),
+            invalidated,
+            "invalidated cache leases after retryable target failure"
+        );
     }
 }
 
@@ -1032,7 +1035,7 @@ fn spawn_mesh_refresh_once(node: &mesh::Node, refreshed: &mut bool) {
 
 async fn finish_exhausted_mesh_request(
     node: &mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     effective_model: Option<&str>,
     total_targets: usize,
     affinity: &AffinityRouter,
@@ -1227,7 +1230,7 @@ async fn resolve_mesh_target_hosts(
 
 async fn route_attempt_for_target(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     target: &election::InferenceTarget,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
@@ -1278,7 +1281,7 @@ async fn route_attempt_for_target(
 
 async fn route_local_transport_attempt(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     port: u16,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
@@ -1303,7 +1306,7 @@ async fn route_local_transport_attempt(
 
 async fn route_remote_attempt_with_retry(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
@@ -1343,7 +1346,7 @@ async fn route_remote_attempt_with_retry(
 
 async fn route_remote_transport_attempt(
     node: &mesh::Node,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
     retry_policy: ResponseRetryPolicy,
@@ -1405,462 +1408,6 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
     )
 }
 
-pub(crate) struct RouteModelRequestContext<'a> {
-    pub(crate) required_tokens: Option<u32>,
-    pub(crate) affinity: &'a AffinityRouter,
-    pub(crate) route_observer: OpenAiRouteObserver<'a>,
-}
-
-pub async fn route_model_request(
-    node: mesh::Node,
-    tcp_stream: TcpStream,
-    targets: &election::ModelTargets,
-    model: &str,
-    request: &BufferedHttpRequest,
-    context: RouteModelRequestContext<'_>,
-) -> RouteDispatchOutcome {
-    let args = RouteModelRequestArgs {
-        node,
-        tcp_stream,
-        targets,
-        model,
-        request,
-        required_tokens: context.required_tokens,
-        affinity: context.affinity,
-        route_observer: context.route_observer,
-    };
-    route_model_request_inner(args).await
-}
-
-struct RouteModelRequestArgs<'a> {
-    node: mesh::Node,
-    tcp_stream: TcpStream,
-    targets: &'a election::ModelTargets,
-    model: &'a str,
-    request: &'a BufferedHttpRequest,
-    required_tokens: Option<u32>,
-    affinity: &'a AffinityRouter,
-    route_observer: OpenAiRouteObserver<'a>,
-}
-
-struct RouteModelState {
-    route_started: Instant,
-    attempts: usize,
-    refreshed: bool,
-}
-
-enum RouteModelDisposition {
-    Continue,
-    Return(RouteDispatchOutcome),
-}
-
-fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) -> String {
-    match required_tokens {
-        Some(tokens) => format!(
-            "no context-compatible target for model '{model}' can fit approximately {tokens} tokens"
-        ),
-        None => format!("no eligible target for model '{model}'"),
-    }
-}
-
-async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDispatchOutcome {
-    let RouteModelRequestArgs {
-        node,
-        tcp_stream,
-        targets,
-        model,
-        request,
-        required_tokens,
-        affinity,
-        route_observer,
-    } = args;
-    let route_started = Instant::now();
-    let mut tcp_stream = tcp_stream;
-    let ordered_candidates =
-        order_targets_by_context(&node, model, required_tokens, &targets.candidates(model)).await;
-    let ordered_candidates = affinity.route_eligible_candidates(model, &ordered_candidates);
-    if ordered_candidates.is_empty() {
-        record_route_model_unavailable(&node, model, 0);
-        let reason = no_context_eligible_target_reason(model, required_tokens);
-        return response_outcome(
-            503,
-            send_503_observed(tcp_stream, &reason, route_observer).await,
-        );
-    }
-    route_observer.route_selected(Some(model));
-
-    let selection = crate::network::affinity::select_model_target_from_candidates(
-        targets,
-        &ordered_candidates,
-        model,
-        request.body_json.as_ref(),
-        affinity,
-    );
-    if matches!(selection.target, election::InferenceTarget::None) {
-        return send_route_model_none_target(&node, tcp_stream, model, route_observer).await;
-    }
-    forget_route_model_context_mismatch(&node, model, required_tokens, &selection, affinity).await;
-
-    let mut ordered = ordered_candidates;
-    move_target_first(&mut ordered, &selection.target);
-    let total_targets = ordered.len();
-    let mut state = RouteModelState {
-        route_started,
-        attempts: 0,
-        refreshed: false,
-    };
-    for (idx, target) in ordered.into_iter().enumerate() {
-        state.attempts += 1;
-        let attempt_started = Instant::now();
-        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
-        let attempt_result = route_attempt_for_target(
-            &node,
-            &mut tcp_stream,
-            &target,
-            &request.raw,
-            retry_policy,
-            RouteAttemptLoggingContext {
-                request_id: request.request_id,
-                retry_policy,
-                response_adapter: request.response_adapter,
-                route_observer,
-            },
-        )
-        .await;
-        let queue_wait = attempt_started.duration_since(route_started);
-        let attempt_time = attempt_started.elapsed();
-        record_route_model_attempt(
-            &node,
-            model,
-            &target,
-            queue_wait,
-            attempt_time,
-            &attempt_result,
-        );
-        affinity.record_target_outcome(
-            Some(model),
-            &target,
-            target_health_outcome_for_attempt(&attempt_result),
-        );
-        tracing::info!(
-            model = model,
-            target = ?target,
-            attempt = state.attempts,
-            total_targets = total_targets,
-            outcome = route_attempt_result_label(&attempt_result),
-            attempt_ms = attempt_started.elapsed().as_millis(),
-            total_route_ms = route_started.elapsed().as_millis(),
-            "openai route_model_request attempt"
-        );
-        match handle_route_model_attempt_result(
-            &node,
-            model,
-            &target,
-            &selection,
-            attempt_result,
-            &mut state,
-            affinity,
-        ) {
-            RouteModelDisposition::Continue => continue,
-            RouteModelDisposition::Return(result) => {
-                return finalize_route_model_result(
-                    &node,
-                    model,
-                    request,
-                    route_started,
-                    state.attempts,
-                    result,
-                    &target,
-                );
-            }
-        }
-    }
-
-    finish_exhausted_route_model_request(
-        &node,
-        tcp_stream,
-        model,
-        total_targets,
-        &state,
-        route_observer,
-    )
-    .await
-}
-
-fn record_route_model_unavailable(node: &mesh::Node, model: &str, attempts: usize) {
-    node.record_routed_request(
-        Some(model),
-        attempts,
-        crate::network::metrics::RequestOutcome::Unavailable,
-    );
-}
-
-async fn send_route_model_none_target(
-    node: &mesh::Node,
-    tcp_stream: TcpStream,
-    model: &str,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> RouteDispatchOutcome {
-    record_route_model_unavailable(node, model, 0);
-    let result = send_503_observed(
-        tcp_stream,
-        &format!("target for model '{model}' resolved to None (election in progress or host down)"),
-        route_observer,
-    )
-    .await;
-    response_outcome(503, result)
-}
-
-async fn finish_exhausted_route_model_request(
-    node: &mesh::Node,
-    tcp_stream: TcpStream,
-    model: &str,
-    total_targets: usize,
-    state: &RouteModelState,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> RouteDispatchOutcome {
-    let result = send_503_observed(
-        tcp_stream,
-        &format!("all {} target(s) for model '{model}' failed", total_targets),
-        route_observer,
-    )
-    .await;
-    record_route_model_unavailable(node, model, state.attempts);
-    tracing::warn!(
-        model = model,
-        attempts = state.attempts,
-        route_ms = state.route_started.elapsed().as_millis(),
-        "openai route_model_request exhausted targets"
-    );
-    response_outcome(503, result)
-}
-
-async fn forget_route_model_context_mismatch(
-    node: &mesh::Node,
-    model: &str,
-    required_tokens: Option<u32>,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-) {
-    let (Some(prefix_hash), Some(cached_target)) = (
-        selection.learn_prefix_hash,
-        selection.cached_target.as_ref(),
-    ) else {
-        return;
-    };
-    let cached_context = match cached_target {
-        election::InferenceTarget::Local(_) => node.local_model_context_length(model).await,
-        election::InferenceTarget::Remote(peer_id) => {
-            node.peer_model_context_length(*peer_id, model).await
-        }
-        election::InferenceTarget::None => None,
-    };
-    if matches!((required_tokens, cached_context), (Some(required), Some(context)) if context < required)
-    {
-        affinity.forget_target(model, prefix_hash, cached_target);
-    }
-}
-
-fn handle_route_model_attempt_result(
-    node: &mesh::Node,
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    attempt_result: RouteAttemptResult,
-    state: &mut RouteModelState,
-    affinity: &AffinityRouter,
-) -> RouteModelDisposition {
-    match attempt_result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
-            handle_delivered_route_model_attempt(
-                DeliveredRouteModelContext {
-                    node,
-                    model,
-                    target,
-                    selection,
-                    state,
-                    affinity,
-                },
-                status_code,
-                usage,
-            )
-        }
-        RouteAttemptResult::RetryableContextOverflow => {
-            handle_retryable_route_model_context(model, target, selection, affinity)
-        }
-        RouteAttemptResult::RetryableResponseQuality(failure) => {
-            handle_retryable_route_model_response_quality(
-                model, target, selection, affinity, failure,
-            )
-        }
-        RouteAttemptResult::RetryableTimeout => {
-            handle_retryable_route_model_timeout(node, model, target, selection, state, affinity)
-        }
-        RouteAttemptResult::RetryableUnavailable => handle_retryable_route_model_unavailable(
-            node, model, target, selection, state, affinity,
-        ),
-        RouteAttemptResult::CommittedStreamFailure { status_code } => {
-            RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
-                status_code,
-                reason: "upstream_stream_incomplete",
-            })
-        }
-        RouteAttemptResult::ClientDisconnected => {
-            tracing::info!(
-                model = model,
-                attempts = state.attempts,
-                route_ms = state.route_started.elapsed().as_millis(),
-                "openai route_model_request downstream disconnected"
-            );
-            RouteModelDisposition::Return(RouteDispatchOutcome::Dropped("client_disconnected"))
-        }
-    }
-}
-
-struct DeliveredRouteModelContext<'a> {
-    node: &'a mesh::Node,
-    model: &'a str,
-    target: &'a election::InferenceTarget,
-    selection: &'a TargetSelection,
-    state: &'a RouteModelState,
-    affinity: &'a AffinityRouter,
-}
-
-fn handle_delivered_route_model_attempt(
-    context: DeliveredRouteModelContext<'_>,
-    status_code: u16,
-    usage: Option<TokenUsage>,
-) -> RouteModelDisposition {
-    if should_learn_affinity(status_code)
-        && let Some(prefix_hash) = context.selection.learn_prefix_hash
-    {
-        context
-            .affinity
-            .learn_target(context.model, prefix_hash, context.target);
-    }
-    context.node.record_routed_request(
-        Some(context.model),
-        context.state.attempts,
-        request_outcome_for_status(status_code, request_service_for_target(context.target)),
-    );
-    tracing::info!(
-        model = context.model,
-        attempts = context.state.attempts,
-        status_code = status_code,
-        route_ms = context.state.route_started.elapsed().as_millis(),
-        "openai route_model_request delivered"
-    );
-    RouteModelDisposition::Return(
-        usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
-            RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
-        }),
-    )
-}
-
-fn handle_retryable_route_model_context(
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
-    tracing::warn!(
-        "Target {target:?} rejected request with context overflow-style 400, trying next"
-    );
-    RouteModelDisposition::Continue
-}
-
-fn handle_retryable_route_model_response_quality(
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-    failure: ResponseQualityFailure,
-) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
-    tracing::warn!(
-        reason = failure.label(),
-        "Target {target:?} returned low-quality success response, trying next"
-    );
-    RouteModelDisposition::Continue
-}
-
-fn handle_retryable_route_model_timeout(
-    node: &mesh::Node,
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    state: &mut RouteModelState,
-    affinity: &AffinityRouter,
-) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
-    spawn_mesh_refresh_once(node, &mut state.refreshed);
-    tracing::warn!("Target {target:?} timed out, trying next");
-    RouteModelDisposition::Continue
-}
-
-fn handle_retryable_route_model_unavailable(
-    node: &mesh::Node,
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    state: &mut RouteModelState,
-    affinity: &AffinityRouter,
-) -> RouteModelDisposition {
-    forget_selected_route_model_target(model, target, selection, affinity);
-    spawn_mesh_refresh_once(node, &mut state.refreshed);
-    tracing::warn!("Target {target:?} unavailable, trying next");
-    RouteModelDisposition::Continue
-}
-
-fn forget_selected_route_model_target(
-    model: &str,
-    target: &election::InferenceTarget,
-    selection: &TargetSelection,
-    affinity: &AffinityRouter,
-) {
-    if let (Some(prefix_hash), Some(cached_target)) = (
-        selection.learn_prefix_hash,
-        selection.cached_target.as_ref(),
-    ) && cached_target == target
-    {
-        affinity.forget_target(model, prefix_hash, target);
-    }
-}
-
-fn finalize_route_model_result(
-    _node: &mesh::Node,
-    _model: &str,
-    _request: &BufferedHttpRequest,
-    _route_started: Instant,
-    _attempts: usize,
-    result: RouteDispatchOutcome,
-    _target: &election::InferenceTarget,
-) -> RouteDispatchOutcome {
-    result
-}
-
-fn record_route_model_attempt(
-    node: &mesh::Node,
-    model: &str,
-    target: &election::InferenceTarget,
-    queue_wait: Duration,
-    attempt_time: Duration,
-    attempt_result: &RouteAttemptResult,
-) {
-    if matches!(attempt_result, RouteAttemptResult::ClientDisconnected) {
-        return;
-    }
-    node.record_inference_attempt(
-        Some(model),
-        target,
-        queue_wait,
-        attempt_time,
-        attempt_outcome_for_result(attempt_result),
-        completion_tokens_for_result(attempt_result),
-    );
-}
-
 /// Route a request to a known inference target (local OpenAI surface or remote host).
 ///
 /// Used by the API proxy after election has determined the target.
@@ -1872,7 +1419,7 @@ pub(crate) struct RouteTargetContext<'a> {
 
 pub async fn route_to_target(
     node: mesh::Node,
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     model: Option<&str>,
     target: election::InferenceTarget,
     prefetched: &[u8],
@@ -1919,7 +1466,16 @@ pub async fn route_to_target(
     match result {
         RouteAttemptResult::Delivered { status_code, usage } => {
             let service = request_service_for_target(&target);
-            node.record_routed_request(model, 1, request_outcome_for_status(status_code, service));
+            let outcome = request_outcome_for_status(status_code, service);
+            if let Some(usage) = usage.as_ref() {
+                node.record_prompt_shape(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
+            node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
                 RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
             })
@@ -1957,7 +1513,7 @@ pub async fn route_http_endpoint_request(
     node: &mesh::Node,
     model: Option<&str>,
     route_metadata: RouteSelectionMetadata<'_>,
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     base_url: &str,
     request: &BufferedHttpRequest,
     route_observer: OpenAiRouteObserver<'_>,
@@ -2006,14 +1562,19 @@ pub async fn route_http_endpoint_request(
     );
     match result {
         RouteAttemptResult::Delivered { status_code, usage } => {
-            node.record_routed_request(
-                model,
-                1,
-                request_outcome_for_status(
-                    status_code,
-                    crate::network::metrics::RequestService::Endpoint,
-                ),
+            let outcome = request_outcome_for_status(
+                status_code,
+                crate::network::metrics::RequestService::Endpoint,
             );
+            if let Some(usage) = usage.as_ref() {
+                node.record_prompt_shape(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
+            node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
                 RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
             })

@@ -79,6 +79,7 @@ fn canonical_jsonl_is_one_stable_safe_record_per_line() {
             duration_ms: Some(31),
             usage: Some(TokenUsage {
                 prompt_tokens: Some(8),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(3),
                 total_tokens: Some(11),
             }),
@@ -438,6 +439,7 @@ fn canonical_stream_token_counts_are_local_operational_metadata() {
             tokens: Some(42),
             usage: Some(TokenUsage {
                 prompt_tokens: Some(20),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(42),
                 total_tokens: Some(62),
             }),

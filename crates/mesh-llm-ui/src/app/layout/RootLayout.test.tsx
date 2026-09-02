@@ -109,6 +109,12 @@ describe('RootLayout', () => {
     expect(useStatusStreamSpy).toHaveBeenCalledWith({ enabled: true })
   })
 
+  it('keeps the app shell width stable by reserving the gutter on its scroll container', () => {
+    renderRootLayout('harness')
+
+    expect(document.querySelector('main')).toHaveClass('overflow-y-auto', '[scrollbar-gutter:stable]')
+  })
+
   it('selects the Logs tab for the logs route', () => {
     routerState.pathname = '/logs'
     featureFlagState.logsPage = true

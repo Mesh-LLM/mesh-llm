@@ -8,7 +8,7 @@ LLAMA_UPSTREAM_URL="${LLAMA_UPSTREAM_URL:-https://github.com/ggml-org/llama.cpp.
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 PIN_FILE="${LLAMA_PIN_FILE:-$ROOT/third_party/llama.cpp/upstream.txt}"
 PATCH_DIR="${LLAMA_PATCH_DIR:-$ROOT/third_party/llama.cpp/patches}"
-PREPARE_SCHEMA=2
+PREPARE_SCHEMA=3
 
 if [[ ! -f "$PIN_FILE" ]]; then
   echo "missing llama upstream pin: $PIN_FILE" >&2

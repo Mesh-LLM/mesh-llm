@@ -545,7 +545,9 @@ pub(crate) mod tests {
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            local_gguf_content_id_supported: false,
             advertised_model_throughput: vec![],
+            cache_affinity: None,
             display_rtt: None,
             selected_path: None,
             propagated_latency: None,
@@ -681,11 +683,13 @@ pub(crate) mod tests {
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
+            local_gguf_content_id_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
             }],
+            cache_affinity: None,
             display_rtt: None,
             selected_path: None,
             propagated_latency: None,
@@ -1488,7 +1492,7 @@ pub(crate) mod tests {
 
         let routed = transport::route_to_target(
             node.clone(),
-            proxy_stream,
+            proxy_stream.into(),
             Some("glm"),
             election::InferenceTarget::Local(upstream_port),
             b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}",

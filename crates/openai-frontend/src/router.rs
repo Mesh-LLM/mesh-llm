@@ -769,6 +769,14 @@ fn authoritative_usage(usage: &Usage) -> Option<TokenUsage> {
         Some(u64::from(usage.completion_tokens)),
         Some(u64::from(usage.total_tokens)),
     )
+    .map(|authoritative| {
+        authoritative.with_cached_prompt_tokens(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .map(|details| u64::from(details.cached_tokens)),
+        )
+    })
 }
 
 fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) -> Response {

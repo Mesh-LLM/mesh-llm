@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600" viewBox="0 0 1600 1600" role="img" aria-labelledby="title desc">
+<title id="title">Old to new scheduler comparison across seven architecture and strategy workloads</title>
+<desc id="desc">Two line charts compare new scheduler throughput and end-to-end p99 latency as ratios to the old scheduler across concurrency one to sixty-four. Six generation families improve broadly; the native MTP lifecycle fixture is exact but shows control-path overhead.</desc>
+<style>
+:root{color-scheme:light dark} .bg{fill:#ffffff}.fg{fill:#111827}.muted{fill:#4b5563}.grid{stroke:#d1d5db}.frame{stroke:#9ca3af}.baseline{stroke:#111827}.label{font:500 25px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.small{font:400 20px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.title{font:500 38px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.subtitle{font:400 22px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.axis{font:400 18px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.line{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.point{stroke:#fff;stroke-width:2}@media(prefers-color-scheme:dark){.bg{fill:#0b1020}.fg{fill:#f3f4f6}.muted{fill:#cbd5e1}.grid{stroke:#334155}.frame{stroke:#64748b}.baseline{stroke:#f3f4f6}.point{stroke:#0b1020}}
+</style>
+<rect class="bg" width="1600" height="1600"/>
+<text id="title-text" class="title fg" x="70" y="62">Old → new scheduler: family-wide change</text>
+<text class="subtitle muted" x="70" y="100">Six generation families + native MTP verification · old and new serving paths</text>
+<line x1="70" y1="145" x2="104" y2="145" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="114" y="152">Llama 3.2</text>
+<line x1="315" y1="145" x2="349" y2="145" stroke="#16a34a" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="359" y="152">Gemma 2</text>
+<line x1="560" y1="145" x2="594" y2="145" stroke="#9333ea" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="604" y="152">Qwen 3.5</text>
+<line x1="560" y1="178" x2="594" y2="178" stroke="#9333ea" stroke-width="5" stroke-dasharray="10 7" stroke-linecap="round"/>
+<text class="small fg" x="604" y="185">Qwen3-Next</text>
+<line x1="805" y1="145" x2="839" y2="145" stroke="#ea580c" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="849" y="152">Falcon-H1</text>
+<line x1="1050" y1="145" x2="1084" y2="145" stroke="#0891b2" stroke-width="5" stroke-linecap="round"/>
+<text class="small fg" x="1094" y="152">DeepSeek2</text>
+<line x1="1295" y1="145" x2="1329" y2="145" stroke="#dc2626" stroke-width="5" stroke-dasharray="5 7" stroke-linecap="round"/>
+<text class="small fg" x="1339" y="152">GLM MTP lifecycle</text>
+<text class="label fg" x="120" y="252">Throughput</text>
+<text class="small muted" x="1535" y="252" text-anchor="end">Higher is better; 1.00× = unchanged</text>
+<line class="grid" x1="120" y1="760.0" x2="1535" y2="760.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="767.0" text-anchor="end">0.80×</text>
+<line class="grid" x1="120" y1="645.0" x2="1535" y2="645.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="652.0" text-anchor="end">1.05×</text>
+<line class="grid" x1="120" y1="530.0" x2="1535" y2="530.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="537.0" text-anchor="end">1.30×</text>
+<line class="grid" x1="120" y1="415.0" x2="1535" y2="415.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="422.0" text-anchor="end">1.55×</text>
+<line class="grid" x1="120" y1="300.0" x2="1535" y2="300.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="307.0" text-anchor="end">1.80×</text>
+<line class="baseline" x1="120" y1="668.0" x2="1535" y2="668.0" stroke-width="2" stroke-dasharray="8 8"/>
+<line class="grid" x1="120.0" y1="300" x2="120.0" y2="760" stroke-width="1"/>
+<text class="axis muted" x="120.0" y="790" text-anchor="middle">1</text>
+<line class="grid" x1="355.8" y1="300" x2="355.8" y2="760" stroke-width="1"/>
+<text class="axis muted" x="355.8" y="790" text-anchor="middle">2</text>
+<line class="grid" x1="591.7" y1="300" x2="591.7" y2="760" stroke-width="1"/>
+<text class="axis muted" x="591.7" y="790" text-anchor="middle">4</text>
+<line class="grid" x1="827.5" y1="300" x2="827.5" y2="760" stroke-width="1"/>
+<text class="axis muted" x="827.5" y="790" text-anchor="middle">8</text>
+<line class="grid" x1="1063.3" y1="300" x2="1063.3" y2="760" stroke-width="1"/>
+<text class="axis muted" x="1063.3" y="790" text-anchor="middle">16</text>
+<line class="grid" x1="1299.2" y1="300" x2="1299.2" y2="760" stroke-width="1"/>
+<text class="axis muted" x="1299.2" y="790" text-anchor="middle">32</text>
+<line class="grid" x1="1535.0" y1="300" x2="1535.0" y2="760" stroke-width="1"/>
+<text class="axis muted" x="1535.0" y="790" text-anchor="middle">64</text>
+<rect x="120" y="300" width="1415" height="460" fill="none" class="frame" stroke-width="1"/>
+<text class="small fg" x="827.5" y="828" text-anchor="middle">Concurrent requests (N)</text>
+<text class="small fg" transform="translate(34 530.0) rotate(-90)" text-anchor="middle">NEW / OLD throughput</text>
+<path class="line" d="M 120.0 654.0 L 355.8 625.7 L 591.7 531.8 L 827.5 572.6 L 1063.3 504.8 L 1299.2 539.5 L 1535.0 615.1" stroke="#2563eb"/>
+<circle class="point" cx="120.0" cy="654.0" r="6" fill="#2563eb"><title>Llama 3.2 · N=1 · 1.030×</title></circle>
+<circle class="point" cx="355.8" cy="625.7" r="6" fill="#2563eb"><title>Llama 3.2 · N=2 · 1.092×</title></circle>
+<circle class="point" cx="591.7" cy="531.8" r="6" fill="#2563eb"><title>Llama 3.2 · N=4 · 1.296×</title></circle>
+<circle class="point" cx="827.5" cy="572.6" r="6" fill="#2563eb"><title>Llama 3.2 · N=8 · 1.207×</title></circle>
+<circle class="point" cx="1063.3" cy="504.8" r="6" fill="#2563eb"><title>Llama 3.2 · N=16 · 1.355×</title></circle>
+<circle class="point" cx="1299.2" cy="539.5" r="6" fill="#2563eb"><title>Llama 3.2 · N=32 · 1.279×</title></circle>
+<circle class="point" cx="1535.0" cy="615.1" r="6" fill="#2563eb"><title>Llama 3.2 · N=64 · 1.115×</title></circle>
+<path class="line" d="M 120.0 602.6 L 355.8 593.1 L 591.7 539.0 L 827.5 470.8 L 1063.3 464.3 L 1299.2 500.1 L 1535.0 598.7" stroke="#16a34a"/>
+<circle class="point" cx="120.0" cy="602.6" r="6" fill="#16a34a"><title>Gemma 2 · N=1 · 1.142×</title></circle>
+<circle class="point" cx="355.8" cy="593.1" r="6" fill="#16a34a"><title>Gemma 2 · N=2 · 1.163×</title></circle>
+<circle class="point" cx="591.7" cy="539.0" r="6" fill="#16a34a"><title>Gemma 2 · N=4 · 1.280×</title></circle>
+<circle class="point" cx="827.5" cy="470.8" r="6" fill="#16a34a"><title>Gemma 2 · N=8 · 1.429×</title></circle>
+<circle class="point" cx="1063.3" cy="464.3" r="6" fill="#16a34a"><title>Gemma 2 · N=16 · 1.443×</title></circle>
+<circle class="point" cx="1299.2" cy="500.1" r="6" fill="#16a34a"><title>Gemma 2 · N=32 · 1.365×</title></circle>
+<circle class="point" cx="1535.0" cy="598.7" r="6" fill="#16a34a"><title>Gemma 2 · N=64 · 1.151×</title></circle>
+<path class="line" d="M 120.0 668.6 L 355.8 574.5 L 591.7 561.6 L 827.5 514.2 L 1063.3 330.6 L 1299.2 633.0 L 1535.0 602.7" stroke="#9333ea"/>
+<circle class="point" cx="120.0" cy="668.6" r="6" fill="#9333ea"><title>Qwen 3.5 · N=1 · 0.999×</title></circle>
+<circle class="point" cx="355.8" cy="574.5" r="6" fill="#9333ea"><title>Qwen 3.5 · N=2 · 1.203×</title></circle>
+<circle class="point" cx="591.7" cy="561.6" r="6" fill="#9333ea"><title>Qwen 3.5 · N=4 · 1.231×</title></circle>
+<circle class="point" cx="827.5" cy="514.2" r="6" fill="#9333ea"><title>Qwen 3.5 · N=8 · 1.334×</title></circle>
+<circle class="point" cx="1063.3" cy="330.6" r="6" fill="#9333ea"><title>Qwen 3.5 · N=16 · 1.734×</title></circle>
+<circle class="point" cx="1299.2" cy="633.0" r="6" fill="#9333ea"><title>Qwen 3.5 · N=32 · 1.076×</title></circle>
+<circle class="point" cx="1535.0" cy="602.7" r="6" fill="#9333ea"><title>Qwen 3.5 · N=64 · 1.142×</title></circle>
+<path class="line" d="M 120.0 631.2 L 355.8 681.3 L 591.7 555.8" stroke="#9333ea" stroke-dasharray="10 7"/>
+<circle class="point" cx="120.0" cy="631.2" r="6" fill="#9333ea"><title>Qwen3-Next · N=1 · 1.080×</title></circle>
+<circle class="point" cx="355.8" cy="681.3" r="6" fill="#9333ea"><title>Qwen3-Next · N=2 · 0.971×</title></circle>
+<circle class="point" cx="591.7" cy="555.8" r="6" fill="#9333ea"><title>Qwen3-Next · N=4 · 1.244×</title></circle>
+<path class="line" d="M 120.0 612.8 L 355.8 604.2 L 591.7 524.6 L 827.5 459.2 L 1063.3 488.0 L 1299.2 487.7 L 1535.0 511.0" stroke="#ea580c"/>
+<circle class="point" cx="120.0" cy="612.8" r="6" fill="#ea580c"><title>Falcon-H1 · N=1 · 1.120×</title></circle>
+<circle class="point" cx="355.8" cy="604.2" r="6" fill="#ea580c"><title>Falcon-H1 · N=2 · 1.139×</title></circle>
+<circle class="point" cx="591.7" cy="524.6" r="6" fill="#ea580c"><title>Falcon-H1 · N=4 · 1.312×</title></circle>
+<circle class="point" cx="827.5" cy="459.2" r="6" fill="#ea580c"><title>Falcon-H1 · N=8 · 1.454×</title></circle>
+<circle class="point" cx="1063.3" cy="488.0" r="6" fill="#ea580c"><title>Falcon-H1 · N=16 · 1.391×</title></circle>
+<circle class="point" cx="1299.2" cy="487.7" r="6" fill="#ea580c"><title>Falcon-H1 · N=32 · 1.392×</title></circle>
+<circle class="point" cx="1535.0" cy="511.0" r="6" fill="#ea580c"><title>Falcon-H1 · N=64 · 1.341×</title></circle>
+<path class="line" d="M 120.0 665.1 L 355.8 675.1 L 591.7 650.7 L 827.5 576.0 L 1063.3 406.2 L 1299.2 412.8 L 1535.0 464.7" stroke="#0891b2"/>
+<circle class="point" cx="120.0" cy="665.1" r="6" fill="#0891b2"><title>DeepSeek2 · N=1 · 1.006×</title></circle>
+<circle class="point" cx="355.8" cy="675.1" r="6" fill="#0891b2"><title>DeepSeek2 · N=2 · 0.985×</title></circle>
+<circle class="point" cx="591.7" cy="650.7" r="6" fill="#0891b2"><title>DeepSeek2 · N=4 · 1.038×</title></circle>
+<circle class="point" cx="827.5" cy="576.0" r="6" fill="#0891b2"><title>DeepSeek2 · N=8 · 1.200×</title></circle>
+<circle class="point" cx="1063.3" cy="406.2" r="6" fill="#0891b2"><title>DeepSeek2 · N=16 · 1.569×</title></circle>
+<circle class="point" cx="1299.2" cy="412.8" r="6" fill="#0891b2"><title>DeepSeek2 · N=32 · 1.555×</title></circle>
+<circle class="point" cx="1535.0" cy="464.7" r="6" fill="#0891b2"><title>DeepSeek2 · N=64 · 1.442×</title></circle>
+<path class="line" d="M 120.0 670.0 L 355.8 722.6 L 591.7 686.5 L 827.5 728.6" stroke="#dc2626" stroke-dasharray="5 7"/>
+<circle class="point" cx="120.0" cy="670.0" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=1 · 0.996×</title></circle>
+<circle class="point" cx="355.8" cy="722.6" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=2 · 0.881×</title></circle>
+<circle class="point" cx="591.7" cy="686.5" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=4 · 0.960×</title></circle>
+<circle class="point" cx="827.5" cy="728.6" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=8 · 0.868×</title></circle>
+<text class="label fg" x="120" y="882">Tail latency</text>
+<text class="small muted" x="1535" y="882" text-anchor="end">Lower is better; 1.00× = unchanged</text>
+<line class="grid" x1="120" y1="1390.0" x2="1535" y2="1390.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="1397.0" text-anchor="end">0.25×</text>
+<line class="grid" x1="120" y1="1275.0" x2="1535" y2="1275.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="1282.0" text-anchor="end">0.49×</text>
+<line class="grid" x1="120" y1="1160.0" x2="1535" y2="1160.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="1167.0" text-anchor="end">0.72×</text>
+<line class="grid" x1="120" y1="1045.0" x2="1535" y2="1045.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="1052.0" text-anchor="end">0.96×</text>
+<line class="grid" x1="120" y1="930.0" x2="1535" y2="930.0" stroke-width="1"/>
+<text class="axis muted" x="102" y="937.0" text-anchor="end">1.20×</text>
+<line class="baseline" x1="120" y1="1026.8" x2="1535" y2="1026.8" stroke-width="2" stroke-dasharray="8 8"/>
+<line class="grid" x1="120.0" y1="930" x2="120.0" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="120.0" y="1420" text-anchor="middle">1</text>
+<line class="grid" x1="355.8" y1="930" x2="355.8" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="355.8" y="1420" text-anchor="middle">2</text>
+<line class="grid" x1="591.7" y1="930" x2="591.7" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="591.7" y="1420" text-anchor="middle">4</text>
+<line class="grid" x1="827.5" y1="930" x2="827.5" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="827.5" y="1420" text-anchor="middle">8</text>
+<line class="grid" x1="1063.3" y1="930" x2="1063.3" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="1063.3" y="1420" text-anchor="middle">16</text>
+<line class="grid" x1="1299.2" y1="930" x2="1299.2" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="1299.2" y="1420" text-anchor="middle">32</text>
+<line class="grid" x1="1535.0" y1="930" x2="1535.0" y2="1390" stroke-width="1"/>
+<text class="axis muted" x="1535.0" y="1420" text-anchor="middle">64</text>
+<rect x="120" y="930" width="1415" height="460" fill="none" class="frame" stroke-width="1"/>
+<text class="small fg" x="827.5" y="1458" text-anchor="middle">Concurrent requests (N)</text>
+<text class="small fg" transform="translate(34 1160.0) rotate(-90)" text-anchor="middle">NEW / OLD end-to-end p99</text>
+<path class="line" d="M 120.0 1055.0 L 355.8 1076.1 L 591.7 1138.1 L 827.5 1171.4 L 1063.3 1244.4 L 1299.2 1255.1 L 1535.0 1076.4" stroke="#2563eb"/>
+<circle class="point" cx="120.0" cy="1055.0" r="6" fill="#2563eb"><title>Llama 3.2 · N=1 · 0.942×</title></circle>
+<circle class="point" cx="355.8" cy="1076.1" r="6" fill="#2563eb"><title>Llama 3.2 · N=2 · 0.898×</title></circle>
+<circle class="point" cx="591.7" cy="1138.1" r="6" fill="#2563eb"><title>Llama 3.2 · N=4 · 0.770×</title></circle>
+<circle class="point" cx="827.5" cy="1171.4" r="6" fill="#2563eb"><title>Llama 3.2 · N=8 · 0.701×</title></circle>
+<circle class="point" cx="1063.3" cy="1244.4" r="6" fill="#2563eb"><title>Llama 3.2 · N=16 · 0.551×</title></circle>
+<circle class="point" cx="1299.2" cy="1255.1" r="6" fill="#2563eb"><title>Llama 3.2 · N=32 · 0.529×</title></circle>
+<circle class="point" cx="1535.0" cy="1076.4" r="6" fill="#2563eb"><title>Llama 3.2 · N=64 · 0.898×</title></circle>
+<path class="line" d="M 120.0 1081.5 L 355.8 1093.6 L 591.7 1154.8 L 827.5 1227.3 L 1063.3 1226.6 L 1299.2 1285.6 L 1535.0 1090.0" stroke="#16a34a"/>
+<circle class="point" cx="120.0" cy="1081.5" r="6" fill="#16a34a"><title>Gemma 2 · N=1 · 0.887×</title></circle>
+<circle class="point" cx="355.8" cy="1093.6" r="6" fill="#16a34a"><title>Gemma 2 · N=2 · 0.862×</title></circle>
+<circle class="point" cx="591.7" cy="1154.8" r="6" fill="#16a34a"><title>Gemma 2 · N=4 · 0.736×</title></circle>
+<circle class="point" cx="827.5" cy="1227.3" r="6" fill="#16a34a"><title>Gemma 2 · N=8 · 0.586×</title></circle>
+<circle class="point" cx="1063.3" cy="1226.6" r="6" fill="#16a34a"><title>Gemma 2 · N=16 · 0.588×</title></circle>
+<circle class="point" cx="1299.2" cy="1285.6" r="6" fill="#16a34a"><title>Gemma 2 · N=32 · 0.466×</title></circle>
+<circle class="point" cx="1535.0" cy="1090.0" r="6" fill="#16a34a"><title>Gemma 2 · N=64 · 0.870×</title></circle>
+<path class="line" d="M 120.0 980.4 L 355.8 1126.0 L 591.7 1144.8 L 827.5 1204.3 L 1063.3 1265.9 L 1299.2 1179.9 L 1535.0 1086.8" stroke="#9333ea"/>
+<circle class="point" cx="120.0" cy="980.4" r="6" fill="#9333ea"><title>Qwen 3.5 · N=1 · 1.096×</title></circle>
+<circle class="point" cx="355.8" cy="1126.0" r="6" fill="#9333ea"><title>Qwen 3.5 · N=2 · 0.795×</title></circle>
+<circle class="point" cx="591.7" cy="1144.8" r="6" fill="#9333ea"><title>Qwen 3.5 · N=4 · 0.756×</title></circle>
+<circle class="point" cx="827.5" cy="1204.3" r="6" fill="#9333ea"><title>Qwen 3.5 · N=8 · 0.634×</title></circle>
+<circle class="point" cx="1063.3" cy="1265.9" r="6" fill="#9333ea"><title>Qwen 3.5 · N=16 · 0.506×</title></circle>
+<circle class="point" cx="1299.2" cy="1179.9" r="6" fill="#9333ea"><title>Qwen 3.5 · N=32 · 0.684×</title></circle>
+<circle class="point" cx="1535.0" cy="1086.8" r="6" fill="#9333ea"><title>Qwen 3.5 · N=64 · 0.876×</title></circle>
+<path class="line" d="M 120.0 974.0 L 355.8 993.9 L 591.7 1169.6" stroke="#9333ea" stroke-dasharray="10 7"/>
+<circle class="point" cx="120.0" cy="974.0" r="6" fill="#9333ea"><title>Qwen3-Next · N=1 · 1.109×</title></circle>
+<circle class="point" cx="355.8" cy="993.9" r="6" fill="#9333ea"><title>Qwen3-Next · N=2 · 1.068×</title></circle>
+<circle class="point" cx="591.7" cy="1169.6" r="6" fill="#9333ea"><title>Qwen3-Next · N=4 · 0.705×</title></circle>
+<path class="line" d="M 120.0 1349.6 L 355.8 1083.5 L 591.7 1164.8 L 827.5 1228.3 L 1063.3 1254.7 L 1299.2 1261.6 L 1535.0 1150.0" stroke="#ea580c"/>
+<circle class="point" cx="120.0" cy="1349.6" r="6" fill="#ea580c"><title>Falcon-H1 · N=1 · 0.333×</title></circle>
+<circle class="point" cx="355.8" cy="1083.5" r="6" fill="#ea580c"><title>Falcon-H1 · N=2 · 0.883×</title></circle>
+<circle class="point" cx="591.7" cy="1164.8" r="6" fill="#ea580c"><title>Falcon-H1 · N=4 · 0.715×</title></circle>
+<circle class="point" cx="827.5" cy="1228.3" r="6" fill="#ea580c"><title>Falcon-H1 · N=8 · 0.584×</title></circle>
+<circle class="point" cx="1063.3" cy="1254.7" r="6" fill="#ea580c"><title>Falcon-H1 · N=16 · 0.529×</title></circle>
+<circle class="point" cx="1299.2" cy="1261.6" r="6" fill="#ea580c"><title>Falcon-H1 · N=32 · 0.515×</title></circle>
+<circle class="point" cx="1535.0" cy="1150.0" r="6" fill="#ea580c"><title>Falcon-H1 · N=64 · 0.746×</title></circle>
+<path class="line" d="M 120.0 1091.6 L 355.8 1054.2 L 591.7 1000.0 L 827.5 1139.8 L 1063.3 1265.3 L 1299.2 1275.0 L 1535.0 1175.2" stroke="#0891b2"/>
+<circle class="point" cx="120.0" cy="1091.6" r="6" fill="#0891b2"><title>DeepSeek2 · N=1 · 0.866×</title></circle>
+<circle class="point" cx="355.8" cy="1054.2" r="6" fill="#0891b2"><title>DeepSeek2 · N=2 · 0.944×</title></circle>
+<circle class="point" cx="591.7" cy="1000.0" r="6" fill="#0891b2"><title>DeepSeek2 · N=4 · 1.055×</title></circle>
+<circle class="point" cx="827.5" cy="1139.8" r="6" fill="#0891b2"><title>DeepSeek2 · N=8 · 0.767×</title></circle>
+<circle class="point" cx="1063.3" cy="1265.3" r="6" fill="#0891b2"><title>DeepSeek2 · N=16 · 0.508×</title></circle>
+<circle class="point" cx="1299.2" cy="1275.0" r="6" fill="#0891b2"><title>DeepSeek2 · N=32 · 0.487×</title></circle>
+<circle class="point" cx="1535.0" cy="1175.2" r="6" fill="#0891b2"><title>DeepSeek2 · N=64 · 0.694×</title></circle>
+<path class="line" d="M 120.0 960.8 L 355.8 1000.7 L 591.7 1038.8 L 827.5 977.4" stroke="#dc2626" stroke-dasharray="5 7"/>
+<circle class="point" cx="120.0" cy="960.8" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=1 · 1.136×</title></circle>
+<circle class="point" cx="355.8" cy="1000.7" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=2 · 1.054×</title></circle>
+<circle class="point" cx="591.7" cy="1038.8" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=4 · 0.975×</title></circle>
+<circle class="point" cx="827.5" cy="977.4" r="6" fill="#dc2626"><title>GLM-4.7 MTP · N=8 · 1.102×</title></circle>
+<text class="small fg" x="70" y="1505">Generation: broad throughput and p99 wins. Model-backed native MTP: 15/15 drafts accepted on both; NEW median generation +13.4%.</text>
+<text class="axis muted" x="70" y="1545">Dotted MTP line: 256/256 exact lifecycle requests with zero activations; correctness/transport evidence, not draft-quality evidence.</text>
+</svg>

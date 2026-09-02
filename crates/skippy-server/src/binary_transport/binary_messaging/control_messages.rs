@@ -15,30 +15,29 @@ use crate::binary_transport::stage_execution::{
     binary_message_attrs, elapsed_ms, runtime_sampling_config, stage_mask, token_sideband_or_fill,
 };
 use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
-use crate::runtime_state::RuntimeState;
 use crate::telemetry::{Telemetry, now_unix_nanos};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageReplyStats, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
-    recv_reply, send_reply_ack_with_stats,
+    StageReplyStats, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
+    send_reply_ack_with_stats,
 };
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_stop(
     config: &StageConfig,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -63,13 +62,8 @@ pub(super) fn handle_stop(
                 .flush()
                 .context("flush async forwards before stop")?;
         }
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward binary stop")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward binary stop")?;
         let reply = recv_reply(&mut **downstream).context("stop downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("stop expected downstream ACK");
@@ -78,30 +72,48 @@ pub(super) fn handle_stop(
     }
     let reset_start_unix_nanos = now_unix_nanos() as u64;
     let reset_timer = Instant::now();
-    let lock_timer = Instant::now();
-    let mut runtime = runtime.lock().expect("runtime lock poisoned");
-    let runtime_lock_wait_ms = elapsed_ms(lock_timer);
+    let session_lease = session_tracker.session_lease(session_key);
+    let release = session_lease
+        .begin_release()
+        .ok_or_else(|| anyhow::anyhow!("cannot stop stale binary session {session_key}"))?;
     let accumulated =
         kv.and_then(|cache| take_shared_prefill_tokens(&cache.split_prefill_tokens, session_key));
-    if let Some(tokens) = accumulated {
-        let record = maybe_record_binary_full_prefill(
-            config,
-            &mut runtime,
-            kv,
-            telemetry,
-            session_key,
-            message,
-            &tokens,
-        );
-        if record.recorded_pages > 0 {
-            stop_stats.kv_recorded_pages += record.recorded_pages as i64;
-            stop_stats.kv_record_stage_mask |= stage_mask(config.stage_index);
-        }
+    let scheduler_config = config.clone();
+    let scheduler_kv = kv.cloned();
+    let scheduler_telemetry = telemetry.clone();
+    let scheduler_session_key = session_key.to_string();
+    let scheduler_message = message.clone();
+    let outcome = iteration_scheduler
+        .execute_runtime_timed("binary-session-stop", move |runtime| {
+            let record = accumulated.map(|tokens| {
+                maybe_record_binary_full_prefill(
+                    &scheduler_config,
+                    runtime,
+                    scheduler_kv.as_ref(),
+                    &scheduler_telemetry,
+                    &scheduler_session_key,
+                    &scheduler_message,
+                    &tokens,
+                )
+            });
+            let drop_stats = runtime
+                .drop_session_timed(&scheduler_session_key)
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))?;
+            Ok((record, drop_stats))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
+        .context("reset binary stage session");
+    drop(release);
+    session_tracker.stopped(session_key);
+    let outcome = outcome?;
+    let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+    let (record, drop_stats) = outcome.value;
+    if let Some(record) = record
+        && record.recorded_pages > 0
+    {
+        stop_stats.kv_recorded_pages += record.recorded_pages as i64;
+        stop_stats.kv_record_stage_mask |= stage_mask(config.stage_index);
     }
-    let drop_stats = runtime
-        .drop_session_timed(session_key)
-        .context("reset binary stage session")?;
-    drop(runtime);
     let reset_end_unix_nanos = now_unix_nanos() as u64;
     let mut reset_attrs = binary_message_attrs(config, session_id, message);
     reset_attrs.insert(
@@ -138,7 +150,6 @@ pub(super) fn handle_stop(
         reset_start_unix_nanos,
         reset_end_unix_nanos,
     );
-    session_tracker.stopped(session_key);
     prediction_return_streams.remove(&(message.request_id, message.session_id));
     prediction_return_sinks.remove(message.request_id, message.session_id);
     send_reply_ack_with_stats(upstream, stop_stats).context("send stop ACK")
@@ -146,9 +157,8 @@ pub(super) fn handle_stop(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_verify_retirement(
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -163,29 +173,27 @@ pub(super) fn handle_verify_retirement(
         .context("verify retirement position must be non-negative")?;
     let token_count = u64::try_from(message.token_count)
         .context("verify retirement count must be non-negative")?;
-    runtime
-        .lock()
-        .expect("runtime lock poisoned")
-        .retire_verify_checkpoint(session_key, token_start, token_count)
+    let scheduler_session_key = session_key.to_string();
+    iteration_scheduler
+        .execute_runtime("binary-verify-retire", move |runtime| {
+            runtime
+                .retire_verify_checkpoint(&scheduler_session_key, token_start, token_count)
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("retire binary stage verify checkpoint")?;
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward verify retirement")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward verify retirement")?;
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_session_control(
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -206,21 +214,25 @@ pub(super) fn handle_session_control(
     )
     .context("drain deferred replies before session control")?;
     match message.kind {
-        WireMessageKind::TrimSession => runtime
-            .lock()
-            .expect("runtime lock poisoned")
-            .trim_session(session_key, message.token_count.max(0) as u64)
-            .context("trim binary stage session")?,
+        WireMessageKind::TrimSession => {
+            let scheduler_session_key = session_key.to_string();
+            let token_count = message.token_count.max(0) as u64;
+            iteration_scheduler
+                .execute_runtime("binary-session-trim", move |runtime| {
+                    runtime
+                        .trim_session(&scheduler_session_key, token_count)
+                        .map_err(|error| {
+                            openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                        })
+                })
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
+                .context("trim binary stage session")?;
+        }
         _ => unreachable!("session control checked above"),
     }
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward session control")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward session control")?;
         let reply = recv_reply(&mut **downstream).context("session control downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("session control expected downstream ACK");
@@ -234,10 +246,9 @@ pub(super) fn handle_session_control(
 pub(super) fn handle_generation_control(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     message: &StageWireMessage,
@@ -261,13 +272,8 @@ pub(super) fn handle_generation_control(
     )
     .context("drain deferred replies before generation config")?;
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward generation config")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward generation config")?;
         let reply = recv_reply(&mut **downstream).context("generation config downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("generation config expected downstream ACK");
@@ -276,15 +282,23 @@ pub(super) fn handle_generation_control(
     } else {
         if let Some(metadata) = message.chat_sampling_metadata.as_deref() {
             let sampling = runtime_sampling_config(message.sampling.as_ref());
-            runtime
-                .lock()
-                .expect("runtime lock poisoned")
-                .configure_chat_sampling(
-                    session_key,
-                    metadata,
-                    message.state.prompt_token_count.max(0) as u64,
-                    sampling.as_ref(),
-                )
+            let scheduler_session_key = session_key.to_string();
+            let metadata = metadata.to_string();
+            let prompt_token_count = message.state.prompt_token_count.max(0) as u64;
+            iteration_scheduler
+                .execute_runtime("binary-generation-config", move |runtime| {
+                    runtime
+                        .configure_chat_sampling(
+                            &scheduler_session_key,
+                            &metadata,
+                            prompt_token_count,
+                            sampling.as_ref(),
+                        )
+                        .map_err(|error| {
+                            openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                        })
+                })
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                 .context("configure binary stage generation")?;
         }
         configure_prediction_return_stream(
@@ -292,7 +306,6 @@ pub(super) fn handle_generation_control(
             topology,
             message.request_id,
             message.session_id,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_sinks,
             prediction_return_streams,
@@ -305,12 +318,11 @@ pub(super) fn handle_generation_control(
 pub(super) fn handle_prefix_cache_control(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    runtime: &Arc<Mutex<RuntimeState>>,
+    iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     activation_width: i32,
@@ -341,14 +353,13 @@ pub(super) fn handle_prefix_cache_control(
         return handle_binary_restore_prefill_decode_control(
             config,
             topology,
-            runtime,
+            iteration_scheduler,
             kv,
             telemetry,
             session_key,
             session_id,
             message,
             downstream,
-            wire_dtype,
             downstream_wire_condition,
             activation_width,
             control_started,
@@ -362,26 +373,30 @@ pub(super) fn handle_prefix_cache_control(
     }
     let token_ids =
         token_sideband_or_fill(&message).context("read prefix cache control token sideband")?;
-    let local = maybe_prefix_cache_control(
-        config,
-        runtime,
-        kv,
-        telemetry,
-        session_key,
-        &message,
-        &token_ids,
-    );
+    let scheduler_config = config.clone();
+    let scheduler_kv = kv.cloned();
+    let scheduler_telemetry = telemetry.clone();
+    let scheduler_session_key = session_key.to_string();
+    let scheduler_message = message.clone();
+    let local = iteration_scheduler
+        .execute_runtime("binary-prefix-control", move |runtime| {
+            Ok(maybe_prefix_cache_control(
+                &scheduler_config,
+                runtime,
+                scheduler_kv.as_ref(),
+                &scheduler_telemetry,
+                &scheduler_session_key,
+                &scheduler_message,
+                &token_ids,
+            ))
+        })
+        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     control_stats.merge(local.stats);
     if local.hit
         && let Some(downstream) = downstream.as_mut()
     {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            &message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward prefix cache control")?;
+        write_stage_message_conditioned(&mut **downstream, &message, downstream_wire_condition)
+            .context("forward prefix cache control")?;
         let mut reply = recv_reply(&mut **downstream).context("prefix cache downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("prefix cache control expected downstream ACK");
@@ -390,10 +405,13 @@ pub(super) fn handle_prefix_cache_control(
             normalize_downstream_prefix_restore_reply(message.kind, &mut reply.stats);
         control_stats.merge(reply.stats);
         if downstream_missed {
-            let _ = runtime
-                .lock()
-                .expect("runtime lock poisoned")
-                .drop_session_timed(session_key);
+            let scheduler_session_key = session_key.to_string();
+            let _ = iteration_scheduler.execute_runtime("binary-prefix-rollback", move |runtime| {
+                runtime
+                    .drop_session_timed(&scheduler_session_key)
+                    .map(|_| ())
+                    .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
+            });
         }
     }
     let mut attrs = binary_message_attrs(config, session_id, &message);

@@ -7,6 +7,8 @@ use skippy_cache::{CacheBytesReconstructStats, CacheDedupeStats, ExactStatePaylo
 pub struct PrefillKvIdentity {
     pub identity: PageIdentity,
     pub page_id: String,
+    pub namespace: String,
+    pub token_ids: Vec<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +36,6 @@ pub struct ResidentPrefixRestore {
     pub token_count: usize,
     pub seq_id: i32,
     pub entries: usize,
-    pub borrowed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -70,34 +71,11 @@ pub struct ResidentActivationRecord {
     pub resident_bytes: u64,
 }
 
-/// The tier a restored exact-state payload came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExactStateSource {
-    Ram,
-    Disk,
-}
-
-impl ExactStateSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ram => "ram",
-            Self::Disk => "disk",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ExactStateRestore {
     pub page_id: String,
     pub token_count: usize,
     pub payload_kind: ExactStatePayloadKind,
-    /// Which tier actually served the payload.
-    ///
-    /// A hit reported without this is unattributable: RAM hits and disk hits
-    /// have completely different costs and completely different failure
-    /// modes, and a disk tier that has silently stopped serving looks
-    /// identical to a warm RAM cache in the telemetry.
-    pub source: ExactStateSource,
     pub logical_bytes: u64,
     pub entries: usize,
     pub reconstruct_ms: f64,

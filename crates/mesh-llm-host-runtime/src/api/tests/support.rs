@@ -646,8 +646,10 @@ fn make_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,
@@ -1049,7 +1051,6 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             state: crate::inference::skippy::StageRuntimeState::Ready,
             bind_addr: "127.0.0.1:39100".into(),
             activation_width: 4096,
-            wire_dtype: crate::inference::skippy::StageWireDType::F16,
             selected_device: Some(skippy_protocol::StageDevice {
                 backend_device: "Metal0".into(),
                 stable_id: Some("metal:0".into()),

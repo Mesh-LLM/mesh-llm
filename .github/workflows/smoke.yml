@@ -84,6 +84,16 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
+      # The container runs as root while the host-mounted workspace is owned
+      # by the runner uid, so git refuses every command in it as "dubious
+      # ownership". release-version.sh enumerates manifests with `git
+      # ls-files`, which then returns nothing and the script exits 1. Same
+      # step every containerized release job already carries (release.yml,
+      # native-sdk-artifact.yml, node-sdk-addon-artifact.yml).
+      - name: Trust checkout directory
+        if: job.container.id != ''
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Prepare dispatched release version
         if: inputs.release_tag != ''
         run: scripts/release-version.sh "${{ inputs.release_tag }}"

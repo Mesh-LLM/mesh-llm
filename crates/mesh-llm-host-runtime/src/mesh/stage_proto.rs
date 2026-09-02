@@ -21,6 +21,17 @@ pub(super) fn stage_runtime_status_key(topology_id: &str, run_id: &str, stage_id
     format!("{topology_id}\n{run_id}\n{stage_id}")
 }
 
+fn path_free_stage_projector_path(
+    package_ref: Option<&str>,
+    projector_path: Option<String>,
+) -> Option<String> {
+    if package_ref.is_some_and(crate::inference::skippy::is_content_addressed_gguf_ref) {
+        None
+    } else {
+        projector_path
+    }
+}
+
 pub(super) fn endpoint_id_from_bytes(bytes: Vec<u8>) -> anyhow::Result<EndpointId> {
     let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
         anyhow::anyhow!(
@@ -37,6 +48,8 @@ pub(super) fn stage_runtime_status_from_snapshot(
     node_id: Option<EndpointId>,
     status: crate::inference::skippy::StageStatusSnapshot,
 ) -> StageRuntimeStatus {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     StageRuntimeStatus {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -49,7 +62,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned,
-        projector_path: status.projector_path,
+        projector_path,
         stage_id: status.stage_id,
         stage_index: status.stage_index,
         node_id,
@@ -58,7 +71,6 @@ pub(super) fn stage_runtime_status_from_snapshot(
         state: status.state,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device,
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -75,6 +87,10 @@ pub(super) fn stage_snapshot_from_runtime_status(
     state: crate::inference::skippy::StageRuntimeState,
     error: Option<String>,
 ) -> crate::inference::skippy::StageStatusSnapshot {
+    let projector_path = path_free_stage_projector_path(
+        status.package_ref.as_deref(),
+        status.projector_path.clone(),
+    );
     crate::inference::skippy::StageStatusSnapshot {
         topology_id: status.topology_id.clone(),
         run_id: status.run_id.clone(),
@@ -87,7 +103,7 @@ pub(super) fn stage_snapshot_from_runtime_status(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path.clone(),
         materialized_pinned: status.materialized_pinned,
-        projector_path: status.projector_path.clone(),
+        projector_path,
         stage_id: status.stage_id.clone(),
         stage_index: status.stage_index,
         layer_start: status.layer_start,
@@ -95,7 +111,6 @@ pub(super) fn stage_snapshot_from_runtime_status(
         state,
         bind_addr: status.bind_addr.clone(),
         activation_width: status.activation_width,
-        wire_dtype: status.wire_dtype,
         selected_device: status.selected_device.clone(),
         ctx_size: status.ctx_size,
         lane_count: status.lane_count,
@@ -136,7 +151,7 @@ pub(super) fn stage_topology_from_load(
 pub(super) fn stage_control_request_to_proto(
     requester_id: EndpointId,
     request: crate::inference::skippy::StageControlRequest,
-) -> skippy_stage_proto::StageControlRequest {
+) -> anyhow::Result<skippy_stage_proto::StageControlRequest> {
     use skippy_stage_proto::stage_control_request::Command;
 
     let command = match request {
@@ -144,7 +159,19 @@ pub(super) fn stage_control_request_to_proto(
             Command::ClaimCoordinator(stage_coordinator_claim_to_proto(claim))
         }
         crate::inference::skippy::StageControlRequest::Load(load) => {
+            anyhow::ensure!(
+                !load.local_source_required
+                    && !crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref),
+                "local-required stage load must use the fail-closed LoadLocal command"
+            );
             Command::LoadStage(stage_load_to_proto(load))
+        }
+        crate::inference::skippy::StageControlRequest::LoadLocal(mut load) => {
+            // The command discriminant is the fail-closed contract. Do not let
+            // a stale or manually constructed domain request weaken it by
+            // carrying the fallback policy bit.
+            load.local_source_required = true;
+            Command::LoadLocalStage(stage_load_to_proto(load))
         }
         crate::inference::skippy::StageControlRequest::Stop(stop) => {
             Command::StopStage(skippy_stage_proto::StopStage {
@@ -165,11 +192,23 @@ pub(super) fn stage_control_request_to_proto(
         crate::inference::skippy::StageControlRequest::Inventory(inventory) => {
             Command::GetLayerInventory(skippy_stage_proto::GetLayerInventory {
                 model_id: inventory.model_id,
+                runtime_profile: inventory.runtime_profile,
                 package_ref: inventory.package_ref,
                 manifest_sha256: inventory.manifest_sha256,
+                expected_source_model_sha256: inventory.expected_source_model_sha256,
+                source_resolution_policy: source_resolution_policy_to_proto(
+                    inventory.local_source_required,
+                ) as i32,
             })
         }
         crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
+            anyhow::ensure!(
+                !prepare.load.local_source_required
+                    && !crate::inference::skippy::is_content_addressed_gguf_ref(
+                        &prepare.load.package_ref
+                    ),
+                "local-required stage load cannot use the legacy Prepare command"
+            );
             Command::PrepareStage(skippy_stage_proto::PrepareStage {
                 load_stage: Some(stage_load_to_proto(prepare.load)),
                 coordinator_id: prepare.coordinator_id.map(|id| id.as_bytes().to_vec()),
@@ -190,20 +229,27 @@ pub(super) fn stage_control_request_to_proto(
         }
     };
 
-    skippy_stage_proto::StageControlRequest {
+    let frame = skippy_stage_proto::StageControlRequest {
         r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         command: Some(command),
-    }
+    };
+    skippy_protocol::validate_stage_control_request(&frame)
+        .map_err(|error| anyhow::anyhow!("invalid outbound stage-control request: {error}"))?;
+    Ok(frame)
 }
 
 pub(super) fn stage_load_to_proto(
     load: crate::inference::skippy::StageLoadRequest,
 ) -> skippy_stage_proto::LoadStage {
+    let projector_path = (!load.local_source_required)
+        .then(|| load.projector_path.clone())
+        .flatten();
     skippy_stage_proto::LoadStage {
         topology_id: load.topology_id,
         run_id: load.run_id,
         model_id: load.model_id,
+        runtime_profile: load.runtime_profile,
         backend: load.backend,
         package_ref: load.package_ref,
         manifest_sha256: load.manifest_sha256,
@@ -213,13 +259,23 @@ pub(super) fn stage_load_to_proto(
         layer_end: load.layer_end,
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
-        projector_path: load.projector_path,
+        source_model_sha256: load.source_model_sha256,
+        source_resolution_policy: source_resolution_policy_to_proto(load.local_source_required)
+            as i32,
+        projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_to_proto(load.glm_dsa_policy) as i32,
+        generation_signal_window: load.generation_signal_window,
         selected_device: load.selected_device.map(stage_device_to_proto),
         bind_addr: load.bind_addr,
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: stage_wire_dtype_to_proto(load.wire_dtype) as i32,
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
+        continuous_batching: Some(load.continuous_batching),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -228,6 +284,7 @@ pub(super) fn stage_load_to_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
+        runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -246,6 +303,30 @@ pub(super) fn stage_load_to_proto(
         },
         upstream: load.upstream.map(stage_peer_to_proto),
         downstream: load.downstream.map(stage_peer_to_proto),
+    }
+}
+
+fn stage_runtime_settings_to_proto(
+    settings: crate::inference::skippy::StageLoadRuntimeSettings,
+) -> skippy_stage_proto::StageLoadRuntimeSettings {
+    skippy_stage_proto::StageLoadRuntimeSettings {
+        repack: Some(settings.repack),
+        op_offload: settings.op_offload,
+        no_host_buffer: Some(settings.no_host_buffer),
+        check_tensors: Some(settings.check_tensors),
+        direct_io: Some(settings.direct_io),
+        main_gpu: settings.main_gpu,
+        split_mode: Some(match settings.split_mode {
+            skippy_protocol::SplitMode::Auto => -1,
+            skippy_protocol::SplitMode::None => 0,
+            skippy_protocol::SplitMode::Layer => 1,
+            skippy_protocol::SplitMode::Row => 2,
+            skippy_protocol::SplitMode::Tensor => 3,
+        }),
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
     }
 }
 
@@ -305,6 +386,15 @@ pub(super) fn stage_control_request_from_proto(
         Command::LoadStage(load) => Ok(crate::inference::skippy::StageControlRequest::Load(
             stage_load_from_proto(load)?,
         )),
+        Command::LoadLocalStage(load) => {
+            let mut load = stage_load_from_proto(load)?;
+            // Preserve the command-level invariant even if this conversion is
+            // called on a frame that did not pass the wire validator first.
+            load.local_source_required = true;
+            Ok(crate::inference::skippy::StageControlRequest::LoadLocal(
+                load,
+            ))
+        }
         Command::StopStage(stop) => Ok(crate::inference::skippy::StageControlRequest::Stop(
             crate::inference::skippy::StageStopRequest {
                 topology_id: stop.topology_id,
@@ -327,8 +417,13 @@ pub(super) fn stage_control_request_from_proto(
             Ok(crate::inference::skippy::StageControlRequest::Inventory(
                 crate::inference::skippy::StageInventoryRequest {
                     model_id: inventory.model_id,
+                    runtime_profile: inventory.runtime_profile,
                     package_ref: inventory.package_ref,
                     manifest_sha256: inventory.manifest_sha256,
+                    expected_source_model_sha256: inventory.expected_source_model_sha256,
+                    local_source_required: source_resolution_policy_from_proto(
+                        inventory.source_resolution_policy,
+                    )?,
                 },
             ))
         }
@@ -371,10 +466,15 @@ pub(super) fn stage_control_request_from_proto(
 pub(super) fn stage_load_from_proto(
     load: skippy_stage_proto::LoadStage,
 ) -> anyhow::Result<crate::inference::skippy::StageLoadRequest> {
+    let local_source_required = source_resolution_policy_from_proto(load.source_resolution_policy)?;
+    let projector_path = (!local_source_required)
+        .then(|| load.projector_path.clone())
+        .flatten();
     Ok(crate::inference::skippy::StageLoadRequest {
         topology_id: load.topology_id,
         run_id: load.run_id,
         model_id: load.model_id,
+        runtime_profile: load.runtime_profile,
         backend: load.backend,
         package_ref: load.package_ref,
         manifest_sha256: load.manifest_sha256,
@@ -384,7 +484,16 @@ pub(super) fn stage_load_from_proto(
         layer_end: load.layer_end,
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
-        projector_path: load.projector_path,
+        source_model_sha256: load.source_model_sha256,
+        local_source_required,
+        projector_path,
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker,
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: stage_glm_dsa_policy_from_proto(load.glm_dsa_policy),
+        generation_signal_window: load.generation_signal_window,
         selected_device: load
             .selected_device
             .map(stage_device_from_proto)
@@ -392,13 +501,13 @@ pub(super) fn stage_load_from_proto(
         bind_addr: load.bind_addr,
         activation_width: i32::try_from(load.activation_width)
             .context("stage activation_width exceeds i32")?,
-        wire_dtype: stage_wire_dtype_from_proto(load.wire_dtype),
         ctx_size: load.ctx_size,
         lane_count: if load.lane_count == 0 {
             4
         } else {
             load.lane_count
         },
+        continuous_batching: load.continuous_batching.unwrap_or(true),
         n_batch: load.n_batch,
         n_ubatch: load.n_ubatch,
         n_gpu_layers: load.n_gpu_layers,
@@ -407,6 +516,7 @@ pub(super) fn stage_load_from_proto(
         cache_type_k: load.cache_type_k,
         cache_type_v: load.cache_type_v,
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
+        runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings),
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
@@ -420,6 +530,33 @@ pub(super) fn stage_load_from_proto(
         upstream: load.upstream.map(stage_peer_from_proto).transpose()?,
         downstream: load.downstream.map(stage_peer_from_proto).transpose()?,
     })
+}
+
+fn stage_runtime_settings_from_proto(
+    settings: Option<skippy_stage_proto::StageLoadRuntimeSettings>,
+) -> crate::inference::skippy::StageLoadRuntimeSettings {
+    let Some(settings) = settings else {
+        return crate::inference::skippy::StageLoadRuntimeSettings::default();
+    };
+    crate::inference::skippy::StageLoadRuntimeSettings {
+        repack: settings.repack.unwrap_or(false),
+        op_offload: settings.op_offload,
+        no_host_buffer: settings.no_host_buffer.unwrap_or(false),
+        check_tensors: settings.check_tensors.unwrap_or(false),
+        direct_io: settings.direct_io.unwrap_or(false),
+        main_gpu: settings.main_gpu,
+        split_mode: match settings.split_mode.unwrap_or(-1) {
+            0 => skippy_protocol::SplitMode::None,
+            1 => skippy_protocol::SplitMode::Layer,
+            2 => skippy_protocol::SplitMode::Row,
+            3 => skippy_protocol::SplitMode::Tensor,
+            _ => skippy_protocol::SplitMode::Auto,
+        },
+        kv_offload: settings.kv_offload,
+        kv_unified: settings.kv_unified,
+        swa_full: settings.swa_full,
+        cache_idle_slots: settings.cache_idle_slots,
+    }
 }
 
 pub(super) fn stage_coordinator_claim_from_proto(
@@ -484,23 +621,6 @@ pub(super) fn stage_load_mode_from_proto(value: i32) -> skippy_protocol::LoadMod
     }
 }
 
-pub(super) fn stage_wire_dtype_from_proto(value: i32) -> crate::inference::skippy::StageWireDType {
-    match skippy_stage_proto::StageWireDType::try_from(value)
-        .unwrap_or(skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified)
-    {
-        skippy_stage_proto::StageWireDType::StageWireDtypeUnspecified
-        | skippy_stage_proto::StageWireDType::StageWireDtypeF16 => {
-            crate::inference::skippy::StageWireDType::F16
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeF32 => {
-            crate::inference::skippy::StageWireDType::F32
-        }
-        skippy_stage_proto::StageWireDType::StageWireDtypeQ8 => {
-            crate::inference::skippy::StageWireDType::Q8
-        }
-    }
-}
-
 pub(super) fn stage_control_unavailable_response(
     request: crate::inference::skippy::StageControlRequest,
 ) -> crate::inference::skippy::StageControlResponse {
@@ -515,6 +635,9 @@ pub(super) fn stage_control_unavailable_response(
             );
         }
         crate::inference::skippy::StageControlRequest::Load(load) => {
+            stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed)
+        }
+        crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
             stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed)
         }
         crate::inference::skippy::StageControlRequest::Stop(stop) => {
@@ -538,7 +661,6 @@ pub(super) fn stage_control_unavailable_response(
                 state: crate::inference::skippy::StageRuntimeState::Failed,
                 bind_addr: String::new(),
                 activation_width: 0,
-                wire_dtype: crate::inference::skippy::StageWireDType::F16,
                 selected_device: None,
                 ctx_size: 0,
                 lane_count: 0,
@@ -568,6 +690,8 @@ pub(super) fn stage_control_unavailable_response(
                     preparing_ranges: Vec::new(),
                     source_model_path: None,
                     source_model_bytes: None,
+                    source_model_sha256: None,
+                    content_addressed_local_source: None,
                     source_model_kind: crate::inference::skippy::SourceModelKind::Unknown,
                 },
             );
@@ -616,6 +740,8 @@ pub(super) fn stage_status_from_load(
     load: &crate::inference::skippy::StageLoadRequest,
     state: crate::inference::skippy::StageRuntimeState,
 ) -> crate::inference::skippy::StageStatusSnapshot {
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref);
     crate::inference::skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -623,12 +749,16 @@ pub(super) fn stage_status_from_load(
         backend: load.backend.clone(),
         package_ref: Some(load.package_ref.clone()),
         manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: load.model_path.clone(),
-        source_model_sha256: None,
+        source_model_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.model_path.clone())
+            .flatten(),
+        source_model_sha256: load.source_model_sha256.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
-        projector_path: load.projector_path.clone(),
+        projector_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.projector_path.clone())
+            .flatten(),
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
@@ -636,7 +766,6 @@ pub(super) fn stage_status_from_load(
         state,
         bind_addr: load.bind_addr.clone(),
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -885,6 +1014,8 @@ pub(super) fn layer_inventory_to_proto(
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_kind: source_model_kind_to_proto(inventory.source_model_kind) as i32,
+        source_model_sha256: inventory.source_model_sha256,
+        content_addressed_local_source: inventory.content_addressed_local_source,
     }
 }
 
@@ -918,7 +1049,27 @@ pub(super) fn layer_inventory_from_proto(
             .collect(),
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
+        source_model_sha256: inventory.source_model_sha256,
+        content_addressed_local_source: inventory.content_addressed_local_source,
         source_model_kind: source_model_kind_from_proto(inventory.source_model_kind),
+    }
+}
+
+fn source_resolution_policy_to_proto(
+    local_source_required: bool,
+) -> skippy_stage_proto::SourceResolutionPolicy {
+    if local_source_required {
+        skippy_stage_proto::SourceResolutionPolicy::LocalRequired
+    } else {
+        skippy_stage_proto::SourceResolutionPolicy::Fallback
+    }
+}
+
+fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
+    match skippy_stage_proto::SourceResolutionPolicy::try_from(value) {
+        Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
+        Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
+        Err(_) => anyhow::bail!("unsupported stage source resolution policy {value}"),
     }
 }
 
@@ -1046,6 +1197,8 @@ pub(super) fn stage_preparation_status_from_proto(
 pub(super) fn stage_status_to_proto(
     status: crate::inference::skippy::StageStatusSnapshot,
 ) -> skippy_stage_proto::StageStatus {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     skippy_stage_proto::StageStatus {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -1058,7 +1211,6 @@ pub(super) fn stage_status_to_proto(
         state: stage_runtime_state_to_proto(status.state) as i32,
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_to_proto(status.wire_dtype) as i32,
         error: status.error,
         shutdown_generation: status.shutdown_generation,
         selected_device: status.selected_device.map(stage_device_to_proto),
@@ -1073,7 +1225,7 @@ pub(super) fn stage_status_to_proto(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: Some(status.materialized_pinned),
-        projector_path: status.projector_path,
+        projector_path,
         flash_attn_type: stage_flash_attn_type_to_proto(status.flash_attn_type) as i32,
         coordinator_term: status.coordinator_term,
         coordinator_id: status.coordinator_id.map(|id| id.to_string()),
@@ -1084,6 +1236,8 @@ pub(super) fn stage_status_to_proto(
 pub(super) fn stage_status_from_proto(
     status: skippy_stage_proto::StageStatus,
 ) -> anyhow::Result<crate::inference::skippy::StageStatusSnapshot> {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     Ok(crate::inference::skippy::StageStatusSnapshot {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -1096,7 +1250,6 @@ pub(super) fn stage_status_from_proto(
         state: stage_runtime_state_from_proto(status.state),
         bind_addr: status.bind_addr,
         activation_width: status.activation_width,
-        wire_dtype: stage_wire_dtype_from_proto(status.wire_dtype),
         selected_device: status
             .selected_device
             .map(stage_device_from_proto)
@@ -1116,7 +1269,7 @@ pub(super) fn stage_status_from_proto(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned.unwrap_or(false),
-        projector_path: status.projector_path,
+        projector_path,
         flash_attn_type: stage_flash_attn_type_from_proto(status.flash_attn_type),
         error: status.error,
         shutdown_generation: status.shutdown_generation,
@@ -1156,6 +1309,24 @@ pub(super) fn stage_flash_attn_type_from_proto(value: i32) -> skippy_protocol::F
         skippy_stage_proto::StageFlashAttnType::Enabled => {
             skippy_protocol::FlashAttentionType::Enabled
         }
+    }
+}
+
+fn stage_glm_dsa_policy_to_proto(
+    value: skippy_protocol::GlmDsaPolicy,
+) -> skippy_stage_proto::StageGlmDsaPolicy {
+    match value {
+        skippy_protocol::GlmDsaPolicy::Auto => skippy_stage_proto::StageGlmDsaPolicy::Auto,
+        skippy_protocol::GlmDsaPolicy::V1 => skippy_stage_proto::StageGlmDsaPolicy::V1,
+    }
+}
+
+fn stage_glm_dsa_policy_from_proto(value: i32) -> skippy_protocol::GlmDsaPolicy {
+    match skippy_stage_proto::StageGlmDsaPolicy::try_from(value)
+        .unwrap_or(skippy_stage_proto::StageGlmDsaPolicy::Auto)
+    {
+        skippy_stage_proto::StageGlmDsaPolicy::Auto => skippy_protocol::GlmDsaPolicy::Auto,
+        skippy_stage_proto::StageGlmDsaPolicy::V1 => skippy_protocol::GlmDsaPolicy::V1,
     }
 }
 
@@ -1270,19 +1441,85 @@ pub(super) fn stage_preparation_state_to_proto(
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
 
-pub(super) fn stage_wire_dtype_to_proto(
-    dtype: crate::inference::skippy::StageWireDType,
-) -> skippy_stage_proto::StageWireDType {
-    match dtype {
-        crate::inference::skippy::StageWireDType::F32 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF32
+    #[derive(Clone, PartialEq, Message)]
+    struct LegacyLoadStage {}
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatLoadStage {
+        #[prost(message, optional, tag = "43")]
+        runtime_settings: Option<CompatRuntimeSettings>,
+    }
+
+    #[derive(Clone, PartialEq, Message)]
+    struct CompatRuntimeSettings {
+        #[prost(bool, optional, tag = "1")]
+        repack: Option<bool>,
+        #[prost(bool, optional, tag = "2")]
+        op_offload: Option<bool>,
+        #[prost(bool, optional, tag = "3")]
+        no_host_buffer: Option<bool>,
+        #[prost(bool, optional, tag = "4")]
+        check_tensors: Option<bool>,
+        #[prost(bool, optional, tag = "5")]
+        direct_io: Option<bool>,
+        #[prost(uint32, optional, tag = "6")]
+        main_gpu: Option<u32>,
+        #[prost(int32, optional, tag = "7")]
+        split_mode: Option<i32>,
+        #[prost(bool, optional, tag = "8")]
+        kv_offload: Option<bool>,
+        #[prost(bool, optional, tag = "9")]
+        kv_unified: Option<bool>,
+        #[prost(bool, optional, tag = "10")]
+        swa_full: Option<bool>,
+        #[prost(uint32, optional, tag = "11")]
+        cache_idle_slots: Option<u32>,
+    }
+
+    #[test]
+    fn stage_load_wire_round_trip_preserves_runtime_controls() {
+        let settings = CompatRuntimeSettings {
+            repack: Some(true),
+            op_offload: Some(false),
+            no_host_buffer: Some(true),
+            check_tensors: Some(true),
+            direct_io: Some(true),
+            main_gpu: Some(2),
+            split_mode: Some(3),
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        };
+        let mut encoded = skippy_stage_proto::LoadStage::default().encode_to_vec();
+        CompatLoadStage {
+            runtime_settings: Some(settings.clone()),
         }
-        crate::inference::skippy::StageWireDType::F16 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeF16
-        }
-        crate::inference::skippy::StageWireDType::Q8 => {
-            skippy_stage_proto::StageWireDType::StageWireDtypeQ8
-        }
+        .encode(&mut encoded)
+        .expect("compat runtime settings encode");
+
+        let legacy = LegacyLoadStage::decode(encoded.as_slice())
+            .expect("legacy schema ignores additive runtime settings");
+        assert!(legacy.encode_to_vec().is_empty());
+
+        let decoded = skippy_stage_proto::LoadStage::decode(encoded.as_slice())
+            .expect("production load stage decode");
+        let request = stage_load_from_proto(decoded).expect("domain load request");
+        let reencoded = stage_load_to_proto(request).encode_to_vec();
+        let observed = CompatLoadStage::decode(reencoded.as_slice())
+            .expect("compat runtime settings decode")
+            .runtime_settings
+            .expect("runtime settings must survive production round trip");
+
+        assert_eq!(observed, settings);
+        assert_eq!(
+            stage_runtime_settings_from_proto(None),
+            crate::inference::skippy::StageLoadRuntimeSettings::default()
+        );
     }
 }

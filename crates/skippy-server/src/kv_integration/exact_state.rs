@@ -7,12 +7,23 @@ use crate::runtime_state::RuntimeState;
 
 use super::{
     ExactStateExtra, ExactStateRecord, ExactStateRecordAdmission, ExactStateRestore,
-    ExactStateSource, KvStageIntegration, PendingExactStateRecord, PrefillKvIdentity,
-    StagePrefixCachePayload, records::add_reconstruct_stats,
+    KvStageIntegration, PendingExactStateRecord, PrefillKvIdentity, StagePrefixCachePayload,
+    records::add_reconstruct_stats,
 };
 
 impl KvStageIntegration {
     pub fn restore_exact_state(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+    ) -> Result<Option<ExactStateRestore>> {
+        runtime.restore_transaction(session_id, |runtime| {
+            self.restore_exact_state_inner(runtime, session_id, identities)
+        })
+    }
+
+    fn restore_exact_state_inner(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
@@ -23,118 +34,196 @@ impl KvStageIntegration {
         }
         for identity in identities {
             let lookup_started = Instant::now();
-            let lookup = {
-                let mut cache = self
-                    .exact_states
+            let (lookup, entries) = {
+                let mut radix = self
+                    .radix
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Fall through to the disk tier on a RAM miss, so a demoted
-                // page is actually readable. Without this the tier is
-                // write-only: eviction pays to serialize every payload and
-                // nothing ever reads one back.
-                //
-                // A verification failure inside the tier is a hard error and
-                // quarantines the entry; treat it as a miss here and keep
-                // probing shorter candidates rather than failing the request.
-                match cache.lookup_with_disk(
-                    &identity.page_id,
-                    self.payload.into(),
-                    Default::default,
-                ) {
-                    Ok(found) => found,
-                    Err(_) => continue,
-                }
+                let lookup = radix.acquire_recurrent(&identity.namespace, &identity.token_ids);
+                let entries = radix.stats().recurrent_entries;
+                (lookup, entries)
             };
             let Some(lookup) = lookup else {
                 continue;
             };
+            let lease = ExactStateLease {
+                radix: std::sync::Arc::clone(&self.radix),
+                namespace: identity.namespace.clone(),
+                stored_tokens: lookup.stored_tokens.clone(),
+            };
+            let token_count = lookup.stored_tokens.len() as u64;
             let lookup_ms = lookup_started.elapsed().as_secs_f64() * 1000.0;
-            let from_disk = lookup.from_disk;
             let mut reconstruct_ms = 0.0;
             let mut reconstruct_bytes = 0u64;
             let mut reconstruct_blocks = 0usize;
             let mut kv_import_ms = 0.0;
             let mut recurrent_import_ms = 0.0;
-            match lookup.payload.kind().into() {
-                StagePrefixCachePayload::FullState => {
-                    let (full_state, stats) = lookup
-                        .payload
-                        .full_state_bytes_timed()
-                        .context("reconstruct cached full-state payload")?;
-                    add_reconstruct_stats(
-                        &mut reconstruct_ms,
-                        &mut reconstruct_bytes,
-                        &mut reconstruct_blocks,
-                        stats,
-                    );
-                    let import_started = Instant::now();
-                    runtime.import_full_state_for_token_count(
-                        session_id,
-                        full_state.as_ref(),
-                        lookup.token_count,
-                    )?;
-                    kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
-                }
-                StagePrefixCachePayload::KvRecurrent => {
-                    if let Some((kv, stats)) = lookup
-                        .payload
-                        .kv_bytes_timed()
-                        .context("reconstruct cached KV payload")?
-                    {
+            let mut deterministic_failure = false;
+            let restore_result = (|| -> Result<bool> {
+                match lookup.value.payload.kind().into() {
+                    StagePrefixCachePayload::FullState => {
+                        let (full_state, stats) = lookup
+                            .value
+                            .payload
+                            .full_state_bytes_timed()
+                            .context("reconstruct cached full-state payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?;
+                        if full_state.is_empty() {
+                            deterministic_failure = true;
+                            return Err(anyhow::anyhow!("cached full-state payload is empty"));
+                        }
                         add_reconstruct_stats(
                             &mut reconstruct_ms,
                             &mut reconstruct_bytes,
                             &mut reconstruct_blocks,
                             stats,
                         );
-                        if let Some(desc) = lookup.extra.kv_desc {
-                            let import_started = Instant::now();
-                            runtime.import_kv_page(session_id, &desc, kv.as_ref())?;
-                            kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
-                        } else if !kv.is_empty() {
-                            continue;
-                        }
+                        let import_started = Instant::now();
+                        runtime.import_full_state_for_token_count(
+                            session_id,
+                            full_state.as_ref(),
+                            token_count,
+                        )?;
+                        kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                     }
-                    let (recurrent, stats) = lookup
-                        .payload
-                        .recurrent_state_bytes_timed()
-                        .context("reconstruct cached recurrent payload")?;
-                    add_reconstruct_stats(
-                        &mut reconstruct_ms,
-                        &mut reconstruct_bytes,
-                        &mut reconstruct_blocks,
-                        stats,
-                    );
-                    let import_started = Instant::now();
-                    runtime.import_recurrent_state_for_token_count(
-                        session_id,
-                        recurrent.as_ref(),
-                        lookup.token_count,
-                    )?;
-                    recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                    StagePrefixCachePayload::KvRecurrent => {
+                        if let Some((kv, stats)) = lookup
+                            .value
+                            .payload
+                            .kv_bytes_timed()
+                            .context("reconstruct cached KV payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?
+                        {
+                            add_reconstruct_stats(
+                                &mut reconstruct_ms,
+                                &mut reconstruct_bytes,
+                                &mut reconstruct_blocks,
+                                stats,
+                            );
+                            if let Some(desc) = lookup.value.extra.kv_desc.as_ref() {
+                                desc.validate_payload(kv.len()).map_err(|error| {
+                                    mark_deterministic_failure(&mut deterministic_failure, error)
+                                })?;
+                                if desc.token_start != 0 || desc.token_count != token_count {
+                                    deterministic_failure = true;
+                                    return Err(anyhow::anyhow!(
+                                        "cached KV page token range mismatch for exact-state checkpoint"
+                                    ));
+                                }
+                                let import_started = Instant::now();
+                                runtime.import_kv_page(session_id, desc, kv.as_ref())?;
+                                kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                            } else if !kv.is_empty() {
+                                deterministic_failure = true;
+                                return Err(anyhow::anyhow!(
+                                    "cached KV payload is missing its descriptor"
+                                ));
+                            }
+                        }
+                        let (recurrent, stats) = lookup
+                            .value
+                            .payload
+                            .recurrent_state_bytes_timed()
+                            .context("reconstruct cached recurrent payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?;
+                        if recurrent.is_empty() {
+                            deterministic_failure = true;
+                            return Err(anyhow::anyhow!("cached recurrent-state payload is empty"));
+                        }
+                        add_reconstruct_stats(
+                            &mut reconstruct_ms,
+                            &mut reconstruct_bytes,
+                            &mut reconstruct_blocks,
+                            stats,
+                        );
+                        let import_started = Instant::now();
+                        runtime.import_recurrent_state_for_token_count(
+                            session_id,
+                            recurrent.as_ref(),
+                            token_count,
+                        )?;
+                        recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                    }
+                    _ => return Ok(false),
                 }
-                _ => continue,
+                Ok(true)
+            })();
+            let restored_payload = match restore_result {
+                Ok(restored_payload) => restored_payload,
+                Err(error) => {
+                    drop(lease);
+                    if deterministic_failure
+                        && let Err(quarantine_error) = self.quarantine_exact_state_entry(
+                            &identity.namespace,
+                            &lookup.stored_tokens,
+                            &lookup.value.page_id,
+                        )
+                    {
+                        let _ =
+                            mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                                message: "Skippy exact-state quarantine failed".to_string(),
+                                context: Some(format!(
+                                    "page_id={} error={quarantine_error:#}",
+                                    lookup.value.page_id
+                                )),
+                            });
+                        return Err(error.context(format!(
+                            "failed to fully quarantine corrupt exact-state entry: {quarantine_error:#}"
+                        )));
+                    }
+                    return Err(error);
+                }
+            };
+            if !restored_payload {
+                drop(lease);
+                continue;
             }
-            return Ok(Some(ExactStateRestore {
-                page_id: lookup.page_id,
-                token_count: lookup.token_count as usize,
-                payload_kind: lookup.payload.kind(),
-                source: if from_disk {
-                    ExactStateSource::Disk
-                } else {
-                    ExactStateSource::Ram
-                },
+            let restored = ExactStateRestore {
+                page_id: lookup.value.page_id,
+                token_count: token_count as usize,
+                payload_kind: lookup.value.payload.kind(),
                 logical_bytes: lookup.logical_bytes,
-                entries: lookup.entries,
+                entries,
                 reconstruct_ms,
                 reconstruct_bytes,
                 reconstruct_blocks,
                 lookup_ms,
                 kv_import_ms,
                 recurrent_import_ms,
-            }));
+            };
+            drop(lease);
+            return Ok(Some(restored));
         }
         Ok(None)
+    }
+
+    fn quarantine_exact_state_entry(
+        &self,
+        namespace: &str,
+        tokens: &[i32],
+        page_id: &str,
+    ) -> Result<bool> {
+        let removed = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove_recurrent_if(namespace, tokens, |entry| entry.page_id == page_id);
+        let Some(entry) = removed else {
+            return Ok(false);
+        };
+        entry.payload.release_from(
+            &mut self
+                .exact_blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        Ok(true)
     }
 
     pub fn record_exact_state(
@@ -147,25 +236,26 @@ impl KvStageIntegration {
             return Ok(None);
         }
         let token_count = identity.identity.token_count;
-        if token_count < self.candidate_policy.min_tokens {
+        if token_count < self.checkpoint_policy.min_tokens {
             return Ok(None);
         }
         if !self.try_begin_record(&identity.page_id) {
             return Ok(None);
         }
-        let already_recorded = match try_touch_exact_state(&self.exact_states, &identity.page_id) {
-            Ok(Some(already_recorded)) => already_recorded,
-            Ok(None) => {
-                // Recording is optional. A background worker may hold this lock
-                // while hashing hundreds of MiB; never make inference wait for it.
-                self.finish_record(&identity.page_id);
-                return Ok(None);
-            }
-            Err(error) => {
-                self.finish_record(&identity.page_id);
-                return Err(error);
-            }
-        };
+        let already_recorded =
+            match try_touch_exact_state(&self.radix, &identity.namespace, &identity.token_ids) {
+                Ok(Some(already_recorded)) => already_recorded,
+                Ok(None) => {
+                    // Recording is optional. A background worker may hold this lock
+                    // while hashing hundreds of MiB; never make inference wait for it.
+                    self.finish_record(&identity.page_id);
+                    return Ok(None);
+                }
+                Err(error) => {
+                    self.finish_record(&identity.page_id);
+                    return Err(error);
+                }
+            };
         if already_recorded {
             self.finish_record(&identity.page_id);
             return Ok(None);
@@ -219,19 +309,26 @@ impl KvStageIntegration {
         let logical_bytes = payload.byte_len();
         match self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
-            token_count,
             payload,
             extra,
+            namespace: identity.namespace.clone(),
+            token_ids: identity.token_ids.clone(),
         }) {
             ExactStateRecordAdmission::Queued => {
-                // Recording owns the exact-state mutex while it hashes a potentially
+                // Recording owns the radix/blob locks while it hashes a potentially
                 // multi-hundred-MiB payload. Telemetry must not turn that background
                 // work back into request latency by waiting for cache stats here.
-                let stats = self
-                    .exact_states
+                let entries = self
+                    .radix
                     .try_lock()
                     .ok()
-                    .map(|states| states.stats())
+                    .map(|radix| radix.stats().recurrent_entries)
+                    .unwrap_or_default();
+                let physical_bytes = self
+                    .exact_blobs
+                    .try_lock()
+                    .ok()
+                    .map(|blobs| blobs.physical_bytes())
                     .unwrap_or_default();
                 Ok(Some(ExactStateRecord {
                     page_id: identity.page_id.clone(),
@@ -239,8 +336,8 @@ impl KvStageIntegration {
                     payload_kind,
                     stored: false,
                     logical_bytes,
-                    physical_bytes: stats.physical_bytes,
-                    entries: stats.entries,
+                    physical_bytes,
+                    entries,
                     evicted_entries: 0,
                     evicted_logical_bytes: 0,
                     dedupe: Default::default(),
@@ -253,16 +350,43 @@ impl KvStageIntegration {
     }
 }
 
+struct ExactStateLease {
+    radix: std::sync::Arc<
+        std::sync::Mutex<
+            skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+        >,
+    >,
+    namespace: String,
+    stored_tokens: Vec<i32>,
+}
+
+impl Drop for ExactStateLease {
+    fn drop(&mut self) {
+        let released = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .release_recurrent(&self.namespace, &self.stored_tokens);
+        debug_assert!(released, "recurrent radix acquire/release must balance");
+    }
+}
+
 fn try_touch_exact_state(
-    exact_states: &std::sync::Mutex<skippy_cache::ExactStateCache<ExactStateExtra>>,
-    page_id: &str,
+    radix: &std::sync::Mutex<
+        skippy_cache::UnifiedRadixCache<super::RadixResidentEntry, super::RadixExactEntry>,
+    >,
+    namespace: &str,
+    token_ids: &[i32],
 ) -> Result<Option<bool>> {
-    match exact_states.try_lock() {
-        Ok(mut exact_states) => Ok(Some(exact_states.touch(page_id))),
+    match radix.try_lock() {
+        Ok(mut radix) => Ok(Some(radix.recurrent_exact(namespace, token_ids).is_some())),
         Err(std::sync::TryLockError::WouldBlock) => Ok(None),
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            Ok(Some(poisoned.into_inner().touch(page_id)))
-        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Ok(Some(
+            poisoned
+                .into_inner()
+                .recurrent_exact(namespace, token_ids)
+                .is_some(),
+        )),
     }
 }
 
@@ -272,6 +396,14 @@ fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
         message.contains("runtime memory type is not supported for native KV pages")
             || message.contains("runtime has no attention KV cache")
     })
+}
+
+fn mark_deterministic_failure(
+    deterministic_failure: &mut bool,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    *deterministic_failure = true;
+    error
 }
 
 impl StagePrefixCachePayload {
@@ -286,10 +418,6 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
             skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
-            // A dense archive is a disk-tier payload, not an exact-state
-            // family: the resident cache, not `ExactStateCache`, owns reuse
-            // for these models.
-            skippy_cache::ExactStatePayloadKind::ResidentKvArchive => Self::ResidentKv,
         }
     }
 }
@@ -313,13 +441,18 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use skippy_cache::ExactStateCache;
+    use skippy_cache::UnifiedRadixCache;
 
-    use super::{ExactStateExtra, try_touch_exact_state};
+    use super::try_touch_exact_state;
+
+    type TestRadix = UnifiedRadixCache<
+        crate::kv_integration::RadixResidentEntry,
+        crate::kv_integration::RadixExactEntry,
+    >;
 
     #[test]
     fn busy_exact_state_lock_skips_touch_without_waiting() {
-        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
+        let cache = Arc::new(Mutex::new(TestRadix::new()));
         let locked = cache.clone();
         let (locked_tx, locked_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -331,7 +464,10 @@ mod tests {
         locked_rx.recv().unwrap();
 
         let started = Instant::now();
-        assert_eq!(try_touch_exact_state(&cache, "busy").unwrap(), None);
+        assert_eq!(
+            try_touch_exact_state(&cache, "namespace", &[1]).unwrap(),
+            None
+        );
         assert!(started.elapsed() < Duration::from_millis(100));
 
         release_tx.send(()).unwrap();
@@ -340,7 +476,7 @@ mod tests {
 
     #[test]
     fn poisoned_exact_state_lock_recovers_without_panicking() {
-        let cache = Arc::new(Mutex::new(ExactStateCache::<ExactStateExtra>::new(1, 1024)));
+        let cache = Arc::new(Mutex::new(TestRadix::new()));
         let poisoned = cache.clone();
         assert!(
             std::thread::spawn(move || {
@@ -352,7 +488,7 @@ mod tests {
         );
 
         assert_eq!(
-            try_touch_exact_state(&cache, "poisoned").unwrap(),
+            try_touch_exact_state(&cache, "namespace", &[1]).unwrap(),
             Some(false)
         );
     }

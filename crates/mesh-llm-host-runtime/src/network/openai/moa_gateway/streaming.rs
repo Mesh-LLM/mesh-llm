@@ -1,8 +1,8 @@
 use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use mesh_mixture_of_agents as moa;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 /// Carries Responses-API streaming state from the progress phase to
 /// the body writer so the full stream maintains monotonic
@@ -50,7 +50,7 @@ pub(super) fn is_moa_failure_body(body: &serde_json::Value) -> bool {
 /// Gateway), not HTTP 200. Unsophisticated clients that only check the
 /// HTTP status need that status to actually reflect failure.
 pub(super) async fn write_moa_response(
-    tcp_stream: TcpStream,
+    tcp_stream: ClientStream,
     moa_result: &moa::TurnResult,
     extra_headers: &[(&str, String)],
     was_streaming: bool,
@@ -149,7 +149,7 @@ pub(super) fn final_text_stream_mode_for_result(
 /// `extra_headers` are emitted alongside the standard SSE response headers
 /// (used to attach `x-moa-*` observability headers).
 async fn send_moa_as_sse(
-    stream: TcpStream,
+    stream: ClientStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     text_stream_mode: MoaFinalTextStreamMode,
@@ -160,7 +160,7 @@ async fn send_moa_as_sse(
 /// Write the standard SSE response header block, with optional
 /// per-response extra headers (used for `x-moa-*` observability).
 pub(super) async fn write_sse_response_headers(
-    stream: &mut TcpStream,
+    stream: &mut ClientStream,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
     let mut header = String::from(
@@ -178,7 +178,7 @@ pub(super) async fn write_sse_response_headers(
 }
 
 pub(super) async fn send_moa_as_sse_inner(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     header_already_sent: bool,
@@ -441,7 +441,7 @@ fn content_pieces_for_streaming(
 /// can be split for issue #618's visible streaming path, while reducer output
 /// remains one-shot until reducer streaming is implemented deliberately.
 async fn send_moa_as_responses_sse(
-    stream: TcpStream,
+    stream: ClientStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     text_stream_mode: MoaFinalTextStreamMode,
@@ -458,7 +458,7 @@ async fn send_moa_as_responses_sse(
 }
 
 pub(super) async fn send_moa_as_responses_sse_inner(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     header_already_sent: bool,
@@ -713,7 +713,7 @@ mod tests {
     // ── Streaming + failure routing ────────────────────────────────────
     //
     // The actual write path (`write_moa_response`) writes to a real
-    // `TcpStream`, so we test the *decision* it makes by extracting the
+    // `ClientStream`, so we test the *decision* it makes by extracting the
     // failure detection into `is_moa_failure_body` and proving the
     // routing logic with the same booleans the writer uses.
     //
@@ -836,12 +836,13 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept");
+            let socket: ClientStream = socket.into();
             send_moa_as_responses_sse(socket, &response, &[], text_stream_mode)
                 .await
                 .expect("sse write");
         });
 
-        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let mut client = ClientStream::connect(addr).await.expect("connect");
         use tokio::io::AsyncReadExt;
         let mut bytes = Vec::new();
         client.read_to_end(&mut bytes).await.expect("read");
@@ -1041,6 +1042,7 @@ mod tests {
         let addr = listener.local_addr().expect("local_addr");
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept");
+            let socket: ClientStream = socket.into();
             send_moa_as_sse(
                 socket,
                 &response,
@@ -1050,7 +1052,7 @@ mod tests {
             .await
             .expect("sse");
         });
-        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let mut client = ClientStream::connect(addr).await.expect("connect");
         use tokio::io::AsyncReadExt;
         let mut bytes = Vec::new();
         client.read_to_end(&mut bytes).await.expect("read");

@@ -5,7 +5,7 @@
 /// min_vram = file_size * 1.1 rounded up. Prefer Qwen3 over 2.5 at same tier.
 /// Parse a size string like "2.5GB" to GB as f64.
 fn parse_size_gb(s: &str) -> f64 {
-    s.trim_end_matches("GB").parse::<f64>().unwrap_or(0.0)
+    mesh_llm_types::models::parse_gb_suffix_size(s)
 }
 
 /// Build model tiers from the catalog, sorted largest first.

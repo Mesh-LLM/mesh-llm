@@ -4,7 +4,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
-        model_id: "org/model:Q4_K_M".to_string(),
+        model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
@@ -25,9 +25,20 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         n_gpu_layers: 0,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: false,
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -48,6 +59,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
         }),
+        ..StageConfig::default()
     }
 }
 
@@ -60,7 +72,7 @@ pub(super) fn prefix_cache_test_base() -> MessageBase {
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         topology_id: "topology".to_string(),
-        model_id: Some("org/model:Q4_K_M".to_string()),
+        model_id: Some("hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string()),
         tokenizer_id: None,
         chat_template_id: Some("template".to_string()),
         seq: Some(1),
@@ -77,17 +89,27 @@ pub(super) fn prefix_cache_base_with_request(request_id: &str, session_id: &str)
 
 pub(super) fn seed_resident_prefix(kv: &KvStageIntegration, identity: &PrefillKvIdentity) {
     let token_count = identity.identity.token_count;
-    let mut cache = kv.resident.lock().expect("resident cache lock poisoned");
-    let allocation = cache
-        .allocate_for_record(&identity.page_id, token_count, token_count, |_| Ok(()))
+    let seq_id = kv
+        .resident_sequences
+        .lock()
+        .expect("resident sequence pool lock poisoned")
+        .allocate()
         .expect("synthetic resident prefix should allocate");
-    assert!(allocation.should_retain);
-    cache.commit_record(
-        identity.page_id.clone(),
-        allocation.seq_id,
-        token_count,
-        token_count,
-    );
+    kv.radix
+        .lock()
+        .expect("radix cache lock poisoned")
+        .insert_resident(
+            identity.namespace.clone(),
+            &identity.token_ids,
+            token_count,
+            crate::kv_integration::RadixResidentEntry {
+                page_id: identity.page_id.clone(),
+                seq_id,
+                token_count,
+                recompute_cost: token_count,
+            },
+        )
+        .expect("synthetic radix prefix should record");
 }
 
 pub(super) fn unsupported_code(error: OpenAiError) -> Option<String> {
@@ -113,6 +135,7 @@ pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
         reasoning_format: Some(EmbeddedReasoningFormat::Hidden),
         reasoning_enabled: Some(EmbeddedReasoningEnabled::Enabled),
         reasoning_budget: Some(EmbeddedReasoningBudget::Tokens(256)),
+        ..EmbeddedOpenAiRequestDefaults::default()
     }
 }
 

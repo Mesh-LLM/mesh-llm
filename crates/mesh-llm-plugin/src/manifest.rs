@@ -1359,13 +1359,11 @@ mod tests {
     use crate::{Plugin, PluginMetadata, inference, mcp, plugin_server_info};
     use prost::Message;
 
-    #[allow(dead_code)]
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     struct DemoInput {
         value: String,
     }
 
-    #[allow(dead_code)]
     #[derive(serde::Serialize, schemars::JsonSchema)]
     struct DemoOutput {
         echoed: String,

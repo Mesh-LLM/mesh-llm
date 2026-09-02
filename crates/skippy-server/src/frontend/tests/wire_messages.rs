@@ -8,20 +8,17 @@ fn multimodal_final_prefill_message_requests_downstream_prediction() {
         ..WireSamplingConfig::default()
     };
 
-    let message = multimodal_prefill_message(
-        WireActivationDType::F16,
-        MultimodalPrefillArgs {
-            request_id: 11,
-            session_id: 13,
-            prompt_token_count: 17,
-            pos_start: 0,
-            token_count: 17,
-            tokens: vec![3; 17],
-            positions: Vec::new(),
-            sampling: Some(sampling.clone()),
-            final_chunk: true,
-        },
-    )
+    let message = multimodal_prefill_message(MultimodalPrefillArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 17,
+        pos_start: 0,
+        token_count: 17,
+        tokens: vec![3; 17],
+        positions: Vec::new(),
+        sampling: Some(sampling.clone()),
+        final_chunk: true,
+    })
     .unwrap();
 
     assert_eq!(message.kind, WireMessageKind::PrefillFinalEmbd);
@@ -41,20 +38,17 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
         ..WireSamplingConfig::default()
     };
 
-    let message = embedded_restore_prefill_decode_message(
-        WireActivationDType::F16,
-        RestorePrefillDecodeMessageArgs {
-            request_id: 11,
-            session_id: 13,
-            prompt_token_count: 4,
-            pos_start: 3,
-            decode_step: 0,
-            prefix_tokens: &[101, 102, 103],
-            current: 104,
-            sampling: Some(sampling.clone()),
-            chat_sampling_metadata: Some(metadata),
-        },
-    )
+    let message = embedded_restore_prefill_decode_message(RestorePrefillDecodeMessageArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 4,
+        pos_start: 3,
+        decode_step: 0,
+        prefix_tokens: &[101, 102, 103],
+        current: 104,
+        sampling: Some(sampling.clone()),
+        chat_sampling_metadata: Some(metadata),
+    })
     .unwrap();
 
     assert_eq!(message.kind, WireMessageKind::TryRestorePrefillDecode);
@@ -63,7 +57,7 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
     assert_eq!(message.chat_sampling_metadata.as_deref(), Some(metadata));
 
     let mut encoded = Vec::new();
-    write_stage_message(&mut encoded, &message, WireActivationDType::F16).unwrap();
+    write_stage_message(&mut encoded, &message).unwrap();
     let decoded = skippy_protocol::binary::read_stage_message(Cursor::new(encoded), 2816).unwrap();
     assert_eq!(decoded.kind, WireMessageKind::TryRestorePrefillDecode);
     assert_eq!(decoded.tokens, vec![101, 102, 103, 104]);
@@ -78,17 +72,14 @@ fn reusable_decode_message_updates_hot_path_fields() {
         seed: 7,
         ..WireSamplingConfig::default()
     };
-    let mut message = ReusableDecodeMessage::new(
-        WireActivationDType::F16,
-        ReusableDecodeMessageArgs {
-            request_id: 11,
-            session_id: 13,
-            prompt_token_count: 4,
-            base_pos_start: 4,
-            sampling: Some(sampling.clone()),
-            sideband_capacity: 4,
-        },
-    )
+    let mut message = ReusableDecodeMessage::new(ReusableDecodeMessageArgs {
+        request_id: 11,
+        session_id: 13,
+        prompt_token_count: 4,
+        base_pos_start: 4,
+        sampling: Some(sampling.clone()),
+        sideband_capacity: 4,
+    })
     .unwrap();
 
     let first = message.update(0, 104).unwrap();

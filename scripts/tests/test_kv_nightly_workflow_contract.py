@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+OWNERSHIP = ROOT / ".github" / "workflows" / "nightly-kv-coverage.yml"
+STABILITY = ROOT / ".github" / "workflows" / "nightly-stability-run.yml"
+COMPETITIVE = ROOT / ".github" / "workflows" / "nightly-competitive-benchmark.yml"
+
+
+class KvNightlyWorkflowContractTests(unittest.TestCase):
+    def test_ownership_schedule_is_trusted_hosted_and_reproducible(self) -> None:
+        workflow = OWNERSHIP.read_text(encoding="utf-8")
+        self.assertIn('    - cron: "23 6 * * *"', workflow)
+        self.assertIn("  workflow_dispatch:", workflow)
+        self.assertNotIn("\n  pull_request:", workflow)
+        self.assertNotIn("\n  push:", workflow)
+        self.assertIn("runs-on: ubuntu-24.04", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("verify-runner-image public cpu", workflow)
+        self.assertIn("cargo test --locked -p skippy-cache", workflow)
+        self.assertIn("SKIPPY_CACHE_STATE_MACHINE_SEEDS", workflow)
+        self.assertIn("SKIPPY_CACHE_STATE_MACHINE_STEPS", workflow)
+        self.assertNotIn("secrets.", workflow)
+
+    def test_live_nightly_runs_both_harnesses_and_preserves_failures(self) -> None:
+        workflow = STABILITY.read_text(encoding="utf-8")
+        self.assertIn("scripts/qa-nightly-stability.py", workflow)
+        self.assertIn("scripts/qa-kv-tool-loop-stability.py", workflow)
+        self.assertIn("continue-on-error: true", workflow)
+        self.assertIn("Fail on stability regression", workflow)
+        self.assertIn("steps.stability_harness.outcome == 'failure'", workflow)
+        self.assertIn("steps.kv_tool_loop.outcome == 'failure'", workflow)
+        self.assertIn("runs-on: ubuntu-24.04", workflow)
+        self.assertNotIn("runner_label", workflow)
+
+    def test_performance_history_uses_immutable_shards_on_trusted_main(self) -> None:
+        workflow = COMPETITIVE.read_text(encoding="utf-8")
+        self.assertIn("on:\n  schedule:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
+        self.assertIn("github.repository == 'Mesh-LLM/mesh-llm'", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, cuda]", workflow)
+        self.assertNotIn("gpu-nvidia", workflow)
+        self.assertIn("EXPECTED_BENCHMARK_RUNNER_NAME: white", workflow)
+        self.assertIn(
+            '[[ "$RUNNER_NAME" != "$EXPECTED_BENCHMARK_RUNNER_NAME" ]]', workflow
+        )
+        self.assertLess(
+            workflow.index("Verify dedicated benchmark runner"),
+            workflow.index("uses: actions/checkout"),
+        )
+        self.assertNotIn("\n  pull_request:", workflow)
+        self.assertNotIn("\n  push:", workflow)
+        self.assertIn("MESH_NIGHTLY_COMPETITIVE_HF_CLI", workflow)
+        self.assertNotIn("MESH_NIGHTLY_COMPETITIVE_HF_CLI ||", workflow)
+        self.assertIn('"$HF_CLI" datasets info', workflow)
+        self.assertIn('"$HF_CLI" download', workflow)
+        self.assertIn('"$HF_CLI" upload', workflow)
+        self.assertIn("MESH_PERFORMANCE_HISTORY_HF_TOKEN", workflow)
+        self.assertIn("MESH_PERFORMANCE_HISTORY_DATASET", workflow)
+        self.assertIn("scripts/performance-history.py", workflow)
+        self.assertIn('remote_path="data/runs/$source_sha/', workflow)
+        self.assertIn("cmp ci/performance-history/schema.json", workflow)
+        self.assertIn("steps.benchmark.outcome == 'success'", workflow)
+        job_env = workflow[workflow.index("    env:") : workflow.index("    steps:")]
+        self.assertNotIn("MESH_PERFORMANCE_HISTORY_HF_TOKEN", job_env)
+
+
+if __name__ == "__main__":
+    unittest.main()

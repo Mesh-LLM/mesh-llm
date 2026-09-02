@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500" role="img" aria-labelledby="title desc">
+  <title id="title">Resident KV serial suffix prefill, old versus unified radix</title>
+  <desc id="desc">For Llama GQA on Metal at concurrency one, exact replay required zero suffix tokens on both implementations. The unified radix reduced divergent-tail suffix prefill from 66 to 17 tokens and growing coding-trace suffix prefill from 79 to 46 tokens.</desc>
+  <metadata>Source: /private/tmp/pr1429-studio54-final/llama-gqa/comparison.json; OLD commit 3c0f43d4d53361fcdd9eee849824e9392bab522a; NEW commit 70d3777693f7a944a007637d8ba2936aac1a7ef5; two rounds; 20 requests per cell.</metadata>
+  <style>
+    text { fill: #24292f; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .title { font-size: 22px; font-weight: 600; }
+    .subtitle, .legend, .tick, .note { font-size: 13px; }
+    .label { font-size: 15px; font-weight: 600; }
+    .value { font-size: 13px; font-weight: 600; }
+    .value-inbar { fill: #ffffff; font-size: 13px; font-weight: 600; }
+    .axis, .grid { stroke: #d0d7de; stroke-width: 1; }
+    .old { fill: #8c959f; }
+    .new { fill: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #f0f6fc; }
+      .axis, .grid { stroke: #30363d; }
+      .old { fill: #8b949e; }
+      .new { fill: #58a6ff; }
+    }
+  </style>
+
+  <text class="title" x="500" y="34" text-anchor="middle">Unified radix reduces serial suffix prefill</text>
+  <text class="subtitle" x="500" y="58" text-anchor="middle">Llama GQA · warm cache · Metal · concurrency 1 · median tokens · lower is better</text>
+
+  <rect class="old" x="390" y="78" width="16" height="12" rx="2"/>
+  <text class="legend" x="414" y="89">OLD flat cache</text>
+  <rect class="new" x="515" y="78" width="16" height="12" rx="2"/>
+  <text class="legend" x="539" y="89">NEW unified radix</text>
+
+  <line class="grid" x1="220" y1="110" x2="220" y2="420"/>
+  <line class="grid" x1="370" y1="110" x2="370" y2="420"/>
+  <line class="grid" x1="520" y1="110" x2="520" y2="420"/>
+  <line class="grid" x1="670" y1="110" x2="670" y2="420"/>
+  <line class="grid" x1="820" y1="110" x2="820" y2="420"/>
+
+  <text class="tick" x="220" y="442" text-anchor="middle">0</text>
+  <text class="tick" x="370" y="442" text-anchor="middle">20</text>
+  <text class="tick" x="520" y="442" text-anchor="middle">40</text>
+  <text class="tick" x="670" y="442" text-anchor="middle">60</text>
+  <text class="tick" x="820" y="442" text-anchor="middle">80 tokens</text>
+  <line class="axis" x1="220" y1="420" x2="820" y2="420"/>
+
+  <text class="label" x="200" y="154" text-anchor="end">Exact replay</text>
+  <rect class="old" x="220" y="128" width="0" height="22"/>
+  <text class="value" x="228" y="144">0</text>
+  <rect class="new" x="220" y="160" width="0" height="22"/>
+  <text class="value" x="228" y="176">0 · unchanged</text>
+
+  <text class="label" x="200" y="264" text-anchor="end">Divergent tail</text>
+  <rect class="old" x="220" y="238" width="495" height="22" rx="3"/>
+  <text class="value-inbar" x="707" y="254" text-anchor="end">66</text>
+  <rect class="new" x="220" y="270" width="128" height="22" rx="3"/>
+  <text class="value" x="356" y="286">17 · 74% fewer</text>
+
+  <text class="label" x="200" y="374" text-anchor="end">Growing coding trace</text>
+  <rect class="old" x="220" y="348" width="593" height="22" rx="3"/>
+  <text class="value-inbar" x="805" y="364" text-anchor="end">79</text>
+  <rect class="new" x="220" y="380" width="345" height="22" rx="3"/>
+  <text class="value" x="573" y="396">46 · 42% fewer</text>
+
+  <text class="note" x="500" y="478" text-anchor="middle">Llama GQA Metal · two rounds · 20 requests/cell · exact replay stays at zero prefill</text>
+</svg>

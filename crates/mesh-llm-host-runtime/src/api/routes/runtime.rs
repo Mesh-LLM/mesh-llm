@@ -1176,6 +1176,10 @@ async fn handle_runtime_events(stream: &mut TcpStream, state: &MeshApi) -> anyho
 async fn handle_runtime_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     match state.runtime_endpoints().await {
         Ok(endpoints) => {
+            let endpoints = endpoints
+                .into_iter()
+                .map(|endpoint| endpoint.redacted_for_network())
+                .collect::<Vec<_>>();
             respond_json(stream, 200, &serde_json::json!({ "endpoints": endpoints })).await
         }
         Err(err) => respond_error(stream, 500, &err.to_string()).await,
@@ -1248,6 +1252,7 @@ async fn handle_load_model(
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
     let _ = control_tx.send(RuntimeControlRequest::Load {
         spec,
+        config_model_id: None,
         profile,
         resp: resp_tx,
     });

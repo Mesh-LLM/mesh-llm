@@ -186,13 +186,18 @@ fn classify_verify_window<F>(
 where
     F: FnMut(i32) -> Result<bool>,
 {
-    if predicted_tokens.len() < draft_tokens.len() {
+    if predicted_tokens.is_empty() && !draft_tokens.is_empty() {
         bail!(
-            "verify window returned too few tokens: got {} expected {}",
-            predicted_tokens.len(),
+            "verify window returned no tokens for {} draft tokens",
             draft_tokens.len()
         );
     }
+    // A reply shorter than the draft is the runtime's sampler guard, not an
+    // error: with a stateful sampler, verification stops at the first
+    // mismatched row so the sampler never absorbs the rejected suffix. Every
+    // returned token is authoritative, so a short reply classifies exactly
+    // like a full reply whose mismatch sits at its final row.
+    let short_reply = predicted_tokens.len() < draft_tokens.len();
 
     let mut accepted_before_reject = 0usize;
     let mut commit_count = 0usize;
@@ -223,6 +228,18 @@ where
         };
         return Ok(VerifyWindowDecision {
             kind,
+            accepted_before_reject,
+            commit_count,
+        });
+    }
+
+    if short_reply {
+        // The runtime only truncates at a mismatched row, so the loop above
+        // normally returns from its reject arm first. If every returned row
+        // matched anyway, the committed prefix is still all verified accepts;
+        // the unverified draft tail is simply dropped and re-proposed.
+        return Ok(VerifyWindowDecision {
+            kind: VerifyWindowDecisionKind::EarlyReject,
             accepted_before_reject,
             commit_count,
         });

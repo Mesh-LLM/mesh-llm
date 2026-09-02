@@ -1,6 +1,8 @@
 import pathlib
 import unittest
 
+from scripts.tests.justfile_source import read_justfile_source
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build-development-product.sh"
@@ -28,9 +30,12 @@ class DevelopmentProductBuildTests(unittest.TestCase):
         self.assertIn("pkg-config --exists vulkan", contents)
 
     def test_build_runtime_empty_backend_defaults_to_cpu(self) -> None:
-        justfile = JUSTFILE.read_text(encoding="utf-8")
+        # `$$backend` here read the shell PID, not the recipe argument. The
+        # behavioral check that this actually defaults (and that an explicit
+        # backend survives) lives in test_justfile_release_runtime.py.
+        justfile = read_justfile_source(JUSTFILE)
         recipe = justfile[justfile.index('build-runtime backend=""'):]
-        self.assertIn('[[ -n "$$backend" ]] || backend=cpu', recipe)
+        self.assertIn('[[ -n "$backend" ]] || backend=cpu', recipe)
 
     def test_preserves_documented_named_just_arguments(self) -> None:
         contents = SCRIPT.read_text(encoding="utf-8")

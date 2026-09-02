@@ -1,7 +1,7 @@
 use crate::{
     ExactStateMobility, FamilyCapabilityRecord, LayerRange, LayerSpec, ReviewedCapabilityRecord,
     SidebandKind, SidebandRequirement, SplitConstraint, SplitConstraintKind,
-    StageRuntimeFamilyExpectation, WireDType, WireValidation,
+    StageRuntimeFamilyExpectation,
 };
 
 pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectation] = &[
@@ -251,6 +251,11 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
         recurrent_or_hybrid: true,
     },
     StageRuntimeFamilyExpectation {
+        llama_architecture: "qwen4exp",
+        family_id: "qwen4exp",
+        recurrent_or_hybrid: true,
+    },
+    StageRuntimeFamilyExpectation {
         llama_architecture: "qwen3vl",
         family_id: "qwen3vl",
         recurrent_or_hybrid: false,
@@ -363,11 +368,6 @@ pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectati
     StageRuntimeFamilyExpectation {
         llama_architecture: "exaone-moe",
         family_id: "exaone_moe",
-        recurrent_or_hybrid: false,
-    },
-    StageRuntimeFamilyExpectation {
-        llama_architecture: "glm-dsa",
-        family_id: "glm_dsa",
         recurrent_or_hybrid: false,
     },
     StageRuntimeFamilyExpectation {
@@ -536,7 +536,6 @@ pub fn qwen3_dense_capability(layer_count: u32, activation_width: u32) -> Family
         "qwen3_dense",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -546,7 +545,6 @@ pub fn qwen2moe_capability(layer_count: u32, activation_width: u32) -> FamilyCap
         "qwen2moe",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -556,7 +554,6 @@ pub fn qwen3moe_capability(layer_count: u32, activation_width: u32) -> FamilyCap
         "qwen3moe",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -566,7 +563,6 @@ pub fn laguna_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "laguna",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -575,15 +571,12 @@ pub fn dense_family_capability(
     family_id: impl Into<String>,
     layer_count: u32,
     activation_width: u32,
-    q8_wire_validation: WireValidation,
     exact_state_mobility: ExactStateMobility,
 ) -> FamilyCapabilityRecord {
     FamilyCapabilityRecord {
         family_id: family_id.into(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation,
         exact_state_mobility,
         recurrent_ranges: Vec::new(),
         split_constraints: Vec::new(),
@@ -596,7 +589,6 @@ pub fn llama_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         "llama",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -606,7 +598,6 @@ pub fn deepseek2_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         "deepseek2",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -616,7 +607,6 @@ pub fn deepseek2ocr_capability(layer_count: u32, activation_width: u32) -> Famil
         "deepseek2ocr",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -626,7 +616,6 @@ pub fn deepseek3_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         "deepseek3",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -636,7 +625,6 @@ pub fn glm47_flash_capability(layer_count: u32, activation_width: u32) -> Family
         "glm47_flash",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -646,7 +634,6 @@ pub fn glm4_capability(layer_count: u32, activation_width: u32) -> FamilyCapabil
         "glm4",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -656,7 +643,6 @@ pub fn gemma2_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "gemma2",
         layer_count,
         activation_width,
-        WireValidation::Validated,
         ExactStateMobility::Accepted,
     )
 }
@@ -666,7 +652,6 @@ pub fn gemma3_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "gemma3",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -676,8 +661,6 @@ pub fn gemma3n_capability(layer_count: u32, activation_width: u32) -> FamilyCapa
         family_id: "gemma3n".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Validated,
         exact_state_mobility: ExactStateMobility::Accepted,
         recurrent_ranges: Vec::new(),
         split_constraints: vec![SplitConstraint {
@@ -703,7 +686,6 @@ pub fn gemma4_a4b_capability(layer_count: u32, activation_width: u32) -> FamilyC
         "gemma4_a4b",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -713,7 +695,6 @@ pub fn olmo_capability(layer_count: u32, activation_width: u32) -> FamilyCapabil
         "olmo",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -723,7 +704,6 @@ pub fn minimax_m27_capability(layer_count: u32, activation_width: u32) -> Family
         "minimax_m27",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -733,8 +713,6 @@ pub fn falcon_h1_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         family_id: "falcon_h1".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -761,8 +739,6 @@ pub fn qwen35_series_capability(
         family_id: family_id.to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -778,8 +754,6 @@ pub fn inkling_capability(layer_count: u32, activation_width: u32) -> FamilyCapa
         family_id: "inkling".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F32,
-        q8_wire_validation: WireValidation::Rejected,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -799,12 +773,34 @@ pub fn qwen3next_capability(
         family_id: "qwen3next".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges,
         split_constraints: Vec::new(),
         sidebands: Vec::new(),
+    }
+}
+
+/// Conservative Qwen4 experimental / Qwen3.8 Flash-Next capability.
+///
+/// QWEN4EXP combines indexed attention with recurrent Gated DeltaNet state.
+/// Until per-layer ownership is derived from artifact metadata and certified,
+/// keep the complete trunk sticky and reject exact state mobility.
+pub fn qwen4exp_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    FamilyCapabilityRecord {
+        family_id: "qwen4exp".to_string(),
+        layer_count,
+        activation_width,
+        exact_state_mobility: ExactStateMobility::RejectedTooLarge,
+        recurrent_ranges: vec![LayerRange {
+            start: 0,
+            end: layer_count,
+        }],
+        split_constraints: Vec::new(),
+        sidebands: vec![SidebandRequirement {
+            kind: SidebandKind::TokenIds,
+            first_required_layer: 1,
+            reason: "Qwen4Exp downstream PLE layers require original token ids to compute n-gram rows and preserve token history in attention cache cells".to_string(),
+        }],
     }
 }
 
@@ -823,8 +819,6 @@ pub fn kimi_linear_capability(layer_count: u32, activation_width: u32) -> Family
         family_id: "kimi_linear".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Validated,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges,
         split_constraints: Vec::new(),
@@ -841,8 +835,6 @@ pub fn recurrent_family_capability(
         family_id: family_id.to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::Accepted,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -858,8 +850,6 @@ pub fn rwkv6_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         family_id: "rwkv6".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -875,8 +865,6 @@ pub fn rwkv7_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         family_id: "rwkv7".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -896,8 +884,6 @@ pub fn gemma4_e4b_capability(layer_count: u32, activation_width: u32) -> FamilyC
         family_id: "gemma4_e4b".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Rejected,
         exact_state_mobility: ExactStateMobility::Untested,
         recurrent_ranges: Vec::new(),
         split_constraints: vec![SplitConstraint {
@@ -990,7 +976,6 @@ fn infer_granite_gemma_capability(
             "granite_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -999,7 +984,6 @@ fn infer_granite_gemma_capability(
             "granite",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1014,7 +998,6 @@ fn infer_granite_gemma_capability(
             "gemma4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1032,7 +1015,6 @@ fn infer_granite_gemma_capability(
             "gemma",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1062,7 +1044,6 @@ fn infer_falcon_minimax_glm_deepseek_capability(
             "glm4_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1095,7 +1076,6 @@ fn infer_mistral_olmo_llama_capability(
             "mistral4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1104,7 +1084,6 @@ fn infer_mistral_olmo_llama_capability(
             "mistral",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1113,7 +1092,6 @@ fn infer_mistral_olmo_llama_capability(
             "olmoe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1122,7 +1100,6 @@ fn infer_mistral_olmo_llama_capability(
             "olmo2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1227,6 +1204,15 @@ fn infer_qwen_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    // Flash-Next's GGUF metadata names the upstream llama.cpp architecture
+    // explicitly. Check it before release-name routing: other Qwen3.8 models
+    // still load as qwen35/qwen35moe and must retain that separate policy.
+    if compact.contains("qwen4exp")
+        || compact.contains("qwen3.8flashnext")
+        || compact.contains("qwen38flashnext")
+    {
+        return Some(qwen4exp_capability(layer_count, activation_width));
+    }
     if compact.contains("qwen2moe") {
         return Some(qwen2moe_capability(layer_count, activation_width));
     }
@@ -1245,7 +1231,6 @@ fn infer_qwen_capability(
             "qwen2vl",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Untested,
         ));
     }
@@ -1254,7 +1239,6 @@ fn infer_qwen_capability(
             "qwen3vlmoe",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1263,7 +1247,6 @@ fn infer_qwen_capability(
             "qwen3vl",
             layer_count,
             activation_width,
-            WireValidation::Validated,
             ExactStateMobility::Untested,
         ));
     }
@@ -1275,7 +1258,6 @@ fn infer_qwen_capability(
             "qwen2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1305,7 +1287,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1314,7 +1295,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_vl",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1323,7 +1303,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_dense",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1332,7 +1311,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phimoe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1341,7 +1319,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phi2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::RejectedTooLarge,
         ));
     }
@@ -1350,7 +1327,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phi",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1359,7 +1335,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "gptneox",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1368,7 +1343,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "gpt2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1386,7 +1360,6 @@ fn infer_mid_remaining_capability(
             "muse_glimmer",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1395,7 +1368,6 @@ fn infer_mid_remaining_capability(
             "mpt",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1404,7 +1376,6 @@ fn infer_mid_remaining_capability(
             "bloom",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1413,7 +1384,6 @@ fn infer_mid_remaining_capability(
             "baichuan",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1422,7 +1392,6 @@ fn infer_mid_remaining_capability(
             "command_r",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1431,7 +1400,6 @@ fn infer_mid_remaining_capability(
             "cohere2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1440,7 +1408,6 @@ fn infer_mid_remaining_capability(
             "falcon",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1449,7 +1416,6 @@ fn infer_mid_remaining_capability(
             "internlm2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1467,7 +1433,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::RejectedTooLarge,
         ));
     }
@@ -1476,7 +1441,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1485,7 +1449,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1494,7 +1457,6 @@ fn infer_exaone_stable_starcoder_capability(
             "stablelm",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1503,7 +1465,6 @@ fn infer_exaone_stable_starcoder_capability(
             "starcoder2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1541,7 +1502,6 @@ fn infer_stage_runtime_fallback_capability(
                 expected.family_id,
                 layer_count,
                 activation_width,
-                WireValidation::Untested,
                 ExactStateMobility::Accepted,
             )
         });

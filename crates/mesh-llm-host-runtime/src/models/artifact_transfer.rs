@@ -543,10 +543,12 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::set_var(key, value) };
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: the enclosing test contract is `#[serial]`, so this process
+            // environment mutation cannot race another test.
             unsafe { std::env::remove_var(key) };
         }
     }
@@ -636,22 +638,26 @@ mod tests {
     fn artifact_transfer_policy_defaults_to_disabled_and_supports_opt_in_modes() {
         let prev = std::env::var_os("MESH_LLM_ARTIFACT_TRANSFER");
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("MESH_LLM_ARTIFACT_TRANSFER") };
         assert_eq!(artifact_transfer_mode(), ArtifactTransferMode::Disabled);
         assert!(!artifact_transfer_enabled());
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("MESH_LLM_ARTIFACT_TRANSFER", "off") };
         assert_eq!(artifact_transfer_mode(), ArtifactTransferMode::Disabled);
         assert!(!artifact_transfer_enabled());
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("MESH_LLM_ARTIFACT_TRANSFER", "trusted") };
         assert_eq!(artifact_transfer_mode(), ArtifactTransferMode::TrustedOnly);
         assert!(artifact_transfer_enabled());
 
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("MESH_LLM_ARTIFACT_TRANSFER", "1") };
         assert_eq!(artifact_transfer_mode(), ArtifactTransferMode::Open);
         assert!(artifact_transfer_enabled());
@@ -663,7 +669,8 @@ mod tests {
     #[serial]
     fn artifact_transfer_default_policy_does_not_advertise_or_serve_public_mesh() {
         let prev = std::env::var_os("MESH_LLM_ARTIFACT_TRANSFER");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var("MESH_LLM_ARTIFACT_TRANSFER") };
 
         let unsigned = crate::crypto::OwnershipSummary::default();
@@ -683,7 +690,8 @@ mod tests {
     #[serial]
     fn artifact_transfer_trusted_policy_requires_owned_or_allowlisted_peer() {
         let prev = std::env::var_os("MESH_LLM_ARTIFACT_TRANSFER");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("MESH_LLM_ARTIFACT_TRANSFER", "trusted") };
 
         let local = verified_owner("owner-a");
@@ -717,7 +725,8 @@ mod tests {
     #[serial]
     fn artifact_transfer_open_policy_is_explicit_public_mesh_opt_in() {
         let prev = std::env::var_os("MESH_LLM_ARTIFACT_TRANSFER");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("MESH_LLM_ARTIFACT_TRANSFER", "open") };
 
         let unsigned = crate::crypto::OwnershipSummary::default();
@@ -738,7 +747,8 @@ mod tests {
     fn required_stage_package_artifacts_include_stage_shared_and_projectors() {
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
 
@@ -777,7 +787,8 @@ mod tests {
     fn required_stage_package_bytes_include_manifest_and_selected_shared_artifacts() {
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
         let manifest_bytes = fs::metadata(package_dir.join(PACKAGE_MANIFEST_FILE))
@@ -807,7 +818,8 @@ mod tests {
     fn required_stage_package_artifacts_rejects_oversize_manifest() {
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
         let manifest = fs::OpenOptions::new()
@@ -841,7 +853,8 @@ mod tests {
     fn servable_artifact_requires_manifest_declared_path_and_matching_sha() {
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (_package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
 
@@ -874,7 +887,8 @@ mod tests {
     fn servable_artifact_rejects_same_size_corrupt_cached_bytes() {
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
         fs::write(package_dir.join("layers/layer-000.gguf"), b"corrupt!").unwrap();
@@ -930,7 +944,8 @@ mod tests {
 
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
         fs::write(temp.path().join("outside.gguf"), b"outside!").unwrap();
@@ -967,7 +982,8 @@ mod tests {
 
         let prev = std::env::var_os("HF_HUB_CACHE");
         let temp = tempfile::tempdir().unwrap();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
         let (package_dir, package_ref, _manifest_sha) = write_package_fixture(temp.path());
         let outside = temp.path().join("outside");

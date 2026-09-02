@@ -1,0 +1,48 @@
+# Supported-families certification manifest — full certification on every row.
+# Replaces family-tier1.tsv + family-tier2.tsv (tiers dropped 2026-08-25).
+# Every row runs: load, single-step parity, chain split parity, dtype matrix,
+# state handoff, speculative/cache smoke; rows with sweep_period > 0 also run
+# the hybrid/recurrent boundary sweep. The KV-cache oracle is the in-run A/B
+# assertion carried by the state-handoff lane: --cache-hit-repeats 2 makes the
+# cached pass token-exact vs the uncached pass (state_handoff cache_hit_matches).
+# Columns (pipe-separated):
+#   family         | skippy family label used by scripts/family-certify.sh
+#   repo           | Hugging Face repo for the cert artifact (highest-download accessible repo per James 2026-08-25)
+#   file           | GGUF file (or first shard) inside the repo
+#   selector       | quant selector used in model-id
+#   sweep_period   | interleave period for boundary sweeps; 0 = no sweep (dense/pure-MoE)
+#   layer_end      | final layer for staged correctness lanes
+#   notes
+# family|repo|file|selector|sweep_period|layer_end|notes
+qwen3-dense|Qwen/Qwen3-0.6B-GGUF|Qwen3-0.6B-Q8_0.gguf|Q8_0|0|28|core prod dense baseline
+llama|bartowski/Llama-3.2-1B-Instruct-GGUF|Llama-3.2-1B-Instruct-Q4_K_M.gguf|Q4_K_M|0|16|prod dense (covers olmo2 arch, trimmed)
+glm47-flash|unsloth/GLM-4.7-Flash-GGUF|GLM-4.7-Flash-Q4_K_M.gguf|Q4_K_M|0|46|prod MLA path shared with deepseek2
+glm4|bartowski/glm-4-9b-chat-GGUF|glm-4-9b-chat-Q4_K_M.gguf|Q4_K_M|0|40|prod dense
+glm45-air|unsloth/GLM-4.5-Air-GGUF|Q4_K_M/GLM-4.5-Air-Q4_K_M-00001-of-00002.gguf|Q4_K_M|0|46|4.5 MoE lineage; 2 shards
+deepseek2|bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF|DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf|Q4_K_M|0|26|prod MLA path
+gpt-oss|ggml-org/gpt-oss-20b-GGUF|gpt-oss-20b-MXFP4.gguf|MXFP4|0|24|MoE + MXFP4; only quant shipped
+qwen3-moe|unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF|Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf|Q4_K_M|0|36|prod MoE; graph_max_nodes budget lane (decision A)
+qwen2-moe|RichardErkhov/Qwen_-_Qwen1.5-MoE-A2.7B-Chat-gguf|Qwen1.5-MoE-A2.7B-Chat.Q4_K_M.gguf|Q4_K_M|0|24|small MoE
+falcon-h1|tiiuae/Falcon-H1-1.5B-Instruct-GGUF|Falcon-H1-1.5B-Instruct-Q4_K_M.gguf|Q4_K_M|4|24|hybrid boundary sweep
+jamba2|bartowski/ai21labs_AI21-Jamba2-3B-GGUF|ai21labs_AI21-Jamba2-3B-Q4_K_M.gguf|Q4_K_M|6|28|hybrid boundary sweep
+kimi-linear|bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF|moonshotai_Kimi-Linear-48B-A3B-Instruct-IQ2_XS.gguf|IQ2_XS|4|40|hybrid 3:1 interleave; B1 canonical
+qwen3-next|bartowski/Qwen_Qwen3-Next-80B-A3B-Thinking-GGUF|Qwen_Qwen3-Next-80B-A3B-Thinking-IQ2_XS.gguf|IQ2_XS|4|48|hybrid 3 linear:1 attention
+nemotron|ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF|NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf|Q4_0|2|32|hybrid Mamba2+attn MoE; no Q4_K_M in repo
+mamba|Felladrin/gguf-mamba-130m-hf|mamba-130m-hf.Q4_K_M.gguf|Q4_K_M|2|24|recurrent cheap sweep
+mamba2|bartowski/falcon-mamba-7b-GGUF|falcon-mamba-7b-Q4_K_M.gguf|Q4_K_M|2|32|Mamba-2 SSM canonical path
+rwkv6|latestissue/rwkv-6-finch-1b6-gguf|rwkv-6-finch-1b6-Q4_0.gguf|Q4_0|1|24|recurrent; v_first sideband crossing
+rwkv7|Mungert/RWKV7-Goose-World3-2.9B-HF-GGUF|RWKV7-Goose-World3-2.9B-HF-f16-q4_k.gguf|Q4_K|1|32|recurrent; only real RWKV7 World3 GGUF
+granite-hybrid|ibm-granite/granite-4.0-h-350m-GGUF|granite-4.0-h-350m-Q4_K_M.gguf|Q4_K_M|3|32|hybrid cheap sweep
+granite-dense|bartowski/ibm-granite_granite-3.2-2b-instruct-GGUF|ibm-granite_granite-3.2-2b-instruct-Q4_K_M.gguf|Q4_K_M|0|40|dense
+lfm2|LiquidAI/LFM2-350M-GGUF|LFM2-350M-Q4_K_M.gguf|Q4_K_M|2|16|hybrid cheap sweep
+laguna|poolside/Laguna-XS-2.1-GGUF|Laguna-XS-2.1-Q4_K_M.gguf|Q4_K_M|0|28|dense; explicit poolside row
+qwen2-vl|bartowski/Qwen2-VL-2B-Instruct-GGUF|Qwen2-VL-2B-Instruct-Q4_K_M.gguf|Q4_K_M|0|28|multimodal sideband
+qwen3-vl|unsloth/Qwen3-VL-8B-Instruct-GGUF|Qwen3-VL-8B-Instruct-Q4_K_M.gguf|Q4_K_M|0|36|multimodal; ggml-org repo gated
+gemma2|google/gemma-2-2b-it-GGUF|2b_it_v2.gguf|2b_it_v2|0|26|dense; only file in repo (gemma3 trimmed)
+phi3|microsoft/Phi-3-mini-4k-instruct-gguf|Phi-3-mini-4k-instruct-q4.gguf|q4|0|32|dense
+phi4|unsloth/phi-4-GGUF|phi-4-Q4_K_M.gguf|Q4_K_M|0|40|dense; microsoft repo has no Q4_K_M
+falcon-dense|maddes8cht/tiiuae-falcon-7b-instruct-gguf|tiiuae-falcon-7b-instruct-Q4_K_M.gguf|Q4_K_M|0|32|dense
+internlm2|Felladrin/gguf-internlm2-chat-1_8b|internlm2-chat-1_8b.F16.gguf|F16|0|24|dense
+mistral-small|unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF|Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf|Q4_K_M|0|40|dense; relabelled from mistral3
+cohere2|bartowski/c4ai-command-r7b-12-2024-GGUF|c4ai-command-r7b-12-2024-Q4_K_M.gguf|Q4_K_M|0|32|dense
+smollm3|ggml-org/SmolLM3-3B-GGUF|SmolLM3-Q4_K_M.gguf|Q4_K_M|0|36|dense

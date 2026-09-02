@@ -23,7 +23,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -44,7 +45,7 @@ use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -587,11 +588,18 @@ pub(super) fn configure_run_auto_process_state(
     options: &RuntimeOptions,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
+    // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
+    // runtime work can access the process environment. The current runtime
+    // startup path does not enforce that boundary; retain the audit TODO.
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe {
         if options.local_model_only {
+            // SAFETY: UNSAFE CONTRACT — callers must establish the startup ordering above.
+            // TODO: Audit that the environment access only happens in single-threaded code.
             std::env::remove_var("MESH_API_PORT");
         } else {
+            // SAFETY: UNSAFE CONTRACT — callers must establish the startup ordering above.
+            // TODO: Audit that the environment access only happens in single-threaded code.
             std::env::set_var("MESH_API_PORT", options.console.to_string());
         }
     }
@@ -611,53 +619,7 @@ pub(super) fn configure_run_auto_process_state(
     skippy_runtime::set_filtered_native_logs_enabled(true);
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
-    configure_kv_disk_cache(options);
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
-}
-
-/// Propagate CLI policy through a typed process-local configuration. This does
-/// not mutate process environment; lower-level legacy environment variables
-/// remain available when skippy-server is used without this host configuration.
-fn configure_kv_disk_cache(options: &RuntimeOptions) {
-    let budget = parse_kv_cache_disk(&options.kv_cache_disk)
-        .expect("CLI validates --kv-cache-disk before runtime startup");
-    let budget = match budget {
-        KvDiskBudget::Off => skippy_server::KvDiskCacheBudget::Off,
-        KvDiskBudget::Auto => skippy_server::KvDiskCacheBudget::Auto,
-        KvDiskBudget::Mib(mib) => {
-            skippy_server::KvDiskCacheBudget::Bytes(mib.saturating_mul(1024 * 1024))
-        }
-    };
-    let config = skippy_server::KvDiskCacheConfig {
-        budget,
-        directory: options.kv_cache_disk_dir.clone(),
-    };
-    if skippy_server::configure_kv_disk_cache(config).is_err() {
-        tracing::debug!("KV disk cache policy was already configured");
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum KvDiskBudget {
-    Off,
-    Auto,
-    Mib(u64),
-}
-
-fn parse_kv_cache_disk(raw: &str) -> Option<KvDiskBudget> {
-    let value = raw.trim();
-    if value.eq_ignore_ascii_case("off") {
-        return Some(KvDiskBudget::Off);
-    }
-    if value.eq_ignore_ascii_case("auto") {
-        return Some(KvDiskBudget::Auto);
-    }
-    match value.parse::<f64>() {
-        Ok(gb) if gb.is_finite() && gb > 0.0 && gb * 1024.0 >= 1.0 => {
-            Some(KvDiskBudget::Mib((gb * 1024.0).round() as u64))
-        }
-        _ => None,
-    }
 }
 
 pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
@@ -773,7 +735,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
-    node.set_stage_control_sender(skippy::spawn_stage_control_loop(
+    node.set_stage_control_handle(skippy::spawn_stage_control_loop(
         Some(Arc::new(node.clone())),
         skippy_telemetry_options(options),
     ))
@@ -789,6 +751,68 @@ pub(super) async fn start_run_auto_node_and_plugins(
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
+}
+
+pub(super) fn register_pre_accept_local_source_policies(
+    config: &plugin::MeshConfig,
+    startup_specs: &[StartupModelSpec],
+) {
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_deref());
+    for model in &config.models {
+        let mut model_ids = BTreeSet::from([model.model.clone()]);
+        let configured_path = model
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .or(default_model_path);
+        if let Some(path) = configured_path {
+            let path = PathBuf::from(path);
+            model_ids.insert(path.to_string_lossy().into_owned());
+            if path.is_absolute() {
+                let canonical = path.canonicalize().unwrap_or(path);
+                model_ids.insert(models::model_ref_for_path(&canonical));
+            }
+        }
+        let required = super::startup_models::skippy_local_source_required(
+            model.skippy.as_ref(),
+            default_skippy,
+        );
+        let runtime_profile = model
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        for model_id in model_ids {
+            skippy::register_local_source_policy(&model_id, &runtime_profile, required);
+        }
+    }
+    for spec in startup_specs {
+        let mut model_ids = BTreeSet::new();
+        if let Some(declared_ref) = spec.declared_ref.as_deref() {
+            model_ids.insert(declared_ref.to_string());
+        }
+        model_ids.insert(spec.model_ref.to_string_lossy().into_owned());
+        if spec.model_ref.is_absolute() {
+            let canonical = spec
+                .model_ref
+                .canonicalize()
+                .unwrap_or_else(|_| spec.model_ref.clone());
+            model_ids.insert(models::model_ref_for_path(&canonical));
+        }
+        for model_id in model_ids {
+            skippy::register_local_source_policy(
+                &model_id,
+                &spec.profile,
+                spec.local_source_required,
+            );
+        }
+    }
 }
 
 pub(super) fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
@@ -1164,6 +1188,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
+    let primary_device_override =
+        primary_startup_model.and_then(|model| startup_device_override(model.gpu_id.as_deref()));
     let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
     let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
@@ -1174,6 +1200,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_model_ref = primary_startup_model
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
+    let primary_config_model_id =
+        primary_startup_model.and_then(|model| model.config_model_id.clone());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
     let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
     let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -1188,6 +1216,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        config_model_id: primary_config_model_id,
         readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())
@@ -1198,6 +1227,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
+        device_override: primary_device_override,
         runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,
@@ -1205,6 +1235,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        local_source_required: primary_startup_model
+            .is_some_and(|model| model.local_source_required),
         split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
@@ -1345,6 +1377,11 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Stage-control starts accepting before eager model resolution. Register
+    // every spelling that can become the model's runtime identity now so a
+    // legacy/profile-unaware request cannot bypass local-required policy in
+    // that window. False entries deliberately clear stale in-process policy.
+    register_pre_accept_local_source_policies(&config, &startup_specs);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
@@ -1403,39 +1440,20 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     node.set_hosted_models(Vec::new()).await;
     node.regossip().await;
 
-    let tunnel_mgr =
-        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
-    // Both halves of inbound reachability are established here for any node
-    // that can serve, rather than only as a side effect of a local model
-    // finishing load.
-    //
-    // `set_http_port` is what lets a plugin-only node (no local model ever
-    // loads) accept inbound requests at all: the api proxy it points at is
-    // already bound and already answers correctly with no models loaded, so a
-    // tunneled request arriving before any model is ready gets a normal "not
-    // available" response instead of being silently dropped (the previous
-    // behavior whenever this was still 0 — see `network/tunnel.rs`'s
-    // `port == 0` early-return). The three call sites in `startup_handles.rs`
-    // remain and are now redundant-but-harmless — same node, same `api_port`,
-    // for the lifetime of the process.
-    //
-    // `plugin_host_role::spawn` is the other half: whether peers actually
-    // route here.
-    //
-    // Both are gated on `!is_client`. A client node has no compute to offer
-    // and never advertises `Host`, so nothing selects it as a route target;
-    // leaving its inbound HTTP tunnel terminated at the `port == 0` check
-    // keeps it exactly as reachable as it was before this change — not at
-    // all — instead of turning it into a mesh-internal request relay for any
-    // admitted peer that dials it.
-    if !is_client {
-        tunnel_mgr.set_http_port(api_port);
-        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
-    }
-
-    // Election publishes per-model targets
+    // Election publishes per-model targets. The same receiver and affinity
+    // router serve local TCP and remote QUIC OpenAI ingress.
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
     let target_tx = std::sync::Arc::new(target_tx);
+
+    let tunnel_mgr =
+        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
+    // Serving hosts terminate inbound HTTP tunnel streams directly in the
+    // shared OpenAI ingress. Client-only nodes remain unreachable as hosts.
+    if !is_client {
+        tunnel_mgr.set_http_port(api_port);
+        tunnel_mgr.set_http_ingress(target_rx.clone(), affinity_router.clone());
+        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
+    }
 
     // Runtime control for local load/unload of extra models.
     let (control_tx, mut control_rx) =
@@ -1573,31 +1591,4 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         anyhow::bail!("{summary}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod kv_cache_disk_tests {
-    use super::{KvDiskBudget, parse_kv_cache_disk};
-
-    #[test]
-    fn sizes_are_read_as_gigabytes() {
-        assert_eq!(parse_kv_cache_disk("8"), Some(KvDiskBudget::Mib(8192)));
-        assert_eq!(parse_kv_cache_disk(" 0.5 "), Some(KvDiskBudget::Mib(512)));
-    }
-
-    #[test]
-    fn auto_defers_to_the_free_space_policy() {
-        assert_eq!(parse_kv_cache_disk("auto"), Some(KvDiskBudget::Auto));
-        assert_eq!(parse_kv_cache_disk("AUTO"), Some(KvDiskBudget::Auto));
-        assert_eq!(parse_kv_cache_disk("off"), Some(KvDiskBudget::Off));
-    }
-
-    /// Each of these would otherwise disable the tier while looking like the
-    /// user had enabled it, which is the one outcome worth being loud about.
-    #[test]
-    fn unusable_budgets_are_rejected_rather_than_silently_ignored() {
-        for raw in ["0", "-4", "", "lots", "0.0001", "nan", "inf"] {
-            assert_eq!(parse_kv_cache_disk(raw), None, "should reject {raw:?}");
-        }
-    }
 }

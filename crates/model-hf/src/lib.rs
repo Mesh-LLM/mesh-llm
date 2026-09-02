@@ -1,11 +1,13 @@
 mod cache_paths;
 pub mod store;
+mod tls;
 
 pub use cache_paths::{
     DownloadDirectoryFallback, DownloadDirectoryKind, PreparedDownloadDirectories,
     download_cache_diagnostic, download_cache_diagnostic_for, huggingface_hub_cache_dir,
     huggingface_xet_cache_dir, mesh_llm_cache_dir, prepare_download_directories,
 };
+pub use tls::{HfTlsProvider, configure_hf_tls_provider};
 
 use std::{
     ffi::OsStr,
@@ -121,6 +123,7 @@ impl HfModelRepositoryBuilder {
     }
 
     pub fn build(self) -> Result<HfModelRepository> {
+        let _ = configure_hf_tls_provider();
         let cache_dir = self.cache_dir.unwrap_or_else(huggingface_hub_cache_dir);
         let mut builder = HFClientBuilder::new()
             .cache_dir(cache_dir.clone())
@@ -384,6 +387,7 @@ fn scan_hf_cache_identity_for_path(path: &Path, cache_root: &Path) -> Option<HfM
 }
 
 fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
+    let _ = configure_hf_tls_provider();
     let cache_root = cache_root.to_path_buf();
     let scan = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()

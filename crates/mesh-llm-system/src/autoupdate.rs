@@ -318,9 +318,7 @@ async fn apply_update_if_available(
     {
         Ok(InstallOutcome::RestartNow) => {
             eprintln!("✅ Updated to v{}; restarting", release.version);
-            // TODO: Audit that the environment access only happens in single-threaded code.
-            unsafe { std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1") };
-            exec_current_binary(&target.exe)?;
+            exec_current_binary(&target.exe, SELF_UPDATE_ATTEMPTED_ENV, "1")?;
         }
         Ok(InstallOutcome::ExitNow) => {
             eprintln!("✅ Updated to v{}", release.version);
@@ -382,7 +380,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_should_attempt_auto_update_only_when_flag_is_set() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
         assert!(should_attempt_auto_update(AutoUpdateOptions {
             auto_update: true,
@@ -412,7 +411,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_should_attempt_auto_update_respects_restart_guard() {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1") };
         assert!(!should_attempt_auto_update(AutoUpdateOptions {
             auto_update: true,
@@ -421,7 +421,8 @@ mod tests {
             llama_flavor: None,
             current_version: "0.68.0",
         }));
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
     }
 

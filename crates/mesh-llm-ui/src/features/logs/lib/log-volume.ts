@@ -26,6 +26,19 @@ export const VOLUME_TIME_RANGES: readonly { value: VolumeTimeRangeKey; label: st
 
 export const MAX_VOLUME_BUCKETS = 480
 
+export const PREFERRED_VOLUME_BUCKETS = 72
+
+/**
+ * Pick the finest bucket interval that keeps a window under
+ * `PREFERRED_VOLUME_BUCKETS` bars, so each time range opens at a legible
+ * density instead of inheriting the previous range's interval.
+ */
+export function defaultBucketIntervalKey(rangeMs: number): BucketIntervalKey {
+  const coarsest = BUCKET_INTERVALS[BUCKET_INTERVALS.length - 1].value
+  if (!Number.isFinite(rangeMs) || rangeMs <= 0) return coarsest
+  return BUCKET_INTERVALS.find((option) => rangeMs / option.ms <= PREFERRED_VOLUME_BUCKETS)?.value ?? coarsest
+}
+
 export type EventVolumeBucket = {
   readonly bucketStart: number
   readonly bucketEnd: number

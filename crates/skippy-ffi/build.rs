@@ -7,6 +7,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_LINK_MODE");
     println!("cargo:rerun-if-env-changed=LLAMA_STAGE_BACKEND");
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_BACKEND");
+    println!("cargo:rerun-if-env-changed=LLAMA_STAGE_CUDA_ARCHITECTURES");
+    println!("cargo:rerun-if-env-changed=SKIPPY_CUDA_ARCHITECTURES");
+    println!("cargo:rerun-if-env-changed=LLAMA_STAGE_AMDGPU_TARGETS");
+    println!("cargo:rerun-if-env-changed=SKIPPY_AMDGPU_TARGETS");
+    println!("cargo:rerun-if-env-changed=MESH_LLM_LLAMA_BUILD_ROOT");
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_AUTO_BUILD");
     println!("cargo:rerun-if-env-changed=MESH_LLM_AUTO_BUILD_LLAMA");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
@@ -37,7 +42,14 @@ fn main() {
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
     )
     .join("../..");
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("scripts/build-llama.sh").display()
+    );
     let target = std::env::var("TARGET").unwrap_or_default();
+    let backend = std::env::var("LLAMA_STAGE_BACKEND")
+        .or_else(|_| std::env::var("SKIPPY_LLAMA_BACKEND"))
+        .unwrap_or_else(|_| default_backend(&target).to_string());
     let build_dir = std::env::var("LLAMA_STAGE_BUILD_DIR")
         .or_else(|_| std::env::var("SKIPPY_LLAMA_BUILD_DIR"))
         .map(std::path::PathBuf::from)
@@ -48,14 +60,12 @@ fn main() {
                 workspace_root.join(path)
             }
         })
-        .unwrap_or_else(|_| default_build_dir(&workspace_root, &target));
-    let backend = std::env::var("LLAMA_STAGE_BACKEND")
-        .or_else(|_| std::env::var("SKIPPY_LLAMA_BACKEND"))
-        .unwrap_or_else(|_| default_backend(&target).to_string());
+        .unwrap_or_else(|_| default_build_dir(&workspace_root, &backend));
     ensure_static_native_ready(&workspace_root, &build_dir, &target, &backend);
 
     let search_dirs = [
         build_dir.join("tools/mtmd"),
+        build_dir.join("vendor/hash"),
         build_dir.join("common"),
         build_dir.join("src"),
         build_dir.join("ggml/src"),
@@ -78,6 +88,10 @@ fn main() {
     for (unix_archive, msvc_archive) in [
         ("src/libllama.a", "src/llama.lib"),
         ("tools/mtmd/libmtmd.a", "tools/mtmd/mtmd.lib"),
+        (
+            "vendor/hash/libvendor-hash.a",
+            "vendor/hash/vendor-hash.lib",
+        ),
         ("common/libllama-common.a", "common/llama-common.lib"),
         (
             "common/libllama-common-base.a",
@@ -122,6 +136,25 @@ fn main() {
 
     if static_archive_exists(&build_dir, "tools/mtmd/libmtmd.a", "tools/mtmd/mtmd.lib") {
         println!("cargo:rustc-link-lib=static=mtmd");
+        // Upstream links mtmd against vendor::hash PRIVATE, so the archive is
+        // not propagated to consumers. It must follow libmtmd.a on the link
+        // line or hash_sha256_hex stays undefined. mtmd without vendor-hash is
+        // not a degraded configuration to link anyway -- it is a guaranteed
+        // undefined symbol, so fail here with the cause rather than emitting a
+        // link line we know cannot resolve.
+        if !static_archive_exists(
+            &build_dir,
+            "vendor/hash/libvendor-hash.a",
+            "vendor/hash/vendor-hash.lib",
+        ) {
+            panic!(
+                "libmtmd is present in {} but vendor/hash/libvendor-hash.a is not; \
+                 mtmd requires vendor::hash for hash_sha256_hex. The llama.cpp \
+                 build or the restored static ABI artifact is incomplete.",
+                build_dir.display()
+            );
+        }
+        println!("cargo:rustc-link-lib=static=vendor-hash");
     }
     println!("cargo:rustc-link-lib=static=llama-common");
     println!("cargo:rustc-link-lib=static=llama-common-base");
@@ -216,9 +249,35 @@ fn main() {
     }
 }
 
-fn default_build_dir(workspace_root: &std::path::Path, target: &str) -> std::path::PathBuf {
-    let suffix = default_backend(target);
-    workspace_root.join(format!(".deps/llama-build/build-stage-abi-static-{suffix}"))
+fn default_build_dir(workspace_root: &std::path::Path, backend: &str) -> std::path::PathBuf {
+    let script = workspace_root.join("scripts/build-llama.sh");
+    let output = std::process::Command::new("bash")
+        .arg(&script)
+        .arg("--print-build-dir")
+        .env("LLAMA_STAGE_BACKEND", backend)
+        .env("LLAMA_STAGE_LINK_MODE", "static")
+        .output()
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to ask {} for the canonical llama.cpp build directory: {error}",
+                script.display()
+            )
+        });
+    if !output.status.success() {
+        panic!(
+            "{} --print-build-dir failed: {}",
+            script.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let path = String::from_utf8(output.stdout)
+        .expect("build-llama.sh --print-build-dir returned non-UTF-8 output");
+    let path = std::path::PathBuf::from(path.trim());
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_root.join(path)
+    }
 }
 
 fn default_backend(target: &str) -> &'static str {

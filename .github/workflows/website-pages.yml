@@ -12,6 +12,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "Justfile"
+      - "just/**"
       - "crates/**"
       - "scripts/build-crate-docs.sh"
       - "scripts/publish-crates.sh"
@@ -65,6 +66,10 @@ jobs:
 
       - name: Build published crate API docs
         run: just crate-docs
+
+      - name: Validate CLI explorer in desktop and mobile browsers
+        working-directory: website
+        run: npm run test:cli-explorer
 
       - name: Stage Pages artifact
         # shell: bash is required: this job's container: resolves the

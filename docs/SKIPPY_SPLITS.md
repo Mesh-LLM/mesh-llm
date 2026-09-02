@@ -69,6 +69,16 @@ mesh-llm serve \
 For hosts with more than one network interface, add `--bind-ip <lan-ip>` on
 each node so the invite token and gossip advertise the routable address.
 
+On macOS, authorize Local Network access for the exact signed app/binary identity
+on **every** node before diagnosing a failed split. Run it from the same
+app/service context intended for the test and clear any blocking alert on the
+logged-in desktop; see the repository's `deploy-macos` skill and
+[Meshes: macOS Local Network privacy preflight](MESHES.md#macos-local-network-privacy-preflight).
+A raw UDP probe and a correct LAN candidate in the invite do not prove that the
+deployed process is authorized. Before recording throughput, require a path
+observation from both nodes showing `path_type=direct`, the intended LAN
+`observed_direct_remote_addr`, and `observed_via_relay=false`.
+
 Once both stages are ready:
 
 ```bash
@@ -118,9 +128,9 @@ the reachable public endpoint. Iroh owns path selection and may use or upgrade
 between relay and direct paths; split admission does not second-guess that choice
 with path-kind or RTT gates.
 
-Current Inkling policy uses an F32 activation wire and Q4_0 K/V cache. F16 and
-Q8 activation wires are not interchangeable shortcuts: both failed the current
-correctness policy. The published package has no default speculative strategy,
+Inkling uses the same fixed raw-f32 activation wire as every other model and a
+Q4_0 K/V cache. Historical f16 and q8 failures remain compression research
+evidence. The published package has no default speculative strategy,
 and live native MTP and multimodal serving are not yet operator claims.
 
 PR #1118 has exercised ordinary all-CUDA Mesh planning on a direct roughly 5 ms

@@ -367,7 +367,11 @@ pub(crate) fn artifact_transfer_allowed_by_topology(
 /// Channels returned by Node::start for inbound tunnel streams.
 pub struct TunnelChannels {
     pub rpc: tokio::sync::mpsc::Receiver<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
-    pub http: tokio::sync::mpsc::Receiver<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+    pub http: tokio::sync::mpsc::Receiver<(
+        EndpointId,
+        iroh::endpoint::SendStream,
+        iroh::endpoint::RecvStream,
+    )>,
     pub stage: tokio::sync::mpsc::Receiver<(
         EndpointId,
         iroh::endpoint::SendStream,
@@ -422,7 +426,6 @@ pub struct StageRuntimeStatus {
     pub state: crate::inference::skippy::StageRuntimeState,
     pub bind_addr: String,
     pub activation_width: u32,
-    pub wire_dtype: crate::inference::skippy::StageWireDType,
     pub selected_device: Option<skippy_protocol::StageDevice>,
     pub ctx_size: u32,
     pub lane_count: u32,
@@ -684,6 +687,15 @@ impl Node {
         self.inflight_change_tx.subscribe()
     }
 
+    pub(crate) async fn set_stage_control_handle(
+        &self,
+        lifecycle: crate::inference::skippy::StageControlHandle,
+    ) {
+        *self.stage_control_tx.lock().await = Some(lifecycle.sender());
+        *self.stage_control_lifecycle.lock().await = Some(lifecycle);
+    }
+
+    #[cfg(test)]
     pub(crate) async fn set_stage_control_sender(
         &self,
         tx: tokio::sync::mpsc::UnboundedSender<crate::inference::skippy::StageControlCommand>,
@@ -869,7 +881,9 @@ impl Node {
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
         self.prepare_stage_control_request(&mut request).await?;
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
@@ -911,11 +925,13 @@ impl Node {
         use prost::Message as _;
 
         let timeout = Self::stage_control_request_timeout(&request);
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(peer_id, load))
                 .await;
         }
-        let frame = stage_control_request_to_proto(self.endpoint.id(), request);
+        let frame = stage_control_request_to_proto(self.endpoint.id(), request)?;
         let response = tokio::time::timeout(timeout, async {
             let (mut send, mut recv) = if self
                 .peer_supports_skippy_subprotocol_feature(
@@ -977,6 +993,9 @@ impl Node {
                 std::time::Duration::from_secs(30)
             }
             crate::inference::skippy::StageControlRequest::Load(load) => {
+                crate::inference::skippy::stage_load_timeout(load)
+            }
+            crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
                 crate::inference::skippy::stage_load_timeout(load)
             }
             crate::inference::skippy::StageControlRequest::Prepare(prepare) => {

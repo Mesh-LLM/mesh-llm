@@ -1,46 +1,27 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    path::Path,
-    path::PathBuf,
-    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
+    sync::{Arc, Mutex},
 };
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KvDiskCacheBudget {
-    Off,
-    Auto,
-    Bytes(u64),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KvDiskCacheConfig {
-    pub budget: KvDiskCacheBudget,
-    pub directory: Option<PathBuf>,
-}
-
-static DISK_CACHE_CONFIG: OnceLock<KvDiskCacheConfig> = OnceLock::new();
-
-/// Install host-owned disk-cache policy before any stage is constructed.
-pub fn configure_kv_disk_cache(config: KvDiskCacheConfig) -> Result<(), KvDiskCacheConfig> {
-    DISK_CACHE_CONFIG.set(config)
-}
 
 use anyhow::Result;
-use mesh_llm_events::{OutputEvent, emit_event};
+use mesh_llm_events::OutputEvent;
 use skippy_cache::{
-    ExactStateCache, PrefixCandidatePolicy, PrefixDiskTier, ResidentActivationCache,
-    ResidentCacheConfig, ResidentPrefixCache,
+    CacheBlobStore, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
+    UnifiedRadixCache,
 };
-use skippy_protocol::{
-    LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-};
-use skippy_runtime::ModelInfo;
+use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
 use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
-    EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, KvStageIntegration, PendingExactStateRecord,
-    StageKvMode, StagePrefixCachePayload, disk_budget, disk_budget::NodeBudget,
+    EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
+    ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
+    model_capability::{ModelKvCapability, inspect_model_kv_capability},
+    output_tokens::OutputTokenCache,
+};
+
+#[cfg(test)]
+use super::model_capability::{
+    kv_cache_inspection_paths, layer_package_inspection_paths, tensor_name_requires_recurrent_state,
 };
 
 impl KvStageIntegration {
@@ -56,61 +37,73 @@ impl KvStageIntegration {
         if mode == StageKvMode::Disabled {
             return Ok(None);
         }
-        let payload = effective_cache_payload(config, cache_config.payload);
+        let declared_capability = inferred_model_kv_capability(config);
+        let model_capability = inspect_model_kv_capability(config, declared_capability);
+        if let ModelKvCapability::Unknown(reason) = &model_capability {
+            emit_cache_disabled_warning(config, reason);
+            return Ok(None);
+        }
+        let payload = effective_cache_payload(cache_config.payload, &model_capability);
         if payload == StagePrefixCachePayload::Disabled {
             return Ok(None);
         }
-        if model_requires_recurrent_state(config)
+        if matches!(model_capability, ModelKvCapability::KnownRecurrent)
             && matches!(payload, StagePrefixCachePayload::ResidentKv)
         {
+            emit_cache_disabled_warning(
+                config,
+                "resident KV was requested for a recurrent-state model",
+            );
             return Ok(None);
         }
-        let mut candidate_policy = PrefixCandidatePolicy::from_cache(&cache_config);
+        let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
-        // Bound the record ladder by the same token budget the resident cache
-        // enforces, so a single request cannot record more than it can hold.
-        candidate_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
-        let mut exact_states = ExactStateCache::<ExactStateExtra>::new(
-            cache_config.max_entries.clamp(1, 512),
-            cache_config.max_bytes,
-        );
-        let disk = open_disk_tier(config);
-        let disk_budget_reservation = disk.as_ref().map(|opened| opened.reservation.clone());
-        if let Some(opened) = disk {
-            exact_states = exact_states.with_disk_tier(opened.tier);
+        if resident_config.max_entries == 0 {
+            return Ok(None);
         }
-        let exact_states = Arc::new(Mutex::new(exact_states));
+        // Activation checkpoints still use their own sparse policy; serving KV
+        // contributes one full token path to the radix tree.
+        checkpoint_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
+        let exact_max_entries = cache_config.max_entries.clamp(1, 512);
+        let exact_max_bytes = cache_config.max_bytes;
+        let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
+        let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
             std::sync::mpsc::sync_channel::<PendingExactStateRecord>(EXACT_STATE_RECORD_CAPACITY);
-        let worker_exact_states = exact_states.clone();
+        let worker_radix = radix.clone();
+        let worker_exact_blobs = exact_blobs.clone();
         let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
         let worker_inflight_records = inflight_records.clone();
         let exact_state_records_queued = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let exact_state_records_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_exact_state_records_dropped = exact_state_records_dropped.clone();
         let exact_state_records_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker_exact_state_records_pending = exact_state_records_pending.clone();
-        let worker_disk_budget_reservation = disk_budget_reservation.clone();
+        let exact_state_record_worker_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
+        let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
         std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
-                let _disk_budget_reservation = worker_disk_budget_reservation;
                 while let Ok(pending) = exact_state_record_rx.recv() {
-                    let page_id = pending.page_id.clone();
-                    worker_exact_states
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .record(
-                            pending.page_id,
-                            pending.token_count,
-                            pending.payload,
-                            pending.extra,
-                        );
-                    worker_inflight_records
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .remove(&page_id);
-                    worker_exact_state_records_pending
-                        .fetch_sub(1, std::sync::atomic::Ordering::Release);
+                    super::run_exact_state_record_job(
+                        &worker_inflight_records,
+                        &worker_exact_state_records_dropped,
+                        &worker_exact_state_records_pending,
+                        &worker_exact_state_record_worker_healthy,
+                        &worker_exact_state_record_worker_panics,
+                        pending,
+                        |pending| {
+                            store_exact_radix_record(
+                                &worker_radix,
+                                &worker_exact_blobs,
+                                exact_max_entries,
+                                exact_max_bytes,
+                                pending,
+                            )
+                        },
+                    );
                 }
             })?;
         Ok(Some(Self {
@@ -118,261 +111,149 @@ impl KvStageIntegration {
             payload,
             correctness_mode: false,
             trust_local_writes: true,
-            candidate_policy,
+            checkpoint_policy,
             inflight_records,
-            resident: Arc::new(Mutex::new(ResidentPrefixCache::new(resident_config))),
+            resident_config,
+            resident_capacity_reservations: Default::default(),
+            resident_sequences: Arc::new(Mutex::new(ResidentSequencePool::new(
+                resident_config.reserved_seq_count,
+            ))),
             activations: Arc::new(Mutex::new(ResidentActivationCache::new(resident_config))),
-            exact_states,
+            radix,
+            exact_blobs,
+            exact_max_entries,
+            exact_max_bytes,
             exact_state_record_tx,
             exact_state_records_queued,
             exact_state_records_dropped,
             exact_state_records_pending,
-            first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
-            replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            exact_state_record_worker_healthy,
+            exact_state_record_worker_panics,
+            cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            output_tokens: Arc::new(Mutex::new(OutputTokenCache::new(exact_max_entries))),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
-            dense_archive_unsupported: Arc::new(AtomicBool::new(false)),
-            _disk_budget_reservation: disk_budget_reservation,
         }))
     }
 }
 
-fn emit_warning(message: String) {
-    let _ = emit_event(OutputEvent::Warning {
-        message,
-        context: None,
+fn emit_cache_disabled_warning(config: &StageConfig, reason: &str) {
+    let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
+        message: "Skippy KV cache disabled for this model stage".to_string(),
+        context: Some(format!(
+            "stage_id={} model_id={} reason={reason}",
+            config.stage_id, config.model_id
+        )),
     });
 }
 
-/// Open the KV disk tier for this stage. Host configuration wins; legacy
-/// environment variables remain compatibility input when no host configured it.
-struct OpenedDiskTier {
-    tier: PrefixDiskTier,
-    reservation: disk_budget::BudgetReservation,
-}
-
-fn open_disk_tier(config: &StageConfig) -> Option<OpenedDiskTier> {
-    let root = disk_tier_root(config);
-    if !has_valid_content_digest(config) {
-        emit_warning(format!(
-            "skippy: KV disk tier disabled for stage {}: no valid content digest",
-            config.stage_id
-        ));
-        return None;
-    }
-    let reservation = stage_disk_budget(&root, config)?;
-    match PrefixDiskTier::open(&root, reservation.bytes()) {
-        Ok(tier) => Some(OpenedDiskTier { tier, reservation }),
-        Err(error) => {
-            emit_warning(format!(
-                "skippy: KV disk tier unavailable, continuing without it: {error}"
-            ));
-            None
-        }
-    }
-}
-
-fn has_valid_content_digest(config: &StageConfig) -> bool {
-    [
-        config.manifest_sha256.as_deref(),
-        config.source_model_sha256.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(is_sha256_digest)
-}
-
-fn is_sha256_digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-/// Reserve this stage's desired working set from the node-level budget.
-fn stage_disk_budget(root: &Path, config: &StageConfig) -> Option<disk_budget::BudgetReservation> {
-    let probe = disk_budget::existing_ancestor(root);
-    let free_bytes = disk_budget::free_space_bytes(&probe);
-    let policy = effective_disk_cache_config();
-    let (explicit, enabled) = match policy.budget {
-        KvDiskCacheBudget::Off => (None, false),
-        KvDiskCacheBudget::Auto => (None, true),
-        KvDiskCacheBudget::Bytes(bytes) => (Some(bytes), true),
-    };
-    let budget = disk_budget::resolve_node_budget(explicit, enabled, free_bytes);
-    if let NodeBudget::InsufficientSpace { free_bytes } = budget {
-        emit_warning(format!(
-            "skippy: KV disk tier disabled for stage {}: only {:.1} GiB free on {}",
-            config.stage_id,
-            free_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-            probe.display(),
-        ));
-        return None;
-    }
-    let node_bytes = budget.bytes()?;
-    disk_budget::reserve(node_bytes, stage_disk_share(node_bytes))
-}
-
-/// Give two co-located stages equal access to the node-owned disk budget.
-///
-/// A stage must not claim the whole pool before later stages open, and this
-/// share must not be derived from the resident KV allowance: that value may be
-/// an explicit operator cap and disk pages do not consume native KV cells.
-fn stage_disk_share(node_bytes: u64) -> u64 {
-    node_bytes.saturating_add(1) / 2
-}
-
-fn effective_disk_cache_config() -> KvDiskCacheConfig {
-    DISK_CACHE_CONFIG.get().cloned().unwrap_or_else(|| {
-        let budget = explicit_disk_tier_bytes()
-            .map(KvDiskCacheBudget::Bytes)
-            .unwrap_or_else(|| {
-                if legacy_disk_tier_disabled() {
-                    KvDiskCacheBudget::Off
-                } else {
-                    KvDiskCacheBudget::Auto
+fn store_exact_radix_record(
+    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
+    blobs: &Mutex<CacheBlobStore>,
+    max_entries: usize,
+    max_bytes: u64,
+    pending: PendingExactStateRecord,
+) -> Result<()> {
+    let logical_bytes = pending.payload.byte_len();
+    let (payload, _) = pending.payload.dedupe_into(
+        &mut blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    // Cloning retains the Arc-backed blocks without changing blob-store
+    // accounting, leaving `payload` available to roll that accounting back if
+    // the radix rejects the insert.
+    let mut released = Vec::new();
+    let insert_result = {
+        let mut radix = radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let insert_result = radix.insert_recurrent(
+            pending.namespace,
+            &pending.token_ids,
+            logical_bytes,
+            RadixExactEntry {
+                page_id: pending.page_id,
+                payload: payload.clone(),
+                extra: pending.extra,
+            },
+        );
+        match insert_result {
+            Err(error) => Err(error),
+            Ok(replaced) => {
+                if let Some(replaced) = replaced {
+                    released.push(replaced.payload);
                 }
-            });
-        KvDiskCacheConfig {
-            budget,
-            directory: None,
+                while radix.stats().recurrent_entries > max_entries {
+                    let Some(evicted) = radix.evict_lru_recurrent() else {
+                        break;
+                    };
+                    released.push(evicted.value.payload);
+                }
+                Ok(())
+            }
         }
-    })
-}
-
-fn explicit_disk_tier_bytes() -> Option<u64> {
-    let mib = std::env::var("SKIPPY_KV_DISK_TIER_MIB")
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    (mib > 0).then(|| mib.saturating_mul(1024 * 1024))
-}
-
-fn legacy_disk_tier_disabled() -> bool {
-    std::env::var("SKIPPY_KV_DISK_TIER")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "off" | "false"
-            )
-        })
-}
-
-fn disk_tier_root(config: &StageConfig) -> PathBuf {
-    let base = effective_disk_cache_config()
-        .directory
-        .or_else(|| {
-            std::env::var("SKIPPY_KV_DISK_TIER_DIR")
-                .ok()
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| {
-            std::env::var("MESH_LLM_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| dirs_home().join(".mesh-llm"))
-                .join("kv-cache")
-        });
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(config.model_id.as_bytes());
-    hasher.update(config.stage_id.as_bytes());
-    hasher.update(&config.stage_index.to_le_bytes());
-    hasher.update(&config.layer_start.to_le_bytes());
-    hasher.update(&config.layer_end.to_le_bytes());
-    let stage_key = hasher.finalize().to_hex();
-    base.join(&stage_key[..16])
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    };
+    if let Err(error) = insert_result {
+        payload.release_from(
+            &mut blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        return Err(error);
+    }
+    if !released.is_empty() {
+        let mut blobs = blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for payload in released {
+            payload.release_from(&mut blobs)?;
+        }
+    }
+    while max_bytes > 0
+        && blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .physical_bytes()
+            > max_bytes
+    {
+        let evicted = radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .evict_lru_recurrent();
+        let Some(evicted) = evicted else {
+            break;
+        };
+        evicted.value.payload.release_from(
+            &mut blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+    }
+    Ok(())
 }
 
 fn effective_cache_payload(
-    config: &StageConfig,
     requested: StageKvCachePayload,
+    capability: &ModelKvCapability,
 ) -> StagePrefixCachePayload {
-    if matches!(requested, StageKvCachePayload::Auto) && model_requires_recurrent_state(config) {
-        return StagePrefixCachePayload::KvRecurrent;
-    }
     match requested {
         StageKvCachePayload::ResidentKv => StagePrefixCachePayload::ResidentKv,
         StageKvCachePayload::KvRecurrent => StagePrefixCachePayload::KvRecurrent,
         StageKvCachePayload::FullState => StagePrefixCachePayload::FullState,
-        StageKvCachePayload::Auto => infer_cache_payload(config),
+        StageKvCachePayload::Auto => match capability {
+            ModelKvCapability::KnownDense => StagePrefixCachePayload::ResidentKv,
+            ModelKvCapability::KnownRecurrent => StagePrefixCachePayload::KvRecurrent,
+            ModelKvCapability::Unknown(_) => StagePrefixCachePayload::Disabled,
+        },
     }
 }
 
-pub(crate) fn model_requires_recurrent_state(config: &StageConfig) -> bool {
-    let Some(path) = kv_cache_inspection_path(config) else {
-        return false;
-    };
-    let Ok(info) = ModelInfo::open(path) else {
-        return false;
-    };
-    let Ok(tensors) = info.tensors() else {
-        return false;
-    };
-    tensors
-        .iter()
-        .any(|tensor| tensor_name_requires_recurrent_state(&tensor.name))
-}
-
-fn kv_cache_inspection_path(config: &StageConfig) -> Option<PathBuf> {
-    let path = config.model_path.as_deref()?;
-    match config.load_mode {
-        LoadMode::LayerPackage => {
-            let package_dir = std::path::Path::new(path);
-            layer_package_inspection_path(package_dir, config.layer_start, config.layer_end)
-                .or_else(|| layer_package_metadata_path(package_dir))
-                .or_else(|| Some(PathBuf::from(path)))
-        }
-        LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => Some(PathBuf::from(path)),
+fn inferred_model_kv_capability(config: &StageConfig) -> Option<ModelKvCapability> {
+    match infer_cache_payload(config) {
+        StagePrefixCachePayload::ResidentKv => Some(ModelKvCapability::KnownDense),
+        StagePrefixCachePayload::KvRecurrent => Some(ModelKvCapability::KnownRecurrent),
+        StagePrefixCachePayload::Disabled | StagePrefixCachePayload::FullState => None,
     }
-}
-
-fn layer_package_inspection_path(
-    package_dir: &Path,
-    layer_start: u32,
-    layer_end: u32,
-) -> Option<PathBuf> {
-    let manifest_path = package_dir.join("model-package.json");
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(manifest_path).ok()?).ok()?;
-    let layers = manifest.get("layers")?.as_array()?;
-    let selected = layers
-        .iter()
-        .enumerate()
-        .find(|(index, layer)| {
-            let layer_index = layer
-                .get("layer_index")
-                .and_then(|value| value.as_u64())
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or(*index as u32);
-            layer_index >= layer_start && layer_index < layer_end
-        })
-        .or_else(|| layers.first().map(|layer| (0, layer)))?
-        .1;
-    let path = selected.get("path")?.as_str()?;
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        return None;
-    }
-    let absolute = package_dir.join(path);
-    absolute.is_file().then_some(absolute)
-}
-
-fn layer_package_metadata_path(package_dir: &Path) -> Option<PathBuf> {
-    let metadata = package_dir.join("shared/metadata.gguf");
-    metadata.is_file().then_some(metadata)
-}
-
-fn tensor_name_requires_recurrent_state(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.contains(".ssm")
-        || lower.contains("ssm_")
-        || lower.contains("time_mix")
-        || lower.contains("recurrent")
-        || lower.contains("rwkv")
 }
 
 fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
@@ -423,7 +304,25 @@ fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
     StagePrefixCachePayload::Disabled
 }
 
+/// Either kill-switch variable resolving to `off` disables the cache, so an
+/// explicit `SKIPPY_KV_CACHE=on` cannot mask `SKIPPY_PREFIX_CACHE=off`.
+fn cache_disabled_by_env(kv_cache: Option<&str>, prefix_cache: Option<&str>) -> bool {
+    [kv_cache, prefix_cache]
+        .into_iter()
+        .flatten()
+        .any(|value| parse_cache_mode(value) == Some(StageKvCacheMode::Disabled))
+}
+
 fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
+    // An explicit environment kill-switch beats the planned stage config so
+    // benches and incident response can turn the prefix cache off without
+    // replanning the topology.
+    if cache_disabled_by_env(
+        std::env::var("SKIPPY_KV_CACHE").ok().as_deref(),
+        std::env::var("SKIPPY_PREFIX_CACHE").ok().as_deref(),
+    ) {
+        return None;
+    }
     if let Some(cache) = config.kv_cache.clone() {
         return Some(cache);
     }
@@ -491,13 +390,77 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use skippy_protocol::FlashAttentionType;
+    use skippy_protocol::{FlashAttentionType, LoadMode};
+
+    fn pending(page_id: &str, tokens: &[i32], bytes: &[u8]) -> PendingExactStateRecord {
+        PendingExactStateRecord {
+            page_id: page_id.to_string(),
+            payload: skippy_cache::ExactStatePayload::full_state(bytes.to_vec()),
+            extra: super::super::ExactStateExtra::default(),
+            namespace: "model".to_string(),
+            token_ids: tokens.to_vec(),
+        }
+    }
 
     #[test]
-    fn stages_share_the_node_disk_budget_without_using_resident_caps() {
-        assert_eq!(stage_disk_share(1_000), 500);
-        assert_eq!(stage_disk_share(1_001), 501);
+    fn exact_payloads_live_on_radix_nodes_and_release_deduped_blocks_on_eviction() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        store_exact_radix_record(&radix, &blobs, 1, 0, pending("first", &[1, 2], b"aaaabbbb"))
+            .unwrap();
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            0,
+            pending("second", &[1, 3], b"aaaacccc"),
+        )
+        .unwrap();
+
+        let mut radix = radix.lock().unwrap();
+        let blobs = blobs.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert_eq!(blobs.physical_bytes(), 8);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
+        assert_eq!(
+            radix
+                .lookup_recurrent("model", &[1, 3])
+                .expect("second exact payload should remain")
+                .value
+                .page_id,
+            "second"
+        );
+    }
+
+    #[test]
+    fn invalid_exact_radix_key_releases_deduped_payload() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        let error =
+            store_exact_radix_record(&radix, &blobs, 1, 0, pending("empty", &[], b"aaaabbbb"))
+                .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "radix cache key must contain at least one token"
+        );
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
+        assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
+    }
+
+    #[test]
+    fn either_cache_kill_switch_disables_the_cache() {
+        assert!(!cache_disabled_by_env(None, None));
+        assert!(!cache_disabled_by_env(Some("on"), None));
+        assert!(cache_disabled_by_env(Some("off"), None));
+        assert!(cache_disabled_by_env(None, Some("off")));
+        assert!(cache_disabled_by_env(Some("on"), Some("off")));
+        assert!(cache_disabled_by_env(Some("off"), Some("on")));
     }
 
     #[test]
@@ -585,8 +548,46 @@ mod tests {
         config.layer_end = 2;
 
         assert_eq!(
-            kv_cache_inspection_path(&config),
-            Some(dir.path().join("layers/00001.gguf"))
+            kv_cache_inspection_paths(&config),
+            vec![fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap()]
+        );
+    }
+
+    #[test]
+    fn layer_package_inspection_selects_every_in_range_layer_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("layers")).unwrap();
+        fs::write(dir.path().join("layers/00000.gguf"), b"layer0").unwrap();
+        fs::write(dir.path().join("layers/00001.gguf"), b"layer1").unwrap();
+        fs::write(dir.path().join("layers/00002.gguf"), b"layer2").unwrap();
+        let manifest = serde_json::json!({
+            "layers": [
+                { "layer_index": 0, "path": "layers/00000.gguf" },
+                { "layer_index": 1, "path": "layers/00001.gguf" },
+                { "layer_index": 2, "path": "layers/00002.gguf" }
+            ]
+        });
+        fs::write(
+            dir.path().join("model-package.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let mut config = test_config("example/hybrid-package");
+        config.load_mode = LoadMode::LayerPackage;
+        config.model_path = Some(dir.path().to_string_lossy().to_string());
+        config.layer_start = 0;
+        config.layer_end = 3;
+
+        // a hybrid stage must probe every layer file, not just the first:
+        // an attention-first stage still carries recurrent tensors later
+        // in the range
+        assert_eq!(
+            kv_cache_inspection_paths(&config),
+            vec![
+                fs::canonicalize(dir.path().join("layers/00000.gguf")).unwrap(),
+                fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap(),
+                fs::canonicalize(dir.path().join("layers/00002.gguf")).unwrap(),
+            ]
         );
     }
 
@@ -610,9 +611,163 @@ mod tests {
         config.model_path = Some(dir.path().to_string_lossy().to_string());
 
         assert_eq!(
-            kv_cache_inspection_path(&config),
-            Some(dir.path().join("shared/metadata.gguf"))
+            kv_cache_inspection_paths(&config),
+            vec![fs::canonicalize(dir.path().join("shared/metadata.gguf")).unwrap()]
         );
+    }
+
+    #[test]
+    fn layer_package_inspection_rejects_parent_directory_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "../outside.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_symlink_outside_local_package() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
+        symlink(
+            dir.path().join("outside.gguf"),
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_intermediate_symlink_outside_local_package() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&package).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("00000.gguf"), b"outside").unwrap();
+        symlink(&outside, package.join("layers")).unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_accepts_hf_snapshot_blob_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("models--owner--package");
+        let package = repo.join("snapshots/revision");
+        let blob = repo.join("blobs/layer-blob");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        fs::write(&blob, b"layer").unwrap();
+        symlink(
+            "../../../blobs/layer-blob",
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            layer_package_inspection_paths(&package, 0, 1),
+            vec![fs::canonicalize(blob).unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_hf_snapshot_symlink_to_sibling_repo() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("models--owner--package");
+        let sibling_repo = dir.path().join("models--owner--other");
+        let package = repo.join("snapshots/revision");
+        let sibling_blob = sibling_repo.join("blobs/layer-blob");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::create_dir_all(sibling_blob.parent().unwrap()).unwrap();
+        fs::write(&sibling_blob, b"layer").unwrap();
+        symlink(
+            "../../../../models--owner--other/blobs/layer-blob",
+            package.join("layers/00000.gguf"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_package_inspection_rejects_malformed_hf_repo_root_exception() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let malformed_repo = dir.path().join("models--owner");
+        let package = malformed_repo.join("snapshots/revision");
+        let outside_package = malformed_repo.join("private.gguf");
+        fs::create_dir_all(package.join("layers")).unwrap();
+        fs::write(&outside_package, b"outside package").unwrap();
+        symlink("../../../private.gguf", package.join("layers/00000.gguf")).unwrap();
+        fs::write(
+            package.join("model-package.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
     }
 
     #[test]
@@ -649,20 +804,52 @@ mod tests {
 
     #[test]
     fn explicit_cache_payload_overrides_identity_inference() {
-        let config = test_config("tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M");
-
         assert_eq!(
-            effective_cache_payload(&config, StageKvCachePayload::ResidentKv),
+            effective_cache_payload(
+                StageKvCachePayload::ResidentKv,
+                &ModelKvCapability::KnownDense,
+            ),
             StagePrefixCachePayload::ResidentKv
         );
         assert_eq!(
-            effective_cache_payload(&config, StageKvCachePayload::KvRecurrent),
+            effective_cache_payload(
+                StageKvCachePayload::KvRecurrent,
+                &ModelKvCapability::KnownRecurrent,
+            ),
             StagePrefixCachePayload::KvRecurrent
         );
         assert_eq!(
-            effective_cache_payload(&config, StageKvCachePayload::FullState),
+            effective_cache_payload(
+                StageKvCachePayload::FullState,
+                &ModelKvCapability::KnownRecurrent,
+            ),
             StagePrefixCachePayload::FullState
         );
+    }
+
+    #[test]
+    fn corrupt_model_metadata_disables_explicit_resident_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let corrupt_model = dir.path().join("model.gguf");
+        fs::write(&corrupt_model, b"not a gguf").unwrap();
+
+        let mut config = test_config("tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M");
+        config.model_path = Some(corrupt_model.to_string_lossy().to_string());
+        config.kv_cache = Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::ResidentKv,
+            max_entries: 8,
+            max_bytes: 0,
+            min_tokens: 1,
+            shared_prefix_stride_tokens: 1,
+            shared_prefix_record_limit: 1,
+        });
+
+        assert!(matches!(
+            inspect_model_kv_capability(&config, inferred_model_kv_capability(&config)),
+            ModelKvCapability::Unknown(_)
+        ));
+        assert!(KvStageIntegration::from_config(&config).unwrap().is_none());
     }
 
     #[test]
@@ -685,19 +872,6 @@ mod tests {
             Some(StageKvCachePayload::ResidentKv)
         );
         assert_eq!(parse_cache_payload("nope"), None);
-    }
-
-    #[test]
-    fn disk_tier_requires_a_valid_content_digest() {
-        let mut config = test_config("example/model");
-        config.package_ref = Some("/tmp/mutable-package".to_string());
-        assert!(!has_valid_content_digest(&config));
-
-        config.manifest_sha256 = Some("not-a-digest".to_string());
-        assert!(!has_valid_content_digest(&config));
-
-        config.source_model_sha256 = Some("a".repeat(64));
-        assert!(has_valid_content_digest(&config));
     }
 
     fn test_config(model_id: &str) -> StageConfig {
@@ -725,9 +899,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -736,6 +921,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 }

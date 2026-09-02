@@ -88,6 +88,7 @@ jobs:
       LLAMA_STAGE_BUILD_DIR: ${{ matrix.runtime.build_dir }}
       RUSTC_WRAPPER: sccache
       WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
+      MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
       WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
     steps:

@@ -1,35 +1,56 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::super::{KvCachePolicy, StageWireDType, family_policy_for_model_path};
+use super::super::{KvCachePolicy, family_policy_for_model_path};
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
     KvMacroDefaults, ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib,
     effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
-    pick_owned, pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
-    reject_unsupported_model_fit_controls, resolve_field_string, resolve_field_value,
-    resolve_prefix_cache, resolve_wire_dtype, throughput_macro_defaults,
+    parse_kv_offload_string, pick_owned, pick_string, pick_string_owned, pick_value,
+    reject_unsupported_hardware_controls, reject_unsupported_model_fit_controls,
+    resolve_bool_or_auto, resolve_field_string, resolve_field_value, resolve_prefix_cache,
+    throughput_macro_defaults,
 };
 use super::types::{
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
     BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
-    ResolvedSkippyConfig, ResolvedSkippyExecutionConfig, ResolvedThroughputConfig,
-    SkippyConfigResolveRequest,
+    ResolvedMultimodalConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
+    ResolvedThroughputConfig, SkippyConfigResolveRequest,
 };
 use crate::plugin::{
     BoolOrAuto, ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig,
 };
 
+#[cfg(test)]
 pub(crate) fn resolve_skippy_config(
     request: SkippyConfigResolveRequest<'_>,
 ) -> Result<ResolvedSkippyConfig> {
-    let context = ResolverContext::new(request);
+    let config_model_id = request.model_id.to_string();
+    resolve_skippy_config_for_selector(request, Some(&config_model_id))
+}
+
+pub(crate) fn resolve_skippy_config_for_selector(
+    request: SkippyConfigResolveRequest<'_>,
+    config_model_id: Option<&str>,
+) -> Result<ResolvedSkippyConfig> {
+    resolve_skippy_config_with_context(ResolverContext::new_for_selector(request, config_model_id))
+}
+
+fn resolve_skippy_config_with_context(
+    context: ResolverContext<'_>,
+) -> Result<ResolvedSkippyConfig> {
     validate_supported_model_fit_controls(&context)?;
     validate_supported_hardware_controls(&context)?;
 
-    let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
+    // Guard the size-tiered default so a model that cannot load quantised KV
+    // (Flash Attention off, or a head_dim not divisible by the block size)
+    // resolves to f16 instead of failing the context build. Explicit config /
+    // family defaults still take precedence in resolve_cache_type_* below and
+    // are intentionally not guarded here.
+    let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes)
+        .guarded_for_model(context.request.compact_meta);
     let hardware = resolve_hardware_config(&context)?;
     let family_policy = family_policy_for_model_path(
         &hardware.resolved_model_path,
@@ -37,7 +58,7 @@ pub(crate) fn resolve_skippy_config(
     );
     let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
     let throughput = resolve_throughput_config(&context);
-    let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
+    let skippy = resolve_execution_config(&context);
     let speculative = resolve_speculative_config(
         context
             .model_entry
@@ -54,6 +75,7 @@ pub(crate) fn resolve_skippy_config(
         context.model_entry,
         context.request.request_defaults,
     )?;
+    let multimodal = resolve_multimodal_config(&context)?;
 
     Ok(ResolvedSkippyConfig {
         model_id: context.request.model_id.to_string(),
@@ -64,6 +86,58 @@ pub(crate) fn resolve_skippy_config(
         skippy,
         speculative,
         request_defaults: resolved_request,
+        multimodal,
+    })
+}
+
+fn resolve_multimodal_config(context: &ResolverContext<'_>) -> Result<ResolvedMultimodalConfig> {
+    let model = context
+        .model_entry
+        .and_then(|entry| entry.multimodal.as_ref());
+    let defaults = context.defaults.and_then(|value| value.multimodal.as_ref());
+    let projector_use_gpu = resolve_bool_or_auto(
+        model
+            .and_then(|value| value.mmproj_offload.as_ref())
+            .or_else(|| defaults.and_then(|value| value.mmproj_offload.as_ref())),
+        "multimodal.mmproj_offload",
+    )?;
+    let policy = pick_string_owned(
+        model.and_then(|value| value.glm_dsa_policy.as_deref()),
+        defaults.and_then(|value| value.glm_dsa_policy.as_deref()),
+        Some("auto"),
+    );
+    let glm_dsa_policy = match policy.as_str() {
+        "auto" => skippy_protocol::GlmDsaPolicy::Auto,
+        "v1" => skippy_protocol::GlmDsaPolicy::V1,
+        other => bail!("multimodal.glm_dsa_policy must be \"auto\" or \"v1\", got {other:?}"),
+    };
+    Ok(ResolvedMultimodalConfig {
+        projector_url: pick_owned(
+            model.and_then(|value| value.mmproj_url.clone()),
+            defaults.and_then(|value| value.mmproj_url.clone()),
+        ),
+        projector_use_gpu,
+        media_marker: pick_owned(
+            model.and_then(|value| value.media_marker.clone()),
+            defaults.and_then(|value| value.media_marker.clone()),
+        ),
+        image_min_tokens: pick_owned(
+            model.and_then(|value| value.image_min_tokens),
+            defaults.and_then(|value| value.image_min_tokens),
+        ),
+        image_max_tokens: pick_owned(
+            model.and_then(|value| value.image_max_tokens),
+            defaults.and_then(|value| value.image_max_tokens),
+        ),
+        batch_max_tokens: pick_owned(
+            model.and_then(|value| value.batch_max_tokens),
+            defaults.and_then(|value| value.batch_max_tokens),
+        ),
+        glm_dsa_policy,
+        generation_signal_window: pick_owned(
+            model.and_then(|value| value.generation_signal_window),
+            defaults.and_then(|value| value.generation_signal_window),
+        ),
     })
 }
 
@@ -78,13 +152,25 @@ struct ResolverContext<'a> {
 }
 
 impl<'a> ResolverContext<'a> {
-    fn new(request: SkippyConfigResolveRequest<'a>) -> Self {
+    fn new_for_selector(
+        request: SkippyConfigResolveRequest<'a>,
+        config_model_id: Option<&str>,
+    ) -> Self {
+        let model_entry = config_model_id.and_then(|selector| {
+            request
+                .mesh_config
+                .models
+                .iter()
+                .find(|entry| entry.model == selector)
+        });
+        Self::with_model_entry(request, model_entry)
+    }
+
+    fn with_model_entry(
+        request: SkippyConfigResolveRequest<'a>,
+        model_entry: Option<&'a ModelConfigEntry>,
+    ) -> Self {
         let mesh_config = request.mesh_config;
-        let model_entry = mesh_config
-            .models
-            .iter()
-            .find(|entry| entry.model == request.model_id)
-            .or_else(|| find_model_entry_by_resolved_path(mesh_config, request.model_path));
         let defaults = mesh_config.defaults.as_ref();
         let model_fit = model_entry.and_then(|entry| entry.model_fit.as_ref());
         let global_model_fit = defaults.and_then(|value| value.model_fit.as_ref());
@@ -99,32 +185,6 @@ impl<'a> ResolverContext<'a> {
             global_model_fit,
             model_throughput,
             global_throughput,
-        }
-    }
-}
-
-fn find_model_entry_by_resolved_path<'a>(
-    mesh_config: &'a crate::plugin::MeshConfig,
-    model_path: &Path,
-) -> Option<&'a ModelConfigEntry> {
-    let requested_path = comparable_path(model_path);
-    mesh_config.models.iter().find(|entry| {
-        entry
-            .hardware
-            .as_ref()
-            .and_then(|hardware| hardware.model_path.as_deref())
-            .is_some_and(|configured| comparable_path(Path::new(configured)) == requested_path)
-    })
-}
-
-fn comparable_path(path: &Path) -> PathBuf {
-    match path.canonicalize() {
-        Ok(canonical) => canonical,
-        Err(e) => {
-            tracing::warn!(
-                "failed to canonicalize path {path:?}: {e}; using raw path for config entry lookup, which may miss entries"
-            );
-            path.to_path_buf()
         }
     }
 }
@@ -191,6 +251,18 @@ fn resolve_model_fit_config(
     let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
     let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
     let kv_offload = resolve_kv_offload(context, &kv);
+    let kv_offload_resolved = parse_kv_offload_string(&kv_offload);
+    let kv_unified = resolve_kv_unified(context)?;
+    let swa_full = pick_owned(
+        context.model_fit.and_then(|fit| fit.swa_full),
+        context.global_model_fit.and_then(|fit| fit.swa_full),
+    );
+    let cache_idle_slots = pick_owned(
+        context.model_fit.and_then(|fit| fit.cache_idle_slots),
+        context
+            .global_model_fit
+            .and_then(|fit| fit.cache_idle_slots),
+    );
     let flash_attention = context
         .model_fit
         .and_then(|fit| fit.flash_attention)
@@ -207,8 +279,28 @@ fn resolve_model_fit_config(
         kv_cache_policy: kv.effective_policy,
         prefix_cache,
         kv_offload,
+        kv_offload_resolved,
+        kv_unified,
+        swa_full,
+        cache_idle_slots,
         flash_attention,
     })
+}
+
+fn resolve_kv_unified(context: &ResolverContext<'_>) -> Result<Option<bool>> {
+    let model = resolve_bool_or_auto(
+        context.model_fit.and_then(|fit| fit.kv_unified.as_ref()),
+        "model_fit.kv_unified",
+    )?;
+    if model.is_some() {
+        return Ok(model);
+    }
+    resolve_bool_or_auto(
+        context
+            .global_model_fit
+            .and_then(|fit| fit.kv_unified.as_ref()),
+        "defaults.model_fit.kv_unified",
+    )
 }
 
 struct KvDefaults {
@@ -233,6 +325,25 @@ fn resolve_kv_defaults(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) 
     }
 }
 
+fn guarded_family_default_kv_cache_type(
+    context: &ResolverContext<'_>,
+    family_policy: &super::super::family_policy::FamilyPolicy,
+) -> Option<&'static str> {
+    family_policy
+        .default_kv_cache_type
+        .and_then(|default| {
+            crate::models::gguf::GgufKvCacheQuant::from_llama_args(default, default)
+        })
+        .map(|quant| {
+            context
+                .request
+                .compact_meta
+                .map(|meta| meta.compatible_default_kv_cache_quant(quant))
+                .unwrap_or(quant)
+        })
+        .map(|quant| quant.k.as_llama_arg())
+}
+
 fn resolve_cache_type_k(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
@@ -245,7 +356,10 @@ fn resolve_cache_type_k(
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = family_policy.default_kv_cache_type {
+    // Guard the family default against the model's quantised-KV compatibility
+    // so an unloadable family default degrades to f16 instead of failing the
+    // context build. Explicit config above and below stays unguarded.
+    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
@@ -281,7 +395,7 @@ fn resolve_cache_type_v(
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = family_policy.default_kv_cache_type {
+    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
@@ -356,6 +470,38 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         global_hardware.and_then(|hardware| hardware.mlock),
     )
     .unwrap_or(false);
+    let repack = pick_owned(
+        model_hardware.and_then(|hardware| hardware.repack),
+        global_hardware.and_then(|hardware| hardware.repack),
+    )
+    .unwrap_or(false);
+    let op_offload = pick_owned(
+        model_hardware.and_then(|hardware| hardware.op_offload),
+        global_hardware.and_then(|hardware| hardware.op_offload),
+    );
+    let no_host_buffer = pick_owned(
+        model_hardware.and_then(|hardware| hardware.no_host_buffer),
+        global_hardware.and_then(|hardware| hardware.no_host_buffer),
+    )
+    .unwrap_or(false);
+    let check_tensors = pick_owned(
+        model_hardware.and_then(|hardware| hardware.check_tensors),
+        global_hardware.and_then(|hardware| hardware.check_tensors),
+    )
+    .unwrap_or(false);
+    let direct_io = pick_owned(
+        model_hardware.and_then(|hardware| hardware.direct_io),
+        global_hardware.and_then(|hardware| hardware.direct_io),
+    )
+    .unwrap_or(false);
+    let main_gpu = pick_owned(
+        model_hardware.and_then(|hardware| hardware.main_gpu),
+        global_hardware.and_then(|hardware| hardware.main_gpu),
+    );
+    let split_mode = resolve_split_mode(
+        model_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
+        global_hardware.and_then(|hardware| hardware.split_mode.as_deref()),
+    )?;
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
         global_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -387,6 +533,13 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHard
         gpu_layers,
         mmap,
         mlock,
+        repack,
+        op_offload,
+        no_host_buffer,
+        check_tensors,
+        direct_io,
+        main_gpu,
+        split_mode,
         fit_target_mib,
         resolved_model_path,
         projector_path,
@@ -405,6 +558,25 @@ fn resolve_mmap_override(
         Some(BoolOrAuto::String(value)) if value.eq_ignore_ascii_case("auto") => None,
         Some(BoolOrAuto::String(_)) => bail!("hardware.mmap must be a boolean or \"auto\""),
     })
+}
+
+fn resolve_split_mode(
+    model_split_mode: Option<&str>,
+    global_split_mode: Option<&str>,
+) -> Result<skippy_protocol::SplitMode> {
+    match model_split_mode.or(global_split_mode) {
+        None => Ok(skippy_protocol::SplitMode::Auto),
+        Some(value) if value.eq_ignore_ascii_case("auto") => Ok(skippy_protocol::SplitMode::Auto),
+        Some(value) if value.eq_ignore_ascii_case("none") => Ok(skippy_protocol::SplitMode::None),
+        Some(value) if value.eq_ignore_ascii_case("layer") => Ok(skippy_protocol::SplitMode::Layer),
+        Some(value) if value.eq_ignore_ascii_case("row") => Ok(skippy_protocol::SplitMode::Row),
+        Some(value) if value.eq_ignore_ascii_case("tensor") => {
+            Ok(skippy_protocol::SplitMode::Tensor)
+        }
+        Some(other) => bail!(
+            "hardware.split_mode must be \"auto\", \"none\", \"layer\", \"row\", or \"tensor\", got {other:?}"
+        ),
+    }
 }
 
 fn resolve_projector_path(context: &ResolverContext<'_>) -> Option<PathBuf> {
@@ -529,18 +701,10 @@ fn resolve_continuous_batching(
     )
 }
 
-fn resolve_execution_config(
-    context: &ResolverContext<'_>,
-    family_wire_dtype: StageWireDType,
-) -> ResolvedSkippyExecutionConfig {
+fn resolve_execution_config(context: &ResolverContext<'_>) -> ResolvedSkippyExecutionConfig {
     let model_skippy = context.model_entry.and_then(|entry| entry.skippy.as_ref());
     let global_skippy = context.defaults.and_then(|value| value.skippy.as_ref());
 
-    let activation_wire_dtype = resolve_wire_dtype(
-        model_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()),
-        global_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()),
-        family_wire_dtype,
-    );
     let binary_stage_transport = pick_string_owned(
         model_skippy.and_then(|skippy| skippy.binary_stage_transport.as_deref()),
         global_skippy.and_then(|skippy| skippy.binary_stage_transport.as_deref()),
@@ -561,16 +725,10 @@ fn resolve_execution_config(
         model_skippy.and_then(|skippy| skippy.prefill_chunk_schedule.clone()),
         global_skippy.and_then(|skippy| skippy.prefill_chunk_schedule.clone()),
     );
-    let activation_wire_dtype_explicit = model_skippy
-        .and_then(|skippy| skippy.activation_wire_dtype.as_deref())
-        .or_else(|| global_skippy.and_then(|skippy| skippy.activation_wire_dtype.as_deref()))
-        .is_some_and(|value| !value.eq_ignore_ascii_case("auto"));
     let prefill_controls_explicit = model_skippy.is_some_and(has_explicit_prefill_controls)
         || global_skippy.is_some_and(has_explicit_prefill_controls);
 
     ResolvedSkippyExecutionConfig {
-        activation_wire_dtype,
-        activation_wire_dtype_explicit,
         binary_stage_transport,
         prefill_chunking,
         prefill_chunk_size,

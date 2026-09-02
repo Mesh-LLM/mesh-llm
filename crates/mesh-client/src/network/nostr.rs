@@ -391,7 +391,7 @@ pub fn smart_auto(
 }
 
 fn parse_size_gb(s: &str) -> f64 {
-    s.trim_end_matches("GB").parse::<f64>().unwrap_or(0.0)
+    mesh_llm_types::models::parse_gb_suffix_size(s)
 }
 
 fn model_tiers() -> Vec<(String, f64)> {

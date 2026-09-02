@@ -165,7 +165,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.LLAMA_STAGE_BUILD_DIR }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-abi-static-metal-${{ steps.native_toolchain.outputs.epoch }}-${{ hashFiles('scripts/build-mac.sh', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', 'just/**', '.github/cache-version.txt') }}
       - name: Prepare patched llama.cpp ABI checkout
         if: ${{ matrix.check.kind == 'unit' }}
         run: scripts/prepare-llama.sh pinned

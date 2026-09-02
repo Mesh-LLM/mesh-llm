@@ -17,7 +17,6 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 pub(in crate::frontend) fn ensure_requested_model(
     advertised_model_id: &str,
@@ -105,13 +104,17 @@ pub(in crate::frontend) fn attrs_insert_prefill_chunk_policy(
             json!(schedule.label()),
         );
     }
-    if let Some((start, step, max)) = policy.adaptive_params() {
+    if let Some((start, step, max, target_ms)) = policy.adaptive_params() {
         attrs.insert(
             "llama_stage.prefill_adaptive_start".to_string(),
             json!(start),
         );
         attrs.insert("llama_stage.prefill_adaptive_step".to_string(), json!(step));
         attrs.insert("llama_stage.prefill_adaptive_max".to_string(), json!(max));
+        attrs.insert(
+            "llama_stage.prefill_adaptive_target_ms".to_string(),
+            json!(target_ms),
+        );
     }
     if min_chunk_size != usize::MAX {
         attrs.insert(
@@ -308,27 +311,9 @@ pub(in crate::frontend) fn parsed_tool_calls_from_message_value(
     })
 }
 
+/// Compatibility wrapper for the pre-canonical internal call path.
 pub(in crate::frontend) fn ensure_tool_call_ids(tool_calls: &mut [Value]) {
-    let mut emitted_ids = HashSet::new();
-    for tool_call in tool_calls {
-        let Some(object) = tool_call.as_object_mut() else {
-            continue;
-        };
-        let valid_unseen_id = object
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty())
-            .filter(|id| emitted_ids.insert((*id).to_string()));
-        if valid_unseen_id.is_none() {
-            let id = loop {
-                let candidate = format!("call_{}", uuid::Uuid::new_v4().simple());
-                if emitted_ids.insert(candidate.clone()) {
-                    break candidate;
-                }
-            };
-            object.insert("id".to_string(), Value::String(id));
-        }
-    }
+    openai_frontend::ensure_tool_call_ids(tool_calls);
 }
 
 pub(in crate::frontend) fn string_field(value: &Value, field: &str) -> Option<String> {

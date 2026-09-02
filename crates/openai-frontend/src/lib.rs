@@ -21,7 +21,8 @@ pub use backend::{
 pub use chat::{
     AssistantMessage, ChatCompletionChoice, ChatCompletionChunk, ChatCompletionChunkChoice,
     ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    MessageContent, MessageContentPart, message_content_to_text, messages_to_plain_prompt,
+    MessageContent, MessageContentPart, ensure_tool_call_ids, message_content_to_text,
+    messages_to_plain_prompt,
 };
 pub use common::{
     AgentSessionIdentity, AgentSessionSource, FinishReason, PromptCacheRetention, ReasoningConfig,
@@ -50,17 +51,18 @@ pub use lifecycle::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
     OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
     OpenAiTerminalResult, OpenAiUsage, REQUEST_ID_HEADER, RequestId, generate_request_id,
-    parse_request_id, parse_request_id_header, request_id_from_headers_or_generate,
-    request_id_response_header,
+    parse_request_id, parse_request_id_header, parse_single_request_id,
+    request_id_from_headers_or_generate, request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use responses::{
     NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,
     chat_usage_to_responses_usage, normalize_openai_compat_request, parse_chat_stream_chunk,
-    responses_stream_completed_event, responses_stream_completed_event_with_sequence,
-    responses_stream_content_part_added_event, responses_stream_content_part_done_event,
-    responses_stream_created_event, responses_stream_created_event_with_sequence,
-    responses_stream_delta_event, responses_stream_delta_event_with_logprobs,
+    request_body_requires_json_normalization, responses_stream_completed_event,
+    responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
+    responses_stream_content_part_done_event, responses_stream_created_event,
+    responses_stream_created_event_with_sequence, responses_stream_delta_event,
+    responses_stream_delta_event_with_logprobs,
     responses_stream_delta_event_with_logprobs_and_sequence,
     responses_stream_output_item_added_event, responses_stream_output_item_done_event,
     responses_stream_reasoning_delta_event_with_sequence, responses_stream_text_done_event,

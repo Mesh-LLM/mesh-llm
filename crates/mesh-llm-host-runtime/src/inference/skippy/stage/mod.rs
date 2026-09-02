@@ -14,7 +14,7 @@ use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
 use skippy_server::{EmbeddedServerHandle, binary_transport::BinaryStageOptions};
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -40,6 +40,7 @@ struct StageControlState {
     coordinator_claims: ClaimFence,
     preparations: Arc<Mutex<HashMap<String, StagePreparationStatus>>>,
     preparation_tasks: HashMap<String, StagePreparationTask>,
+    readiness_probe: Option<StageReadinessProbe>,
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
 }
@@ -47,6 +48,30 @@ struct StageControlState {
 struct StagePreparationTask {
     cancelled: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+struct StageReadinessProbe {
+    cancelled: Arc<AtomicBool>,
+    handle: JoinHandle<Result<()>>,
+}
+
+pub(crate) struct StageControlHandle {
+    sender: mpsc::UnboundedSender<StageControlCommand>,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: JoinHandle<Result<()>>,
+}
+
+impl StageControlHandle {
+    pub(crate) fn sender(&self) -> mpsc::UnboundedSender<StageControlCommand> {
+        self.sender.clone()
+    }
+
+    pub(crate) async fn shutdown(mut self) -> Result<()> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.task.await.context("join stage control loop")?
+    }
 }
 
 #[async_trait::async_trait]
@@ -57,23 +82,68 @@ pub(crate) trait StagePackagePrefetcher: Send + Sync {
 pub(crate) fn spawn_stage_control_loop(
     package_prefetcher: Option<Arc<dyn StagePackagePrefetcher>>,
     telemetry: super::SkippyTelemetryOptions,
-) -> mpsc::UnboundedSender<StageControlCommand> {
+) -> StageControlHandle {
+    spawn_stage_control_loop_with_state(StageControlState {
+        package_prefetcher,
+        telemetry,
+        ..Default::default()
+    })
+}
+
+fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageControlHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<StageControlCommand>();
-    tokio::spawn(async move {
-        let mut state = StageControlState {
-            package_prefetcher,
-            telemetry,
-            ..Default::default()
-        };
-        while let Some(command) = rx.recv().await {
-            let result = state.handle(command.request).await;
-            let _ = command.resp.send(result);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => break,
+                command = rx.recv() => {
+                    let Some(command) = command else { break };
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => break,
+                        result = state.handle(command.request) => {
+                            let _ = command.resp.send(result);
+                        }
+                    }
+                }
+            }
         }
+        state.shutdown().await
     });
-    tx
+    StageControlHandle {
+        sender: tx,
+        shutdown: Some(shutdown_tx),
+        task,
+    }
 }
 
 impl StageControlState {
+    async fn shutdown(&mut self) -> Result<()> {
+        for (_, task) in self.preparation_tasks.drain() {
+            task.cancelled.store(true, Ordering::Release);
+            task.handle.abort();
+            let _ = task.handle.await;
+        }
+        if let Some(mut probe) = self.readiness_probe.take() {
+            probe.cancelled.store(true, Ordering::Release);
+            let _ = (&mut probe.handle).await;
+        }
+        let mut first_error = None;
+        for (_, stage) in self.stages.drain() {
+            if let Err(error) = stage.server.shutdown().await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
     async fn handle(&mut self, request: StageControlRequest) -> Result<StageControlResponse> {
         match request {
             StageControlRequest::Claim(claim) => self
@@ -81,6 +151,10 @@ impl StageControlState {
                 .await
                 .map(StageControlResponse::ClaimAccepted),
             StageControlRequest::Load(load) => {
+                self.load(load).await.map(StageControlResponse::Ready)
+            }
+            StageControlRequest::LoadLocal(mut load) => {
+                load.local_source_required = true;
                 self.load(load).await.map(StageControlResponse::Ready)
             }
             StageControlRequest::Stop(stop) => {
@@ -147,7 +221,22 @@ impl StageControlState {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let source = resolve_inventory_source(&request);
+        let source_request = request.clone();
+        let source =
+            match tokio::task::spawn_blocking(move || resolve_inventory_source(&source_request))
+                .await
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    tracing::warn!(
+                        model_id = request.model_id,
+                        package_ref = request.package_ref,
+                        error = %error,
+                        "GGUF inventory verification task failed"
+                    );
+                    None
+                }
+            };
         let layer_count = source
             .as_ref()
             .map(|source| source.layer_count)
@@ -181,6 +270,15 @@ impl StageControlState {
         } else {
             Vec::new()
         };
+        let content_addressed_ref =
+            crate::inference::skippy::is_content_addressed_gguf_ref(&request.package_ref);
+        let local_source_required = crate::inference::skippy::effective_local_source_required(
+            &request.model_id,
+            request.runtime_profile.as_deref(),
+            request.local_source_required || content_addressed_ref,
+        );
+        let content_addressed_local_source =
+            local_source_required.then_some(content_addressed_ref && source.is_some());
         StageLayerInventory {
             model_id: request.model_id,
             package_ref: request.package_ref,
@@ -190,10 +288,16 @@ impl StageControlState {
             available_ranges,
             missing_ranges,
             preparing_ranges,
-            source_model_path: source
-                .as_ref()
-                .map(|source| source.path.to_string_lossy().to_string()),
+            source_model_path: (!local_source_required && !content_addressed_ref)
+                .then(|| {
+                    source
+                        .as_ref()
+                        .map(|source| source.path.to_string_lossy().to_string())
+                })
+                .flatten(),
             source_model_bytes: source.as_ref().and_then(|source| source.bytes),
+            source_model_sha256: source.as_ref().and_then(|source| source.sha256.clone()),
+            content_addressed_local_source,
             source_model_kind: source
                 .as_ref()
                 .map(|source| source.kind)
@@ -203,7 +307,7 @@ impl StageControlState {
 
     async fn prepare(
         &mut self,
-        request: StagePrepareRequest,
+        mut request: StagePrepareRequest,
     ) -> Result<StagePrepareAcceptedResponse> {
         if let Some(error) = self.validate_load_claim(&request.load) {
             return Ok(StagePrepareAcceptedResponse {
@@ -215,6 +319,27 @@ impl StageControlState {
                 ),
                 error: Some(error),
             });
+        }
+        let mut load = request.load.clone();
+        let verified_load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage prepare source task")?;
+        match verified_load {
+            Ok(load) => request.load = load,
+            Err(error) => {
+                let error = format!("{error:#}");
+                return Ok(StagePrepareAcceptedResponse {
+                    accepted: false,
+                    status: preparation_status_from_load(
+                        &request.load,
+                        StagePreparationState::Failed,
+                        Some(error.clone()),
+                    ),
+                    error: Some(error),
+                });
+            }
         }
         let key = stage_key(
             &request.load.topology_id,
@@ -328,7 +453,7 @@ impl StageControlState {
         }
     }
 
-    async fn load(&mut self, load: StageLoadRequest) -> Result<StageReadyResponse> {
+    async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
         anyhow::ensure!(
             load.backend == "skippy",
             "unsupported stage backend '{}'",
@@ -341,6 +466,11 @@ impl StageControlState {
                 error: Some(error),
             });
         }
+        load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage load source task")??;
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
         if let Some(existing) = self.stages.remove(&key) {
             existing.server.shutdown().await?;
@@ -349,6 +479,27 @@ impl StageControlState {
         let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
+        if effective_load.local_source_required {
+            let expected_sha256 = effective_load
+                .source_model_sha256
+                .as_deref()
+                .context("local-required stage load is missing expected SHA-256")?;
+            let identity = crate::inference::skippy::verify_registered_content_source(
+                &effective_load.model_id,
+                &effective_load.package_ref,
+                &effective_load.manifest_sha256,
+                expected_sha256,
+            )?;
+            effective_load.model_path = Some(
+                identity
+                    .source_model_path
+                    .to_str()
+                    .context("verified local GGUF path is not valid UTF-8")?
+                    .to_string(),
+            );
+            effective_load.source_model_bytes = Some(identity.source_model_bytes);
+            effective_load.source_model_sha256 = Some(identity.source_model_sha256);
+        }
         super::configure_materialized_stage_cache();
         let package_request = effective_load.clone();
         let mut resolved_package = None;
@@ -368,7 +519,6 @@ impl StageControlState {
             topology: None,
             bind_addr,
             activation_width: effective_load.activation_width,
-            wire_dtype: effective_load.wire_dtype.into(),
             metrics_otlp_grpc: self.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: self.telemetry.queue_capacity,
             telemetry_level: self.telemetry.level,
@@ -378,23 +528,11 @@ impl StageControlState {
             downstream_wire_condition: super::benchmark_downstream_wire_condition()?,
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
+            continuous_batching: effective_load.continuous_batching,
             openai: None,
         });
-        if let Err(error) =
-            wait_for_binary_stage_ready(bind_addr, stage_load_timeout(&effective_load)).await
-        {
-            let last_error = server.status().last_error;
-            let context = stage_load_failure_context(
-                &effective_load,
-                "binary stage did not become ready",
-                last_error.as_deref(),
-            );
-            let _ = server.shutdown().await;
-            return Err(error.context(context));
-        }
-
         self.stages.insert(
-            key,
+            key.clone(),
             RunningStage {
                 load: effective_load.clone(),
                 server,
@@ -403,6 +541,35 @@ impl StageControlState {
                 _materialized_pin: None,
             },
         );
+        self.readiness_probe = Some(start_binary_stage_ready_probe(
+            bind_addr,
+            stage_load_timeout(&effective_load),
+        ));
+        let readiness_result = {
+            let probe = self
+                .readiness_probe
+                .as_mut()
+                .expect("binary stage readiness probe must remain registered while pending");
+            (&mut probe.handle)
+                .await
+                .context("join binary stage readiness probe")
+        };
+        self.readiness_probe.take();
+        if let Err(error) = readiness_result.and_then(|result| result) {
+            let stage = self
+                .stages
+                .remove(&key)
+                .expect("newly started stage must remain registered while readiness is pending");
+            let last_error = stage.server.status().last_error;
+            let context = stage_load_failure_context(
+                &effective_load,
+                "binary stage did not become ready",
+                last_error.as_deref(),
+            );
+            let _ = stage.server.shutdown().await;
+            return Err(error.context(context));
+        }
+
         let status = self
             .statuses(&StageStatusFilter {
                 topology_id: Some(effective_load.topology_id.clone()),
@@ -581,10 +748,13 @@ fn materialize_stage_bind_addr(bind_addr: SocketAddr) -> Result<SocketAddr> {
         .context("read reserved ephemeral stage bind address")
 }
 
-async fn wait_for_binary_stage_ready(bind_addr: SocketAddr, timeout: Duration) -> Result<()> {
-    tokio::task::spawn_blocking(move || probe_binary_stage_ready(bind_addr, timeout))
-        .await
-        .context("join binary stage readiness probe")?
+fn start_binary_stage_ready_probe(bind_addr: SocketAddr, timeout: Duration) -> StageReadinessProbe {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let probe_cancelled = Arc::clone(&cancelled);
+    let handle = tokio::task::spawn_blocking(move || {
+        probe_binary_stage_ready(bind_addr, timeout, &probe_cancelled)
+    });
+    StageReadinessProbe { cancelled, handle }
 }
 
 pub(crate) fn stage_load_timeout(load: &StageLoadRequest) -> Duration {
@@ -640,15 +810,23 @@ fn stage_load_failure_context(
     )
 }
 
-fn probe_binary_stage_ready(bind_addr: SocketAddr, timeout: Duration) -> Result<()> {
+fn probe_binary_stage_ready(
+    bind_addr: SocketAddr,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    const PROBE_IO_TIMEOUT: Duration = Duration::from_secs(2);
     let deadline = std::time::Instant::now() + timeout;
     let mut last_error = None;
     while std::time::Instant::now() < deadline {
-        match std::net::TcpStream::connect(bind_addr) {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(anyhow!("binary stage readiness probe cancelled"));
+        }
+        match std::net::TcpStream::connect_timeout(&bind_addr, PROBE_IO_TIMEOUT) {
             Ok(mut stream) => {
                 stream.set_nodelay(true).ok();
-                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-                stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+                stream.set_read_timeout(Some(PROBE_IO_TIMEOUT)).ok();
+                stream.set_write_timeout(Some(PROBE_IO_TIMEOUT)).ok();
                 match skippy_protocol::binary::recv_ready(&mut stream) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
@@ -661,7 +839,12 @@ fn probe_binary_stage_ready(bind_addr: SocketAddr, timeout: Duration) -> Result<
                 last_error = Some(anyhow!(error).context("connect binary stage listener"));
             }
         }
-        std::thread::sleep(Duration::from_millis(250));
+        for _ in 0..25 {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(anyhow!("binary stage readiness probe cancelled"));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     Err(last_error
         .unwrap_or_else(|| anyhow!("timed out waiting for binary stage ready at {bind_addr}"))
@@ -703,7 +886,8 @@ fn stage_config(
             .or_else(|| load.model_path.clone()),
         source_model_sha256: materialized
             .map(|artifact| artifact.source_model_sha256.clone())
-            .or_else(|| package.map(|package| package.source_model_sha256.clone())),
+            .or_else(|| package.map(|package| package.source_model_sha256.clone()))
+            .or_else(|| load.source_model_sha256.clone()),
         source_model_bytes: materialized
             .and_then(|artifact| artifact.source_model_bytes)
             .or_else(|| package.and_then(|package| package.source_model_bytes))
@@ -712,6 +896,13 @@ fn stage_config(
         materialized_pinned: materialized.is_some(),
         model_path: load.model_path.clone(),
         projector_path: load.projector_path.clone(),
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker.clone(),
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: load.glm_dsa_policy,
+        generation_signal_window: load.generation_signal_window,
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
@@ -723,9 +914,20 @@ fn stage_config(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock,
+        repack: load.runtime_settings.repack,
+        op_offload: load.runtime_settings.op_offload,
+        no_host_buffer: load.runtime_settings.no_host_buffer,
+        check_tensors: load.runtime_settings.check_tensors,
+        direct_io: load.runtime_settings.direct_io,
+        main_gpu: load.runtime_settings.main_gpu,
+        split_mode: load.runtime_settings.split_mode,
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,
+        kv_offload: load.runtime_settings.kv_offload,
+        kv_unified: load.runtime_settings.kv_unified,
+        swa_full: load.runtime_settings.swa_full,
+        cache_idle_slots: load.runtime_settings.cache_idle_slots,
         filter_tensors_on_load: matches!(
             load.load_mode,
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
@@ -773,6 +975,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         skippy_server::EmbeddedState::Stopped => StageRuntimeState::Stopped,
         skippy_server::EmbeddedState::Failed => StageRuntimeState::Failed,
     };
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&stage.load.package_ref);
     StageStatusSnapshot {
         topology_id: stage.load.topology_id.clone(),
         run_id: stage.load.run_id.clone(),
@@ -780,17 +984,21 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         backend: stage.load.backend.clone(),
         package_ref: Some(stage.load.package_ref.clone()),
         manifest_sha256: Some(stage.load.manifest_sha256.clone()),
-        source_model_path: stage
-            .materialized
-            .as_ref()
-            .map(|artifact| artifact.source_model_path.clone())
-            .or_else(|| {
+        source_model_path: (!content_addressed_ref)
+            .then(|| {
                 stage
-                    .package
+                    .materialized
                     .as_ref()
-                    .map(|package| package.source_model_path.clone())
+                    .map(|artifact| artifact.source_model_path.clone())
+                    .or_else(|| {
+                        stage
+                            .package
+                            .as_ref()
+                            .map(|package| package.source_model_path.clone())
+                    })
+                    .or_else(|| stage.load.model_path.clone())
             })
-            .or_else(|| stage.load.model_path.clone()),
+            .flatten(),
         source_model_sha256: stage
             .materialized
             .as_ref()
@@ -800,7 +1008,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
                     .package
                     .as_ref()
                     .map(|package| package.source_model_sha256.clone())
-            }),
+            })
+            .or_else(|| stage.load.source_model_sha256.clone()),
         source_model_bytes: stage
             .materialized
             .as_ref()
@@ -817,7 +1026,9 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|artifact| artifact.path.to_string_lossy().to_string()),
         materialized_pinned: stage.materialized.is_some(),
-        projector_path: stage.load.projector_path.clone(),
+        projector_path: (!stage.load.local_source_required && !content_addressed_ref)
+            .then(|| stage.load.projector_path.clone())
+            .flatten(),
         stage_id: stage.load.stage_id.clone(),
         stage_index: stage.load.stage_index,
         layer_start: stage.load.layer_start,
@@ -825,7 +1036,6 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         state,
         bind_addr: server.bind_addr.to_string(),
         activation_width: stage.load.activation_width.max(0) as u32,
-        wire_dtype: stage.load.wire_dtype,
         selected_device: stage.load.selected_device.clone(),
         ctx_size: stage.load.ctx_size,
         lane_count: stage.load.lane_count,
@@ -861,7 +1071,6 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         state: StageRuntimeState::Stopped,
         bind_addr: String::new(),
         activation_width: 0,
-        wire_dtype: StageWireDType::F32,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,
@@ -877,6 +1086,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
 }
 
 fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatusSnapshot {
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref);
     StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -884,12 +1095,16 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         backend: load.backend.clone(),
         package_ref: Some(load.package_ref.clone()),
         manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: load.model_path.clone(),
-        source_model_sha256: None,
+        source_model_path: (!content_addressed_ref)
+            .then(|| load.model_path.clone())
+            .flatten(),
+        source_model_sha256: load.source_model_sha256.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
-        projector_path: load.projector_path.clone(),
+        projector_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.projector_path.clone())
+            .flatten(),
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
@@ -897,7 +1112,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         state: StageRuntimeState::Failed,
         bind_addr: load.bind_addr.clone(),
         activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -961,15 +1175,5 @@ fn preparation_status_from_cancel(cancel: StageCancelPrepareRequest) -> StagePre
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
-    }
-}
-
-impl From<StageWireDType> for skippy_protocol::binary::WireActivationDType {
-    fn from(value: StageWireDType) -> Self {
-        match value {
-            StageWireDType::F32 => Self::F32,
-            StageWireDType::F16 => Self::F16,
-            StageWireDType::Q8 => Self::Q8,
-        }
     }
 }

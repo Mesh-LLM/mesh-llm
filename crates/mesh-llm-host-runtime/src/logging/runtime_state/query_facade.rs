@@ -45,30 +45,33 @@ impl LoggingQueryFacade {
         self.service.registry_ref().snapshot_active()
     }
 
-    pub(crate) fn request(&self, request_id: &str) -> Result<Option<RequestRecord>, LogStoreError> {
+    pub(crate) fn request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<RequestRecordWithCaller>, LogStoreError> {
         #[cfg(test)]
         self.query_counter
             .point_requests
             .fetch_add(1, Ordering::Relaxed);
-        self.store.query_request(request_id)
+        self.store.query_request_with_caller(request_id)
     }
 
     pub(crate) fn requests_by_ids(
         &self,
         request_ids: &[String],
-    ) -> Result<Vec<RequestRecord>, LogStoreError> {
+    ) -> Result<Vec<RequestRecordWithCaller>, LogStoreError> {
         #[cfg(test)]
         self.query_counter
             .batch_requests
             .fetch_add(1, Ordering::Relaxed);
-        self.store.query_requests_by_ids(request_ids)
+        self.store.query_requests_by_ids_with_caller(request_ids)
     }
 
     pub(crate) fn requests(
         &self,
         query: &RequestQuery,
-    ) -> Result<QueryPage<RequestRecord>, LogStoreError> {
-        self.store.query_requests(query)
+    ) -> Result<QueryPage<RequestRecordWithCaller>, LogStoreError> {
+        self.store.query_requests_with_caller(query)
     }
 
     pub(crate) fn events(
@@ -124,8 +127,9 @@ impl LoggingQueryFacade {
         limit: Option<usize>,
         after_cursor: Option<&str>,
         filters: AuditEntryFilters,
-    ) -> Result<Page<AuditEntryRow>, LogStoreError> {
-        self.store.list_audit_entries(limit, after_cursor, filters)
+    ) -> Result<Page<AuditEntryDetail>, LogStoreError> {
+        self.store
+            .list_audit_entry_details(limit, after_cursor, filters)
     }
 
     pub(crate) fn audit_entries_after_sequence(
@@ -133,9 +137,9 @@ impl LoggingQueryFacade {
         after_sequence: u64,
         limit: usize,
         filters: AuditEntryFilters,
-    ) -> Result<Vec<AuditEntryRow>, LogStoreError> {
+    ) -> Result<Vec<AuditEntryDetail>, LogStoreError> {
         self.store
-            .list_audit_entries_after_sequence(after_sequence, limit, filters)
+            .list_audit_entry_details_after_sequence(after_sequence, limit, filters)
     }
 
     /// Read content only through the fail-open capture owner. The route core

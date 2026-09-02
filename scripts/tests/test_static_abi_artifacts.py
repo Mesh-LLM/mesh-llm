@@ -70,6 +70,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "libggml.a",
             "libggml-base.a",
             "libggml-cpu.a",
+            "libvendor-hash.a",
         ):
             self.assertIn(archive, build_script)
         self.assertIn("--require-prebuilt-llama", package_script)
@@ -94,6 +95,47 @@ class StaticAbiArtifactTests(unittest.TestCase):
         self.assertNotIn("--require-existing", normal_branch)
         self.assertIn("SKIPPY_LLAMA_AUTO_BUILD=0", package_script)
         self.assertIn("MESH_LLM_AUTO_BUILD_LLAMA=0", package_script)
+
+    def test_skippy_ffi_links_mtmd_hash_dependency_after_mtmd(self) -> None:
+        build_script = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+            encoding="utf-8",
+        )
+
+        mtmd_link = 'println!("cargo:rustc-link-lib=static=mtmd");'
+        hash_link = 'println!("cargo:rustc-link-lib=static=vendor-hash");'
+        self.assertIn('build_dir.join("vendor/hash")', build_script)
+        self.assertIn('"vendor/hash/libvendor-hash.a"', build_script)
+        self.assertIn('"vendor/hash/vendor-hash.lib"', build_script)
+        self.assertLess(
+            build_script.index(mtmd_link),
+            build_script.index(hash_link),
+        )
+
+    def test_skippy_ffi_uses_the_native_build_scripts_canonical_directory(self) -> None:
+        ffi_build = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+            encoding="utf-8",
+        )
+
+        self.assertIn('.arg("--print-build-dir")', ffi_build)
+        self.assertIn('.env("LLAMA_STAGE_BACKEND", backend)', ffi_build)
+        self.assertIn('.env("LLAMA_STAGE_LINK_MODE", "static")', ffi_build)
+        self.assertNotIn("sanitize_build_component", ffi_build)
+
+        for backend in ("cpu", "metal", "cuda", "rocm"):
+            environment = os.environ.copy()
+            environment["LLAMA_STAGE_BACKEND"] = backend
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],
+                cwd=ROOT,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            expected = Path(result.stdout.strip())
+            self.assertTrue(expected.is_absolute())
+            self.assertEqual(expected.parent, ROOT / ".deps" / "llama-build")
+            self.assertIn(f"static-{backend}", expected.name)
 
     def test_dynamic_output_probe_is_pipefail_safe(self) -> None:
         build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
@@ -131,6 +173,7 @@ class StaticAbiArtifactTests(unittest.TestCase):
             "ggml/src/libggml-base.a",
             "ggml/src/ggml-cpu/libggml-cpu.a",
             "tools/mtmd/libmtmd.a",
+            "vendor/hash/libvendor-hash.a",
         ):
             if relative == omit_archive:
                 continue
@@ -294,19 +337,26 @@ class StaticAbiArtifactTests(unittest.TestCase):
             self.assertIn("link-mode mismatch", result.stderr)
 
     def test_restore_rejects_incomplete_link_closure(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            download = self.write_artifact(
-                root,
-                omit_archive="common/libllama-common-base.a",
-            )
+        # Every required archive is load-bearing for the link, so omitting any
+        # one of them must fail the restore. vendor-hash is listed explicitly:
+        # it was added after the others and only the Rust link line consumes
+        # it, so a silent drop reappears as an undefined hash_sha256_hex far
+        # from here.
+        for omitted in (
+            "common/libllama-common-base.a",
+            "vendor/hash/libvendor-hash.a",
+        ):
+            with self.subTest(omitted=omitted):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    download = self.write_artifact(root, omit_archive=omitted)
 
-            result = self.restore(
-                download,
-                root / "restored" / "build-stage-abi-static",
-            )
+                    result = self.restore(
+                        download,
+                        root / "restored" / "build-stage-abi-static",
+                    )
 
-            self.assertNotEqual(result.returncode, 0)
+                    self.assertNotEqual(result.returncode, 0)
 
     def test_restore_rejects_toolchain_epoch_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

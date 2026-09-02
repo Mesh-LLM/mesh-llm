@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { LogsApiClient, type LogAuditQuery, type LogsCapability } from '@/features/logs/api/client'
 import type { LogAuditEntry, LogAuditPage } from '@/features/logs/api/schemas'
 import { logsKeys } from '@/features/logs/api/use-logs-ledger-query'
@@ -52,9 +53,17 @@ export async function loadCompleteAudits(query: LogAuditQuery, mode: DataMode): 
 
 export function useLogsAuditQuery(query: LogAuditQuery = {}) {
   const dataMode = useDataMode()
-  return useQuery({
+  const retainedSuccessfulData = useRef<LogsCapability<LogAuditPage> | undefined>(undefined)
+  const result = useQuery({
     queryKey: logsKeys.audit(query, dataMode.mode),
     queryFn: () => loadCompleteAudits(query, dataMode.mode),
+    placeholderData: (previousData) => previousData ?? retainedSuccessfulData.current,
     staleTime: 10_000
   })
+
+  useEffect(() => {
+    if (result.data !== undefined && !result.isPlaceholderData) retainedSuccessfulData.current = result.data
+  }, [result.data, result.isPlaceholderData])
+
+  return result
 }

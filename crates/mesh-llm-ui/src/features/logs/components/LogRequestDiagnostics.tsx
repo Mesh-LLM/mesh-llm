@@ -45,7 +45,7 @@ const requestQueryCopy = {
 function RequestQueryState({ state }: { readonly state: RequestQueryStateKind }) {
   return (
     <div
-      className="rounded-[var(--radius)] border border-border bg-panel p-3 type-body text-fg-dim"
+      className="min-w-0 break-words rounded-[var(--radius)] border border-border bg-panel px-[var(--panel-x)] py-[var(--panel-y)] type-body text-fg-dim"
       data-diagnostic-state={state}
       role={state === 'error' ? 'alert' : 'status'}
     >
@@ -65,7 +65,7 @@ function QueryNotice({
 }) {
   if (!loading && !error) return null
   return (
-    <p className="type-caption text-fg-dim" role={error ? 'alert' : 'status'}>
+    <p className="min-w-0 break-words type-caption text-fg-dim" role={error ? 'alert' : 'status'}>
       {error ? `${label} could not be loaded.` : `Loading ${label}.`}
     </p>
   )
@@ -101,13 +101,13 @@ export function LogRequestDiagnostics(props: LogRequestDiagnosticsProps) {
     props.request.outcome === 'completed' && diagnosticEvidence.evidenceComplete && !diagnosticEvidence.hasErrorEvidence
 
   return (
-    <section aria-label="Request diagnostics" className="space-y-4">
+    <section aria-label="Request diagnostics" className="min-w-0 space-y-[var(--shell-normal)]">
       <LogRequestDiagnosticSummary evidence={diagnosticEvidence} request={props.request} successful={successful} />
 
       {successful ? null : (
         <>
           {!eventsReady || !attemptsReady ? (
-            <div className="grid gap-1 rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 p-3 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-2 rounded-[var(--radius)] border border-border-soft bg-panel-strong/40 px-[var(--panel-x)] py-[var(--panel-y)] sm:grid-cols-2">
               <QueryNotice
                 error={props.eventsError}
                 label="Diagnostic lifecycle evidence"

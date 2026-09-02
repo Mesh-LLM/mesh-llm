@@ -1,3 +1,4 @@
+use super::attestation::{split_stage_source_is_ready, strict_ready_status_matches};
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
     RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
@@ -18,23 +19,74 @@ use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use skippy_server::serving_hooks::SharedModelServingHooksFactory;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(super) const MIN_STAGE_SOURCE_PREPARE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STAGE_SOURCE_PREPARE_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
 const STAGE_SOURCE_MIN_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
+const DEFAULT_STAGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DEFAULT_STAGE_READINESS_INTERVAL: Duration = Duration::from_secs(2);
+pub(super) const DEFAULT_STAGE_HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+pub(super) async fn await_stage_startup<F, T>(
+    timeout: Duration,
+    future: F,
+) -> std::result::Result<T, tokio::time::error::Elapsed>
+where
+    F: Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future).await
+}
+
+pub(super) async fn wait_for_stage_readiness_poll(interval: Duration) {
+    tokio::time::sleep(interval).await;
+}
+
+pub(super) fn stage_health_ticks(interval: Duration) -> tokio::time::Interval {
+    tokio::time::interval(interval)
+}
+
+pub(super) fn peer_supports_strict_local_load(
+    local_node_id: iroh::EndpointId,
+    target_node_id: iroh::EndpointId,
+    peers: &[mesh::PeerInfo],
+) -> bool {
+    target_node_id == local_node_id
+        || peers
+            .iter()
+            .any(|peer| peer.id == target_node_id && peer.local_gguf_content_id_supported)
+}
+
+async fn ensure_peer_supports_strict_local_load(
+    node: &mesh::Node,
+    target_node_id: iroh::EndpointId,
+    stage_id: &str,
+) -> Result<()> {
+    let peers = node.peers().await;
+    anyhow::ensure!(
+        peer_supports_strict_local_load(node.id(), target_node_id, &peers),
+        "stage {stage_id} peer {} no longer advertises content-addressed local GGUF support",
+        target_node_id.fmt_short()
+    );
+    Ok(())
+}
 
 pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) mesh_config: &'a plugin::MeshConfig,
     pub(super) model_ref: &'a str,
+    pub(super) config_model_id: Option<&'a str>,
+    pub(super) runtime_profile: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) package: &'a skippy::SkippyPackageIdentity,
     pub(super) generation: &'a SplitTopologyGeneration,
     pub(super) projector_path: Option<String>,
     pub(super) ctx_size: u32,
+    pub(super) compact_meta: &'a models::gguf::GgufCompactMeta,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<&'a str>,
     pub(super) slots: usize,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -45,6 +97,7 @@ pub(super) struct SplitGenerationLoadSpec<'a> {
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    pub(super) local_source_required: bool,
 }
 
 pub(super) struct SplitGenerationLoadSettings<'a> {
@@ -53,7 +106,57 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
     pub(super) load_mode: LoadMode,
     pub(super) activation_width: i32,
-    pub(super) activation_wire_dtype: skippy::StageWireDType,
+    pub(super) startup_timeout: Duration,
+    pub(super) readiness_interval: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StageLifecycleIntervals {
+    pub(super) startup_timeout: Duration,
+    pub(super) readiness_interval: Duration,
+    pub(super) health_interval: Duration,
+}
+
+pub(super) fn configured_stage_lifecycle_intervals(
+    mesh_config: &plugin::MeshConfig,
+    config_model_id: Option<&str>,
+) -> StageLifecycleIntervals {
+    let model = config_model_id.and_then(|selector| model_skippy_config(mesh_config, selector));
+    let defaults = mesh_config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    StageLifecycleIntervals {
+        startup_timeout: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_startup_timeout_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_startup_timeout_ms))
+                .unwrap_or(DEFAULT_STAGE_STARTUP_TIMEOUT.as_millis() as u64),
+        ),
+        readiness_interval: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_readiness_interval_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_readiness_interval_ms))
+                .unwrap_or(DEFAULT_STAGE_READINESS_INTERVAL.as_millis() as u64),
+        ),
+        health_interval: Duration::from_millis(
+            model
+                .and_then(|config| config.lifecycle_health_interval_ms)
+                .or_else(|| defaults.and_then(|config| config.lifecycle_health_interval_ms))
+                .unwrap_or(DEFAULT_STAGE_HEALTH_INTERVAL.as_millis() as u64),
+        ),
+    }
+}
+
+fn model_skippy_config<'a>(
+    mesh_config: &'a plugin::MeshConfig,
+    model_ref: &str,
+) -> Option<&'a plugin::SkippyConfig> {
+    mesh_config
+        .models
+        .iter()
+        .find(|model| model.model == model_ref)
+        .and_then(|model| model.skippy.as_ref())
 }
 
 pub(super) async fn load_split_runtime_generation(
@@ -85,7 +188,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     spec: &SplitGenerationLoadSpec<'_>,
     cleanup_on_error: &mut bool,
 ) -> Result<SplitRuntimeGenerationHandle> {
-    let settings = split_generation_load_settings(spec)?;
+    let settings = split_generation_load_settings(spec).await?;
     anyhow::ensure!(
         settings.stage0.node_id == spec.node.id(),
         "split topology stage 0 moved to {}; local coordinator is {}",
@@ -131,7 +234,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     ))
     .await?;
     let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
-        downstream.endpoint
+        downstream.endpoint.clone()
     } else {
         spec.node
             .ensure_stage_transport_bridge(
@@ -150,11 +253,36 @@ pub(super) async fn load_split_runtime_generation_inner(
     runtime_options.config.model_id = spec.model_ref.to_string();
     runtime_options.config.package_ref = Some(spec.package.package_ref.clone());
     runtime_options.config.manifest_sha256 = Some(spec.package.manifest_sha256.clone());
-    let effective_model_path = stage_load_model_path(
-        settings.load_mode.clone(),
-        &spec.package.package_ref,
-        spec.model_path,
-    );
+    let verified_stage0_model_path = if spec.local_source_required {
+        let mut stage0_load = split_runtime_stage_load_request(
+            spec,
+            &settings,
+            settings.stage0,
+            Some(downstream.clone()),
+            &stage0_return_endpoint,
+        );
+        let stage0_load = tokio::task::spawn_blocking(move || {
+            let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
+            anyhow::ensure!(verified, "local-required stage 0 was not content-verified");
+            anyhow::Ok(stage0_load)
+        })
+        .await
+        .context("join verify local-required stage 0 source task")??;
+        Some(
+            stage0_load
+                .model_path
+                .context("verified local-required stage 0 is missing its worker-local path")?,
+        )
+    } else {
+        None
+    };
+    let effective_model_path = verified_stage0_model_path.unwrap_or_else(|| {
+        stage_load_model_path(
+            settings.load_mode.clone(),
+            &spec.package.package_ref,
+            spec.model_path,
+        )
+    });
     runtime_options.config.source_model_path = Some(effective_model_path.clone());
     runtime_options.config.source_model_sha256 = Some(spec.package.source_model_sha256.clone());
     runtime_options.config.source_model_bytes = Some(spec.package.source_model_bytes);
@@ -171,9 +299,11 @@ pub(super) async fn load_split_runtime_generation_inner(
     runtime_options.config.ctx_size = spec.ctx_size;
     runtime_options.config.lane_count = spec.slots as u32;
     runtime_options.config.filter_tensors_on_load = true;
-    if let Some(gpu) = spec.pinned_gpu {
-        runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
-    }
+    apply_split_generation_pinned_device(
+        &mut runtime_options.config,
+        spec.pinned_gpu,
+        spec.device_override,
+    );
     runtime_options.config.load_mode = settings.load_mode.clone();
     runtime_options.config.bind_addr = stage0_return_endpoint;
     runtime_options.config.upstream = None;
@@ -278,35 +408,60 @@ pub(super) async fn load_downstream_split_runtime_stages(
             downstream.clone(),
             stage0_return_endpoint,
         );
-        prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
-        wait_for_split_stage_source(
-            spec.node,
-            stage.node_id,
-            &load,
-            stage_source_prepare_timeout(
-                spec.model_path,
-                spec.package,
-                stage,
-                downstream.is_none(),
-            )?,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "prepare split stage {} on {}",
-                stage.stage_id,
-                stage.node_id.fmt_short()
-            )
-        })?;
-        let response = if stage.node_id == spec.node.id() {
-            spec.node
-                .send_local_stage_control(skippy::StageControlRequest::Load(load))
+        if load.local_source_required {
+            let inventory = query_stage_inventory(spec.node, stage.node_id, &load)
                 .await
+                .with_context(|| {
+                    stage_control_unreachable_message(&load.stage_id, stage.node_id)
+                })?;
+            anyhow::ensure!(
+                split_stage_source_is_ready(&inventory, &load),
+                "stage {} no longer has the exact local GGUF content required by this topology",
+                stage.stage_id
+            );
         } else {
-            spec.node
-                .send_stage_control(stage.node_id, skippy::StageControlRequest::Load(load))
-                .await
+            prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
+            wait_for_split_stage_source(
+                spec.node,
+                stage.node_id,
+                &load,
+                stage_source_prepare_timeout(
+                    spec.model_path,
+                    spec.package,
+                    stage,
+                    downstream.is_none(),
+                )?,
+                settings.readiness_interval,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "prepare split stage {} on {}",
+                    stage.stage_id,
+                    stage.node_id.fmt_short()
+                )
+            })?;
         }
+        if load.local_source_required {
+            ensure_peer_supports_strict_local_load(spec.node, stage.node_id, &load.stage_id)
+                .await?;
+        }
+        let load_request = if load.local_source_required {
+            skippy::StageControlRequest::LoadLocal(load.clone())
+        } else {
+            skippy::StageControlRequest::Load(load.clone())
+        };
+        let response = await_stage_startup(settings.startup_timeout, async {
+            if stage.node_id == spec.node.id() {
+                spec.node.send_local_stage_control(load_request).await
+            } else {
+                spec.node
+                    .send_stage_control(stage.node_id, load_request)
+                    .await
+            }
+        })
+        .await
+        .context("split stage startup timed out")?
         .with_context(|| {
             format!(
                 "load split stage {} on {}",
@@ -326,6 +481,13 @@ pub(super) async fn load_downstream_split_runtime_stages(
             stage.stage_id,
             ready.error.unwrap_or_else(|| "unknown error".to_string())
         );
+        if load.local_source_required {
+            anyhow::ensure!(
+                strict_ready_status_matches(&ready.status, &load),
+                "stage {} did not attest the expected local GGUF content after load",
+                stage.stage_id
+            );
+        }
         *downstream = Some(skippy::StagePeerDescriptor {
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
@@ -398,6 +560,7 @@ pub(super) fn split_runtime_stage_load_request(
         topology_id: spec.generation.topology_id.clone(),
         run_id: spec.generation.run_id.clone(),
         model_id: spec.model_ref.to_string(),
+        runtime_profile: Some(spec.runtime_profile.to_string()),
         backend: "skippy".to_string(),
         package_ref: spec.package.package_ref.clone(),
         manifest_sha256: spec.package.manifest_sha256.clone(),
@@ -405,19 +568,32 @@ pub(super) fn split_runtime_stage_load_request(
         stage_index: stage.stage_index,
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
-        model_path: Some(stage_load_model_path(
-            settings.load_mode.clone(),
-            &spec.package.package_ref,
-            spec.model_path,
-        )),
+        model_path: (!spec.local_source_required).then(|| {
+            stage_load_model_path(
+                settings.load_mode.clone(),
+                &spec.package.package_ref,
+                spec.model_path,
+            )
+        }),
         source_model_bytes: Some(spec.package.source_model_bytes),
-        projector_path: spec.projector_path.clone(),
+        source_model_sha256: Some(spec.package.source_model_sha256.clone()),
+        local_source_required: spec.local_source_required,
+        projector_path: (!spec.local_source_required || stage.stage_index == 0)
+            .then(|| resolved_config.projector_path.clone())
+            .flatten(),
+        projector_use_gpu: resolved_config.projector_use_gpu,
+        media_marker: resolved_config.media_marker.clone(),
+        image_min_tokens: resolved_config.image_min_tokens,
+        image_max_tokens: resolved_config.image_max_tokens,
+        batch_max_tokens: resolved_config.batch_max_tokens,
+        glm_dsa_policy: resolved_config.glm_dsa_policy,
+        generation_signal_window: resolved_config.generation_signal_window,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
         activation_width: settings.activation_width,
-        wire_dtype: settings.activation_wire_dtype,
         ctx_size: spec.ctx_size,
         lane_count: spec.slots as u32,
+        continuous_batching: settings.embedded_openai.continuous_batching,
         n_batch: resolved_config.n_batch,
         n_ubatch: resolved_config.n_ubatch,
         n_gpu_layers: resolved_config.n_gpu_layers,
@@ -426,6 +602,19 @@ pub(super) fn split_runtime_stage_load_request(
         cache_type_k: resolved_config.cache_type_k.clone(),
         cache_type_v: resolved_config.cache_type_v.clone(),
         flash_attn_type: resolved_config.flash_attn_type,
+        runtime_settings: skippy::StageLoadRuntimeSettings {
+            repack: resolved_config.repack,
+            op_offload: resolved_config.op_offload,
+            no_host_buffer: resolved_config.no_host_buffer,
+            check_tensors: resolved_config.check_tensors,
+            direct_io: resolved_config.direct_io,
+            main_gpu: resolved_config.main_gpu,
+            split_mode: resolved_config.split_mode,
+            kv_offload: resolved_config.kv_offload,
+            kv_unified: resolved_config.kv_unified,
+            swa_full: resolved_config.swa_full,
+            cache_idle_slots: resolved_config.cache_idle_slots,
+        },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
         shutdown_generation: spec.generation.generation,
         coordinator_term: spec.generation.coordinator_term,
@@ -450,7 +639,7 @@ pub(super) fn split_runtime_stage_upstream(
     })
 }
 
-pub(super) fn split_generation_load_settings<'a>(
+pub(super) async fn split_generation_load_settings<'a>(
     spec: &'a SplitGenerationLoadSpec<'_>,
 ) -> Result<SplitGenerationLoadSettings<'a>> {
     let stage0 = spec
@@ -461,15 +650,23 @@ pub(super) fn split_generation_load_settings<'a>(
     let load_mode = split_generation_load_mode(spec.package);
     let activation_width =
         skippy_stage_activation_width(spec.package.activation_width, spec.model_ref)?;
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.model_ref,
-        model_path: spec.model_path,
-        model_bytes: spec.package.source_model_bytes,
-        allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
-        request_defaults: None,
-        package_generation: spec.package.generation.as_ref(),
-    })?;
+    let mut resolved = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: spec.mesh_config,
+            model_id: spec.model_ref,
+            model_path: spec.model_path,
+            model_bytes: spec.package.source_model_bytes,
+            allocatable_memory_bytes: spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()),
+            request_defaults: None,
+            package_generation: spec.package.generation.as_ref(),
+            // Split stage load uses the compact metadata scanned during planning
+            // so the resolver guards both the size-tiered default and the family
+            // K/V default exactly like the split planner does.
+            compact_meta: Some(spec.compact_meta),
+        },
+        spec.config_model_id,
+    )?;
+    resolved.materialize_projector_url().await?;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
@@ -493,7 +690,11 @@ pub(super) fn split_generation_load_settings<'a>(
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
     }
+    if let Some(device) = spec.device_override {
+        resolved.hardware.device = Some(device.to_string());
+    }
     let embedded_openai = resolved.to_embedded_openai_args(activation_width, true)?;
+    let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(spec.package.clone()),
@@ -511,8 +712,21 @@ pub(super) fn split_generation_load_settings<'a>(
         embedded_openai,
         load_mode,
         activation_width,
-        activation_wire_dtype: resolved.skippy.activation_wire_dtype,
+        startup_timeout: lifecycle.startup_timeout,
+        readiness_interval: lifecycle.readiness_interval,
     })
+}
+
+pub(super) fn apply_split_generation_pinned_device(
+    config: &mut skippy_protocol::StageConfig,
+    pinned_gpu: Option<&crate::runtime::StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+) {
+    if device_override.is_none()
+        && let Some(gpu) = pinned_gpu
+    {
+        config.selected_device = Some(pinned_stage_device(gpu));
+    }
 }
 
 pub(super) fn split_generation_load_mode(package: &skippy::SkippyPackageIdentity) -> LoadMode {
@@ -798,6 +1012,7 @@ pub(super) async fn wait_for_split_stage_source(
     stage_node_id: iroh::EndpointId,
     load: &skippy::StageLoadRequest,
     timeout: Duration,
+    readiness_interval: Duration,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -832,7 +1047,7 @@ pub(super) async fn wait_for_split_stage_source(
                 stage_source_prepare_timeout_message(&load.stage_id, timeout)
             );
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        wait_for_stage_readiness_poll(readiness_interval).await;
     }
 }
 
@@ -857,47 +1072,6 @@ pub(super) fn stage_source_prepare_timeout_message(stage_id: &str, timeout: Dura
     )
 }
 
-pub(super) fn split_stage_source_is_ready(
-    inventory: &skippy::StageLayerInventory,
-    load: &skippy::StageLoadRequest,
-) -> bool {
-    let ready_running_stage = inventory
-        .ready_ranges
-        .iter()
-        .any(|range| split_layer_range_covers(range, load));
-    if ready_running_stage {
-        return true;
-    }
-    if load.load_mode != LoadMode::LayerPackage && !skippy::is_layer_package_ref(&load.package_ref)
-    {
-        return inventory
-            .available_ranges
-            .iter()
-            .any(|range| split_layer_range_covers(range, load));
-    }
-    inventory.preparing_ranges.iter().any(|status| {
-        status.topology_id == load.topology_id
-            && status.run_id == load.run_id
-            && status.stage_id == load.stage_id
-            && status.model_id == load.model_id
-            && status.package_ref == load.package_ref
-            && status.manifest_sha256 == load.manifest_sha256
-            && status.layer_start <= load.layer_start
-            && status.layer_end >= load.layer_end
-            && matches!(
-                status.state,
-                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
-            )
-    })
-}
-
-pub(super) fn split_layer_range_covers(
-    range: &skippy::LayerRange,
-    load: &skippy::StageLoadRequest,
-) -> bool {
-    range.layer_start <= load.layer_start && range.layer_end >= load.layer_end
-}
-
 pub(super) async fn query_stage_inventory(
     node: &mesh::Node,
     stage_node_id: iroh::EndpointId,
@@ -905,8 +1079,11 @@ pub(super) async fn query_stage_inventory(
 ) -> Result<skippy::StageLayerInventory> {
     let request = skippy::StageInventoryRequest {
         model_id: load.model_id.clone(),
+        runtime_profile: load.runtime_profile.clone(),
         package_ref: load.package_ref.clone(),
         manifest_sha256: load.manifest_sha256.clone(),
+        expected_source_model_sha256: load.source_model_sha256.clone(),
+        local_source_required: load.local_source_required,
     };
     let response = if stage_node_id == node.id() {
         node.send_local_stage_control(skippy::StageControlRequest::Inventory(request))

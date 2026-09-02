@@ -140,6 +140,9 @@ impl StreamLifecycle {
                     Some(u64::from(usage.completion_tokens)),
                     Some(u64::from(usage.total_tokens)),
                 )
+                .map(|authoritative| {
+                    authoritative.with_cached_prompt_tokens(usage.cached_tokens.map(u64::from))
+                })
             })
             .map_or(
                 OpenAiTerminalResult::Completed { status_code: 200 },
@@ -313,7 +316,7 @@ mod tests {
                 OpenAiLifecycleEvent::ResponseCompleted {
                     usage: OpenAiUsage {
                         prompt_tokens: 12,
-                        cached_tokens: 9,
+                        cached_tokens: Some(9),
                         completion_tokens: 3,
                         total_tokens: 15,
                     },
@@ -324,6 +327,7 @@ mod tests {
                         status_code: 200,
                         usage: TokenUsage {
                             prompt_tokens: Some(12),
+                            cached_prompt_tokens: Some(9),
                             completion_tokens: Some(3),
                             total_tokens: Some(15),
                         },

@@ -223,11 +223,13 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) node: &'a mesh::Node,
     pub(super) mesh_config: &'a plugin::MeshConfig,
     pub(super) config_model_id: Option<&'a str>,
+    pub(super) runtime_profile: &'a str,
     pub(super) model_path: &'a Path,
     pub(super) model_bytes: u64,
     pub(super) mmproj_override: Option<&'a Path>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<String>,
     pub(super) capacity_budget_bytes: Option<u64>,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -235,6 +237,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) local_source_required: bool,
     pub(super) split_topology_lock: Option<&'a Path>,
     pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
@@ -250,6 +253,7 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) mmproj_override: Option<&'a Path>,
     pub(super) ctx_size_override: Option<u32>,
     pub(super) pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<String>,
     pub(super) capacity_budget_bytes: u64,
     pub(super) cache_type_k_override: Option<&'a str>,
     pub(super) cache_type_v_override: Option<&'a str>,
@@ -309,16 +313,21 @@ pub(super) fn resolve_local_openai_skippy_config(
     context_length: u32,
     slots: usize,
     fallback_projector_path: Option<PathBuf>,
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<skippy::ResolvedSkippyConfig> {
-    let mut resolved = skippy::resolve_skippy_config(skippy::SkippyConfigResolveRequest {
-        mesh_config: spec.mesh_config,
-        model_id: spec.config_model_id.unwrap_or(model_name),
-        model_path: spec.model_path,
-        model_bytes,
-        allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
-        request_defaults: None,
-        package_generation: None,
-    })?;
+    let mut resolved = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: spec.mesh_config,
+            model_id: model_name,
+            model_path: spec.model_path,
+            model_bytes,
+            allocatable_memory_bytes: Some(spec.capacity_budget_bytes),
+            request_defaults: None,
+            package_generation: None,
+            compact_meta,
+        },
+        spec.config_model_id,
+    )?;
     resolved.model_id = model_name.to_string();
     resolved.model_fit.ctx_size = context_length;
     resolved.throughput.parallel = slots;
@@ -344,6 +353,9 @@ pub(super) fn resolve_local_openai_skippy_config(
     }
     if let Some(gpu) = spec.pinned_gpu {
         resolved.hardware.device = Some(gpu.backend_device.clone());
+    }
+    if let Some(device) = &spec.device_override {
+        resolved.hardware.device = Some(device.clone());
     }
     Ok(resolved)
 }
@@ -543,6 +555,22 @@ pub(super) async fn start_runtime_local_model(
     LocalRuntimeModelHandle,
     tokio::sync::oneshot::Receiver<()>,
 )> {
+    let policy_model_id = spec.config_model_id.unwrap_or(runtime_model_name);
+    // Register the effective policy before the first await. Hashing a large
+    // strict-local GGUF can take minutes; an inbound legacy stage request must
+    // fail closed throughout that indexing window, not only after it.
+    skippy::register_local_source_policy(
+        policy_model_id,
+        spec.runtime_profile,
+        spec.local_source_required,
+    );
+    if spec.local_source_required {
+        // Locally-fit strict models are still eligible workers for another
+        // node's split topology. Index their complete GGUF before advertising
+        // the runtime so inventory can resolve the same content identity.
+        super::local_package::resolve_split_runtime_package(spec.model_path, policy_model_id, true)
+            .await?;
+    }
     let local_capacity_bytes = spec
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
@@ -559,6 +587,7 @@ pub(super) async fn start_runtime_local_model(
             mmproj_override: spec.mmproj_override,
             ctx_size_override: spec.ctx_size_override,
             pinned_gpu: spec.pinned_gpu,
+            device_override: spec.device_override,
             capacity_budget_bytes: local_capacity_bytes,
             cache_type_k_override: spec.cache_type_k_override,
             cache_type_v_override: spec.cache_type_v_override,
@@ -626,24 +655,12 @@ pub(super) async fn start_local_openai_model(
         format_gb(my_vram)
     );
 
-    let kv_cache = skippy::KvCachePolicy::for_model_size(total_model_bytes);
-    let effective_cache_type_k = spec
-        .cache_type_k_override
-        .unwrap_or(kv_cache.cache_type_k());
-    let effective_cache_type_v = spec
-        .cache_type_v_override
-        .unwrap_or(kv_cache.cache_type_v());
-    let kv_cache_quant = models::gguf::GgufKvCacheQuant::from_llama_args(
-        effective_cache_type_k,
-        effective_cache_type_v,
-    )
-    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
-
-    // For layer packages, try to read GGUF metadata from the shared metadata
-    // file inside the package.  This carries the model's native context length,
-    // head counts, and KV dimensions needed for accurate KV budget planning.
-    // Runs on a blocking thread because the underlying calls do filesystem I/O
-    // (stat, open, read GGUF headers).
+    // Read GGUF metadata first: it carries the model's native context length,
+    // head counts, and KV dimensions needed for accurate KV budget planning,
+    // and drives the KV-cache compatibility guard below. For layer packages it
+    // comes from the shared metadata file inside the package. Runs on a blocking
+    // thread because the underlying calls do filesystem I/O (stat, open, read
+    // GGUF headers).
     let compact_meta = {
         let package_clone = layer_package.clone();
         let model_path = spec.model_path.to_path_buf();
@@ -658,6 +675,25 @@ pub(super) async fn start_local_openai_model(
         .ok()
         .flatten()
     };
+
+    // Guard the size-tiered default against quantised-KV load incompatibilities
+    // (Flash Attention off, or a head_dim not divisible by the block size) so
+    // planning and the load agree and the context build does not fail. Explicit
+    // user overrides below are never guarded — they must fail loudly.
+    let kv_cache = skippy::KvCachePolicy::for_model_size(total_model_bytes)
+        .guarded_for_model(compact_meta.as_ref());
+    let effective_cache_type_k = spec
+        .cache_type_k_override
+        .unwrap_or(kv_cache.cache_type_k());
+    let effective_cache_type_v = spec
+        .cache_type_v_override
+        .unwrap_or(kv_cache.cache_type_v());
+    let kv_cache_quant = models::gguf::GgufKvCacheQuant::from_llama_args(
+        effective_cache_type_k,
+        effective_cache_type_v,
+    )
+    .unwrap_or(models::gguf::GgufKvCacheQuant::Q8_0);
+
     let plan = plan_runtime_resources(RuntimeResourcePlanInput {
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
@@ -670,9 +706,10 @@ pub(super) async fn start_local_openai_model(
     });
 
     if let Some(package) = layer_package {
-        start_local_layer_package_model(spec, model_name, package, plan).await
+        start_local_layer_package_model(spec, model_name, package, plan, compact_meta.as_ref())
+            .await
     } else {
-        start_local_skippy_model(spec, model_name, plan).await
+        start_local_skippy_model(spec, model_name, plan, compact_meta.as_ref()).await
     }
 }
 
@@ -680,6 +717,7 @@ async fn start_local_skippy_model(
     spec: LocalOpenAiModelStartSpec<'_>,
     model_name: String,
     plan: RuntimeResourcePlan,
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
     LocalRuntimeModelHandle,
@@ -687,14 +725,16 @@ async fn start_local_skippy_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_local_openai_skippy_config(
+    let mut resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         spec.model_bytes,
         context_length,
         plan.slots,
         fallback_projector_path,
+        compact_meta,
     )?;
+    resolved.materialize_projector_url().await?;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -722,7 +762,9 @@ async fn start_local_skippy_model(
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
         ));
-    if let Some(gpu) = spec.pinned_gpu {
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
         options = options.with_selected_device(pinned_skippy_device(gpu));
     }
     let _ = emit_event(OutputEvent::ModelLoading {
@@ -772,6 +814,7 @@ async fn start_local_layer_package_model(
     model_name: String,
     package: skippy::SkippyPackageIdentity,
     plan: RuntimeResourcePlan,
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
 ) -> Result<(
     String,
     LocalRuntimeModelHandle,
@@ -779,14 +822,16 @@ async fn start_local_layer_package_model(
 )> {
     let context_length = plan.context_length;
     let fallback_projector_path = mmproj_path_for_model(&model_name).filter(|path| path.exists());
-    let resolved = resolve_local_openai_skippy_config(
+    let mut resolved = resolve_local_openai_skippy_config(
         &spec,
         &model_name,
         package.source_model_bytes,
         context_length,
         plan.slots,
         fallback_projector_path,
+        compact_meta,
     )?;
+    resolved.materialize_projector_url().await?;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -833,7 +878,9 @@ async fn start_local_layer_package_model(
     runtime_options.config.ctx_size = context_length;
     runtime_options.config.lane_count = plan.slots as u32;
     runtime_options.config.filter_tensors_on_load = true;
-    if let Some(gpu) = spec.pinned_gpu {
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
         runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
     }
     runtime_options.config.load_mode = LoadMode::LayerPackage;

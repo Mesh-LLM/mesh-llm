@@ -113,6 +113,9 @@ impl Node {
                 "claim"
             }
             Some(skippy_stage_proto::stage_control_request::Command::LoadStage(_)) => "load",
+            Some(skippy_stage_proto::stage_control_request::Command::LoadLocalStage(_)) => {
+                "load-local"
+            }
             Some(skippy_stage_proto::stage_control_request::Command::StopStage(_)) => "stop",
             Some(skippy_stage_proto::stage_control_request::Command::PrepareStage(_)) => "prepare",
             _ => "other",
@@ -177,8 +180,10 @@ impl Node {
         request: crate::inference::skippy::StageControlRequest,
         error: anyhow::Error,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
-        let crate::inference::skippy::StageControlRequest::Load(load) = request else {
-            return Err(error);
+        let load = match request {
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => load,
+            _ => return Err(error),
         };
         let error_message = format!("{error:#}");
         tracing::warn!(
@@ -223,7 +228,9 @@ impl Node {
                 );
                 e
             })?;
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
@@ -247,10 +254,27 @@ impl Node {
         &self,
         request: &mut crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<()> {
+        if let crate::inference::skippy::StageControlRequest::LoadLocal(load) = request {
+            // Enforce the command-level policy before any resolver is allowed
+            // to inspect the request. StageControlState repeats this at the
+            // execution boundary as defense in depth.
+            load.local_source_required = true;
+        }
         match request {
             crate::inference::skippy::StageControlRequest::Claim(_) => {}
-            crate::inference::skippy::StageControlRequest::Load(load) => {
-                if load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+                let mut effective_load = load.clone();
+                let verified = tokio::task::spawn_blocking(move || {
+                    let verified =
+                        crate::inference::skippy::apply_verified_local_source(&mut effective_load)?;
+                    anyhow::Ok((effective_load, verified))
+                })
+                .await
+                .context("join verify local-required stage load source task")??;
+                *load = verified.0;
+                if !verified.1
+                    && load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
                     && load
                         .model_path
                         .as_deref()

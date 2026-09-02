@@ -224,8 +224,8 @@ Config file semantics:
 - Request defaults only fill absent or null request fields at the OpenAI
   frontend boundary. Explicit request values win, and the defaults never flow
   into `StageConfig`, runtime load structs, protobuf, or lower runtime.
-- Staged-only controls stay staged-only. Activation wire dtype, prefill
-  controls, speculative draft controls, and manual stage layer ranges only
+- Staged-only controls stay staged-only. Prefill controls, speculative draft
+  controls, and manual stage layer ranges only
   execute in staged mode.
 - Unsupported or deferred rows are documented as rejected, not silent no-ops.
 

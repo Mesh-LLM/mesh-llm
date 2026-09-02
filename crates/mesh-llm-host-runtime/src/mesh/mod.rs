@@ -76,6 +76,7 @@ pub(crate) fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
 }
 
 mod artifact_transfer_io;
+mod cache_affinity_gossip;
 mod capacity;
 mod connection_reservation;
 mod connections;
@@ -110,7 +111,13 @@ use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use model_identity::*;
 use node_identity::*;
-use operational_logging::{MeshOperationalEvent, record_mesh_operational_event};
+#[cfg(test)]
+use operational_logging::capture_mesh_operational_audits;
+use operational_logging::{
+    MeshHandlerFailureBoundary, MeshOperationalEvent, MeshPeerRemovalReason,
+    MeshPolicyRejectionReason, MeshQuicInboundOutcome, mesh_peer_operational_context,
+    record_mesh_operational_event, record_mesh_operational_event_with_context,
+};
 use owner_control::*;
 use owner_lifecycle_cache::*;
 use peer_state::*;
@@ -170,7 +177,7 @@ pub use stage_transport::{
 };
 pub(crate) use stage_transport_bridge::{StageTransportBridge, StageTransportBridgeLabel};
 
-#[allow(unused_imports)]
+#[cfg(test)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 #[cfg(test)]
 use heartbeat::heartbeat_failure_policy_for_peer;

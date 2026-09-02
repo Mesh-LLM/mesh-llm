@@ -1,37 +1,9 @@
-import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Check,
-  Cpu,
-  Download,
-  FileIcon,
-  FileImage,
-  FileText,
-  HardDrive,
-  Loader2,
-  MessageSquareMore,
-  Music,
-  Play,
-  ScanText,
-  X
-} from 'lucide-react'
-import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
-import { DestructiveActionDialog } from '@/components/ui/DestructiveActionDialog'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { TextInputDialog } from '@/components/ui/TextInputDialog'
-import { ChatLiveLoadingGhost } from '@/features/chat/components/ChatLiveLoadingGhost'
-import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
-import { Composer } from '@/features/chat/components/Composer'
-import { MessageRow, type MessageAttachmentAction } from '@/features/chat/components/MessageRow'
-import { ModelSelect } from '@/features/chat/components/ModelSelect'
-import { TransparencyPane } from '@/features/chat/components/transparency/TransparencyPane'
-import { ChatLayout } from '@/features/chat/layouts/ChatLayout'
 import { uiMessagesToThreadMessages } from '@/features/chat/api/use-chat-messages'
 import { ChatSessionProvider } from '@/features/chat/api/chat-session'
 import { createChatDraftConversationId } from '@/features/chat/api/chat-session-ids'
 import { useOptionalChatSession, useChatSession } from '@/features/chat/api/chat-session-hooks'
 import { buildComposerMessageContent } from '@/features/chat/api/legacy-attachments'
-import type { AttachmentProcessingStage } from '@/features/chat/api/legacy-attachments'
 import {
   describeImageForPrompt,
   describeScannedPdf,
@@ -41,428 +13,40 @@ import {
 import { useModelsQuery } from '@/features/network/api/use-models-query'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
-import { cn } from '@/lib/utils'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
 import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
-import type {
-  ChatActionMetric,
-  ChatHarnessData,
-  Conversation,
-  ModelSelectOption,
-  ModelSummary,
-  TransparencyMessage
-} from '@/features/app-tabs/types'
+import type { ChatHarnessData, Conversation, ModelSelectOption, TransparencyMessage } from '@/features/app-tabs/types'
+import {
+  type AttachmentProcessingStatus,
+  ATTACHMENT_PROCESSING_ORDER,
+  revokeObjectUrl,
+  type SubmittedAttachmentPreview,
+  usesBrowserAnalyzerForAttachment
+} from '@/features/chat/pages/chat-page-attachments'
+import { ChatPageLayout } from '@/features/chat/pages/ChatPageLayout'
+import {
+  AUTO_BACKEND_MODEL,
+  AUTO_MODEL_OPTION,
+  AUTO_MODEL_VALUE,
+  isChatSelectableModel,
+  modelStatusBadge
+} from '@/features/chat/pages/chat-page-models'
+import {
+  createQueuedSubmissionId,
+  createStoppedAssistantThreadMessage,
+  getMessageTextContent,
+  hasLastUserTurn,
+  type ComposerSubmission,
+  type ConversationComposerDraft,
+  type DeleteConversationOptions,
+  type FailedSubmission,
+  type QueuedSubmission
+} from '@/features/chat/pages/chat-page-submissions'
+import { useChatPageSubmittedAttachments } from '@/features/chat/pages/chat-page-submitted-attachments'
 
 type ChatPageProps = { data?: ChatHarnessData }
-type ComposerSubmission = { prompt: string; attachments: File[] }
-type ConversationComposerDraft = ComposerSubmission
-type QueuedSubmission = ComposerSubmission & { id: string; timestamp: string; conversationId: string }
-type AttachmentProcessingStatus = {
-  conversationId: string
-  stage: AttachmentProcessingStage
-  attachmentCount: number
-  prompt: string
-  usesBrowserAnalyzer: boolean
-  browserAnalyzerReady: boolean
-}
-type SubmittedAttachmentKind = MessageAttachmentAction['kind']
-type SubmittedAttachmentPreview = {
-  id: string
-  conversationId: string
-  messageId: string
-  label: string
-  kind: SubmittedAttachmentKind
-  fileName: string
-  mimeType: string
-  objectUrl: string
-}
-type FailedSubmission = ComposerSubmission & {
-  id: string
-  timestamp: string
-  conversationId: string
-  errorMessage: string
-  model: string
-  includeUserRow: boolean
-}
-type DeleteConversationOptions = { returnFocusElement?: HTMLElement | null }
-
-// The dropdown shows a single "Mesh — automatic" entry. Selecting it
-// keeps `model === AUTO_MODEL_VALUE` in UI state (so the Radix Select
-// can highlight it correctly) but sends `AUTO_BACKEND_MODEL` on the
-// wire so requests fan out through the Mixture-of-Agents gateway.
-//
-// To flip the chat default back to the single-model router when peer
-// health is reliable enough, change AUTO_BACKEND_MODEL to 'auto'. The
-// two-variable split (selectedModelValue for UI, activeModelName for
-// the wire) is already in place exactly so this stays a one-line
-// change with no other UI surgery. See PR #615 and Issue #617 for the
-// trade-offs that led to the current 'mesh' default.
-const AUTO_MODEL_VALUE = 'auto'
-const AUTO_BACKEND_MODEL = 'mesh'
-const AUTO_MODEL_LABEL = 'Mesh — automatic'
-const AUTO_MODEL_OPTION: ModelSelectOption = {
-  value: AUTO_MODEL_VALUE,
-  label: AUTO_MODEL_LABEL,
-  status: { label: 'Auto', tone: 'accent' }
-}
-
-function hasLastUserTurn(messages: Array<{ role: string }>): boolean {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') return true
-  }
-
-  return false
-}
-
-function getMessageTextContent(message: { parts?: Array<{ type: string; content?: unknown }> }): string {
-  const textPart = message.parts?.find((part) => part.type === 'text' && typeof part.content === 'string')
-  return typeof textPart?.content === 'string' ? textPart.content.trim() : ''
-}
-
-function createQueuedSubmissionId(): string {
-  return `queued-${createChatDraftConversationId()}`
-}
-
-function getQueuedSubmissionBody(submission: QueuedSubmission): string {
-  const trimmedPrompt = submission.prompt.trim()
-  if (trimmedPrompt) return trimmedPrompt
-
-  return `${submission.attachments.length} attachment${submission.attachments.length === 1 ? '' : 's'} queued`
-}
-
-function getSubmissionBody(submission: ComposerSubmission): string {
-  const trimmedPrompt = submission.prompt.trim()
-  if (trimmedPrompt) return trimmedPrompt
-
-  return `${submission.attachments.length} attachment${submission.attachments.length === 1 ? '' : 's'}`
-}
-
-function createStoppedAssistantThreadMessage(model: string) {
-  return {
-    id: `stopped-${createChatDraftConversationId()}`,
-    messageRole: 'assistant' as const,
-    timestamp: new Date().toISOString(),
-    body: '',
-    model
-  }
-}
-
-const ATTACHMENT_PROCESSING_STEPS: Array<{
-  stage: AttachmentProcessingStage
-  title: string
-  description: string
-}> = [
-  {
-    stage: 'downloading',
-    title: 'Downloading',
-    description: 'Fetching the browser analyzer and attachment assets.'
-  },
-  {
-    stage: 'starting',
-    title: 'Starting',
-    description: 'Warming the local vision and document pipeline.'
-  },
-  {
-    stage: 'processing',
-    title: 'Processing',
-    description: 'Reading the attachment before the prompt is sent.'
-  }
-]
-
-const ATTACHMENT_PROCESSING_ORDER: Record<AttachmentProcessingStage, number> = {
-  downloading: 0,
-  starting: 1,
-  processing: 2
-}
-
-function usesBrowserAnalyzerForAttachment(file: File): boolean {
-  const mimeType = file.type.toLowerCase()
-  const fileName = file.name.toLowerCase()
-  return mimeType.startsWith('image/') || mimeType === 'application/pdf' || fileName.endsWith('.pdf')
-}
-
-function getAttachmentProcessingStepCopy(
-  step: (typeof ATTACHMENT_PROCESSING_STEPS)[number],
-  status: AttachmentProcessingStatus
-) {
-  if (!status.usesBrowserAnalyzer) {
-    if (step.stage === 'downloading') {
-      return { title: 'Reading', description: 'Loading the attachment bytes in this browser.' }
-    }
-    if (step.stage === 'starting') {
-      return { title: 'Preparing', description: 'Packaging the attachment for the request.' }
-    }
-  }
-
-  if (status.browserAnalyzerReady) {
-    if (step.stage === 'downloading') {
-      return { title: 'Cached', description: 'Reusing the browser analyzer already loaded in this tab.' }
-    }
-    if (step.stage === 'starting') {
-      return { title: 'Ready', description: 'The local vision and document pipeline is already warm.' }
-    }
-  }
-
-  return { title: step.title, description: step.description }
-}
-
-function getSubmittedAttachmentKind(file: File): SubmittedAttachmentKind {
-  const mimeType = file.type.toLowerCase()
-  const fileName = file.name.toLowerCase()
-  if (mimeType.startsWith('image/')) return 'image'
-  if (mimeType === 'application/pdf' || fileName.endsWith('.pdf')) return 'pdf'
-  if (mimeType.startsWith('audio/')) return 'audio'
-  return 'file'
-}
-
-function getSubmittedAttachmentLabel(kind: SubmittedAttachmentKind, ordinal: number): string {
-  if (kind === 'image') return `Image ${ordinal}`
-  if (kind === 'pdf') return `PDF ${ordinal}`
-  if (kind === 'audio') return `Audio ${ordinal}`
-  return `File ${ordinal}`
-}
-
-function createObjectUrl(file: File): string {
-  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return ''
-  return URL.createObjectURL(file)
-}
-
-function revokeObjectUrl(objectUrl: string) {
-  if (!objectUrl || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return
-  URL.revokeObjectURL(objectUrl)
-}
-
-function getAttachmentProcessingHeadline(status: AttachmentProcessingStatus): string {
-  if (status.stage === 'starting') return 'Starting local analyzer'
-  if (status.stage === 'processing') return 'Processing attachment content'
-  return 'Downloading browser model'
-}
-
-function AttachmentProcessingPanel({ status }: { status: AttachmentProcessingStatus }) {
-  const activeIndex = ATTACHMENT_PROCESSING_ORDER[status.stage]
-  const prompt = status.prompt.trim()
-
-  return (
-    <section
-      aria-live="polite"
-      aria-label="Attachment preparation status"
-      className="mx-auto my-10 flex w-full max-w-[34rem] flex-col items-center text-center"
-    >
-      <div className="relative w-full overflow-hidden rounded-[calc(var(--radius-lg)+6px)] border border-[color:color-mix(in_oklab,var(--color-accent)_35%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-panel)_88%,var(--color-accent)_12%)] p-5 shadow-[0_22px_70px_color-mix(in_oklab,var(--color-accent)_10%,transparent)]">
-        <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-[color:color-mix(in_oklab,var(--color-accent)_48%,transparent)]" />
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full border border-[color:color-mix(in_oklab,var(--color-accent)_40%,var(--color-border))] bg-panel-strong text-accent">
-          <Loader2 className="size-5 animate-spin" aria-hidden={true} strokeWidth={1.7} />
-        </div>
-        <div className="space-y-1">
-          <p className="text-[length:var(--density-type-label)] font-semibold uppercase tracking-[0.18em] text-accent">
-            Preparing attachments
-          </p>
-          <h2 className="text-[length:var(--density-type-title)] font-semibold text-foreground">
-            {getAttachmentProcessingHeadline(status)}
-          </h2>
-          <p className="mx-auto max-w-[26rem] text-[length:var(--density-type-body)] leading-6 text-fg-muted">
-            {status.attachmentCount} file{status.attachmentCount === 1 ? '' : 's'} will be converted locally, then your
-            prompt will be sent to the model.
-          </p>
-        </div>
-        {prompt ? (
-          <div className="mx-auto mt-4 max-w-[28rem] rounded-[var(--radius)] border border-border-soft bg-panel px-3 py-2 text-left text-[length:var(--density-type-caption)] text-fg-muted">
-            <span className="font-medium text-fg">Prompt waiting:</span> {prompt}
-          </div>
-        ) : null}
-        <ol className="mt-5 grid gap-2 text-left sm:grid-cols-3">
-          {ATTACHMENT_PROCESSING_STEPS.map((step, index) => {
-            const complete = index < activeIndex
-            const active = index === activeIndex
-            const Icon = step.stage === 'downloading' ? Download : step.stage === 'starting' ? Play : ScanText
-            const copy = getAttachmentProcessingStepCopy(step, status)
-            return (
-              <li
-                key={step.stage}
-                className={cn(
-                  'rounded-[var(--radius)] border px-3 py-3 transition-colors',
-                  active
-                    ? 'border-[color:color-mix(in_oklab,var(--color-accent)_35%,var(--color-border-soft))] bg-[color:color-mix(in_oklab,var(--color-accent)_6%,var(--color-panel))]'
-                    : 'border-border-soft bg-panel'
-                )}
-                aria-current={active ? 'step' : undefined}
-              >
-                <div className="mb-2 flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'inline-flex size-6 items-center justify-center rounded-full border text-[length:var(--density-type-label)] transition-colors',
-                      complete
-                        ? 'border-accent bg-accent text-panel'
-                        : active
-                          ? 'border-accent bg-[color:color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-accent'
-                          : 'border-border text-fg-faint'
-                    )}
-                  >
-                    {complete ? (
-                      <Check className="size-3.5" aria-hidden={true} />
-                    ) : active ? (
-                      <Loader2 className="size-3.5 animate-spin" aria-hidden={true} />
-                    ) : (
-                      <Icon className="size-3.5" aria-hidden={true} />
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      'text-[length:var(--density-type-caption)]',
-                      active ? 'font-semibold text-foreground' : 'font-medium text-fg-muted'
-                    )}
-                  >
-                    {copy.title}
-                  </span>
-                </div>
-                <p className="text-[length:var(--density-type-caption)] leading-5 text-fg-faint">{copy.description}</p>
-              </li>
-            )
-          })}
-        </ol>
-      </div>
-    </section>
-  )
-}
-
-function AttachmentPreviewIcon({ kind }: { kind: SubmittedAttachmentKind }) {
-  if (kind === 'image') return <FileImage className="size-4" aria-hidden={true} />
-  if (kind === 'pdf') return <FileText className="size-4" aria-hidden={true} />
-  if (kind === 'audio') return <Music className="size-4" aria-hidden={true} />
-  return <FileIcon className="size-4" aria-hidden={true} />
-}
-
-function AttachmentPreviewBody({ attachment }: { attachment: SubmittedAttachmentPreview }) {
-  if (!attachment.objectUrl) {
-    return (
-      <div className="grid min-h-[18rem] place-items-center rounded-[var(--radius)] border border-border-soft bg-panel-strong px-6 text-center">
-        <div className="max-w-[26rem] space-y-2">
-          <AttachmentPreviewIcon kind={attachment.kind} />
-          <p className="text-[length:var(--density-type-body)] font-medium text-fg">Preview unavailable</p>
-          <p className="text-[length:var(--density-type-control)] leading-6 text-fg-muted">
-            The file was submitted with this prompt, but this browser cannot create a local preview URL for it.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  if (attachment.kind === 'image') {
-    return (
-      <div className="grid max-h-[min(72vh,760px)] min-h-[18rem] place-items-center overflow-auto rounded-[var(--radius)] border border-border-soft bg-panel-strong p-3">
-        <img
-          src={attachment.objectUrl}
-          alt={attachment.fileName}
-          className="max-h-[68vh] max-w-full rounded-[calc(var(--radius)-2px)] object-contain"
-        />
-      </div>
-    )
-  }
-
-  if (attachment.kind === 'pdf') {
-    return (
-      <iframe
-        title={`Preview ${attachment.fileName}`}
-        src={attachment.objectUrl}
-        className="h-[min(72vh,760px)] w-full rounded-[var(--radius)] border border-border-soft bg-panel-strong"
-      />
-    )
-  }
-
-  if (attachment.kind === 'audio') {
-    return (
-      <div className="grid min-h-[16rem] place-items-center rounded-[var(--radius)] border border-border-soft bg-panel-strong px-6">
-        <audio controls src={attachment.objectUrl} className="w-full max-w-[32rem]">
-          <track kind="captions" />
-        </audio>
-      </div>
-    )
-  }
-
-  return (
-    <div className="grid min-h-[18rem] place-items-center rounded-[var(--radius)] border border-border-soft bg-panel-strong px-6 text-center">
-      <div className="max-w-[26rem] space-y-2">
-        <AttachmentPreviewIcon kind={attachment.kind} />
-        <p className="text-[length:var(--density-type-body)] font-medium text-fg">{attachment.fileName}</p>
-        <p className="text-[length:var(--density-type-control)] leading-6 text-fg-muted">
-          This attachment was sent with the prompt. Inline preview is available for images, PDFs, and audio files.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function AttachmentPreviewDialog({
-  attachment,
-  onOpenChange
-}: {
-  attachment: SubmittedAttachmentPreview | null
-  onOpenChange: (open: boolean) => void
-}) {
-  const open = attachment !== null
-
-  return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="surface-scrim fixed inset-0 z-50 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content className="shadow-surface-modal fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100vh-2rem)] w-[min(920px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel text-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
-          {attachment ? (
-            <>
-              <div className="flex items-start justify-between gap-4 border-b border-border-soft px-5 py-4">
-                <div className="min-w-0">
-                  <DialogPrimitive.Title className="flex min-w-0 items-center gap-2 text-[length:var(--density-type-headline)] font-semibold leading-5 tracking-[-0.02em] text-fg">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-[var(--radius)] border border-[color:color-mix(in_oklab,var(--color-accent)_34%,var(--color-border))] bg-[color:color-mix(in_oklab,var(--color-accent)_12%,var(--color-panel))] text-accent">
-                      <AttachmentPreviewIcon kind={attachment.kind} />
-                    </span>
-                    <span className="truncate">{attachment.fileName}</span>
-                  </DialogPrimitive.Title>
-                  <DialogPrimitive.Description className="mt-1.5 text-[length:var(--density-type-caption)] text-fg-faint">
-                    {attachment.label} {attachment.mimeType ? `· ${attachment.mimeType}` : ''}
-                  </DialogPrimitive.Description>
-                </div>
-                <DialogPrimitive.Close asChild>
-                  <button
-                    type="button"
-                    className="ui-control inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius)] border text-fg-muted outline-none transition-[background,color,box-shadow,transform] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-label="Close attachment preview"
-                  >
-                    <X className="size-4" aria-hidden={true} />
-                  </button>
-                </DialogPrimitive.Close>
-              </div>
-              <div className="min-h-0 overflow-auto p-4">
-                <AttachmentPreviewBody attachment={attachment} />
-              </div>
-            </>
-          ) : null}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
-  )
-}
-
-function ChatMetricBadge({ metric }: { metric: ChatActionMetric }) {
-  const Icon = metric.icon === 'cpu' ? Cpu : HardDrive
-
-  return (
-    <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-2.5 py-0.5 text-[length:var(--density-type-caption)] font-medium text-fg-faint md:inline-flex">
-      <Icon className="size-3" /> {metric.label}
-    </span>
-  )
-}
-
-function modelStatusBadge(model: ModelSummary): ModelSelectOption['status'] {
-  if (model.status === 'offline') return { label: 'Offline', tone: 'bad' }
-  if (model.status === 'warming') return { label: 'Warming', tone: 'warn' }
-  if (model.status === 'ready') return { label: 'Ready', tone: 'good' }
-  return { label: 'Warm', tone: 'good' }
-}
-
-function isChatSelectableModel(model: ModelSummary): boolean {
-  return model.status === 'ready' || model.status === 'warm'
-}
 
 export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const { mode, setMode } = useDataMode()
@@ -557,77 +141,15 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const requestJumpToLatest = useCallback(() => {
     setLatestTurnToken((current) => current + 1)
   }, [])
-  const revokeSubmittedAttachmentPreviews = useCallback((previews: SubmittedAttachmentPreview[]) => {
-    for (const preview of previews) {
-      revokeObjectUrl(preview.objectUrl)
-      submittedAttachmentUrlsRef.current.delete(preview.objectUrl)
-    }
-  }, [])
-  const createSubmittedAttachmentPreviews = useCallback(
-    (attachments: File[], conversationId: string, messageId: string): SubmittedAttachmentPreview[] => {
-      const counters: Record<SubmittedAttachmentKind, number> = { image: 0, pdf: 0, audio: 0, file: 0 }
-
-      return attachments.map((attachment, index) => {
-        const kind = getSubmittedAttachmentKind(attachment)
-        counters[kind] += 1
-        const objectUrl = createObjectUrl(attachment)
-        if (objectUrl) submittedAttachmentUrlsRef.current.add(objectUrl)
-
-        return {
-          id: `${attachment.name}-${attachment.lastModified}-${index}`,
-          conversationId,
-          messageId,
-          label: getSubmittedAttachmentLabel(kind, counters[kind]),
-          kind,
-          fileName: attachment.name || getSubmittedAttachmentLabel(kind, counters[kind]),
-          mimeType: attachment.type,
-          objectUrl
-        }
-      })
-    },
-    []
-  )
-  const removeSubmittedAttachmentPreviewsForConversation = useCallback(
-    (conversationId: string) => {
-      setSubmittedAttachmentsByMessageId((current) => {
-        let changed = false
-        const next = { ...current }
-
-        for (const [messageId, previews] of Object.entries(current)) {
-          const removedPreviews = previews.filter((preview) => preview.conversationId === conversationId)
-          if (removedPreviews.length === 0) continue
-
-          const keptPreviews = previews.filter((preview) => preview.conversationId !== conversationId)
-          revokeSubmittedAttachmentPreviews(removedPreviews)
-          if (keptPreviews.length > 0) {
-            next[messageId] = keptPreviews
-          } else {
-            delete next[messageId]
-          }
-          changed = true
-        }
-
-        return changed ? next : current
-      })
-      setSelectedAttachmentPreview((current) => (current?.conversationId === conversationId ? null : current))
-    },
-    [revokeSubmittedAttachmentPreviews]
-  )
-  const removeSubmittedAttachmentPreviewsForMessage = useCallback(
-    (messageId: string) => {
-      setSubmittedAttachmentsByMessageId((current) => {
-        const previews = current[messageId]
-        if (!previews) return current
-
-        revokeSubmittedAttachmentPreviews(previews)
-        const next = { ...current }
-        delete next[messageId]
-        return next
-      })
-      setSelectedAttachmentPreview((current) => (current?.messageId === messageId ? null : current))
-    },
-    [revokeSubmittedAttachmentPreviews]
-  )
+  const {
+    createSubmittedAttachmentPreviews,
+    removeSubmittedAttachmentPreviewsForConversation,
+    removeSubmittedAttachmentPreviewsForMessage
+  } = useChatPageSubmittedAttachments({
+    setSubmittedAttachmentsByMessageId,
+    setSelectedAttachmentPreview,
+    submittedAttachmentUrlsRef
+  })
   const displayedConversationId = activeConversationKey || chatConversationId
   const composerConversationId = displayedConversationId || draftConversationId
   const composerDraft = useMemo<ConversationComposerDraft>(() => {
@@ -781,7 +303,8 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     isStreaming,
     liveMode,
     removeQueuedSubmissionsForConversation,
-    removeSubmittedAttachmentPreviewsForConversation
+    removeSubmittedAttachmentPreviewsForConversation,
+    setSelectedAttachmentPreview
   ])
   const retryLiveData = useCallback(() => {
     void statusQuery.refetch()
@@ -879,6 +402,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     removeSubmittedAttachmentPreviewsForMessage,
     setComposerDraft,
     setMessageModels,
+    setSubmittedAttachmentsByMessageId,
     submittedAttachmentsByMessageId,
     updateThread
   ])
@@ -1161,13 +685,18 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
   const showStreamingPlaceholder =
     activeConversationIsStreaming && !lastMessageIsEmptyAssistant && !lastMessageHasAssistantText
 
-  const sidebar = (
-    <ChatSidebar
-      tab={sidebarTab}
-      onTabChange={setSidebarTab}
+  return (
+    <ChatPageLayout
+      data={data}
+      showLiveError={showLiveError}
+      showLiveLoading={showLiveLoading}
+      onRetryLiveData={retryLiveData}
+      onSwitchToTestData={switchToTestData}
+      sidebarTab={sidebarTab}
+      onSidebarTabChange={setSidebarTab}
       conversations={conversations.conversations}
       conversationGroups={conversations.conversationGroups}
-      activeId={conversations.activeConversationId || activeConversation?.id}
+      activeConversationId={conversations.activeConversationId || activeConversation?.id}
       messageCounts={messageCounts}
       streamingConversationIds={streamingConversationIds}
       onSelectConversation={selectConversation}
@@ -1189,226 +718,71 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
         setSidebarTab('conversations')
         focusComposer()
       }}
-      transparency={<TransparencyPane message={inspectedMessage} nodes={data.transparencyNodes} />}
-      showTransparency={transparencyTabEnabled}
+      transparencyTabEnabled={transparencyTabEnabled}
+      inspectedMessage={inspectedMessage}
+      conversationPendingDelete={conversationPendingDelete}
+      onDeleteDialogOpenChange={(open) => {
+        if (!open) setConversationPendingDelete(null)
+      }}
+      onConfirmDeleteConversation={confirmDeleteSelectedConversation}
+      deleteDialogReturnFocusRef={deleteDialogReturnFocusRef}
+      systemPromptDialogOpen={systemPromptDialogOpen}
+      onSystemPromptDialogOpenChange={updateSystemPromptDialogOpen}
+      systemPromptDraft={systemPromptDraft}
+      onSystemPromptDraftChange={setSystemPromptDraft}
+      onSaveSystemPrompt={saveSystemPrompt}
+      systemPromptButtonRef={systemPromptButtonRef}
+      selectedAttachmentPreview={selectedAttachmentPreview}
+      onAttachmentPreviewOpenChange={(open) => {
+        if (!open) setSelectedAttachmentPreview(null)
+      }}
+      actionMetrics={data.actionMetrics}
+      modelLabel={data.modelLabel}
+      modelOptions={options}
+      selectedModelValue={selectedModelValue}
+      onModelChange={setModel}
+      composerConversationId={composerConversationId}
+      composerDraft={composerDraft}
+      onComposerPromptChange={updateComposerPrompt}
+      onComposerAttachmentsChange={(files) => {
+        setFailedSubmission(null)
+        handledChatErrorRef.current = null
+        pendingRetryRef.current = null
+        updateComposerAttachments((current) => [...current, ...files])
+      }}
+      composerAttachmentCount={composerDraft.attachments.length}
+      composerDisabled={composerIsPreparingAttachments || !canChat}
+      composerIsPreparingAttachments={composerIsPreparingAttachments}
+      attachmentProcessingStage={attachmentProcessingStatus?.stage}
+      attachmentProcessingCount={attachmentProcessingStatus?.attachmentCount ?? 0}
+      onOpenSystemPrompt={openSystemPromptDialog}
+      onSendPrompt={() => void sendPrompt()}
+      onStopStreaming={stopStreamingResponse}
+      onRetryLastResponse={() => void retryLastResponse()}
+      canRetry={canRetry}
+      composerIsStreaming={composerIsStreaming}
+      composerSendMode={composerShouldQueue ? 'queue' : 'send'}
+      composerTextareaRef={composerTextareaRef}
+      showSystemPromptButton={systemPromptButtonEnabled}
+      canChat={canChat}
+      activeConversation={activeConversation}
+      latestTurnToken={latestTurnToken}
+      activeMessages={activeMessages}
+      activeModelName={activeModelName}
+      activeConversationIsStreaming={activeConversationIsStreaming}
+      lastActiveMessage={lastActiveMessage}
+      displayedConversationId={displayedConversationId}
+      submittedAttachmentsByMessageId={submittedAttachmentsByMessageId}
+      stoppedConversationIds={stoppedConversationIds}
+      visibleAttachmentProcessingStatus={visibleAttachmentProcessingStatus}
+      visibleFailedSubmission={visibleFailedSubmission}
+      visibleQueuedSubmissions={visibleQueuedSubmissions}
+      showStreamingPlaceholder={showStreamingPlaceholder}
+      onMessageAreaClick={() => setInspectedMessage(undefined)}
+      onInspectMessage={inspectMessage}
+      onOpenAttachment={setSelectedAttachmentPreview}
+      onRemoveQueuedSubmission={removeQueuedSubmission}
     />
-  )
-
-  const actions = (
-    <>
-      {data.actionMetrics.map((metric) => (
-        <ChatMetricBadge key={metric.id} metric={metric} />
-      ))}
-      <div className="flex min-w-0 flex-1 basis-full items-center gap-2 sm:basis-auto md:flex-none">
-        <span className="hidden shrink-0 whitespace-nowrap text-[length:var(--density-type-caption)] text-fg-faint md:inline">
-          {data.modelLabel}
-        </span>
-        <ModelSelect options={options} value={selectedModelValue} onChange={setModel} />
-      </div>
-    </>
-  )
-
-  if (showLiveError) {
-    return (
-      <LiveDataUnavailableOverlay
-        debugTitle="Could not reach local runtime status"
-        title="Live chat is unavailable"
-        debugDescription="Chat could not fetch runtime status from the configured API target. Start the backend, verify the endpoint, or switch Data source back to Harness in Tweaks while debugging."
-        productionDescription="Chat is waiting for the local runtime to become reachable. Keep the page open while the service recovers, or switch Data source back to Harness in Tweaks to inspect sample conversations."
-        onRetry={retryLiveData}
-        onSwitchToTestData={switchToTestData}
-      >
-        <ChatLiveLoadingGhost />
-      </LiveDataUnavailableOverlay>
-    )
-  }
-
-  if (showLiveLoading) {
-    return <ChatLiveLoadingGhost />
-  }
-
-  return (
-    <>
-      <DestructiveActionDialog
-        open={conversationPendingDelete !== null}
-        onOpenChange={(open) => {
-          if (!open) setConversationPendingDelete(null)
-        }}
-        title={`Delete "${conversationPendingDelete?.title ?? 'chat'}"?`}
-        description="This permanently removes the selected chat and its message history from local storage. This action cannot be undone."
-        destructiveLabel="Delete chat"
-        onConfirm={confirmDeleteSelectedConversation}
-        returnFocusRef={deleteDialogReturnFocusRef}
-      />
-      <TextInputDialog
-        open={systemPromptDialogOpen}
-        onOpenChange={updateSystemPromptDialogOpen}
-        title="Set system prompt"
-        description="Saved instructions are sent before every chat message in this browser. Leave it empty to use the model defaults."
-        label="System prompt"
-        value={systemPromptDraft}
-        onValueChange={setSystemPromptDraft}
-        onSave={saveSystemPrompt}
-        placeholder="You are a careful mesh-llm operator. Keep answers grounded in the current cluster state."
-        saveLabel="Save prompt"
-        returnFocusRef={systemPromptButtonRef}
-      />
-      <AttachmentPreviewDialog
-        attachment={selectedAttachmentPreview}
-        onOpenChange={(open) => {
-          if (!open) setSelectedAttachmentPreview(null)
-        }}
-      />
-      <ChatLayout
-        sidebar={sidebar}
-        hideSidebar={conversations.conversations.length === 0}
-        stickToBottomKey={`${displayedConversationId}:${latestTurnToken}`}
-        title={data.title}
-        subtitle={activeConversation?.title}
-        actions={actions}
-        composer={
-          <Composer
-            key={composerConversationId}
-            value={composerDraft.prompt}
-            onChange={updateComposerPrompt}
-            onAttach={(files) => {
-              setFailedSubmission(null)
-              handledChatErrorRef.current = null
-              pendingRetryRef.current = null
-              updateComposerAttachments((current) => [...current, ...files])
-            }}
-            attachmentCount={composerDraft.attachments.length}
-            disabled={composerIsPreparingAttachments || !canChat}
-            isPreparingAttachments={composerIsPreparingAttachments}
-            preparingStage={attachmentProcessingStatus?.stage}
-            preparingAttachmentCount={attachmentProcessingStatus?.attachmentCount ?? 0}
-            onSystemPrompt={openSystemPromptDialog}
-            onSend={() => void sendPrompt()}
-            onStop={stopStreamingResponse}
-            onRetry={() => void retryLastResponse()}
-            canRetry={canRetry}
-            isStreaming={composerIsStreaming}
-            sendMode={composerShouldQueue ? 'queue' : 'send'}
-            textareaRef={composerTextareaRef}
-            systemPromptButtonRef={systemPromptButtonRef}
-            showSystemPromptButton={systemPromptButtonEnabled}
-            placeholder={canChat ? 'Ask me anything...' : 'Waiting for a warm model...'}
-          />
-        }
-        onMessageAreaClick={() => setInspectedMessage(undefined)}
-      >
-        {activeMessages.length === 0 &&
-        !showStreamingPlaceholder &&
-        visibleQueuedSubmissions.length === 0 &&
-        !visibleAttachmentProcessingStatus &&
-        !visibleFailedSubmission ? (
-          <EmptyState
-            tone="accent"
-            icon={<MessageSquareMore aria-hidden={true} className="size-10" strokeWidth={1.4} />}
-            title="Start Chatting"
-            description={
-              conversations.conversations.length === 0 ? (
-                'Type a message below to begin. Your chats stay in this browser, and the mesh routes requests automatically.'
-              ) : (
-                <>
-                  No messages yet. Send a message to begin a fresh conversation; replies use{' '}
-                  <span className="font-mono text-fg">{activeModelName}</span> unless you choose another model.
-                </>
-              )
-            }
-          />
-        ) : null}
-        {activeMessages.map((message) => {
-          const transparencyMessage = message.inspectMessage
-          const messageAttachments = submittedAttachmentsByMessageId[message.id] ?? []
-          const isLatestAssistantMessage = message.messageRole === 'assistant' && message.id === lastActiveMessage?.id
-          const messageIsStreamingResponse = activeConversationIsStreaming && isLatestAssistantMessage
-          const messageWasStopped = stoppedConversationIds.has(displayedConversationId) && isLatestAssistantMessage
-          return (
-            <MessageRow
-              key={message.id}
-              messageRole={message.messageRole}
-              timestamp={message.timestamp}
-              model={message.model}
-              state={messageIsStreamingResponse ? 'streaming' : messageWasStopped ? 'stopped' : 'default'}
-              body={message.body}
-              route={message.route}
-              routeNode={message.routeNode}
-              showRouteMetadata={transparencyTabEnabled}
-              tokens={message.tokens}
-              tokPerSec={message.tokPerSec}
-              ttft={message.ttft}
-              inspect={
-                transparencyTabEnabled && transparencyMessage ? () => inspectMessage(transparencyMessage) : undefined
-              }
-              inspectLabel={message.inspectLabel}
-              inspected={transparencyMessage != null && inspectedMessage?.id === transparencyMessage.id}
-              onStopStreaming={stopStreamingResponse}
-              attachments={messageAttachments.map((attachment): MessageAttachmentAction => {
-                return {
-                  id: attachment.id,
-                  label: attachment.label,
-                  kind: attachment.kind,
-                  fileName: attachment.fileName,
-                  onOpen: () => setSelectedAttachmentPreview(attachment)
-                }
-              })}
-            />
-          )
-        })}
-        {visibleAttachmentProcessingStatus ? (
-          <AttachmentProcessingPanel status={visibleAttachmentProcessingStatus} />
-        ) : null}
-        {visibleFailedSubmission ? (
-          <>
-            {visibleFailedSubmission.includeUserRow ? (
-              <MessageRow
-                key={`${visibleFailedSubmission.id}-user`}
-                messageRole="user"
-                timestamp={visibleFailedSubmission.timestamp}
-                model={visibleFailedSubmission.model}
-                state="default"
-                body={getSubmissionBody(visibleFailedSubmission)}
-                showRouteMetadata={false}
-              />
-            ) : null}
-            <MessageRow
-              key={`${visibleFailedSubmission.id}-error`}
-              messageRole="assistant"
-              timestamp={visibleFailedSubmission.timestamp}
-              model={visibleFailedSubmission.model}
-              state="error"
-              body={visibleFailedSubmission.errorMessage}
-              showRouteMetadata={false}
-            />
-          </>
-        ) : null}
-        {showStreamingPlaceholder ? (
-          <MessageRow
-            key="streaming-response-placeholder"
-            messageRole="assistant"
-            timestamp="Now"
-            model={activeModelName}
-            state="streaming"
-            body=""
-            showRouteMetadata={false}
-            onStopStreaming={stopStreamingResponse}
-          />
-        ) : null}
-        {visibleQueuedSubmissions.map((submission) => (
-          <MessageRow
-            key={submission.id}
-            messageRole="user"
-            timestamp={submission.timestamp}
-            model="Queued"
-            state="queued"
-            body={getQueuedSubmissionBody(submission)}
-            showRouteMetadata={false}
-            onRemoveQueued={() => removeQueuedSubmission(submission.id)}
-          />
-        ))}
-      </ChatLayout>
-    </>
   )
 }
 

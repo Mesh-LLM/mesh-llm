@@ -53,13 +53,15 @@ struct BenchmarkChildOverrideGuard;
 
 impl Drop for BenchmarkChildOverrideGuard {
     fn drop(&mut self) {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(BENCHMARK_TOOL_TEST_OVERRIDE_ENV) };
     }
 }
 
 fn with_benchmark_child_override<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var(BENCHMARK_TOOL_TEST_OVERRIDE_ENV, path) };
     let _guard = BenchmarkChildOverrideGuard;
     f()

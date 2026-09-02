@@ -51,6 +51,18 @@ replacement. `MESH_LLM_DATA_DIR` overrides the application-data fallback root.
 Use `HfModelRepository::builder()` to override the cache directory, endpoint, or
 token explicitly in tests and embedding applications.
 
+## TLS portability
+
+Before constructing a Hub or Xet client, this crate checks the native AArch64
+SHA-512 capability. On Linux/Android it reads `AT_HWCAP`; on Apple platforms it
+uses the ARM SHA-512 sysctl. If an application provider is already installed,
+it keeps that provider. Otherwise, it installs rustls' `ring` provider on
+AArch64 without SHA-512 and leaves reqwest's normal provider selection
+unchanged everywhere else. If another provider was already installed on an
+affected AArch64 CPU, the crate preserves it but warns that its safety cannot
+be verified. Xet remains enabled and TLS certificate/hostname verification is
+unchanged.
+
 ## Responsibilities
 
 - resolve branch/tag names to immutable Hugging Face revisions

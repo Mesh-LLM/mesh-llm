@@ -12,6 +12,15 @@ process needs to behave like it was launched by an operator in a terminal, be
 observed after launch, expose readiness, keep running beyond one command, or be
 stopped cleanly later.
 
+## macOS Local Network privacy gate
+
+Before using a remote macOS node for LAN, mDNS, or split-inference diagnosis,
+complete the `deploy-macos` skill's Local Network privacy preflight for the exact
+signed app/binary identity and launch context on every Mac. A raw UDP probe, a
+LAN address in an invite, or relay connectivity is not proof that the deployed
+process was authorized. Do not collect performance data until both nodes report
+the intended LAN peer as an iroh direct path.
+
 ## Rule
 
 For environment-sensitive processes, prefer SSH with a TTY and an interactive

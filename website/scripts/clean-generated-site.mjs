@@ -20,6 +20,7 @@ const generatedPaths = [
   "docs/crates",
   "docs/pagefind",
   "website/src/assets/site.generated.css",
+  "website/src/_data/cliInventory.json",
 ];
 
 for (const relativePath of generatedPaths) {
@@ -30,4 +31,4 @@ for (const relativePath of generatedPaths) {
   await rm(target, { force: true, recursive: true });
 }
 
-console.log("Removed generated website artifacts from docs/ and website/src/assets/.");
+console.log("Removed generated website artifacts from docs/, website/src/assets/, and website/src/_data/.");

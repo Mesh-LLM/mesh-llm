@@ -302,6 +302,93 @@ fn activation_width_rejects_too_deep_metadata_arrays() {
 }
 
 #[test]
+fn activation_width_for_qwen4exp_is_the_wide_hyper_connected_boundary() {
+    // QWEN4EXP moves hc parallel residual streams across a stage boundary, so a
+    // stage exchanges hc*embedding_length floats per token. embedding_length
+    // alone would under-size every activation frame by a factor of hc.
+    let dir = unique_test_dir("activation-width-qwen4exp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(3);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 8192);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_accepts_a_matching_declared_output_width() {
+    let dir = unique_test_dir("activation-width-qwen4exp-declared");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(4);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length_out", 8192);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 8192);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_rejects_a_contradictory_declared_output_width() {
+    let dir = unique_test_dir("activation-width-qwen4exp-mismatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(4);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    push_u32_kv(&mut bytes, "qwen4exp.hyper_connection.count", 4);
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length_out", 2048);
+    std::fs::write(&model, bytes).unwrap();
+
+    let error = activation_width(&model).unwrap_err().to_string();
+    assert!(
+        error.contains("disagrees with hyper_connection.count"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_qwen4exp_requires_the_hyper_connection_count() {
+    // Failing loudly is the point: silently falling back to embedding_length
+    // would produce a package whose manifest under-sizes every stage boundary.
+    let dir = unique_test_dir("activation-width-qwen4exp-missing-hc");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(2);
+    push_string_kv(&mut bytes, "general.architecture", "qwen4exp");
+    push_u32_kv(&mut bytes, "qwen4exp.embedding_length", 2048);
+    std::fs::write(&model, bytes).unwrap();
+
+    let error = activation_width(&model).unwrap_err().to_string();
+    assert!(error.contains("hyper_connection.count"), "{error}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn activation_width_for_other_architectures_is_unchanged_by_a_stray_hc_count() {
+    // The hyper-connected derivation must be scoped to qwen4exp only.
+    let dir = unique_test_dir("activation-width-non-qwen4exp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = dir.join("model.gguf");
+    let mut bytes = gguf_header(3);
+    push_string_kv(&mut bytes, "general.architecture", "qwen2");
+    push_u32_kv(&mut bytes, "qwen2.embedding_length", 3584);
+    push_u32_kv(&mut bytes, "qwen2.hyper_connection.count", 4);
+    std::fs::write(&model, bytes).unwrap();
+
+    assert_eq!(activation_width(&model).unwrap(), 3584);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn resumes_only_existing_artifacts_when_requested() {
     let dir = unique_test_dir("resume-artifact");
     std::fs::create_dir_all(&dir).unwrap();
@@ -315,6 +402,257 @@ fn resumes_only_existing_artifacts_when_requested() {
         true
     ));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn manifest_rejects_a_plan_that_disagrees_with_the_written_artifact() {
+    // The observed drift: the native slice writer retained per_layer_token_embd
+    // while the plan did not, so the manifest reported 610 tensors for an
+    // artifact holding 611 and under-reported tensor_bytes by 26.8 GiB. That
+    // number feeds split planning's per-layer cost estimate.
+    let error = crate::write::check_manifest_matches_artifact(
+        1,
+        (610, 22_060_312_320),
+        (611, 50_860_450_560),
+        Path::new("/tmp/stage-001.gguf"),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("disagree on tensor selection"), "{error}");
+    assert!(error.contains("610"), "{error}");
+    assert!(error.contains("611"), "{error}");
+}
+
+#[test]
+fn manifest_accepts_a_plan_that_matches_the_written_artifact() {
+    assert!(
+        crate::write::check_manifest_matches_artifact(
+            0,
+            (617, 50_482_128_640),
+            (617, 50_482_128_640),
+            Path::new("/tmp/stage-000.gguf"),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn per_layer_token_embd_is_kept_only_by_stages_that_retain_a_ple_layer() {
+    // Qwen3.8-Flash-Next declares ple.layers = [1]. Layer 1 is in stage 0, so
+    // stage 1 can never gather from the 26.8 GiB table and must not ship it.
+    let tensors = qwen4exp_tensors(48, &[1]);
+    let plan = crate::plan::build_plan_from_tensors(2, &tensors).unwrap();
+
+    let stage0 = &plan.stages[0];
+    let stage1 = &plan.stages[1];
+
+    assert!(
+        stage_selects(&tensors, stage0.layer_start, stage0.layer_end, true, false),
+        "stage 0 holds the PLE layer and must retain per_layer_token_embd.weight"
+    );
+    assert!(
+        !stage_selects(&tensors, stage1.layer_start, stage1.layer_end, false, true),
+        "stage 1 holds no PLE layer and must not ship per_layer_token_embd.weight"
+    );
+
+    // And the cost must be absent from the accounting, not merely from the file.
+    assert!(
+        stage1.tensor_bytes < 28_800_138_240,
+        "stage 1 tensor_bytes {} still includes the per-layer embedding table",
+        stage1.tensor_bytes
+    );
+}
+
+#[test]
+fn per_layer_token_embd_is_kept_by_a_mid_stage_that_holds_the_ple_layer() {
+    // The case the loader exemption exists for: a PLE layer on a stage that does
+    // not own the token embeddings.
+    let tensors = qwen4exp_tensors(48, &[30]);
+    let plan = crate::plan::build_plan_from_tensors(2, &tensors).unwrap();
+    let stage1 = &plan.stages[1];
+
+    assert!(
+        stage_selects(&tensors, stage1.layer_start, stage1.layer_end, false, true),
+        "a mid stage holding a PLE layer must retain per_layer_token_embd.weight \
+         even though it does not include embeddings"
+    );
+}
+
+#[test]
+fn per_layer_token_embd_is_kept_by_every_stage_for_a_gemma_shaped_artifact() {
+    // Gemma3n/Gemma4 gather the same table through per-block tensors named
+    // `blk.N.inp_gate` / `blk.N.proj` / `blk.N.post_norm` (llama-arch.cpp:568-570)
+    // -- none of which carry a `ple_` or `per_layer_` prefix. A name-based
+    // consumer scan therefore finds nothing for them, and the qwen4exp rule must
+    // NOT fail closed: every stage must retain the shared table.
+    let mut tensors = vec![
+        sized_tensor("token_embd.weight", None, TensorRole::Embedding, 100),
+        sized_tensor(
+            "per_layer_token_embd.weight",
+            None,
+            TensorRole::Embedding,
+            5_000,
+        ),
+    ];
+    for layer in 0..8u32 {
+        tensors.push(sized_tensor(
+            &format!("blk.{layer}.attn_norm.weight"),
+            Some(layer),
+            TensorRole::Layer,
+            7,
+        ));
+        tensors.push(sized_tensor(
+            &format!("blk.{layer}.inp_gate.weight"),
+            Some(layer),
+            TensorRole::Layer,
+            5,
+        ));
+    }
+
+    let plan = crate::plan::build_plan_from_tensors(4, &tensors).unwrap();
+    for stage in &plan.stages {
+        assert!(
+            stage.includes_per_layer_token_embd
+                && stage_selects(
+                    &tensors,
+                    stage.layer_start,
+                    stage.layer_end,
+                    stage.includes_embeddings,
+                    stage.includes_output
+                ),
+            "gemma-shaped stage {} must retain per_layer_token_embd.weight",
+            stage.stage_index
+        );
+    }
+}
+
+#[test]
+fn cross_shard_ple_ownership_uses_complete_source_tensor_counts_and_bytes() {
+    // The shared table is in shard 0 while the only sparse PLE consumer is in
+    // shard 1. Planning joins both inventories before it decides which stage
+    // owns the table, and the resulting ownership bit is passed to every
+    // shard-local native slice plan.
+    let table_bytes = 28_800_138_240;
+    let table_shard = vec![
+        sized_tensor("token_embd.weight", None, TensorRole::Embedding, 100),
+        sized_tensor(
+            "per_layer_token_embd.weight",
+            None,
+            TensorRole::Embedding,
+            table_bytes,
+        ),
+    ];
+    let mut consumer_shard = Vec::new();
+    for layer in 0..4u32 {
+        consumer_shard.push(sized_tensor(
+            &format!("blk.{layer}.attn_norm.weight"),
+            Some(layer),
+            TensorRole::Layer,
+            10,
+        ));
+    }
+    consumer_shard.push(sized_tensor(
+        "blk.1.ple_mlp.weight",
+        Some(1),
+        TensorRole::Layer,
+        7,
+    ));
+
+    let tensors = table_shard
+        .into_iter()
+        .chain(consumer_shard)
+        .collect::<Vec<_>>();
+    let plan = crate::plan::build_plan_from_tensors(2, &tensors).unwrap();
+    let stage0 = &plan.stages[0];
+    let stage1 = &plan.stages[1];
+
+    assert!(stage0.includes_per_layer_token_embd);
+    assert!(!stage1.includes_per_layer_token_embd);
+    assert_eq!(stage0.tensor_count, 5);
+    assert_eq!(stage0.tensor_bytes, table_bytes + 127);
+    assert_eq!(stage1.tensor_count, 2);
+    assert_eq!(stage1.tensor_bytes, 20);
+}
+
+fn stage_selects(
+    tensors: &[TensorInfo],
+    layer_start: u32,
+    layer_end: u32,
+    includes_embeddings: bool,
+    includes_output: bool,
+) -> bool {
+    let with_table = crate::plan::stage_plan_from_tensors(
+        0,
+        layer_start,
+        layer_end,
+        includes_embeddings,
+        includes_output,
+        tensors,
+    );
+    let without_table: Vec<TensorInfo> = tensors
+        .iter()
+        .filter(|tensor| tensor.name != "per_layer_token_embd.weight")
+        .cloned()
+        .collect();
+    let baseline = crate::plan::stage_plan_from_tensors(
+        0,
+        layer_start,
+        layer_end,
+        includes_embeddings,
+        includes_output,
+        &without_table,
+    );
+    with_table.tensor_count > baseline.tensor_count
+}
+
+/// A qwen4exp-shaped tensor list: the PLE consumer blocks are a sparse subset of
+/// layers (`ple.layers = [1]` on Qwen3.8-Flash-Next), so only the stage holding
+/// layer 1 can ever gather from `per_layer_token_embd.weight`.
+fn qwen4exp_tensors(layer_count: u32, ple_layers: &[u32]) -> Vec<TensorInfo> {
+    let mut tensors = vec![
+        sized_tensor("token_embd.weight", None, TensorRole::Embedding, 100),
+        sized_tensor(
+            "per_layer_token_embd.weight",
+            None,
+            TensorRole::Embedding,
+            28_800_138_240,
+        ),
+        sized_tensor("output_hc_norm.weight", None, TensorRole::FinalNorm, 10),
+    ];
+    for layer in 0..layer_count {
+        tensors.push(sized_tensor(
+            &format!("blk.{layer}.hc_attn_norm.weight"),
+            Some(layer),
+            TensorRole::Layer,
+            7,
+        ));
+        if ple_layers.contains(&layer) {
+            tensors.push(sized_tensor(
+                &format!("blk.{layer}.ple_key.weight"),
+                Some(layer),
+                TensorRole::Layer,
+                5,
+            ));
+        }
+    }
+    tensors
+}
+
+fn sized_tensor(
+    name: &str,
+    layer_index: Option<u32>,
+    role: TensorRole,
+    byte_size: u64,
+) -> TensorInfo {
+    TensorInfo {
+        name: name.to_string(),
+        layer_index,
+        role,
+        ggml_type: 0,
+        byte_size,
+        element_count: 1,
+    }
 }
 
 fn tensor(name: &str, layer_index: Option<u32>) -> TensorInfo {

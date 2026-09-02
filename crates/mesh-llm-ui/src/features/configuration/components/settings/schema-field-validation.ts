@@ -4,6 +4,11 @@ import type {
   ConfigurationSettingValueSchema,
   ConfigurationSettingValidationConstraint
 } from '@/features/app-tabs/types'
+import {
+  isSchemaRecord,
+  objectArrayItemSchema,
+  parseSchemaObjectArrayValue
+} from '@/features/configuration/lib/schema-object-array'
 import { acceptedValuesForSetting, hasSchemaKind, numericMetadataForSetting } from './schema-control-utils'
 
 export type SchemaFieldValidationResult = {
@@ -121,26 +126,87 @@ function validateUrl(value: string, label: string): string | undefined {
   return undefined
 }
 
-function validateObject(value: string, label: string) {
+function validateJsonSchemaValue(
+  value: unknown,
+  setting: ConfigurationDefaultsSetting,
+  schema: ConfigurationSettingValueSchema
+): string | undefined {
+  const label = setting.label
+
+  switch (schema.kind) {
+    case 'boolean':
+      return typeof value === 'boolean' ? undefined : `${label} must be true or false.`
+    case 'integer':
+      if (typeof value !== 'number' || !Number.isInteger(value)) return `${label} must be a whole number.`
+      return validateNumber(String(value), setting, true)
+    case 'float':
+      if (typeof value !== 'number' || !Number.isFinite(value)) return `${label} must be a number.`
+      return validateNumber(String(value), setting, false)
+    case 'enum':
+    case 'path':
+    case 'socket_addr':
+    case 'string':
+    case 'url':
+      if (typeof value !== 'string') return `${label} must be text.`
+      return validateSchemaKind(value, setting, schema)
+    case 'one_of': {
+      const messages = schema.variants
+        .map((variant) => validateJsonSchemaValue(value, setting, variant))
+        .filter((message): message is string => typeof message === 'string')
+      return messages.length === schema.variants.length ? messages[0] : undefined
+    }
+    case 'array': {
+      if (!Array.isArray(value)) return `${label} must be a JSON array.`
+      const itemError = value
+        .map((item) => validateJsonSchemaValue(item, setting, schema.items))
+        .find((message): message is string => typeof message === 'string')
+      return itemError ? `One ${label} item is invalid: ${itemError}` : undefined
+    }
+    case 'object': {
+      if (!isSchemaRecord(value)) return `${label} must be a JSON object.`
+      for (const property of schema.properties ?? []) {
+        const propertyValue = value[property.name]
+        if (propertyValue === undefined) {
+          if (property.required) return `${property.label} is required.`
+          continue
+        }
+        const message = validateJsonSchemaValue(
+          propertyValue,
+          { ...setting, label: property.label },
+          property.value_schema
+        )
+        if (message) return message
+      }
+      return undefined
+    }
+  }
+}
+
+function validateObject(value: string, setting: ConfigurationDefaultsSetting, schema: ConfigurationSettingValueSchema) {
   if (value.trim().length === 0) return undefined
 
   try {
     const parsed: unknown = JSON.parse(value)
-    return firstIssueMessage(
-      v.safeParse(
-        v.pipe(
-          v.unknown(),
-          v.check(
-            (input) => input !== null && typeof input === 'object' && !Array.isArray(input),
-            `${label} must be a JSON object.`
-          )
-        ),
-        parsed
-      )
-    )
-  } catch {
-    return `${label} must be valid JSON.`
+    return validateJsonSchemaValue(parsed, setting, schema)
+  } catch (error) {
+    if (error instanceof SyntaxError) return `${setting.label} must be valid JSON.`
+    throw error
   }
+}
+
+function validateObjectArray(
+  value: string,
+  setting: ConfigurationDefaultsSetting,
+  schema: ConfigurationSettingValueSchema
+): string | undefined {
+  const parsed = parseSchemaObjectArrayValue(value)
+  const itemSchema = objectArrayItemSchema(schema)
+  if (!parsed || !itemSchema) return `${setting.label} must be a valid JSON array of objects.`
+
+  const itemError = parsed
+    .map((item) => validateJsonSchemaValue(item, setting, itemSchema))
+    .find((message): message is string => typeof message === 'string')
+  return itemError ? `One ${setting.label} item is invalid: ${itemError}` : undefined
 }
 
 function validateAllowedPattern(value: string, pattern: string, label: string): string | undefined {
@@ -193,6 +259,7 @@ function validateSchemaKind(
       return messages.length === schema.variants.length ? messages[0] : undefined
     }
     case 'array': {
+      if (objectArrayItemSchema(schema)) return validateObjectArray(value, setting, schema)
       const items = arrayItems(value)
       const itemError = items
         .map((item) => validateSchemaKind(item, setting, schema.items))
@@ -200,7 +267,7 @@ function validateSchemaKind(
       return itemError ? `One ${label} item is invalid: ${itemError}` : undefined
     }
     case 'object':
-      return validateObject(value, label)
+      return validateObject(value, setting, schema)
     case 'url':
       return validateUrl(value, label)
     case 'path':

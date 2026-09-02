@@ -346,6 +346,22 @@ pub(super) fn record_prefill_edge_transport(
     );
 }
 
+pub(super) fn record_prefill_stage_compute(
+    stats: &mut StageReplyStats,
+    config: &StageConfig,
+    message: &StageWireMessage,
+    compute_ms: f64,
+) {
+    if !message.kind.is_prefill() {
+        return;
+    }
+    stats.observe_prefill_compute(
+        config.stage_index,
+        ms_to_us(compute_ms),
+        message.token_count.max(0) as usize,
+    );
+}
+
 pub(super) fn record_verify_window_timing(
     stats: &mut StageReplyStats,
     message: &StageWireMessage,

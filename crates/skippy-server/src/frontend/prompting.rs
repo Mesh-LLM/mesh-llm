@@ -23,6 +23,7 @@ use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
 use skippy_runtime::MediaInput;
 use skippy_runtime::TokenSignal;
+use tokio::task;
 
 /// Output of a single chat-template application, before it is folded into a
 /// [`PreparedGenerationPrompt`].
@@ -33,6 +34,29 @@ struct RenderedChatPrompt {
 }
 
 impl StageOpenAiBackend {
+    /// Offload [`Self::prepare_chat_prompt`] to a blocking thread.
+    ///
+    /// Template rendering takes the runtime mutex and runs the template
+    /// engine synchronously (FFI). Under a connect burst (e.g. a c256
+    /// benchmark wave) running that on tokio workers starves the accept
+    /// task: every worker blocks on the mutex or renders while SYNs pile
+    /// up behind the listen backlog. Moving it to the blocking pool keeps
+    /// the async workers (and therefore the accept loop) responsive. This
+    /// mirrors the `spawn_blocking` already used for prompt tokenization.
+    pub(super) async fn prepare_chat_prompt_offloaded(
+        &self,
+        request: &ChatCompletionRequest,
+        options: ChatTemplateOptions,
+    ) -> OpenAiResult<PreparedGenerationPrompt> {
+        let backend = self.clone();
+        let request = request.clone();
+        task::spawn_blocking(move || backend.prepare_chat_prompt(&request, options))
+            .await
+            .map_err(|error| {
+                OpenAiError::backend(format!("chat prompt preparation task failed: {error}"))
+            })?
+    }
+
     pub(super) fn prepare_chat_prompt(
         &self,
         request: &ChatCompletionRequest,
@@ -153,12 +177,16 @@ impl StageOpenAiBackend {
         } else {
             None
         };
-        let runtime = self
+        // Short-lock reader pattern: clone the immutable reader and run the
+        // template FFI on it, so template rendering never waits behind
+        // decode's hold of the runtime mutex (and vice versa).
+        let reader = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        let result = runtime
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
             .model
+            .reader();
+        let result = reader
             .apply_chat_template_json(
                 &messages_json,
                 ChatTemplateJsonOptions {
@@ -169,6 +197,11 @@ impl StageOpenAiBackend {
                     tools_json,
                     tool_choice_json,
                     parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),
+                    chat_template: options.chat_template.clone(),
+                    use_jinja: options.use_jinja,
+                    grammar: options.grammar.clone(),
+                    json_schema: options.json_schema.clone(),
+                    skip_chat_parsing: options.skip_chat_parsing,
                 },
             )
             .map_err(openai_backend_error)?;
@@ -189,7 +222,35 @@ impl StageOpenAiBackend {
         let Some(metadata) = metadata else {
             return Ok(None);
         };
+        if serde_json::from_str::<Value>(metadata)
+            .ok()
+            .and_then(|value| value.get("skip_chat_parsing").and_then(Value::as_bool))
+            .unwrap_or(false)
+        {
+            return Ok(Some(ParsedChatMessage {
+                content: Some(text.to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+            }));
+        }
 
+        let model = self
+            .runtime
+            .lock()
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
+            .model
+            .reader();
+        self.parse_chat_output_with_reader(&model, text, request, metadata, is_partial)
+    }
+
+    pub(super) fn parse_chat_output_with_reader(
+        &self,
+        model: &skippy_runtime::StageModelReader,
+        text: &str,
+        request: &ChatCompletionRequest,
+        metadata: &str,
+        is_partial: bool,
+    ) -> OpenAiResult<Option<ParsedChatMessage>> {
         // Emulation path: when tools were requested but the prompt was rendered
         // without native tool support, the model emitted TOOL_CALL text lines.
         // Parse those into OpenAI tool_calls instead of using the native parser.
@@ -199,16 +260,9 @@ impl StageOpenAiBackend {
             return Ok(parse_emulated_chat_output(text, request, is_partial));
         }
 
-        let parsed_json = {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            runtime
-                .model
-                .parse_chat_response_json(text, metadata, is_partial)
-                .map_err(openai_backend_error)?
-        };
+        let parsed_json = model
+            .parse_chat_response_json(text, metadata, is_partial)
+            .map_err(openai_backend_error)?;
         Ok(parsed_chat_message_from_json(&parsed_json, request))
     }
 
@@ -225,12 +279,17 @@ impl StageOpenAiBackend {
         text: &str,
         add_special: bool,
     ) -> OpenAiResult<Vec<i32>> {
-        let runtime = self
+        // Hold the inference mutex only long enough to clone the immutable
+        // reader; the tokenizer FFI runs on the reader, so decode can hold
+        // the runtime lock concurrently without serializing tokenization
+        // behind it (see render_chat_prompt for the same pattern).
+        let reader = self
             .runtime
             .lock()
-            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-        runtime
+            .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?
             .model
+            .reader();
+        reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
     }
@@ -361,7 +420,7 @@ pub(super) fn parse_emulated_chat_output(
         if request.parallel_tool_calls == Some(false) {
             calls.truncate(1);
         }
-        crate::frontend::generation::ensure_tool_call_ids(&mut calls);
+        openai_frontend::ensure_tool_call_ids(&mut calls);
         Some(Value::Array(calls))
     };
     Some(ParsedChatMessage {

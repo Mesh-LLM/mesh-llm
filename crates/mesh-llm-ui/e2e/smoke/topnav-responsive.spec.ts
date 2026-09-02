@@ -7,6 +7,7 @@ async function readTopNavMetrics(page: Page) {
     const header = document.querySelector('header')
     const apiTarget = document.querySelector('[aria-label="API target instructions"]')
     const actionsMenu = document.querySelector('[aria-label="Open navigation actions"]')
+    const compactNavigation = document.querySelector('[aria-label="Primary compact navigation"]')
     const joinButton = document.querySelector('[aria-label="Mesh join and invite instructions"]')
     const themeButton = document.querySelector('[aria-label^="Theme:"]')
     const preferencesButton = document.querySelector('[aria-label="Open interface preferences"]')
@@ -25,6 +26,7 @@ async function readTopNavMetrics(page: Page) {
     const visibleControls = [
       apiTarget,
       actionsMenu,
+      compactNavigation,
       joinButton,
       themeButton,
       preferencesButton,
@@ -36,6 +38,7 @@ async function readTopNavMetrics(page: Page) {
     return {
       actionsMenuVisible: isVisible(actionsMenu),
       apiTargetVisible: isVisible(apiTarget),
+      compactNavigationVisible: isVisible(compactNavigation),
       controlTopSpread,
       fullTabLabels: fullTabLabels.filter(isVisible).map((element) => (element.textContent ?? '').trim()),
       headerHeight: header ? Math.round(header.getBoundingClientRect().height) : 0,
@@ -57,12 +60,16 @@ test('top navigation stays on one row at every responsive breakpoint', async ({ 
       .poll(async () => {
         const metrics = await readTopNavMetrics(page)
         let responsiveControlsReady: boolean
-        if (width < 768) {
-          responsiveControlsReady = !metrics.apiTargetVisible && metrics.actionsMenuVisible
-        } else if (width < 1024) {
-          responsiveControlsReady = metrics.apiTargetVisible && metrics.actionsMenuVisible
+        if (width < 1024) {
+          responsiveControlsReady =
+            metrics.compactNavigationVisible &&
+            metrics.fullTabLabels.length === 0 &&
+            !metrics.apiTargetVisible &&
+            metrics.actionsMenuVisible
         } else {
           responsiveControlsReady =
+            !metrics.compactNavigationVisible &&
+            metrics.fullTabLabels.join('|') === 'Network|Chat|Configuration' &&
             metrics.apiTargetVisible &&
             !metrics.actionsMenuVisible &&
             metrics.joinButtonVisible &&
@@ -83,13 +90,18 @@ test('top navigation stays on one row at every responsive breakpoint', async ({ 
     expect(metrics.controlTopSpread, `${width}px controls should not split onto separate rows`).toBeLessThanOrEqual(3)
     expect(metrics.horizontalOverflow, `${width}px should not create horizontal document overflow`).toBe(false)
 
-    if (width < 768) {
+    if (width < 1024) {
+      expect(metrics.compactNavigationVisible, `${width}px compact state shows primary icon navigation`).toBe(true)
+      expect(metrics.fullTabLabels, `${width}px compact state hides full primary labels`).toEqual([])
       expect(metrics.apiTargetVisible, `${width}px compact state hides API target chip`).toBe(false)
       expect(metrics.actionsMenuVisible, `${width}px compact state keeps actions in the menu`).toBe(true)
-    } else if (width < 1024) {
-      expect(metrics.apiTargetVisible, `${width}px shows the API target chip`).toBe(true)
-      expect(metrics.actionsMenuVisible, `${width}px middle state uses the actions menu`).toBe(true)
     } else {
+      expect(metrics.compactNavigationVisible, `${width}px desktop state hides primary icon navigation`).toBe(false)
+      expect(metrics.fullTabLabels, `${width}px desktop state shows full primary labels`).toEqual([
+        'Network',
+        'Chat',
+        'Configuration'
+      ])
       expect(metrics.apiTargetVisible, `${width}px shows the API target chip`).toBe(true)
       expect(metrics.actionsMenuVisible, `${width}px desktop state shows direct actions`).toBe(false)
       expect(metrics.joinButtonVisible, `${width}px desktop state shows join actions`).toBe(true)

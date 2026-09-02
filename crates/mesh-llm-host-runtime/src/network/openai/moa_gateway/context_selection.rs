@@ -10,32 +10,72 @@ pub(in crate::network::openai) fn context_can_satisfy(
     }
 }
 
-pub(in crate::network::openai) async fn select_remote_host(
+pub(in crate::network::openai) fn select_degrade_model(
+    candidates: Vec<String>,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+    required_tokens: Option<u32>,
+) -> Option<String> {
+    let candidates = candidates
+        .into_iter()
+        .filter(|model| model != mesh_mixture_of_agents::VIRTUAL_MODEL_NAME);
+    let Some(required_tokens) = required_tokens else {
+        return candidates.into_iter().next();
+    };
+
+    let mut unknown = None;
+    let mut fitting = Vec::new();
+    for model in candidates {
+        let context_length = runtimes
+            .iter()
+            .filter(|runtime| runtime.model_name == model)
+            .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
+            .max();
+        match context_length {
+            Some(context) if context >= required_tokens => fitting.push((context, model)),
+            Some(_) => {}
+            None => {
+                unknown.get_or_insert(model);
+            }
+        }
+    }
+
+    fitting
+        .into_iter()
+        .max_by(|(left_context, left_model), (right_context, right_model)| {
+            left_context
+                .cmp(right_context)
+                .then_with(|| right_model.cmp(left_model))
+        })
+        .map(|(_, model)| model)
+        .or(unknown)
+}
+
+pub(super) async fn eligible_remote_hosts(
     node: &mesh::Node,
     model: &str,
     required_tokens: Option<u32>,
     hosts: Vec<iroh::EndpointId>,
-) -> Option<iroh::EndpointId> {
+) -> Vec<iroh::EndpointId> {
     let Some(required_tokens) = required_tokens else {
-        return hosts.into_iter().next();
+        return hosts;
     };
 
-    let mut unknown = None;
+    let mut fitting = Vec::new();
+    let mut unknown = Vec::new();
     for host in hosts {
         match node.peer_model_context_length(host, model).await {
-            Some(context) if context >= required_tokens => return Some(host),
+            Some(context) if context >= required_tokens => fitting.push(host),
             Some(context) => {
                 tracing::info!(
                     "MoA: skipping remote worker {model} on {}; context {context} cannot fit {required_tokens} required tokens",
                     host.fmt_short()
                 );
             }
-            None => {
-                unknown.get_or_insert(host);
-            }
+            None => unknown.push(host),
         }
     }
-    unknown
+    fitting.extend(unknown);
+    fitting
 }
 
 /// Capabilities the automatic directive can serve: the union across the mesh.
@@ -114,6 +154,36 @@ mod tests {
             context_length,
             ready: true,
         }
+    }
+
+    #[test]
+    fn degrade_selection_prefers_largest_known_context_that_fits() {
+        let candidates = vec![
+            "local-small".to_string(),
+            "remote-large".to_string(),
+            "remote-medium".to_string(),
+        ];
+        let runtimes = vec![
+            runtime("local-small", Some(4096)),
+            runtime("remote-large", Some(16_384)),
+            runtime("remote-medium", Some(8192)),
+        ];
+
+        assert_eq!(
+            select_degrade_model(candidates, &runtimes, Some(6000)).as_deref(),
+            Some("remote-large")
+        );
+    }
+
+    #[test]
+    fn degrade_selection_keeps_unknown_context_as_last_resort() {
+        let candidates = vec!["too-small".to_string(), "unknown".to_string()];
+        let runtimes = vec![runtime("too-small", Some(4096))];
+
+        assert_eq!(
+            select_degrade_model(candidates, &runtimes, Some(6000)).as_deref(),
+            Some("unknown")
+        );
     }
 
     #[test]

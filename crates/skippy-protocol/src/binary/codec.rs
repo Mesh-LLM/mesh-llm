@@ -2,11 +2,11 @@ use std::io::{self, Read, Write};
 
 use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
-    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
+    MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
+    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_STATE_VERSION,
     StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    WireReplyKind,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{
         activation_decoded_f32_bytes_with_state_flags, activation_wire_bytes_with_state_flags,
     },
@@ -237,14 +237,10 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
     }
 }
 
-pub fn write_stage_message(
-    mut writer: impl Write,
-    message: &StageWireMessage,
-    dtype: WireActivationDType,
-) -> io::Result<()> {
+pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -> io::Result<()> {
     // Wire v4 fixed prefix, little-endian:
     // kind, pos_start, token_count, token_sideband_count, position_sideband_count (5 x i32);
-    // StageStateHeader (10 x i32); request_id, session_id (2 x u64);
+    // StageStateHeader (9 x i32); request_id, session_id (2 x u64);
     // optional StageSamplingConfig follows when state_flags::SAMPLING is set.
     // Token sideband, raw StateImport bytes, or activation bytes follow this
     // prefix, so prefill overhead stays independent of ID string length.
@@ -268,7 +264,6 @@ pub fn write_stage_message(
     )?;
 
     let mut state = message.state;
-    state.reserved = dtype as i32;
     if message.sampling.is_some() {
         state.flags |= super::state_flags::SAMPLING;
     } else {
@@ -310,12 +305,8 @@ pub fn write_stage_message(
         writer.write_all(&message.raw_bytes)?;
         return Ok(());
     }
-    for token in &message.tokens {
-        write_i32(&mut writer, *token)?;
-    }
-    for position in &message.positions {
-        write_i32(&mut writer, *position)?;
-    }
+    write_i32_slice(&mut writer, &message.tokens)?;
+    write_i32_slice(&mut writer, &message.positions)?;
     writer.write_all(&message.activation)?;
     Ok(())
 }
@@ -353,7 +344,6 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
     } else {
         None
     };
-    let dtype = state.dtype()?;
     if kind == WireMessageKind::Stop {
         return Ok(StageWireMessage {
             kind,
@@ -410,19 +400,13 @@ pub fn read_stage_message(mut reader: impl Read, n_embd: i32) -> io::Result<Stag
         });
     }
 
-    let mut tokens = Vec::with_capacity(token_sideband_count);
-    for _ in 0..token_sideband_count {
-        tokens.push(read_i32(&mut reader)?);
-    }
-    let mut positions = Vec::with_capacity(position_sideband_count);
-    for _ in 0..position_sideband_count {
-        positions.push(read_i32(&mut reader)?);
-    }
+    let tokens = read_i32_values(&mut reader, token_sideband_count)?;
+    let positions = read_i32_values(&mut reader, position_sideband_count)?;
     let activation_bytes =
         if state.source_stage_index < 0 || kind.is_activationless_prefix_cache_control() {
             0
         } else {
-            activation_wire_bytes_with_state_flags(dtype, token_count, n_embd, state.flags)?
+            activation_wire_bytes_with_state_flags(token_count, n_embd, state.flags)?
         };
     if activation_bytes > MAX_STAGE_ACTIVATION_BYTES {
         return Err(invalid_data(
@@ -491,8 +475,7 @@ fn write_state_header(mut writer: impl Write, state: StageStateHeader) -> io::Re
     write_i32(&mut writer, state.prompt_token_count)?;
     write_i32(&mut writer, state.decode_step)?;
     write_i32(&mut writer, state.current_token)?;
-    write_i32(&mut writer, state.source_stage_index)?;
-    write_i32(&mut writer, state.reserved)
+    write_i32(&mut writer, state.source_stage_index)
 }
 
 fn read_state_header(mut reader: impl Read) -> io::Result<StageStateHeader> {
@@ -506,7 +489,6 @@ fn read_state_header(mut reader: impl Read) -> io::Result<StageStateHeader> {
         decode_step: read_i32(&mut reader)?,
         current_token: read_i32(&mut reader)?,
         source_stage_index: read_i32(&mut reader)?,
-        reserved: read_i32(&mut reader)?,
     })
 }
 
@@ -527,6 +509,26 @@ fn write_sampling_config(mut writer: impl Write, sampling: &StageSamplingConfig)
         write_i32(&mut writer, bias.token_id)?;
         write_f32(&mut writer, bias.bias)?;
     }
+    write_f32(&mut writer, sampling.typical_p)?;
+    write_f32(&mut writer, sampling.top_nsigma)?;
+    write_f32(&mut writer, sampling.dynatemp_range)?;
+    write_f32(&mut writer, sampling.dynatemp_exponent)?;
+    write_f32(&mut writer, sampling.dry_multiplier)?;
+    write_f32(&mut writer, sampling.dry_base)?;
+    write_i32(&mut writer, sampling.dry_allowed_length)?;
+    write_i32(&mut writer, sampling.dry_penalty_last_n)?;
+    write_string_list(
+        &mut writer,
+        &sampling.dry_sequence_breakers,
+        MAX_STAGE_DRY_SEQUENCE_BREAKERS,
+    )?;
+    write_f32(&mut writer, sampling.xtc_probability)?;
+    write_f32(&mut writer, sampling.xtc_threshold)?;
+    write_i32(&mut writer, sampling.mirostat_mode)?;
+    write_f32(&mut writer, sampling.mirostat_entropy)?;
+    write_f32(&mut writer, sampling.mirostat_learning_rate)?;
+    write_string_list(&mut writer, &sampling.samplers, MAX_STAGE_SAMPLERS)?;
+    write_u32(&mut writer, u32::from(sampling.ignore_eos))?;
     Ok(())
 }
 
@@ -543,6 +545,7 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
         repeat_penalty: read_f32(&mut reader)?,
         penalty_last_n: read_i32(&mut reader)?,
         logit_bias: Vec::new(),
+        ..StageSamplingConfig::default()
     };
     let logit_bias_count = usize::try_from(read_u32(&mut reader)?)
         .map_err(|_| invalid_data("logit bias count overflows usize"))?;
@@ -556,10 +559,67 @@ fn read_sampling_config(mut reader: impl Read) -> io::Result<StageSamplingConfig
             bias: read_f32(&mut reader)?,
         });
     }
+    sampling.typical_p = read_f32(&mut reader)?;
+    sampling.top_nsigma = read_f32(&mut reader)?;
+    sampling.dynatemp_range = read_f32(&mut reader)?;
+    sampling.dynatemp_exponent = read_f32(&mut reader)?;
+    sampling.dry_multiplier = read_f32(&mut reader)?;
+    sampling.dry_base = read_f32(&mut reader)?;
+    sampling.dry_allowed_length = read_i32(&mut reader)?;
+    sampling.dry_penalty_last_n = read_i32(&mut reader)?;
+    sampling.dry_sequence_breakers =
+        read_string_list(&mut reader, MAX_STAGE_DRY_SEQUENCE_BREAKERS)?;
+    sampling.xtc_probability = read_f32(&mut reader)?;
+    sampling.xtc_threshold = read_f32(&mut reader)?;
+    sampling.mirostat_mode = read_i32(&mut reader)?;
+    sampling.mirostat_entropy = read_f32(&mut reader)?;
+    sampling.mirostat_learning_rate = read_f32(&mut reader)?;
+    sampling.samplers = read_string_list(&mut reader, MAX_STAGE_SAMPLERS)?;
+    sampling.ignore_eos = read_u32(&mut reader)? != 0;
     Ok(sampling)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 23;
+fn write_string_list(
+    mut writer: impl Write,
+    values: &[String],
+    maximum_count: usize,
+) -> io::Result<()> {
+    let count = values.len().min(maximum_count);
+    write_u32(&mut writer, count as u32)?;
+    for value in values.iter().take(count) {
+        let bytes = value.as_bytes();
+        if bytes.len() > MAX_STAGE_SAMPLING_STRING_BYTES {
+            return Err(invalid_data("sampling string exceeds maximum length"));
+        }
+        write_u32(&mut writer, bytes.len() as u32)?;
+        writer.write_all(bytes)?;
+    }
+    Ok(())
+}
+
+fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<Vec<String>> {
+    let count = usize::try_from(read_u32(&mut reader)?)
+        .map_err(|_| invalid_data("sampling string count overflows usize"))?;
+    if count > maximum_count {
+        return Err(invalid_data("sampling string count exceeds maximum"));
+    }
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length = usize::try_from(read_u32(&mut reader)?)
+            .map_err(|_| invalid_data("sampling string length overflows usize"))?;
+        if length > MAX_STAGE_SAMPLING_STRING_BYTES {
+            return Err(invalid_data("sampling string exceeds maximum length"));
+        }
+        let mut bytes = vec![0_u8; length];
+        reader.read_exact(&mut bytes)?;
+        values.push(
+            String::from_utf8(bytes).map_err(|_| invalid_data("sampling string is not UTF-8"))?,
+        );
+    }
+    Ok(values)
+}
+
+const REPLY_STATS_FIELD_COUNT: usize = 27;
 const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
@@ -622,6 +682,10 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_edge_stage_index,
         stats.prefill_edge_activation_bytes_max,
         stats.prefill_edge_observation_count,
+        stats.prefill_compute_us_at_slowest_rate,
+        stats.prefill_compute_stage_index,
+        stats.prefill_compute_token_count_at_slowest_rate,
+        stats.prefill_compute_observation_count,
     ]
 }
 
@@ -650,7 +714,52 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_stage_index: fields[20],
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
+        prefill_compute_us_at_slowest_rate: fields[23],
+        prefill_compute_stage_index: fields[24],
+        prefill_compute_token_count_at_slowest_rate: fields[25],
+        prefill_compute_observation_count: fields[26],
     }
+}
+
+const I32_WIRE_BYTES: usize = std::mem::size_of::<i32>();
+
+fn read_i32_values(mut reader: impl Read, count: usize) -> io::Result<Vec<i32>> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut values = Vec::with_capacity(count);
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
+    let mut remaining = count;
+    while remaining > 0 {
+        let chunk_values = remaining.min(VALUES_PER_CHUNK);
+        let chunk_bytes = chunk_values * I32_WIRE_BYTES;
+        reader.read_exact(&mut bytes[..chunk_bytes])?;
+        values.extend(
+            bytes[..chunk_bytes]
+                .as_chunks::<I32_WIRE_BYTES>()
+                .0
+                .iter()
+                .map(|chunk| i32::from_le_bytes(*chunk)),
+        );
+        remaining -= chunk_values;
+    }
+    Ok(values)
+}
+
+fn write_i32_slice(mut writer: impl Write, values: &[i32]) -> io::Result<()> {
+    const VALUES_PER_CHUNK: usize = 4_096;
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
+    for values in values.chunks(VALUES_PER_CHUNK) {
+        let chunk_bytes = std::mem::size_of_val(values);
+        for (bytes, value) in bytes[..chunk_bytes]
+            .as_chunks_mut::<I32_WIRE_BYTES>()
+            .0
+            .iter_mut()
+            .zip(values)
+        {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+        writer.write_all(&bytes[..chunk_bytes])?;
+    }
+    Ok(())
 }
 
 fn read_i32(mut reader: impl Read) -> io::Result<i32> {

@@ -127,7 +127,13 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install CI Python requirements
+        run: python3 -m pip install --disable-pip-version-check --no-input -r ci/requirements-ci-python.txt
       - uses: ./.github/actions/install-actionlint
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Validate GitHub Actions
         run: actionlint -config-file .github/actionlint.yaml
       - name: Test CI, packaging, and SDK contracts
@@ -147,7 +153,6 @@ jobs:
             exit 1
           fi
 
-      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
       - name: Check console print drift
         run: just no-console-print
 
@@ -210,7 +215,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -240,7 +245,7 @@ jobs:
           minimum_hit_rate: "0.20"
 
   cli_docs_sync:
-    name: CLI documentation sync
+    name: CLI inventory freshness
     needs: runner_policy
     if: ${{ inputs.cli_surface_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
@@ -256,15 +261,18 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - name: Require public website docs update
-        env:
-          WEBSITE_DOCS_CHANGED: ${{ inputs.website_docs_changed }}
-        run: |
-          set -euo pipefail
-          if [[ "$WEBSITE_DOCS_CHANGED" != "true" ]]; then
-            echo "Rust CLI surface changed without a public website docs/example update." >&2
-            exit 1
-          fi
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: taiki-e/install-action@3d23c1bbdafe696dfccad2664945a04f47d03dc3 # just
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+      - name: Verify generated CLI inventory is deterministic and current
+        run: just cli-inventory-check
 
   # Explicit diagnostic exception: this no-checkout job attests the
   # provider-injected cache authority itself, outside the normal build-cache

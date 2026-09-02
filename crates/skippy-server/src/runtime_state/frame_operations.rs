@@ -1,11 +1,39 @@
 use super::*;
 
+fn final_sampled_chunk_start(token_count: usize, batch_size: usize) -> usize {
+    debug_assert!(token_count > 0);
+    (token_count - 1) / batch_size.max(1) * batch_size.max(1)
+}
+
 impl RuntimeState {
     pub fn prefill(&mut self, session_id: &str, token_ids: &[i32]) -> Result<()> {
         let session = self.session(session_id)?;
         session.prefill_chunked(token_ids)?;
         self.add_session_tokens(session_id, token_ids.len() as u64);
         Ok(())
+    }
+
+    pub fn prefill_chunked_sampled(
+        &mut self,
+        session_id: &str,
+        token_ids: &[i32],
+        sampling: Option<&SamplingConfig>,
+    ) -> Result<i32> {
+        if token_ids.is_empty() {
+            bail!("sampled prefill requires at least one token");
+        }
+        let session = self.session(session_id)?;
+        let batch_size = session.batch_size()?.max(1);
+        let final_chunk_start = final_sampled_chunk_start(token_ids.len(), batch_size);
+        session.prefill_chunked(&token_ids[..final_chunk_start])?;
+        let (predicted, _) = session.prefill_chunk_frame_sampled(
+            &token_ids[final_chunk_start..],
+            sampling,
+            None,
+            0,
+        )?;
+        self.add_session_tokens(session_id, token_ids.len() as u64);
+        Ok(predicted)
     }
 
     pub fn media_marker(&self) -> String {
@@ -191,7 +219,6 @@ impl RuntimeState {
         Ok((predicted, frame))
     }
 
-    #[allow(dead_code)]
     pub fn decode_frame(
         &mut self,
         session_id: &str,
@@ -293,6 +320,74 @@ impl RuntimeState {
         if result.is_ok() {
             for request in requests {
                 self.add_session_tokens(request.session_id, 1);
+            }
+        }
+        result
+    }
+
+    pub fn iteration_batch_sampled(
+        &mut self,
+        requests: &[RuntimeIterationBatchRequest<'_>],
+    ) -> Result<IterationBatchOutput> {
+        if requests.is_empty() {
+            return Ok(IterationBatchOutput {
+                request_outputs: Vec::new(),
+                samples: Vec::new(),
+            });
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for request in requests {
+            if !unique.insert(request.session_id) {
+                bail!(
+                    "iteration contains duplicate session {}",
+                    request.session_id
+                );
+            }
+        }
+        let new_session_count = unique
+            .iter()
+            .filter(|session_id| !self.sessions.contains_key(**session_id))
+            .count();
+        let available_lanes = (self.lane_count as usize).saturating_sub(self.sessions.len());
+        ensure_iteration_session_capacity(new_session_count, available_lanes)?;
+        for request in requests {
+            self.session(request.session_id)?;
+        }
+
+        let mut lane_sessions = Vec::with_capacity(requests.len());
+        for request in requests {
+            let lane_session = self.sessions.remove(request.session_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "session {} was not active after admission",
+                    request.session_id
+                )
+            })?;
+            lane_sessions.push((request.session_id.to_string(), lane_session));
+        }
+
+        let result = {
+            let mut iteration_requests = lane_sessions
+                .iter_mut()
+                .zip(requests.iter())
+                .map(|((_, lane_session), request)| IterationBatchRequest {
+                    session: &mut lane_session.session,
+                    token_ids: request.token_ids,
+                    positions: request.positions,
+                    sampling: request.sampling,
+                    input: request.input,
+                    sample_last: request.sample_last,
+                    phase: request.phase,
+                })
+                .collect::<Vec<_>>();
+            StageSession::iteration_batch_sampled(&mut iteration_requests)
+        };
+
+        for (session_id, lane_session) in lane_sessions {
+            self.sessions.insert(session_id, lane_session);
+        }
+        if result.is_ok() {
+            for request in requests {
+                self.add_session_tokens(request.session_id, request.token_ids.len() as u64);
             }
         }
         result
@@ -509,6 +604,32 @@ impl RuntimeState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::final_sampled_chunk_start;
+
+    #[test]
+    fn sampled_prefill_keeps_the_final_native_chunk_intact() {
+        assert_eq!(final_sampled_chunk_start(1, 512), 0);
+        assert_eq!(final_sampled_chunk_start(511, 512), 0);
+        assert_eq!(final_sampled_chunk_start(512, 512), 0);
+        assert_eq!(final_sampled_chunk_start(513, 512), 512);
+        assert_eq!(final_sampled_chunk_start(6603, 2048), 6144);
+    }
+}
+
+fn ensure_iteration_session_capacity(
+    new_session_count: usize,
+    available_lanes: usize,
+) -> Result<()> {
+    if new_session_count > available_lanes {
+        bail!(
+            "iteration requires {new_session_count} new sessions but only {available_lanes} execution lanes are available"
+        );
+    }
+    Ok(())
+}
+
 fn split_activation_frame(
     input: Option<&ActivationFrame>,
     token_count: usize,
@@ -577,4 +698,15 @@ fn combine_activation_frames(frames: &[ActivationFrame]) -> Result<ActivationFra
     desc.token_count = token_count;
     desc.payload_bytes = payload.len() as u64;
     Ok(ActivationFrame { desc, payload })
+}
+
+#[cfg(test)]
+mod iteration_admission_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_batch_before_partial_session_admission() {
+        assert!(ensure_iteration_session_capacity(3, 2).is_err());
+        assert!(ensure_iteration_session_capacity(2, 2).is_ok());
+    }
 }

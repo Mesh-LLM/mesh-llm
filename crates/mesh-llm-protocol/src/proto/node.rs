@@ -129,6 +129,9 @@ pub struct PeerAnnouncement {
     /// Inference admission state advertised by this peer (additive; older nodes ignore)
     #[prost(enumeration = "InferenceAdmissionState", optional, tag = "49")]
     pub inference_admission_state: ::core::option::Option<i32>,
+    /// Positive, short-lived cache evidence. Digests are salted and contain no tokens.
+    #[prost(message, optional, tag = "50")]
+    pub cache_affinity: ::core::option::Option<CacheAffinityAdvertisement>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdvertisedModelThroughput {
@@ -138,6 +141,38 @@ pub struct AdvertisedModelThroughput {
     pub avg_tokens_per_second_milli: u64,
     #[prost(uint64, tag = "3")]
     pub throughput_samples: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CacheAffinityAdvertisement {
+    /// exactly 32 bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub salt: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    pub epoch: u64,
+    #[prost(uint64, tag = "3")]
+    pub generated_at_unix_ms: u64,
+    #[prost(uint32, tag = "4")]
+    pub ttl_ms: u32,
+    #[prost(message, repeated, tag = "5")]
+    pub entries: ::prost::alloc::vec::Vec<CacheAffinityEntry>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CacheAffinityEntry {
+    #[prost(string, tag = "1")]
+    pub model_name: ::prost::alloc::string::String,
+    /// exactly 16 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub prefix_digest: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "3")]
+    pub matched_tokens: u32,
+    #[prost(uint32, tag = "4")]
+    pub suffix_prefill_tokens: u32,
+    #[prost(enumeration = "CacheTier", tag = "5")]
+    pub tier: i32,
+    #[prost(uint64, tag = "6")]
+    pub restore_micros: u64,
+    #[prost(uint64, tag = "7")]
+    pub queue_delay_micros: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MeshSubprotocol {
@@ -1366,6 +1401,30 @@ impl OwnerControlRefreshInventoryDisposition {
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_EXECUTED" => Some(Self::Executed),
             "OWNER_CONTROL_REFRESH_INVENTORY_DISPOSITION_COALESCED" => Some(Self::Coalesced),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CacheTier {
+    Unspecified = 0,
+    L1 = 1,
+    L3 = 2,
+}
+impl CacheTier {
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CACHE_TIER_UNSPECIFIED",
+            Self::L1 => "CACHE_TIER_L1",
+            Self::L3 => "CACHE_TIER_L3",
+        }
+    }
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CACHE_TIER_UNSPECIFIED" => Some(Self::Unspecified),
+            "CACHE_TIER_L1" => Some(Self::L1),
+            "CACHE_TIER_L3" => Some(Self::L3),
             _ => None,
         }
     }

@@ -295,16 +295,12 @@ fn append_pending_linear_proposal_tokens(pending: &mut Vec<i32>, committed_token
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
-    use anyhow::Result;
-    use skippy_protocol::{LoadMode, StageConfig};
-    use skippy_runtime::SamplingConfig;
-    use tokio::sync::Semaphore;
-
     use super::*;
-    use crate::binary_transport::DecodeFrameBatcher;
     use crate::frontend::admission::GenerationTokenBudget;
-    use crate::frontend::decode_batcher::DecodeBatcher;
-    use crate::frontend::generation::{OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds};
+    use crate::frontend::generation::{
+        GenerationConcurrencyController, OpenAiBackendMode, OpenAiCacheHints, OpenAiGenerationIds,
+    };
+    use crate::frontend::iteration_scheduler::IterationScheduler;
     use crate::frontend::linear_proposal::{
         LinearProposal, LinearProposalDiscardReason, LinearProposalIngress,
         LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
@@ -314,6 +310,9 @@ mod tests {
     use crate::frontend::{EmbeddedOpenAiRequestDefaults, SpeculativeDecodeConfig};
     use crate::runtime_state::RuntimeState;
     use crate::telemetry::{Telemetry, TelemetryLevel};
+    use anyhow::Result;
+    use skippy_protocol::{LoadMode, StageConfig};
+    use skippy_runtime::SamplingConfig;
 
     #[derive(Default)]
     struct PendingTokenIngress {
@@ -384,9 +383,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: Some(true),
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -395,13 +405,18 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
         let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
         let speculative = SpeculativeDecodeConfig::default();
+        let telemetry = Telemetry::new(None, 1, stage_config.clone(), TelemetryLevel::Off);
+        let iteration_scheduler =
+            IterationScheduler::new(runtime.clone(), &stage_config, 1, true, telemetry.clone())
+                .unwrap();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
             config: stage_config.clone(),
-            telemetry: Telemetry::new(None, 1, stage_config, TelemetryLevel::Off),
+            telemetry,
             model_id: "linear-proposal-test".to_string(),
             default_max_tokens: 4,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
@@ -412,17 +427,20 @@ mod tests {
             adaptive_speculative_window: false,
             ngram_max: 0,
             speculative: speculative.clone(),
-            generation_limit: Arc::new(Semaphore::new(1)),
+            generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
             generation_queue_depth: Arc::new(AtomicUsize::new(0)),
             generation_queue_limit: 1,
+            generation_admission_timeout: std::time::Duration::from_secs(10),
+            generation_service_estimator: Arc::new(
+                crate::frontend::GenerationServiceEstimator::new(1),
+            ),
             generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
             hook_policy: None,
             generation_receipt: None,
             linear_proposal_ingress: Some(config),
             kv: None,
-            decode_batcher: DecodeBatcher::new(runtime.clone(), 1),
-            decode_frame_batcher: DecodeFrameBatcher::new(runtime, 1),
+            iteration_scheduler,
         };
         let sampling = SamplingConfig::default();
         let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
@@ -464,6 +482,7 @@ mod tests {
             native_mtp_span_admitted: false,
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
+            direct_iteration_channel: None,
         };
         let mut emitted = Vec::new();
 

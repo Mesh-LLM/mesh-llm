@@ -11,11 +11,10 @@ const MAX_BENCHMARK_TRIALS_PER_TARGET: usize = 512;
 
 pub(crate) use candidates::*;
 // Re-export flattened benchmark helpers for downstream tune call-sites.
-#[allow(unused_imports)]
-pub(crate) use trial::{
-    TrialChild, TrialReadinessWait, build_trial_child_command, finish_failed_trial, run_trial,
-    run_trial_inner, send_chat_request, send_chat_request_with_watchdog,
-    trial_startup_failure_from_log, trial_startup_failure_from_log_line,
+pub(crate) use trial::run_trial;
+#[cfg(test)]
+use trial::{
+    build_trial_child_command, trial_startup_failure_from_log, trial_startup_failure_from_log_line,
 };
 pub(crate) use trial_config::trial_config;
 

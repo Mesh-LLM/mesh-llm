@@ -1,6 +1,36 @@
 use super::*;
 use crate::runtime::{DrainCoordinator, DrainResult};
 
+pub(super) fn unregister_local_source_policy_if_unused(
+    ctx: &RunAutoRuntimeLoopContext<'_>,
+    model: &str,
+    profile: &str,
+) {
+    let runtime_profiles = ctx
+        .runtime_models
+        .values()
+        .map(|entry| (entry.model_name.as_str(), entry.profile.as_str()));
+    let managed_profiles = ctx
+        .managed_models
+        .values()
+        .map(|controller| (controller.model_name.as_str(), controller.profile.as_str()));
+    unregister_local_source_policy_after_lifecycle_removal(
+        runtime_profiles.chain(managed_profiles),
+        model,
+        profile,
+    );
+}
+
+fn unregister_local_source_policy_after_lifecycle_removal<'a>(
+    mut active_profiles: impl Iterator<Item = (&'a str, &'a str)>,
+    model: &str,
+    profile: &str,
+) {
+    if !active_profiles.any(|active| active == (model, profile)) {
+        crate::inference::skippy::unregister_local_source_policy(model, profile);
+    }
+}
+
 /// Unload a runtime model (entry point for both runtime and managed models).
 #[expect(
     clippy::cognitive_complexity,
@@ -62,6 +92,7 @@ pub(crate) async fn run_auto_unload_runtime_model(
             };
             let ManagedModelController {
                 model_name: model,
+                profile,
                 stop_tx,
                 task,
                 lifecycle,
@@ -136,6 +167,7 @@ pub(crate) async fn run_auto_unload_runtime_model(
             if let Some(cs) = ctx.console_state {
                 cs.remove_local_process(&unload.instance_id).await;
             }
+            unregister_local_source_policy_if_unused(ctx, &model, &profile);
             let _ = emit_event(OutputEvent::Info {
                 message: format!("Unloaded managed model '{}'", model),
                 context: None,
@@ -214,6 +246,7 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     };
     let RuntimeModelHandleEntry {
         model_name: model,
+        profile,
         handle,
         capacity_reservation,
         lifecycle,
@@ -313,6 +346,7 @@ pub(crate) async fn run_auto_unload_runtime_entry(
     if let Some(cs) = ctx.console_state {
         cs.remove_local_process(&unload.instance_id).await;
     }
+    unregister_local_source_policy_if_unused(ctx, &model, &profile);
     let _ = emit_event(OutputEvent::Info {
         message: format!("Unloaded local model '{}' from :{}", model, port),
         context: None,
@@ -348,6 +382,7 @@ pub(crate) async fn run_auto_handle_runtime_exit(
     if let Some(entry) = ctx.runtime_models.remove(&instance_id) {
         let RuntimeModelHandleEntry {
             handle,
+            profile,
             capacity_reservation,
             lifecycle,
             ..
@@ -391,6 +426,7 @@ pub(crate) async fn run_auto_handle_runtime_exit(
         remove_dashboard_context_usage(ctx.dashboard_context_usage, &model, &handle).await;
         handle.shutdown().await;
         drop(capacity_reservation);
+        unregister_local_source_policy_if_unused(ctx, &model, &profile);
     }
     remove_runtime_local_target(ctx.target_tx, &model, port);
     let _ = emit_event(OutputEvent::Warning {
@@ -403,4 +439,37 @@ pub(crate) async fn run_auto_handle_runtime_exit(
             .reason_code("unexpected_exit")
             .outcome("failed"),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unregister_local_source_policy_after_lifecycle_removal;
+
+    #[test]
+    fn last_strict_lifecycle_removal_allows_profile_unaware_fallback_reload() {
+        let model = format!("lifecycle-policy-model-{}", std::process::id());
+        let strict_profile = "strict";
+        crate::inference::skippy::register_local_source_policy(&model, strict_profile, true);
+
+        unregister_local_source_policy_after_lifecycle_removal(
+            std::iter::once((model.as_str(), strict_profile)),
+            &model,
+            strict_profile,
+        );
+        assert!(crate::inference::skippy::effective_local_source_required(
+            &model, None, false
+        ));
+
+        unregister_local_source_policy_after_lifecycle_removal(
+            std::iter::empty::<(&str, &str)>(),
+            &model,
+            strict_profile,
+        );
+        crate::inference::skippy::register_local_source_policy(&model, "fallback", false);
+
+        assert!(!crate::inference::skippy::effective_local_source_required(
+            &model, None, false
+        ));
+        crate::inference::skippy::unregister_local_source_policy(&model, "fallback");
+    }
 }

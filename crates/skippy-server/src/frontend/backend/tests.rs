@@ -38,9 +38,14 @@ fn admission_controller(
     generation_queue_limit: usize,
 ) -> GenerationAdmissionController {
     GenerationAdmissionController {
-        generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(
+            generation_concurrency,
+        )),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit,
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
     }
 }
@@ -50,6 +55,111 @@ fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
         Ok(_) => panic!("expected generation admission to fail"),
         Err(error) => error,
     }
+}
+
+#[tokio::test]
+async fn queued_admission_balances_shared_prefix_families_across_lane_wave() {
+    let controller = admission_controller(1, 4);
+    let work = GenerationAdmissionWork::new(4, 1);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(2),
+            work,
+        )
+        .await
+        .expect("active request admission");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    for (label, prompt) in [
+        ("family-a-1", vec![1, 1, 3, 4]),
+        ("family-a-2", vec![1, 1, 3, 5]),
+        ("family-b-1", vec![2, 2, 3, 4]),
+        ("family-b-2", vec![2, 2, 3, 5]),
+    ] {
+        let controller = controller.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let cancellation = openai_frontend::CancellationToken::new();
+            let admitted = controller
+                .acquire_scheduled_work(
+                    &trusted_ids(label),
+                    &cancellation,
+                    Duration::from_secs(2),
+                    work,
+                    GenerationAdmissionScheduling::new(
+                        Arc::from(prompt),
+                        Arc::new(skippy_scheduler::CacheAffinity::default),
+                    ),
+                )
+                .await
+                .expect("queued request admission");
+            tx.send((label, admitted)).await.unwrap();
+        });
+    }
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all prompts become scheduler-visible");
+
+    drop(active);
+    let (first_label, first) = rx.recv().await.expect("first queued admission");
+    drop(first);
+    let (second_label, second) = rx.recv().await.expect("second queued admission");
+    assert_ne!(
+        first_label.split('-').nth(1),
+        second_label.split('-').nth(1),
+        "one family must not drain the whole lane wave"
+    );
+    drop(second);
+    let (_, third) = rx.recv().await.expect("third queued admission");
+    drop(third);
+    let (_, fourth) = rx.recv().await.expect("fourth queued admission");
+    drop(fourth);
+}
+
+#[tokio::test]
+async fn predicted_wait_rejection_preserves_queue_capacity() {
+    let controller = admission_controller(1, 2);
+    let work = GenerationAdmissionWork::new(100, 100);
+    controller
+        .generation_service_estimator
+        .observe_completed(work, 100.0, 100.0);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("agent-1"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(1),
+            work,
+        )
+        .await
+        .expect("active request admission");
+
+    let error = result_error(
+        controller
+            .acquire_work(
+                &trusted_ids("agent-2"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::from_millis(199),
+                work,
+            )
+            .await,
+    );
+
+    assert!(
+        error
+            .body()
+            .error
+            .message
+            .contains("predicted generation wait")
+    );
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    drop(active);
+    assert_eq!(controller.generation_limit.available_permits(), 1);
 }
 
 #[test]
@@ -681,6 +791,40 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     assert!(
         send_result.is_err(),
         "the cancellation check is bypassed only for terminal frames, not in-flight ones"
+    );
+}
+
+/// Once streaming has committed HTTP 200, a native generation failure cannot
+/// be converted into a new HTTP status. It must remain an `Err` item on the
+/// backend stream so `openai-frontend` can frame an explicit SSE error event
+/// before `[DONE]` instead of making the response look like a zero-token
+/// success.
+#[test]
+fn backend_errors_are_delivered_as_terminal_stream_frames() {
+    let (tx, mut rx) = mpsc::channel(4);
+    let rt = Runtime::new().expect("tokio runtime for terminal-error test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    sender
+        .send_terminal(Err(OpenAiError::backend(
+            "native decode failed to find a memory slot",
+        )))
+        .expect("backend failure must reach a live stream receiver");
+
+    let error = match rx.try_recv().expect("backend failure must be enqueued") {
+        Ok(_) => panic!("terminal item must remain an error"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("native decode failed to find a memory slot")
     );
 }
 

@@ -7,6 +7,7 @@ mod control_listener;
 
 include!("connections.rs");
 include!("admission/helpers.rs");
+include!("endpoint_shutdown.rs");
 include!("protocol_compat.rs");
 include!("owner_control.rs");
 include!("stage_transport.rs");

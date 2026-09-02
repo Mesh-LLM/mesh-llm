@@ -17,9 +17,8 @@ pub struct ResidentCacheConfig {
     /// `RuntimeError: llama_decode failed`
     /// (`decode: failed to find a memory slot`).
     ///
-    /// Set this to a fraction of the model's `n_ctx` (typically
-    /// `n_ctx / 2` or similar). A value of 0 disables the cap and
-    /// behaves like the legacy unbounded-by-tokens cache. The cap is
+    /// Set this to a fraction of the model's `n_ctx`. A value of 0 disables
+    /// the cap and behaves like the legacy unbounded-by-tokens cache. The cap is
     /// only useful when `n_ctx` is comfortably larger than
     /// `min_tokens`; see [`derive_max_resident_tokens`] for the floor.
     pub max_resident_tokens: u64,
@@ -32,7 +31,7 @@ impl ResidentCacheConfig {
             .max(2);
         let max_resident_tokens = derive_max_resident_tokens(u64::from(config.ctx_size));
         Self {
-            max_entries: cache.max_entries.clamp(1, 512),
+            max_entries: cap_resident_entries(cache.max_entries, reserved_seq_count),
             max_bytes: cache.max_bytes,
             min_tokens: cache.min_tokens,
             reserved_seq_count,
@@ -41,13 +40,24 @@ impl ResidentCacheConfig {
     }
 }
 
+fn cap_resident_entries(configured_entries: usize, reserved_seq_count: i32) -> usize {
+    let available_sequence_ids = crate::LLAMA_MAX_SEQ.saturating_sub(reserved_seq_count) as usize;
+    if available_sequence_ids == 0 {
+        return 0;
+    }
+    configured_entries.clamp(1, 512).min(available_sequence_ids)
+}
+
 /// Derive `max_resident_tokens` from the model's `n_ctx` cell pool.
 ///
 /// The cache shares the `n_ctx` cell pool with the active lanes under
-/// `kv_unified = true`. The cap reserves half of the pool for in-flight
-/// lane prefills and lets the cache use at most the other half.
+/// `kv_unified = true`. The cap reserves one eighth of the pool for
+/// in-flight lane prefills and lets the cache use at most the other seven
+/// eighths. Runtime capacity admission evicts resident entries before a
+/// request consumes that reserve, so holding half the pool idle here only
+/// shrinks the reusable working set and causes avoidable prefix thrashing.
 ///
-/// For small contexts (smoke-test / tiny-model configs) the half-pool
+/// For small contexts (smoke-test / tiny-model configs) the fractional pool
 /// can be smaller than a single typical prompt; applying the cap then
 /// rejects the very first record and degrades the cache without
 /// preventing any real wedge. The cap is therefore disabled when the
@@ -67,7 +77,7 @@ fn derive_max_resident_tokens(ctx_size: u64) -> u64 {
     if ctx_size < MIN_CTX_FOR_CELL_CAP {
         return 0;
     }
-    ctx_size.saturating_div(2)
+    ctx_size.saturating_sub(ctx_size.saturating_div(8))
 }
 
 #[cfg(test)]
@@ -76,7 +86,7 @@ mod resident_cache_config_tests {
 
     #[test]
     fn cap_disabled_for_smoke_test_ctx_size() {
-        // Smoke-test / SmolLM2 scenario: ctx_size=768. Half=384 would
+        // Smoke-test / SmolLM2 scenario: ctx_size=768. Any fractional cap would
         // be smaller than a typical 533-token smoke prompt; cap stays
         // disabled.
         assert_eq!(derive_max_resident_tokens(768), 0);
@@ -85,11 +95,11 @@ mod resident_cache_config_tests {
     #[test]
     fn cap_enabled_for_production_ctx_size() {
         // Production failure mode the cap is designed for.
-        assert_eq!(derive_max_resident_tokens(131072), 65536);
+        assert_eq!(derive_max_resident_tokens(131072), 114688);
         // Exactly at the floor.
-        assert_eq!(derive_max_resident_tokens(8192), 4096);
+        assert_eq!(derive_max_resident_tokens(8192), 7168);
         // Just above the floor.
-        assert_eq!(derive_max_resident_tokens(16384), 8192);
+        assert_eq!(derive_max_resident_tokens(16384), 14336);
     }
 
     #[test]
@@ -98,10 +108,18 @@ mod resident_cache_config_tests {
         assert_eq!(derive_max_resident_tokens(8191), 0);
         assert_eq!(derive_max_resident_tokens(4096), 0);
     }
+
+    #[test]
+    fn resident_entry_cap_fits_available_sequence_ids() {
+        assert_eq!(cap_resident_entries(512, 8), 248);
+        assert_eq!(cap_resident_entries(512, 32), 224);
+        assert_eq!(cap_resident_entries(64, 8), 64);
+        assert_eq!(cap_resident_entries(64, crate::LLAMA_MAX_SEQ), 0);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrefixCandidatePolicy {
+pub struct SparseCheckpointPolicy {
     pub min_tokens: u64,
     pub stride_tokens: u64,
     pub record_limit: u64,
@@ -116,7 +134,7 @@ pub struct PrefixCandidatePolicy {
     pub max_resident_tokens_hint: u64,
 }
 
-impl PrefixCandidatePolicy {
+impl SparseCheckpointPolicy {
     pub fn from_cache(cache: &StageKvCacheConfig) -> Self {
         Self {
             min_tokens: cache.min_tokens,
@@ -325,7 +343,7 @@ mod tests {
 
     #[test]
     fn lookup_candidates_prefer_longest_prefix_first() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -338,7 +356,7 @@ mod tests {
 
     #[test]
     fn record_candidates_are_limited_but_keep_current_and_shared_prefix() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -351,7 +369,7 @@ mod tests {
 
     #[test]
     fn candidates_below_min_only_use_exact_request() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 2,
@@ -365,7 +383,7 @@ mod tests {
 
     #[test]
     fn unlimited_record_candidates_keep_shared_prefix_grid() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 64,
             stride_tokens: 32,
             record_limit: 0,
@@ -381,7 +399,7 @@ mod tests {
 
     #[test]
     fn same_prefix_different_tail_prompts_share_near_tail_candidate() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 2,
@@ -402,7 +420,7 @@ mod tests {
 
     #[test]
     fn non_aligned_min_tokens_still_provides_shared_floor_candidate() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 300,
             stride_tokens: 128,
             record_limit: 2,
@@ -416,12 +434,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod record_ladder_tests {
+mod cache_checkpoint_tests {
     use super::*;
 
     /// The shipped agentic policy: 128-token stride, 256-token floor.
-    fn agentic_policy(record_limit: u64) -> PrefixCandidatePolicy {
-        PrefixCandidatePolicy {
+    fn agentic_policy(record_limit: u64) -> SparseCheckpointPolicy {
+        SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit,
@@ -541,7 +559,7 @@ mod record_ladder_tests {
     /// what is still optional.
     #[test]
     fn ladder_budget_bounds_the_shared_rungs_not_the_mandatory_slots() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 6,
@@ -573,7 +591,7 @@ mod record_ladder_tests {
     /// With a generous budget the deeper ladder is admitted in full.
     #[test]
     fn generous_budget_admits_the_full_ladder() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 6,
@@ -605,10 +623,10 @@ mod shipped_default_ladder_tests {
     /// not just under hand-picked test values.
     ///
     /// `family_policy` derives `record_limit` from the entry cap, which is
-    /// itself derived from `n_ctx`, and `max_resident_tokens_hint` is a half
-    /// of `n_ctx`. Those three interact: charging the unconditional exact and
-    /// near-tail slots against the token budget consumed it entirely on every
-    /// context below ~48k, so the shared rungs were never affordable and the
+    /// itself derived from `n_ctx`, and `max_resident_tokens_hint` is a fixed
+    /// fraction of `n_ctx`. Those three interact: charging the unconditional
+    /// exact and near-tail slots against the token budget consumed it entirely
+    /// on every context below ~48k, so the shared rungs were never affordable and the
     /// deeper ladder silently did nothing on real deployments. This test pins
     /// the composed behaviour so that regression cannot return unnoticed.
     #[test]
@@ -616,7 +634,7 @@ mod shipped_default_ladder_tests {
         for ctx in [8192u64, 16384, 32768, 131072] {
             let max_entries = ((ctx / 2 / 256) as usize).clamp(1, 16);
             let record_limit = ((max_entries as u64) / 4).clamp(2, 6);
-            let policy = PrefixCandidatePolicy {
+            let policy = SparseCheckpointPolicy {
                 min_tokens: 256,
                 stride_tokens: 128,
                 record_limit,
@@ -644,7 +662,7 @@ mod shipped_default_ladder_tests {
     /// raising the floor changes default behaviour and is a separate decision.
     #[test]
     fn small_contexts_still_record_only_the_tail() {
-        let policy = PrefixCandidatePolicy {
+        let policy = SparseCheckpointPolicy {
             min_tokens: 256,
             stride_tokens: 128,
             record_limit: 2,

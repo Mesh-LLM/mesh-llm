@@ -366,7 +366,6 @@ mod proto_error {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpService, session::local::LocalSessionManager,

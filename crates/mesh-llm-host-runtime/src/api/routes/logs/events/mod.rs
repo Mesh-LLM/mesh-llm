@@ -10,7 +10,7 @@ mod query;
 mod session;
 mod stream;
 
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(super) use protocol::heartbeat_frame;
 pub(super) use query::parse_subscription;
 pub(super) use stream::stream;

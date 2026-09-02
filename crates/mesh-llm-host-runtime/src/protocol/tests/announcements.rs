@@ -55,7 +55,9 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -82,7 +84,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -139,6 +141,8 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         avg_tokens_per_second_milli: 42_000,
         throughput_samples: 7,
     }];
+    let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
+    let prefix_hash = 0xfeed_beef;
     let ann = super::super::PeerAnnouncement {
         addr: iroh::EndpointAddr {
             id: peer_id,
@@ -178,6 +182,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -186,6 +191,38 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 throughput_samples: 99,
             },
         ],
+        cache_affinity: Some(
+            mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+                salt,
+                epoch: 7,
+                generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+                ttl_ms: 10_000,
+                entries: vec![
+                    mesh_llm_routing::cache_inventory::CacheAffinityEntry {
+                        model: "qwen".to_string(),
+                        prefix_digest: mesh_llm_routing::cache_inventory::prefix_digest(
+                            &salt,
+                            "qwen",
+                            prefix_hash,
+                        ),
+                        matched_tokens: 512,
+                        suffix_prefill_tokens: 24,
+                        tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
+                        restore_micros: 0,
+                        queue_delay_micros: 50,
+                    },
+                    mesh_llm_routing::cache_inventory::CacheAffinityEntry {
+                        model: "ghost".to_string(),
+                        prefix_digest: [0xEE; 16],
+                        matched_tokens: 999,
+                        suffix_prefill_tokens: 0,
+                        tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
+                        restore_micros: 0,
+                        queue_delay_micros: 0,
+                    },
+                ],
+            },
+        ),
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -195,6 +232,16 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let mut proto_pa = local_ann_to_proto_ann(&ann);
     assert_eq!(proto_pa.advertised_model_throughput.len(), 1);
+    assert_eq!(
+        proto_pa
+            .cache_affinity
+            .as_ref()
+            .expect("cache evidence")
+            .entries
+            .len(),
+        1,
+        "evidence for non-routable models must be removed"
+    );
     assert_eq!(proto_pa.advertised_model_throughput[0].model_name, "qwen");
     assert_eq!(
         proto_pa.advertised_model_throughput[0].avg_tokens_per_second_milli,
@@ -214,6 +261,83 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
     assert_eq!(roundtripped.advertised_model_throughput, expected_hints);
+    assert_eq!(
+        roundtripped
+            .cache_affinity
+            .as_ref()
+            .and_then(|advertisement| advertisement.probe(
+                "qwen",
+                prefix_hash,
+                crate::mesh::current_time_unix_ms(),
+            ))
+            .map(|entry| entry.matched_tokens),
+        Some(512)
+    );
+}
+
+#[test]
+fn malformed_cache_affinity_is_dropped_at_the_gossip_boundary() {
+    let proto = crate::proto::node::PeerAnnouncement {
+        endpoint_id: SecretKey::from_bytes(&[0xAE; 32])
+            .public()
+            .as_bytes()
+            .to_vec(),
+        role: crate::proto::node::NodeRole::Host as i32,
+        serving_models: vec!["qwen".to_string()],
+        hosted_models: vec!["qwen".to_string()],
+        hosted_models_known: Some(true),
+        cache_affinity: Some(crate::proto::node::CacheAffinityAdvertisement {
+            salt: vec![1; 31],
+            epoch: 1,
+            generated_at_unix_ms: crate::mesh::current_time_unix_ms(),
+            ttl_ms: 10_000,
+            entries: Vec::new(),
+        }),
+        ..Default::default()
+    };
+
+    let (_, announcement) = proto_ann_to_local(&proto).expect("peer announcement");
+    assert!(announcement.cache_affinity.is_none());
+}
+
+#[test]
+fn stale_and_far_future_cache_affinity_are_dropped_at_ingest() {
+    use mesh_llm_routing::cache_inventory::CACHE_AFFINITY_MAX_FUTURE_SKEW_MS;
+
+    let now = crate::mesh::current_time_unix_ms();
+    let mut proto = crate::proto::node::PeerAnnouncement {
+        endpoint_id: SecretKey::from_bytes(&[0xAF; 32])
+            .public()
+            .as_bytes()
+            .to_vec(),
+        role: crate::proto::node::NodeRole::Host as i32,
+        serving_models: vec!["qwen".to_string()],
+        hosted_models: vec!["qwen".to_string()],
+        hosted_models_known: Some(true),
+        cache_affinity: Some(crate::proto::node::CacheAffinityAdvertisement {
+            salt: vec![1; 32],
+            epoch: 1,
+            generated_at_unix_ms: now.saturating_sub(10_001),
+            ttl_ms: 10_000,
+            entries: Vec::new(),
+        }),
+        ..Default::default()
+    };
+
+    let (_, stale) = proto_ann_to_local(&proto).expect("stale peer announcement");
+    assert!(stale.cache_affinity.is_none());
+
+    proto
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .generated_at_unix_ms = now
+        .saturating_add(CACHE_AFFINITY_MAX_FUTURE_SKEW_MS)
+        // Keep the fixture well beyond the boundary even if this test is
+        // descheduled between capturing `now` and decoding the announcement.
+        .saturating_add(60_000);
+    let (_, future) = proto_ann_to_local(&proto).expect("future peer announcement");
+    assert!(future.cache_affinity.is_none());
 }
 
 #[test]
@@ -259,7 +383,9 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,
@@ -310,7 +436,7 @@ fn proto_announcement_without_stage_control_is_not_stage_compatible() {
             name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
             major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
             features: vec![
-                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V4.to_string(),
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6.to_string(),
             ],
         }],
         ..Default::default()
@@ -319,6 +445,104 @@ fn proto_announcement_without_stage_control_is_not_stage_compatible() {
     let (_, ann) = proto_ann_to_local(&proto_pa).expect("proto announcement should decode");
 
     assert!(!ann.stage_protocol_generation_supported);
+}
+
+#[test]
+fn legacy_stage_announcement_does_not_gain_local_gguf_content_id_support() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xCF; 32]).public());
+    let proto_pa = crate::proto::node::PeerAnnouncement {
+        endpoint_id: peer_id.as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        subprotocols: vec![crate::proto::node::MeshSubprotocol {
+            name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+            major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+            features: vec![
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+                // Frozen legacy wire token: the current protocol intentionally
+                // exports only its V6 capability.
+                "stage-generation-5".to_string(),
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST.to_string(),
+            ],
+        }],
+        ..Default::default()
+    };
+
+    let (_, ann) = proto_ann_to_local(&proto_pa).expect("legacy announcement should decode");
+    assert!(!ann.local_gguf_content_id_supported);
+
+    let reencoded = local_ann_to_proto_ann(&ann);
+    let stage = reencoded
+        .subprotocols
+        .iter()
+        .find(|subprotocol| subprotocol.name == skippy_protocol::STAGE_SUBPROTOCOL_NAME)
+        .expect("stage subprotocol should survive bridge re-encoding");
+    assert!(!stage.features.iter().any(|feature| {
+        feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1
+    }));
+}
+
+#[test]
+fn local_gguf_content_id_support_roundtrips_through_announcement_bridge() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
+    let proto_pa = crate::proto::node::PeerAnnouncement {
+        endpoint_id: peer_id.as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        subprotocols: vec![crate::proto::node::MeshSubprotocol {
+            name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+            major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+            features: vec![
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string(),
+            ],
+        }],
+        ..Default::default()
+    };
+
+    let (_, ann) = proto_ann_to_local(&proto_pa).expect("capability announcement should decode");
+    assert!(ann.local_gguf_content_id_supported);
+
+    let reencoded = local_ann_to_proto_ann(&ann);
+    let stage = reencoded
+        .subprotocols
+        .iter()
+        .find(|subprotocol| subprotocol.name == skippy_protocol::STAGE_SUBPROTOCOL_NAME)
+        .expect("stage subprotocol should survive bridge re-encoding");
+    assert_eq!(
+        stage
+            .features
+            .iter()
+            .filter(|feature| {
+                feature.as_str()
+                    == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1
+            })
+            .count(),
+        1
+    );
+
+    let (_, roundtripped) =
+        proto_ann_to_local(&reencoded).expect("re-encoded capability should decode");
+    assert!(roundtripped.local_gguf_content_id_supported);
+}
+
+#[test]
+fn unknown_stage_feature_does_not_enable_local_gguf_content_id_support() {
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD1; 32]).public());
+    let proto_pa = crate::proto::node::PeerAnnouncement {
+        endpoint_id: peer_id.as_bytes().to_vec(),
+        role: crate::proto::node::NodeRole::Worker as i32,
+        subprotocols: vec![crate::proto::node::MeshSubprotocol {
+            name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
+            major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
+            features: vec![
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
+                "local-gguf-content-id-v999".to_string(),
+            ],
+        }],
+        ..Default::default()
+    };
+
+    let (_, ann) = proto_ann_to_local(&proto_pa).expect("unknown feature should be ignored");
+    assert!(!ann.local_gguf_content_id_supported);
 }
 
 #[test]
@@ -363,7 +587,9 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         artifact_transfer_supported: true,
         stage_protocol_generation_supported: true,
         stage_status_list_supported: true,
+        local_gguf_content_id_supported: true,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
         latency_ms: None,
         latency_source: None,
         latency_age_ms: None,

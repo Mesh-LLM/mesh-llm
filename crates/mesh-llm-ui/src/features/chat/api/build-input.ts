@@ -2,6 +2,9 @@ import type { UIMessage, ModelMessage, MessagePart, ContentPart } from '@tanstac
 import type { ResponsesRequest, ResponsesInputMessage, ResponsesInputContentBlock } from '@/lib/api/types'
 import { uploadAttachment } from '@/features/chat/api/upload-attachment'
 
+/** Reuse in-flight and completed blob uploads while constructing retry bodies. */
+export type AttachmentUploadCache = Map<string, Promise<string>>
+
 type PartMetadata = {
   fileName?: string
 }
@@ -16,16 +19,28 @@ async function uploadDataSource(
   source: { type: 'data'; value: string; mimeType: string },
   clientId: string,
   requestId: string,
-  fileName?: string
+  fileName?: string,
+  uploadCache?: AttachmentUploadCache
 ) {
-  const token = await uploadAttachment({
-    requestId,
-    bytesBase64: source.value,
-    mimeType: source.mimeType,
-    fileName
-  })
+  const cacheKey = `${source.mimeType}\u0000${fileName ?? ''}\u0000${source.value}`
+  let upload = uploadCache?.get(cacheKey)
+  if (!upload) {
+    upload = uploadAttachment({
+      requestId,
+      bytesBase64: source.value,
+      mimeType: source.mimeType,
+      fileName
+    }).then((token) => `mesh://blob/${clientId}/${token}`)
+    uploadCache?.set(cacheKey, upload)
+  }
 
-  return `mesh://blob/${clientId}/${token}`
+  try {
+    return await upload
+  } catch (error) {
+    // A failed upload must not poison a later retry with the same attachment.
+    uploadCache?.delete(cacheKey)
+    throw error
+  }
 }
 
 function isUIMessage(msg: UIMessage | ModelMessage): msg is UIMessage {
@@ -35,7 +50,8 @@ function isUIMessage(msg: UIMessage | ModelMessage): msg is UIMessage {
 async function partToContentBlock(
   part: MessagePart,
   clientId: string,
-  requestId: string
+  requestId: string,
+  uploadCache?: AttachmentUploadCache
 ): Promise<ResponsesInputContentBlock | null> {
   if (part.type === 'text') {
     return { type: 'input_text', text: part.content }
@@ -49,14 +65,14 @@ async function partToContentBlock(
     const audio_url =
       part.source.type === 'url'
         ? part.source.value
-        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata))
+        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata), uploadCache)
     return { type: 'input_audio', audio_url }
   }
   if (part.type === 'document') {
     const url =
       part.source.type === 'url'
         ? part.source.value
-        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata))
+        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata), uploadCache)
     return {
       type: 'input_file',
       url,
@@ -70,7 +86,8 @@ async function partToContentBlock(
 async function contentPartToBlock(
   part: ContentPart,
   clientId: string,
-  requestId: string
+  requestId: string,
+  uploadCache?: AttachmentUploadCache
 ): Promise<ResponsesInputContentBlock | null> {
   if (part.type === 'text') {
     return { type: 'input_text', text: part.content }
@@ -84,14 +101,14 @@ async function contentPartToBlock(
     const audio_url =
       part.source.type === 'url'
         ? part.source.value
-        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata))
+        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata), uploadCache)
     return { type: 'input_audio', audio_url }
   }
   if (part.type === 'document') {
     const url =
       part.source.type === 'url'
         ? part.source.value
-        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata))
+        : await uploadDataSource(part.source, clientId, requestId, getPartMetadataFileName(part.metadata), uploadCache)
     return {
       type: 'input_file',
       url,
@@ -105,12 +122,13 @@ async function contentPartToBlock(
 async function convertUIMessage(
   msg: UIMessage,
   clientId: string,
-  requestId: string
+  requestId: string,
+  uploadCache?: AttachmentUploadCache
 ): Promise<ResponsesInputMessage | null> {
   if (msg.role === 'system') return null
   const role = msg.role as 'user' | 'assistant'
   const content: ResponsesInputContentBlock[] = (
-    await Promise.all(msg.parts.map((part) => partToContentBlock(part, clientId, requestId)))
+    await Promise.all(msg.parts.map((part) => partToContentBlock(part, clientId, requestId, uploadCache)))
   ).filter((b): b is ResponsesInputContentBlock => b !== null)
   if (content.length === 0) return null
   return { role, content: content.length === 1 && content[0]?.type === 'input_text' ? content[0].text : content }
@@ -119,7 +137,8 @@ async function convertUIMessage(
 async function convertModelMessage(
   msg: ModelMessage,
   clientId: string,
-  requestId: string
+  requestId: string,
+  uploadCache?: AttachmentUploadCache
 ): Promise<ResponsesInputMessage | null> {
   if (msg.role === 'tool') return null
   const role = msg.role as 'user' | 'assistant'
@@ -132,7 +151,7 @@ async function convertModelMessage(
   }
 
   const content: ResponsesInputContentBlock[] = (
-    await Promise.all(msg.content.map((part) => contentPartToBlock(part, clientId, requestId)))
+    await Promise.all(msg.content.map((part) => contentPartToBlock(part, clientId, requestId, uploadCache)))
   ).filter((b): b is ResponsesInputContentBlock => b !== null)
 
   if (content.length === 0) return null
@@ -144,12 +163,15 @@ export async function buildResponsesInput(
   model: string,
   clientId: string,
   requestId: string,
-  systemPrompt = ''
+  systemPrompt = '',
+  uploadCache?: AttachmentUploadCache
 ): Promise<ResponsesRequest> {
   const input: ResponsesInputMessage[] = (
     await Promise.all(
       (messages as ReadonlyArray<UIMessage | ModelMessage>).map((msg) =>
-        isUIMessage(msg) ? convertUIMessage(msg, clientId, requestId) : convertModelMessage(msg, clientId, requestId)
+        isUIMessage(msg)
+          ? convertUIMessage(msg, clientId, requestId, uploadCache)
+          : convertModelMessage(msg, clientId, requestId, uploadCache)
       )
     )
   ).filter((m): m is ResponsesInputMessage => m !== null)

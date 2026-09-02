@@ -146,17 +146,14 @@ impl ModelBackend for HttpBackend {
             // until the flags were dropped. A strict endpoint must cost us a
             // slightly slower worker, not the whole worker.
             if status.as_u16() == 400
-                && text.to_ascii_lowercase().contains("reasoning")
+                && rejects_disabled_thinking_controls(&text)
                 && sampling.enable_thinking == Some(false)
             {
                 tracing::info!(
                     "moa: {model} rejected thinking-disable flags, retrying without them"
                 );
                 let mut retry_body = body.clone();
-                if let Some(obj) = retry_body.as_object_mut() {
-                    obj.remove("reasoning_effort");
-                    obj.remove("chat_template_kwargs");
-                }
+                remove_disabled_thinking_controls(&mut retry_body);
                 let retry = self
                     .http
                     .post(&url)
@@ -316,6 +313,13 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     }
     if let Some(kwargs_obj) = kwargs.as_object_mut() {
         kwargs_obj.insert("enable_thinking".to_string(), json!(enable));
+        if !enable {
+            // Some templates key exclusively on an effort enum rather than the
+            // boolean. Put `none` inside the template kwargs as well as on the
+            // OpenAI surface below so every MoA worker/actor sees the same
+            // unambiguous instruction before prompt rendering.
+            kwargs_obj.insert("reasoning_effort".to_string(), json!("none"));
+        }
     }
 
     // reasoning_effort is the OpenAI-surface analogue. If the caller
@@ -325,7 +329,28 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     // specific effort level on the caller's behalf.
     if !enable {
         obj.insert("reasoning_effort".to_string(), json!("none"));
+        obj.insert("thinking_budget".to_string(), json!(0));
     }
+}
+
+fn remove_disabled_thinking_controls(body: &mut Value) {
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("reasoning_effort");
+        obj.remove("thinking_budget");
+        obj.remove("chat_template_kwargs");
+    }
+}
+
+fn rejects_disabled_thinking_controls(error_body: &str) -> bool {
+    let lower = error_body.to_ascii_lowercase();
+    [
+        "reasoning",
+        "thinking_budget",
+        "chat_template_kwargs",
+        "enable_thinking",
+    ]
+    .into_iter()
+    .any(|field| lower.contains(field))
 }
 
 /// Extract retry-after seconds from an error message containing "retry-after: N".
@@ -401,17 +426,24 @@ fn extract_text_from_response(resp: &Value) -> Result<BackendReply, String> {
         return Ok(reply(stripped));
     }
 
-    let thinking = worker::extract_thinking(&content);
-    if !thinking.is_empty() {
-        return Ok(reply(thinking));
-    }
-
-    let reasoning = message
-        .get("reasoning")
-        .and_then(|r| r.as_str())
-        .unwrap_or("");
-    if !reasoning.is_empty() {
-        return Ok(reply(reasoning.to_string()));
+    // A response containing only a thinking trace is not an answer. MoA sends
+    // `enable_thinking=false`, but backend/model combinations are allowed to
+    // ignore that hint. Treating their private reasoning as worker text turns
+    // an internal plan (for example, "I'll start by inspecting …") into a
+    // successful final response and prematurely ends agent tool loops.
+    //
+    // Fail this candidate instead. The normal worker fan-out can proceed with
+    // the remaining candidates, and the hedged actor/reducer path can try its
+    // next candidate. Native tool calls and post-thinking `content` were
+    // already handled above, so no actionable output is discarded here.
+    let has_reasoning_trace = ["reasoning_content", "reasoning"].into_iter().any(|field| {
+        message
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    if has_reasoning_trace {
+        return Err("reasoning-only response: no answer or tool call".into());
     }
 
     Err("empty response".into())
@@ -420,6 +452,146 @@ fn extract_text_from_response(resp: &Value) -> Result<BackendReply, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn read_http_json(stream: &mut tokio::net::TcpStream) -> Value {
+        use tokio::io::AsyncReadExt;
+
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "request ended before headers");
+            bytes.extend_from_slice(&chunk[..read]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&bytes[..header_end]).expect("ASCII HTTP headers");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("content length"))
+            })
+            .expect("content-length header");
+        while bytes.len() < header_end + content_length {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await.expect("read request body");
+            assert!(read > 0, "request ended before body");
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        serde_json::from_slice(&bytes[header_end..header_end + content_length])
+            .expect("JSON request body")
+    }
+
+    async fn exercise_compatibility_retry(error: &str) -> (Value, Value, Value) {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test backend");
+        let address = listener.local_addr().expect("test backend address");
+        let error = error.to_string();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.expect("first request");
+            let first_body = read_http_json(&mut first).await;
+            let error_response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                error.len(),
+                error,
+            );
+            first
+                .write_all(error_response.as_bytes())
+                .await
+                .expect("write rejection");
+
+            let (mut retry, _) = listener.accept().await.expect("retry request");
+            let retry_body = read_http_json(&mut retry).await;
+            let success = r#"{"choices":[{"message":{"content":"ok"}}]}"#;
+            let success_response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                success.len(),
+                success,
+            );
+            retry
+                .write_all(success_response.as_bytes())
+                .await
+                .expect("write success");
+            (first_body, retry_body)
+        });
+
+        let backend = HttpBackend::new(format!("http://{address}/v1"));
+        let response = backend
+            .chat_completion(
+                "qwen",
+                &[json!({"role": "user", "content": "hello"})],
+                None,
+                32,
+                Duration::from_secs(5),
+                SamplingParams::worker().with_thinking(Some(false)),
+            )
+            .await
+            .expect("compatibility retry succeeds");
+        let (first_body, retry_body) = server.await.expect("test backend task");
+        (first_body, retry_body, response)
+    }
+
+    #[tokio::test]
+    async fn compatibility_retry_handles_each_rejected_thinking_surface_end_to_end() {
+        for error in [
+            "unknown field: reasoning_effort",
+            "unknown field: thinking_budget",
+            "unknown field: chat_template_kwargs",
+            "unknown field: enable_thinking",
+        ] {
+            let (first, retry, response) = exercise_compatibility_retry(error).await;
+
+            assert_eq!(first["reasoning_effort"], json!("none"));
+            assert_eq!(first["thinking_budget"], json!(0));
+            assert!(first.get("chat_template_kwargs").is_some());
+            assert!(retry.get("reasoning_effort").is_none());
+            assert!(retry.get("thinking_budget").is_none());
+            assert!(retry.get("chat_template_kwargs").is_none());
+            assert_eq!(response["choices"][0]["message"]["content"], json!("ok"));
+        }
+    }
+
+    #[test]
+    fn compatibility_retry_recognizes_every_injected_thinking_surface() {
+        for error in [
+            "Reasoning is mandatory for this endpoint",
+            "unknown field: reasoning_effort",
+            "unknown field: thinking_budget",
+            "unknown field: chat_template_kwargs",
+            "unknown field: enable_thinking",
+        ] {
+            assert!(
+                rejects_disabled_thinking_controls(error),
+                "retry predicate missed {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn compatibility_retry_removes_every_injected_thinking_surface() {
+        let mut body = json!({"model": "qwen", "messages": []});
+        apply_enable_thinking(&mut body, Some(false));
+        remove_disabled_thinking_controls(&mut body);
+
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking_budget").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
+        assert_eq!(body["model"], json!("qwen"));
+        assert_eq!(body["messages"], json!([]));
+    }
+
+    #[test]
+    fn compatibility_retry_does_not_match_unrelated_bad_requests() {
+        assert!(!rejects_disabled_thinking_controls(
+            "unknown field: temperature"
+        ));
+    }
 
     #[test]
     fn parse_retry_after_from_header() {
@@ -466,6 +638,99 @@ mod tests {
         let resp: Value = serde_json::json!({"choices": []});
         let err = extract_text_from_response(&resp).unwrap_err();
         assert!(err.contains("missing choices"));
+    }
+
+    #[test]
+    fn extract_text_rejects_reasoning_content_without_an_answer() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "I'll start by inspecting the project structure."
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "reasoning-only response: no answer or tool call");
+    }
+
+    #[test]
+    fn extract_text_rejects_legacy_reasoning_without_an_answer() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning": "I should inspect the files before answering."
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "reasoning-only response: no answer or tool call");
+    }
+
+    #[test]
+    fn extract_text_keeps_answer_when_reasoning_is_also_present() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": "Private reasoning."
+                }
+            }]
+        });
+
+        let reply = extract_text_from_response(&resp).expect("content is a usable answer");
+        assert_eq!(reply.text, "The answer is 42.");
+    }
+
+    #[test]
+    fn extract_text_keeps_native_tool_call_when_reasoning_is_also_present() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "I need to inspect the project.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "list_files",
+                            "arguments": "{\"path\":\".\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let reply = extract_text_from_response(&resp).expect("tool call is actionable output");
+        assert!(reply.text.contains("kind: tool_proposal"));
+        assert!(reply.text.contains("tool: list_files"));
+    }
+
+    #[test]
+    fn extract_text_rejects_think_block_without_post_thinking_content() {
+        let resp = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "<think>I'll start by inspecting the project.</think>"
+                }
+            }]
+        });
+
+        let err = extract_text_from_response(&resp).unwrap_err();
+        assert_eq!(err, "empty response");
     }
 
     #[test]
@@ -531,7 +796,12 @@ mod tests {
             body["chat_template_kwargs"]["enable_thinking"],
             json!(false)
         );
+        assert_eq!(
+            body["chat_template_kwargs"]["reasoning_effort"],
+            json!("none")
+        );
         assert_eq!(body["reasoning_effort"], json!("none"));
+        assert_eq!(body["thinking_budget"], json!(0));
     }
 
     #[test]

@@ -134,6 +134,7 @@ impl SlicePlan {
         layer_end: u32,
         include_embeddings: bool,
         include_output: bool,
+        include_per_layer_token_embd: bool,
     ) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {
@@ -144,6 +145,7 @@ impl SlicePlan {
                 i32::try_from(layer_end).context("layer_end exceeds i32")?,
                 include_embeddings,
                 include_output,
+                include_per_layer_token_embd,
                 &mut error,
             )
         };

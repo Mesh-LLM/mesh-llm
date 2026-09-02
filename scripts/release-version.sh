@@ -149,6 +149,10 @@ update_known_mesh_versions() {
     local next="$2"
     local before
     local after
+    if ! grep -q 'fn known_mesh_llm_versions()' "$file"; then
+        echo "known_mesh_llm_versions() is not defined in $file; update known_versions_file in $0" >&2
+        exit 1
+    fi
     before="$(cat "$file")"
     if perl -0777 -ne '
         BEGIN {
@@ -293,7 +297,7 @@ for relative_file in "${literal_version_files[@]}"; do
     versioned_files+=("$file")
 done
 
-known_versions_file="$REPO_ROOT/crates/mesh-llm-config/src/model/built_in_schema.rs"
+known_versions_file="$REPO_ROOT/crates/mesh-llm-config/src/model/built_in_schema/setting_schema.rs"
 require_file "$known_versions_file"
 update_known_mesh_versions "$known_versions_file" "$version"
 versioned_files+=("$known_versions_file")

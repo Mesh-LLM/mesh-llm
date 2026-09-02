@@ -231,17 +231,19 @@ describe('unified logs event ledger', () => {
 
     const table = screen.getByRole('table', { name: 'MeshLLM event logs' })
     expect(within(table).queryByText(REQUEST_ID)).not.toBeInTheDocument()
-    expect(within(table).getAllByRole('row', { name: /Inspect operational event runtime_event_/ })).toHaveLength(20)
-    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('20')
-    expect(screen.getByText('Page 1 of 2')).toBeVisible()
+    expect(within(table).getAllByRole('row', { name: /Inspect operational event runtime_event_/ })).toHaveLength(10)
+    expect(screen.getByRole('combobox', { name: 'Rows per page' })).toHaveValue('10')
+    expect(screen.getByText('Page 1 of 3')).toBeVisible()
     const pagination = screen.getByRole('navigation', { name: 'Loaded event rows' })
     await user.click(within(pagination).getByRole('button', { name: 'Go to next page' }))
 
+    expect(within(table).queryByText(REQUEST_ID)).not.toBeInTheDocument()
+    expect(within(table).getAllByRole('row', { name: /Inspect operational event runtime_event_/ })).toHaveLength(10)
+    expect(screen.getByText('Page 2 of 3')).toBeVisible()
+
+    await user.click(within(pagination).getByRole('button', { name: 'Go to next page' }))
     expect(within(table).getByText(REQUEST_ID)).toBeVisible()
-    expect(
-      within(table).queryByRole('row', { name: /Inspect operational event runtime_event_/ })
-    ).not.toBeInTheDocument()
-    expect(screen.getByText('Page 2 of 2')).toBeVisible()
+    expect(screen.getByText('Page 3 of 3')).toBeVisible()
   })
 
   it('makes the horizontally scrollable event columns keyboard reachable', () => {

@@ -1,9 +1,10 @@
 use crate::inference::{election, pipeline};
-use crate::logging::{OpenAiLifecycleAttachment, OpenAiRouteObserver};
+use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::openai::auto_route;
 use crate::network::openai::automatic;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use mesh_llm_events::audit::{audit_events, emit_audit};
@@ -61,11 +62,11 @@ fn response_outcome(status_code: u16, result: std::io::Result<()>) -> proxy::Rou
 
 /// Check activity policy admission and reject with 503 if paused.
 async fn check_activity_admission(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     guard: &crate::runtime::ActivityPolicyGuard,
     ingress_type: crate::runtime::IngressType,
     route_observer: OpenAiRouteObserver<'_>,
-) -> Result<tokio::net::TcpStream, proxy::RouteDispatchOutcome> {
+) -> Result<ClientStream, proxy::RouteDispatchOutcome> {
     match guard.check_admission(ingress_type) {
         crate::runtime::AdmissionResult::Allowed => Ok(tcp_stream),
         crate::runtime::AdmissionResult::Paused { reason, .. } => {
@@ -128,7 +129,7 @@ async fn bind_api_proxy_listener(
 }
 
 async fn handle_models_list_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     node: &mesh::Node,
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
@@ -388,7 +389,7 @@ fn maybe_enable_auto_route_hooks(
 
 async fn try_pipeline_proxy(
     node: &mesh::Node,
-    tcp_stream: &mut tokio::net::TcpStream,
+    tcp_stream: &mut ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     strong_name: &str,
@@ -462,7 +463,7 @@ fn warn_pipeline_fallback(strong_name: &str) {
 }
 
 async fn route_missing_local_model(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     model_name: &str,
@@ -550,7 +551,7 @@ async fn remote_mesh_targets(
 
 async fn try_route_plugin_model(
     ctx: &IngressRouteContext<'_>,
-    mut tcp_stream: tokio::net::TcpStream,
+    mut tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     model_name: &str,
     route_observer: OpenAiRouteObserver<'_>,
@@ -658,13 +659,14 @@ async fn try_route_plugin_model(
 }
 
 async fn route_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     effective_model: Option<&str>,
     required_tokens: Option<u32>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    prepare_cache_routing_body(request, effective_model);
     if let Some(model_name) = effective_model {
         // Model explicitly requested. Check local candidates first.
         if !has_available_candidates(ctx.targets, model_name) {
@@ -680,9 +682,6 @@ async fn route_request(
         }
 
         // Local candidates available — route normally.
-        if !request.is_tokenize_request() && ctx.targets.candidates(model_name).len() > 1 {
-            request.ensure_body_json();
-        }
         proxy::route_model_request(
             ctx.node.clone(),
             tcp_stream,
@@ -712,6 +711,19 @@ async fn route_request(
             },
         )
         .await
+    }
+}
+
+fn prepare_cache_routing_body(
+    request: &mut proxy::BufferedHttpRequest,
+    effective_model: Option<&str>,
+) {
+    // Cache routing and provider-confirmed local receipts need the same
+    // prefix key even when this node currently has only one eligible target.
+    // The body is already bounded and buffered at ingress; parsing here does
+    // not change the forwarded bytes.
+    if effective_model.is_some() && !request.is_tokenize_request() {
+        request.ensure_body_json();
     }
 }
 
@@ -751,7 +763,7 @@ async fn prepare_auto_route_decision(
 }
 
 async fn send_media_unsupported(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
     response_outcome(
@@ -781,11 +793,11 @@ fn callable_models_with_local_served(
 }
 
 async fn maybe_handle_control_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
     route_observer: OpenAiRouteObserver<'_>,
-) -> Result<proxy::RouteDispatchOutcome, tokio::net::TcpStream> {
+) -> Result<proxy::RouteDispatchOutcome, ClientStream> {
     if proxy::is_legacy_lifecycle_path(&request.path) {
         return Ok(proxy::reject_legacy_lifecycle_request(tcp_stream, route_observer).await);
     }
@@ -819,7 +831,7 @@ fn pipeline_route_model<'a>(
 }
 
 async fn try_pipeline_route(
-    tcp_stream: &mut tokio::net::TcpStream,
+    tcp_stream: &mut ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     decision: &AutoRouteDecision,
@@ -835,13 +847,13 @@ enum MoaInterceptResult {
     Handled(proxy::RouteDispatchOutcome),
     /// Not an MoA request — caller should continue with normal routing,
     /// reusing the returned stream.
-    NotMoa(tokio::net::TcpStream),
+    NotMoa(ClientStream),
     /// MoA could not form a committee but degraded `model=mesh` to a real
     /// single model (already rewritten on the request). Caller routes it
     /// normally, but must use this model rather than the stale
     /// `decision.effective_model` (still "mesh").
     Degraded {
-        stream: tokio::net::TcpStream,
+        stream: ClientStream,
         model: Option<String>,
     },
 }
@@ -849,7 +861,7 @@ enum MoaInterceptResult {
 /// Dispatch to the MoA gateway when `model == "mesh"`. Self-gates on the
 /// effective model so the call site is unconditional.
 async fn try_handle_moa_intercept(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
     ctx: &ProxyConnectionContext<'_>,
     decision: &AutoRouteDecision,
@@ -924,16 +936,30 @@ async fn try_handle_moa_intercept(
 }
 
 async fn handle_buffered_api_request(
-    tcp_stream: tokio::net::TcpStream,
+    tcp_stream: ClientStream,
     mut request: proxy::BufferedHttpRequest,
     ctx: ProxyConnectionContext<'_>,
+    source_addr: Option<std::net::SocketAddr>,
+    ingress_type: crate::runtime::IngressType,
 ) {
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
+    let caller_addr = source_addr.map(|addr| addr.to_string());
     let request_metadata =
         crate::logging::RequestSummaryMetadata::from_openai_ingress_path(&request.client_path)
-            .with_source(Some("direct_http"))
-            .with_method(Some(&request.method));
+            .with_source(Some(
+                if ingress_type == crate::runtime::IngressType::RemoteQuicHttp {
+                    "remote_quic_http"
+                } else {
+                    "direct_http"
+                },
+            ))
+            .with_method(Some(&request.method))
+            .with_caller_identity(
+                None,
+                caller_addr.as_deref(),
+                caller_addr.as_ref().map(|_| CallerPathType::LocalHttp),
+            );
     let mut lifecycle = crate::logging_runtime_state()
         .map(|state| state.openai_ingress_attachment(request.request_id, request_metadata))
         .unwrap_or_else(OpenAiLifecycleAttachment::unowned);
@@ -964,7 +990,7 @@ async fn handle_buffered_api_request(
     let tcp_stream = match check_activity_admission(
         tcp_stream,
         &ctx.route.node.activity_policy_guard,
-        crate::runtime::IngressType::LocalOpenAi,
+        ingress_type,
         lifecycle.route_observer(),
     )
     .await
@@ -1054,10 +1080,12 @@ async fn handle_buffered_api_request(
 
 async fn handle_api_proxy_connection(
     node: mesh::Node,
-    mut tcp_stream: tokio::net::TcpStream,
+    mut tcp_stream: ClientStream,
     targets: election::ModelTargets,
     affinity: affinity::AffinityRouter,
+    ingress_type: crate::runtime::IngressType,
 ) {
+    let source_addr = tcp_stream.peer_addr().ok();
     let plugin_manager = node.plugin_manager().await;
     match proxy::read_http_request_with_plugin_manager_with_context(
         &mut tcp_stream,
@@ -1072,13 +1100,35 @@ async fn handle_api_proxy_connection(
                 affinity: &affinity,
                 plugin_manager: plugin_manager.as_ref(),
             };
-            handle_buffered_api_request(tcp_stream, request, ProxyConnectionContext { route })
-                .await;
+            handle_buffered_api_request(
+                tcp_stream,
+                request,
+                ProxyConnectionContext { route },
+                source_addr,
+                ingress_type,
+            )
+            .await;
         }
         Err(error) => {
             let _ = super::parse_failure::send_read_failure(tcp_stream, &error).await;
         }
     }
+}
+
+pub(crate) async fn handle_remote_http_stream(
+    node: mesh::Node,
+    stream: ClientStream,
+    targets: election::ModelTargets,
+    affinity: affinity::AffinityRouter,
+) {
+    handle_api_proxy_connection(
+        node,
+        stream,
+        targets,
+        affinity,
+        crate::runtime::IngressType::RemoteQuicHttp,
+    )
+    .await;
 }
 
 /// Model-aware API proxy. Parses the "model" field from POST request bodies
@@ -1107,7 +1157,14 @@ pub(crate) async fn api_proxy(
         let node = node.clone();
         let affinity = affinity.clone();
         tokio::spawn(async move {
-            handle_api_proxy_connection(node, tcp_stream, targets, affinity).await;
+            handle_api_proxy_connection(
+                node,
+                tcp_stream.into(),
+                targets,
+                affinity,
+                crate::runtime::IngressType::LocalOpenAi,
+            )
+            .await;
         });
     }
 }
@@ -1148,7 +1205,7 @@ pub(crate) async fn bootstrap_proxy(
                 let _ = tcp_stream.set_nodelay(true);
                 let node = node.clone();
                 let affinity = affinity.clone();
-                tokio::spawn(Box::pin(proxy::handle_mesh_request(node, tcp_stream, true, affinity)));
+                tokio::spawn(Box::pin(proxy::handle_mesh_request(node, tcp_stream.into(), true, affinity)));
             }
             resp_tx = stop_rx.recv() => {
                 if let Some(tx) = resp_tx {
@@ -1209,874 +1266,5 @@ mod durable_artifacts;
 mod automatic_routing;
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use crate::logging::{
-        LoggingService, OpenAiLifecycleAttachment, RawMeshLifecycleOwners, RawMeshRequestLifecycle,
-        TerminalOutcome,
-    };
-    use mesh_llm_events::logging::{events::LifecycleEvent, identifiers::RequestId};
-
-    use super::*;
-
-    fn large_tokenize_request(model: &str) -> proxy::BufferedHttpRequest {
-        proxy::BufferedHttpRequest {
-            raw: b"unchanged tokenizer wire".to_vec(),
-            method: "POST".to_owned(),
-            path: "/v1/tokenize".to_owned(),
-            client_path: "/v1/tokenize".to_owned(),
-            request_id: RequestId::default(),
-            body_json: None,
-            body_json_attempted: false,
-            body_bytes: None,
-            body_len_bytes: 140_000,
-            completion_tokens: None,
-            stream: None,
-            model_name: Some(model.to_owned()),
-            request_object_request_ids: Vec::new(),
-            response_adapter: proxy::ResponseAdapter::None,
-            correlation_id: None,
-        }
-    }
-
-    fn recorded_lifecycle_events(service: &LoggingService) -> Vec<LifecycleEvent> {
-        service
-            .bus_ref()
-            .replay_window()
-            .records
-            .into_iter()
-            .filter_map(|record| {
-                let envelope =
-                    serde_json::from_str::<serde_json::Value>(&record.entry.payload).ok()?;
-                let payload = envelope.get("payload")?.as_str()?;
-                serde_json::from_str(payload).ok()
-            })
-            .collect()
-    }
-
-    fn plugin_lifecycle() -> (Arc<LoggingService>, OpenAiLifecycleAttachment) {
-        let service = Arc::new(LoggingService::new_disabled(Default::default()));
-        let parent = RawMeshRequestLifecycle::register(
-            Arc::clone(&service),
-            Arc::new(RawMeshLifecycleOwners::default()),
-            RequestId::new(),
-        )
-        .expect("plugin test should claim one parent");
-        (service, OpenAiLifecycleAttachment::new(Some(parent)))
-    }
-
-    fn record_plugin_attempt(
-        observer: OpenAiRouteObserver<'_>,
-        model: &str,
-        provider: &str,
-        engine: &str,
-        result: super::super::response::RouteAttemptResult,
-    ) -> super::super::response::RouteAttemptResult {
-        observer.route_selected_with_metadata(Some(model), Some(provider), Some(engine));
-        let attempt_id = observer.start_attempt();
-        match result {
-            super::super::response::RouteAttemptResult::Delivered { status_code, .. } => {
-                observer.complete_attempt(attempt_id, status_code);
-            }
-            _ => observer.fail_attempt(
-                attempt_id,
-                super::super::response::route_attempt_result_label(&result),
-            ),
-        }
-        result
-    }
-
-    fn assert_payload_free(events: &[LifecycleEvent]) {
-        let serialized = serde_json::to_string(events).expect("events should serialize");
-        for forbidden in [
-            "body",
-            "headers",
-            "prompt",
-            "authorization",
-            "secret",
-            "completion",
-        ] {
-            assert!(!serialized.to_ascii_lowercase().contains(forbidden));
-        }
-    }
-
-    /// A model nobody serves must not stay in the auto pool. Before this,
-    /// the readiness check fell through to `true`, so `auto` could select a
-    /// phantom (stale gossip, or a peer that unloaded) and 404 the caller on
-    /// a model they never named.
-    #[tokio::test]
-    async fn phantom_model_is_not_auto_route_eligible() {
-        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
-            .await
-            .expect("test node");
-        let targets = election::ModelTargets::default();
-        let affinity = affinity::AffinityRouter::new();
-
-        let eligible = auto_route_model_has_ready_ingress_target(
-            &node,
-            &targets,
-            "phantom/model:Q4_K_M",
-            None,
-            &affinity,
-        )
-        .await;
-
-        assert!(
-            !eligible,
-            "a model with no local target and no remote host must not be auto-route eligible"
-        );
-    }
-
-    /// A freshly started serve node records its model before the target table
-    /// and gossip catch up. Failing closed must not exclude this node's own
-    /// model during that window.
-    #[tokio::test]
-    async fn freshly_served_local_model_is_auto_route_eligible() {
-        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
-            .await
-            .expect("test node");
-        node.set_hosted_models(vec!["local/fresh-model:Q4_K_M".to_string()])
-            .await;
-        let targets = election::ModelTargets::default();
-        let affinity = affinity::AffinityRouter::new();
-
-        let eligible = auto_route_model_has_ready_ingress_target(
-            &node,
-            &targets,
-            "local/fresh-model:Q4_K_M",
-            None,
-            &affinity,
-        )
-        .await;
-
-        assert!(
-            eligible,
-            "a locally served model must stay eligible before targets populate"
-        );
-    }
-
-    #[test]
-    fn parse_model_with_profile_with_named_profile() {
-        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#low-ctx");
-        assert_eq!(model_ref, "Qwen3-8B");
-        assert_eq!(profile, "low-ctx");
-    }
-
-    #[test]
-    fn parse_model_with_profile_without_profile() {
-        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B");
-        assert_eq!(model_ref, "Qwen3-8B");
-        assert_eq!(profile, "");
-    }
-
-    #[test]
-    fn parse_model_with_profile_empty_profile_after_hash() {
-        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#");
-        assert_eq!(model_ref, "Qwen3-8B");
-        assert_eq!(profile, "");
-    }
-
-    #[test]
-    fn parse_model_with_profile_huggingface_ref_with_quant() {
-        let (model_ref, profile) = parse_model_with_profile("org/repo:Q4_K_M#profile");
-        assert_eq!(model_ref, "org/repo:Q4_K_M");
-        assert_eq!(profile, "profile");
-    }
-
-    #[test]
-    fn parse_model_with_profile_multiple_hashes_uses_last() {
-        let (model_ref, profile) = parse_model_with_profile("model#with#hash#profile");
-        assert_eq!(model_ref, "model#with#hash");
-        assert_eq!(profile, "profile");
-    }
-
-    /// Regression: the MoA intercept must surface a single-model degradation.
-    ///
-    /// This helper-level test verifies that the gateway rewrites the request
-    /// and returns the resolved model to its caller. The separate pipeline
-    /// regression below verifies that the caller actually consumes that model.
-    #[tokio::test]
-    async fn moa_single_model_degrade_rewrites_routing_model() {
-        let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
-            .await
-            .expect("test node");
-        node.set_hosted_models(vec!["local/only-model:Q4_K_M".to_string()])
-            .await;
-        let mut targets = election::ModelTargets::default();
-        targets.targets.insert(
-            "local/only-model:Q4_K_M".to_string(),
-            vec![election::InferenceTarget::Local(1)],
-        );
-        let affinity = affinity::AffinityRouter::new();
-
-        // The helper returns the connected stream; this test only inspects the
-        // degradation result and intentionally does not dispatch it.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let client = tokio::net::TcpStream::connect(addr);
-        let server = async { listener.accept().await.map(|(stream, _)| stream) };
-        let (_client_side, server_side) = tokio::join!(client, server);
-        let tcp_stream = server_side.expect("accept");
-
-        let body = br#"{"model":"mesh","messages":[{"role":"user","content":"hi"}]}"#;
-        let raw = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        )
-        .into_bytes()
-        .into_iter()
-        .chain(body.iter().copied())
-        .collect::<Vec<u8>>();
-        let mut request = proxy::BufferedHttpRequest {
-            raw,
-            method: "POST".to_owned(),
-            path: "/v1/chat/completions".to_owned(),
-            client_path: "/v1/chat/completions".to_owned(),
-            request_id: RequestId::default(),
-            body_json: None,
-            body_json_attempted: false,
-            body_bytes: None,
-            body_len_bytes: body.len(),
-            completion_tokens: None,
-            stream: None,
-            model_name: Some("mesh".to_owned()),
-            request_object_request_ids: Vec::new(),
-            response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
-            correlation_id: None,
-        };
-        let decision = AutoRouteDecision {
-            effective_model: Some("mesh".to_owned()),
-            classification: None,
-            required_tokens: None,
-        };
-        let ctx = ProxyConnectionContext {
-            route: IngressRouteContext {
-                node: &node,
-                targets: &targets,
-                affinity: &affinity,
-                plugin_manager: None,
-            },
-        };
-        let lifecycle = OpenAiLifecycleAttachment::unowned();
-
-        let result = try_handle_moa_intercept(
-            tcp_stream,
-            &mut request,
-            &ctx,
-            &decision,
-            lifecycle.route_observer(),
-        )
-        .await;
-
-        match result {
-            MoaInterceptResult::Degraded { model, .. } => {
-                assert_eq!(
-                    model.as_deref(),
-                    Some("local/only-model:Q4_K_M"),
-                    "degrade must carry the rewritten real model for routing"
-                );
-                assert_eq!(
-                    request.model_name.as_deref(),
-                    Some("local/only-model:Q4_K_M"),
-                    "request must be rewritten in place"
-                );
-            }
-            MoaInterceptResult::NotMoa(_) => {
-                panic!(
-                    "single-model model=mesh fell through as NotMoa — routing would use the stale \
-                     'mesh' model and 404 (#1175 regression)"
-                );
-            }
-            MoaInterceptResult::Handled(outcome) => {
-                panic!("expected degrade passthrough, got handled outcome: {outcome:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn moa_degraded_model_is_consumed_by_pipeline_dispatch() {
-        use crate::network::router::{Category, Classification, Complexity};
-
-        let request = proxy::BufferedHttpRequest {
-            raw: Vec::new(),
-            method: "POST".to_owned(),
-            path: "/v1/chat/completions".to_owned(),
-            client_path: "/v1/chat/completions".to_owned(),
-            request_id: RequestId::default(),
-            body_json: None,
-            body_json_attempted: false,
-            body_bytes: None,
-            body_len_bytes: 0,
-            completion_tokens: None,
-            stream: None,
-            model_name: Some("local/only-model:Q4_K_M".to_owned()),
-            request_object_request_ids: Vec::new(),
-            response_adapter: proxy::ResponseAdapter::None,
-            correlation_id: None,
-        };
-        let decision = AutoRouteDecision {
-            effective_model: Some("mesh".to_owned()),
-            classification: Some(Classification {
-                category: Category::Code,
-                complexity: Complexity::Deep,
-                needs_tools: true,
-                has_media_inputs: false,
-            }),
-            required_tokens: None,
-        };
-
-        assert_eq!(
-            pipeline_route_model(&request, &decision, request.model_name.as_deref(),),
-            Some("local/only-model:Q4_K_M"),
-            "pipeline dispatch must consume the post-degradation model, not stale 'mesh'"
-        );
-    }
-
-    // --- Routing behavior tests for model-independent daemon support ---
-
-    #[test]
-    fn has_local_unavailable_returns_false_for_empty_targets() {
-        let targets = election::ModelTargets::default();
-        assert!(!has_local_unavailable_candidates(&targets, "nonexistent"));
-    }
-
-    #[test]
-    fn has_local_unavailable_returns_true_when_all_none() {
-        let mut targets = election::ModelTargets::default();
-        targets.targets.insert(
-            "loading-model".to_string(),
-            vec![
-                election::InferenceTarget::None,
-                election::InferenceTarget::None,
-            ],
-        );
-        assert!(has_local_unavailable_candidates(&targets, "loading-model"));
-    }
-
-    #[test]
-    fn has_local_unavailable_returns_false_when_any_available() {
-        let mut targets = election::ModelTargets::default();
-        targets.targets.insert(
-            "partial-model".to_string(),
-            vec![
-                election::InferenceTarget::None,
-                election::InferenceTarget::Local(9337),
-            ],
-        );
-        assert!(!has_local_unavailable_candidates(&targets, "partial-model"));
-    }
-
-    #[test]
-    fn callable_models_excludes_all_none_targets() {
-        let mut targets = election::ModelTargets::default();
-        // Available model - included in callable list
-        targets.targets.insert(
-            "available".to_string(),
-            vec![election::InferenceTarget::Local(9337)],
-        );
-        // Unavailable model (loading/draining) - excluded from callable list
-        targets.targets.insert(
-            "unavailable".to_string(),
-            vec![
-                election::InferenceTarget::None,
-                election::InferenceTarget::None,
-            ],
-        );
-
-        let models = callable_models(&targets);
-        assert!(models.contains(&"available".to_string()));
-        assert!(!models.contains(&"unavailable".to_string()));
-    }
-
-    #[test]
-    fn callable_models_returns_empty_when_no_targets() {
-        let targets = election::ModelTargets::default();
-        let models = callable_models(&targets);
-        assert!(models.is_empty());
-    }
-
-    // --- Daemon state derivation tests for plugin-only and remote-only daemons ---
-
-    #[test]
-    fn daemon_ready_proxying_when_only_plugins_available() {
-        use crate::api::status::{DaemonState, derive_daemon_state};
-
-        assert_eq!(
-            derive_daemon_state(
-                false, // shutdown_requested
-                false, // has_terminal_failure
-                false, // priority_degraded
-                false, // local_serving - no local models
-                true,  // proxying - plugin endpoints available for routing
-                true,  // listeners_ready
-            ),
-            DaemonState::ReadyProxying,
-        );
-    }
-
-    #[test]
-    fn daemon_ready_proxying_when_only_remote_mesh_available() {
-        use crate::api::status::{DaemonState, derive_daemon_state};
-
-        assert_eq!(
-            derive_daemon_state(
-                false, // shutdown_requested
-                false, // has_terminal_failure
-                false, // priority_degraded
-                false, // local_serving - no local models
-                true,  // proxying - remote mesh targets available for routing
-                true,  // listeners_ready
-            ),
-            DaemonState::ReadyProxying,
-        );
-    }
-
-    #[test]
-    fn daemon_degraded_on_terminal_failure_not_killed() {
-        use crate::api::status::{DaemonState, derive_daemon_state};
-
-        assert_eq!(
-            derive_daemon_state(
-                false, // shutdown_requested - NOT stopping
-                true,  // has_terminal_failure - model failed
-                false, // priority_degraded
-                false, // local_serving
-                true,  // proxying still works for other capabilities
-                true,  // listeners_ready
-            ),
-            DaemonState::Degraded,
-        );
-    }
-
-    #[test]
-    fn daemon_stopping_only_when_shutdown_requested() {
-        use crate::api::status::{DaemonState, derive_daemon_state};
-
-        assert_eq!(
-            derive_daemon_state(
-                true,  // shutdown_requested - explicitly stopping
-                false, // has_terminal_failure
-                false, // priority_degraded
-                true,  // local_serving (irrelevant when stopping)
-                true,  // proxying (irrelevant when stopping)
-                true,  // listeners_ready
-            ),
-            DaemonState::Stopping,
-        );
-    }
-
-    #[test]
-    fn daemon_ready_idle_when_no_models_but_listeners_up() {
-        use crate::api::status::{DaemonState, derive_daemon_state};
-
-        assert_eq!(
-            derive_daemon_state(
-                false, // shutdown_requested
-                false, // has_terminal_failure
-                false, // priority_degraded
-                false, // local_serving - no models loaded yet (on-demand mode)
-                false, // proxying - not yet routing to mesh or plugins
-                true,  // listeners_ready - HTTP listeners are up and accepting connections
-            ),
-            DaemonState::ReadyIdle,
-        );
-    }
-
-    #[tokio::test]
-    async fn api_proxy_tokenizer_route_ignores_generation_context_budget() {
-        let model = "acme/code-model:Q4_K_M";
-        let mut request = large_tokenize_request(model);
-        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
-            .await
-            .expect("test node should start");
-        node.set_model_runtime_context_length(model, Some(32_768))
-            .await;
-        let target = election::InferenceTarget::Local(19_337);
-        let mut targets = election::ModelTargets::default();
-        targets
-            .targets
-            .insert(model.to_owned(), vec![target.clone()]);
-        let affinity = affinity::AffinityRouter::new();
-        let ctx = IngressRouteContext {
-            node: &node,
-            targets: &targets,
-            affinity: &affinity,
-            plugin_manager: None,
-        };
-        let raw_before_decision = request.raw.clone();
-
-        let generation_budget = proxy::request_budget_tokens_from_parts(
-            request.body_len_bytes,
-            request.completion_tokens,
-        );
-        assert!(generation_budget.is_some_and(|tokens| tokens > 32_768));
-        assert!(
-            crate::network::openai::routing_rank::order_targets_by_context(
-                &node,
-                model,
-                generation_budget,
-                std::slice::from_ref(&target),
-            )
-            .await
-            .is_empty(),
-            "a generation budget would incorrectly reject the tokenizer target"
-        );
-
-        let decision = prepare_auto_route_decision(&mut request, &ctx, &[])
-            .await
-            .expect("tokenizer route should not enter media auto-routing");
-        assert_eq!(decision.effective_model.as_deref(), Some(model));
-        assert_eq!(decision.required_tokens, None);
-        assert_eq!(request.raw, raw_before_decision);
-        assert!(request.body_json.is_none());
-        assert!(!request.body_json_attempted);
-        assert_eq!(proxy::request_context_budget(&request), None);
-        assert_eq!(
-            crate::network::openai::routing_rank::order_targets_by_context(
-                &node,
-                model,
-                proxy::request_context_budget(&request),
-                std::slice::from_ref(&target),
-            )
-            .await,
-            vec![target]
-        );
-    }
-
-    #[test]
-    fn plugin_route_success_records_one_attempt_and_one_terminal_outcome() {
-        let (service, mut attachment) = plugin_lifecycle();
-        let observer = attachment.route_observer();
-        let result = record_plugin_attempt(
-            observer,
-            "plugin-model",
-            "acme/plugin",
-            "endpoint-prod",
-            super::super::response::RouteAttemptResult::Delivered {
-                status_code: 200,
-                usage: None,
-            },
-        );
-        assert!(matches!(
-            result,
-            super::super::response::RouteAttemptResult::Delivered {
-                status_code: 200,
-                ..
-            }
-        ));
-
-        attachment.terminal(terminal_outcome_for_dispatch(
-            proxy::RouteDispatchOutcome::Responded(200),
-        ));
-        attachment.terminal(TerminalOutcome::Failed("late_plugin_failure".into()));
-
-        let events = recorded_lifecycle_events(&service);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::RouteSelected { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::AttemptStarted { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::AttemptCompleted { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Completed { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Failed { .. }))
-                .count(),
-            0
-        );
-        match events
-            .iter()
-            .find(|event| matches!(event, LifecycleEvent::RouteSelected { .. }))
-        {
-            Some(LifecycleEvent::RouteSelected {
-                model,
-                provider,
-                engine,
-            }) => {
-                assert_eq!(model.as_deref(), Some("plugin-model"));
-                assert_eq!(provider.as_deref(), Some("acme/plugin"));
-                assert_eq!(engine.as_deref(), Some("endpoint-prod"));
-            }
-            other => panic!("expected one plugin route selection, got {other:?}"),
-        }
-        assert_payload_free(&events);
-    }
-
-    #[test]
-    fn plugin_route_failure_records_failed_attempt_and_terminal_outcome() {
-        let (service, mut attachment) = plugin_lifecycle();
-        let observer = attachment.route_observer();
-        let result = record_plugin_attempt(
-            observer,
-            "plugin-model",
-            "plugin.example",
-            "sk_test",
-            super::super::response::RouteAttemptResult::RetryableUnavailable,
-        );
-        assert_eq!(
-            result,
-            super::super::response::RouteAttemptResult::RetryableUnavailable
-        );
-
-        attachment.terminal(terminal_outcome_for_dispatch(
-            proxy::RouteDispatchOutcome::Failed("plugin_endpoint_failed"),
-        ));
-        attachment.terminal(TerminalOutcome::Completed);
-
-        let events = recorded_lifecycle_events(&service);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::AttemptStarted { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::AttemptFailed { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Failed { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Completed { .. }))
-                .count(),
-            0
-        );
-        match events
-            .iter()
-            .find(|event| matches!(event, LifecycleEvent::AttemptFailed { .. }))
-        {
-            Some(LifecycleEvent::AttemptFailed { error, .. }) => {
-                assert_eq!(error.as_deref(), Some("retryable_unavailable"));
-            }
-            other => panic!("expected one plugin attempt failure, got {other:?}"),
-        }
-        assert_payload_free(&events);
-    }
-
-    #[test]
-    fn plugin_route_without_endpoint_records_decision_without_attempt_or_payload() {
-        let (service, mut attachment) = plugin_lifecycle();
-        let observer = attachment.route_observer();
-        observer.route_selected_with_metadata(
-            Some("plugin-model"),
-            Some("plugin"),
-            Some("inference_endpoint"),
-        );
-        attachment.terminal(terminal_outcome_for_dispatch(
-            proxy::RouteDispatchOutcome::Responded(404),
-        ));
-        attachment.terminal(TerminalOutcome::Failed("late_plugin_failure".into()));
-
-        let events = recorded_lifecycle_events(&service);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::RouteSelected { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::AttemptStarted { .. }))
-                .count(),
-            0
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Rejected { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, LifecycleEvent::Failed { .. }))
-                .count(),
-            0
-        );
-        assert_payload_free(&events);
-    }
-
-    #[test]
-    fn load_and_unload_error_statuses_never_complete_lifecycle() {
-        for status in [400, 404, 409, 500, 503] {
-            assert!(!matches!(
-                terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(status)),
-                TerminalOutcome::Completed
-            ));
-        }
-    }
-
-    #[test]
-    fn unknown_and_unavailable_models_map_to_rejected_and_failed() {
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(404)),
-            TerminalOutcome::RejectedWithStatus {
-                status_code: 404,
-                ..
-            }
-        ));
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(503)),
-            TerminalOutcome::FailedWithStatus {
-                status_code: 503,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn invalid_and_failed_moa_responses_map_from_http_status() {
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(400)),
-            TerminalOutcome::RejectedWithStatus {
-                status_code: 400,
-                ..
-            }
-        ));
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(502)),
-            TerminalOutcome::FailedWithStatus {
-                status_code: 502,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn usage_never_turns_moa_or_pipeline_error_statuses_into_success() {
-        let usage = mesh_llm_events::logging::events::TokenUsage {
-            prompt_tokens: Some(8),
-            completion_tokens: Some(5),
-            total_tokens: Some(13),
-        };
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::RespondedWithUsage {
-                status_code: 400,
-                usage,
-            }),
-            TerminalOutcome::RejectedWithStatus {
-                status_code: 400,
-                ..
-            }
-        ));
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::RespondedWithUsage {
-                status_code: 502,
-                usage,
-            }),
-            TerminalOutcome::FailedWithStatus {
-                status_code: 502,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn streamed_moa_chat_and_responses_record_compatible_usage_lifecycle() {
-        let usage = mesh_llm_events::logging::events::TokenUsage {
-            prompt_tokens: Some(8),
-            completion_tokens: Some(5),
-            total_tokens: Some(13),
-        };
-        for adapter in [
-            proxy::ResponseAdapter::OpenAiChatCompletionsStream,
-            proxy::ResponseAdapter::OpenAiResponsesStream,
-        ] {
-            let (service, mut attachment) = plugin_lifecycle();
-            let outcome = proxy::RouteDispatchOutcome::RespondedWithUsage {
-                status_code: 200,
-                usage,
-            };
-            proxy::record_moa_stream_lifecycle(attachment.route_observer(), adapter, outcome);
-            attachment.terminal(terminal_outcome_for_dispatch(outcome));
-
-            let events = recorded_lifecycle_events(&service);
-            assert!(events.iter().any(|event| matches!(
-                event,
-                LifecycleEvent::StreamStarted { model }
-                    if model.as_deref() == Some(moa::VIRTUAL_MODEL_NAME)
-            )));
-            assert!(events.iter().any(|event| matches!(
-                event,
-                LifecycleEvent::StreamCompleted {
-                    tokens: Some(5),
-                    usage: Some(recorded),
-                } if *recorded == usage
-            )));
-            assert!(events.iter().any(|event| matches!(
-                event,
-                LifecycleEvent::Completed {
-                    status_code: Some(200),
-                    usage: Some(recorded),
-                    ..
-                } if *recorded == usage
-            )));
-        }
-    }
-
-    #[test]
-    fn pipeline_server_error_is_failed_not_completed() {
-        assert!(matches!(
-            terminal_outcome_for_dispatch(proxy::RouteDispatchOutcome::Responded(500)),
-            TerminalOutcome::FailedWithStatus {
-                status_code: 500,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn disconnect_is_dropped_and_cannot_audit_model_access_as_success() {
-        let outcome = proxy::RouteDispatchOutcome::Dropped("client_disconnected");
-        assert!(matches!(
-            terminal_outcome_for_dispatch(outcome),
-            TerminalOutcome::Dropped(_)
-        ));
-        assert!(!model_access_succeeded(outcome));
-        assert!(!model_access_succeeded(
-            proxy::RouteDispatchOutcome::Responded(502)
-        ));
-        assert!(model_access_succeeded(
-            proxy::RouteDispatchOutcome::Responded(200)
-        ));
-    }
-}
+#[path = "ingress_tests/tests.rs"]
+mod tests;

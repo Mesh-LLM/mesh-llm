@@ -18,10 +18,12 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 
 fn restore_env(key: &str, previous: Option<OsString>) {
     if let Some(value) = previous {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::set_var(key, value) };
     } else {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
         unsafe { std::env::remove_var(key) };
     }
 }
@@ -97,11 +99,14 @@ async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
         4,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("bartowski/GLM-5-UD-IQ2_XXS-GGUF:UD-IQ2_XXS")
@@ -146,11 +151,14 @@ async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
         4,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let expected_deleted = vec![
@@ -194,11 +202,14 @@ async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
         4,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("Example/tiny-qwen3-variant-GGUF:Q2_K")
@@ -250,11 +261,14 @@ async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
         128,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let sibling_entries = vec![
@@ -345,11 +359,14 @@ async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
         10,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers")
@@ -396,11 +413,14 @@ async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
         10,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let err = resolve_model_identifier("meshllm/Reports-layers")
@@ -468,11 +488,14 @@ async fn delete_model_by_identifier_removes_all_layered_package_files() {
         10,
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("HF_HOME") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let expected_deleted = vec![

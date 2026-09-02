@@ -11,8 +11,8 @@ use model_ref::split_gguf_shard_info;
 use serde::Deserialize;
 use serde_json::Value;
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode,
-    StageModel, StageSession,
+    ActivationFrame, GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, MtpSource,
+    RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
     redirect_native_logs_to_file,
 };
@@ -94,6 +94,239 @@ pub(crate) fn cache_state_restore_matches_recompute(spec: FamilySpec) -> Result<
     run_stage_state_restore(&layout, spec, stage_start, stage_end, state_kind)
 }
 
+pub(crate) fn mixed_iteration_matches_serial(spec: FamilySpec) -> Result<()> {
+    prepare_native_logs()?;
+    let Some(case) = resolve_case_for_ignored_test(spec)? else {
+        return Ok(());
+    };
+    let layout = case.layout()?;
+    if case.row.is_package_only() {
+        eprintln!(
+            "skipping mixed-iteration parity for package-only {} / {}",
+            spec.llama_model, spec.family
+        );
+        return Ok(());
+    }
+    let (split_layer, _) = split_layers_for(case.row, layout.layer_count)?;
+    run_mixed_iteration_split(&layout, spec, split_layer)
+}
+
+fn run_mixed_iteration_split(
+    layout: &TestLayout,
+    spec: FamilySpec,
+    split_layer: u32,
+) -> Result<()> {
+    let n_gpu_layers = case_n_gpu_layers(manifest_row(spec)?);
+    let stage0_shape = StageShape {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: split_layer,
+        include_embeddings: true,
+        include_output: false,
+    };
+    let stage1_shape = StageShape {
+        stage_index: 1,
+        layer_start: split_layer,
+        layer_end: layout.layer_count,
+        include_embeddings: false,
+        include_output: true,
+    };
+    let stage0 = open_stage_model(
+        &stage_path(layout, spec, stage0_shape)?,
+        stage0_shape,
+        n_gpu_layers,
+    )?;
+    let stage1 = open_stage_model(
+        &stage_path(layout, spec, stage1_shape)?,
+        stage1_shape,
+        n_gpu_layers,
+    )?;
+    let tokens = stage0.tokenize(case_prompt(manifest_row(spec)?), true)?;
+    if tokens.len() < 3 {
+        bail!(
+            "{} / {} mixed-iteration prompt produced fewer than three tokens",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    let prefix = &tokens[..2];
+    let long_prefill = &tokens[..tokens.len().min(6)];
+    let short_prefill = &tokens[..3];
+
+    let mut mixed_stage0 = [
+        stage0.create_session()?,
+        stage0.create_session()?,
+        stage0.create_session()?,
+    ];
+    let mut mixed_stage1 = [
+        stage1.create_session()?,
+        stage1.create_session()?,
+        stage1.create_session()?,
+    ];
+    let mut serial_stage0 = [
+        stage0.create_session()?,
+        stage0.create_session()?,
+        stage0.create_session()?,
+    ];
+    let mut serial_stage1 = [
+        stage1.create_session()?,
+        stage1.create_session()?,
+        stage1.create_session()?,
+    ];
+
+    let mixed_prefix_frame = mixed_stage0[0].prefill_chunk_frame(prefix, None, 0)?;
+    let (mixed_decode_token, _) =
+        mixed_stage1[0].prefill_chunk_frame_sampled(prefix, None, Some(&mixed_prefix_frame), 0)?;
+    let serial_prefix_frame = serial_stage0[0].prefill_chunk_frame(prefix, None, 0)?;
+    let (serial_decode_token, _) = serial_stage1[0].prefill_chunk_frame_sampled(
+        prefix,
+        None,
+        Some(&serial_prefix_frame),
+        0,
+    )?;
+    if mixed_decode_token != serial_decode_token {
+        bail!(
+            "{} / {} mixed-iteration setup token {mixed_decode_token} did not match serial {serial_decode_token}",
+            spec.llama_model,
+            spec.family
+        );
+    }
+
+    let decode_tokens = [mixed_decode_token];
+    let mixed_stage0_output = {
+        let [decode, long, short] = &mut mixed_stage0;
+        let mut requests = [
+            IterationBatchRequest {
+                session: decode,
+                token_ids: &decode_tokens,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            },
+            IterationBatchRequest {
+                session: long,
+                token_ids: long_prefill,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: false,
+                phase: IterationBatchPhase::Prefill,
+            },
+            IterationBatchRequest {
+                session: short,
+                token_ids: short_prefill,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: true,
+                phase: IterationBatchPhase::Prefill,
+            },
+        ];
+        StageSession::iteration_batch_sampled(&mut requests)?
+    };
+    if !mixed_stage0_output.samples.is_empty() {
+        bail!(
+            "{} / {} intermediate stage unexpectedly sampled tokens",
+            spec.llama_model,
+            spec.family
+        );
+    }
+
+    let (_, serial_decode_frame) =
+        serial_stage0[0].decode_step_frame(serial_decode_token, None, 0)?;
+    let serial_long_frame = serial_stage0[1].prefill_chunk_frame(long_prefill, None, 0)?;
+    let serial_short_frame = serial_stage0[2].prefill_chunk_frame(short_prefill, None, 0)?;
+    let serial_frames = [serial_decode_frame, serial_long_frame, serial_short_frame];
+    for (request_index, (mixed, serial)) in mixed_stage0_output
+        .request_outputs
+        .iter()
+        .zip(&serial_frames)
+        .enumerate()
+    {
+        if !activation_frames_match(mixed, serial) {
+            bail!(
+                "{} / {} mixed intermediate activation for request {request_index} did not match serial",
+                spec.llama_model,
+                spec.family
+            );
+        }
+    }
+
+    let mixed_stage1_output = {
+        let [decode, long, short] = &mut mixed_stage1;
+        let mut requests = [
+            IterationBatchRequest {
+                session: decode,
+                token_ids: &decode_tokens,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[0]),
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            },
+            IterationBatchRequest {
+                session: long,
+                token_ids: long_prefill,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[1]),
+                sample_last: false,
+                phase: IterationBatchPhase::Prefill,
+            },
+            IterationBatchRequest {
+                session: short,
+                token_ids: short_prefill,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[2]),
+                sample_last: true,
+                phase: IterationBatchPhase::Prefill,
+            },
+        ];
+        StageSession::iteration_batch_sampled(&mut requests)?
+    };
+    let (serial_decode_prediction, _) = serial_stage1[0].decode_step_frame_sampled(
+        serial_decode_token,
+        None,
+        Some(&serial_frames[0]),
+        0,
+    )?;
+    serial_stage1[1].prefill_chunk_frame(long_prefill, Some(&serial_frames[1]), 0)?;
+    let (serial_short_prediction, _) = serial_stage1[2].prefill_chunk_frame_sampled(
+        short_prefill,
+        None,
+        Some(&serial_frames[2]),
+        0,
+    )?;
+    let mixed_samples = mixed_stage1_output
+        .samples
+        .iter()
+        .map(|sample| (sample.request_index, sample.predicted_token))
+        .collect::<Vec<_>>();
+    let expected_samples = vec![(0, serial_decode_prediction), (2, serial_short_prediction)];
+    if mixed_samples != expected_samples {
+        bail!(
+            "{} / {} mixed samples {mixed_samples:?} did not match serial {expected_samples:?}",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    for index in 0..3 {
+        if mixed_stage0[index].token_count() != serial_stage0[index].token_count()
+            || mixed_stage1[index].token_count() != serial_stage1[index].token_count()
+        {
+            bail!(
+                "{} / {} mixed request {index} advanced session state differently from serial",
+                spec.llama_model,
+                spec.family
+            );
+        }
+    }
+    Ok(())
+}
+
 fn resolve_case_for_ignored_test(spec: FamilySpec) -> Result<Option<ResolvedCase>> {
     match ResolvedCase::resolve(spec) {
         Ok(case) => Ok(Some(case)),
@@ -159,8 +392,6 @@ struct CandidateRow {
     splits: Option<String>,
     #[serde(default)]
     prompt: Option<String>,
-    #[serde(default)]
-    wire_dtype: Option<String>,
     #[serde(default)]
     n_gpu_layers: Option<i32>,
 }
@@ -686,8 +917,6 @@ fn run_correctness_chain(layout: &TestLayout, spec: FamilySpec, splits: (u32, u3
             &stage_server_bin.to_string_lossy(),
             "--prompt",
             case_prompt(manifest_row(spec)?),
-            "--activation-wire-dtype",
-            case_wire_dtype(manifest_row(spec)?),
         ])
         .output()
         .with_context(|| {
@@ -725,10 +954,6 @@ fn run_correctness_chain(layout: &TestLayout, spec: FamilySpec, splits: (u32, u3
 
 fn case_prompt(row: &CandidateRow) -> &str {
     row.prompt.as_deref().unwrap_or("Hello")
-}
-
-fn case_wire_dtype(row: &CandidateRow) -> &str {
-    row.wire_dtype.as_deref().unwrap_or("f16")
 }
 
 fn case_n_gpu_layers(row: &CandidateRow) -> i32 {
@@ -996,11 +1221,13 @@ fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame)
 
     source
         .payload
-        .chunks_exact(4)
-        .zip(restored.payload.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(restored.payload.as_chunks::<4>().0.iter())
         .all(|(lhs, rhs)| {
-            let lhs = f32::from_le_bytes(lhs.try_into().expect("chunks_exact"));
-            let rhs = f32::from_le_bytes(rhs.try_into().expect("chunks_exact"));
+            let lhs = f32::from_le_bytes(*lhs);
+            let rhs = f32::from_le_bytes(*rhs);
             if lhs.to_bits() == rhs.to_bits() {
                 return true;
             }
@@ -1098,16 +1325,32 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             n_gpu_layers,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_runtime::SplitMode::Auto,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
             load_mode: path.load_mode,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             include_embeddings: shape.include_embeddings,
             include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: path.filter_tensors_on_load,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     )
     .with_context(|| {

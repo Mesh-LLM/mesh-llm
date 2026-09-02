@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1280" viewBox="0 0 1600 1280" role="img" aria-labelledby="title desc">
+<title id="title">Production KV cache comparison between the old and new schedulers</title>
+<desc id="desc">The upper grouped bar chart shows cache-derived time-to-first-token savings for three ResidentKv model families. The lower diverging bar chart shows the warm time-to-first-token change for three recurrent model families at concurrency one and four. ResidentKv improves strongly. Recurrent cache reuse is exact on both schedulers, with single-request overhead and concurrent improvements on the new scheduler.</desc>
+<style>
+:root{color-scheme:light dark}.bg{fill:#fff}.fg{fill:#111827}.muted{fill:#4b5563}.grid{stroke:#d1d5db}.frame{stroke:#9ca3af}.baseline{stroke:#111827}.title{font:600 38px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.subtitle{font:400 22px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.label{font:600 25px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.small{font:400 20px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.axis{font:400 18px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.value{font:600 18px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}@media(prefers-color-scheme:dark){.bg{fill:#0b1020}.fg{fill:#f3f4f6}.muted{fill:#cbd5e1}.grid{stroke:#334155}.frame{stroke:#64748b}.baseline{stroke:#f3f4f6}}
+</style>
+<rect class="bg" width="1600" height="1280"/>
+<text class="title fg" x="70" y="62">Production KV cache A/B: cache type matters</text>
+<text class="subtitle muted" x="70" y="100">OLD 03cbe8d7 vs NEW 8d658602 · two alternating-order replicates · 20–24 measured requests per cell</text>
+
+<rect x="70" y="126" width="24" height="24" rx="3" fill="#94a3b8"/>
+<text class="small fg" x="106" y="146">OLD</text>
+<rect x="190" y="126" width="24" height="24" rx="3" fill="#2563eb"/>
+<text class="small fg" x="226" y="146">NEW</text>
+
+<text class="label fg" x="120" y="218">ResidentKv: cache-derived p50 TTFT savings at N=1</text>
+<text class="small muted" x="1510" y="218" text-anchor="end">Cold p50 − warm-hit p50 · more saved is better</text>
+<line class="grid" x1="150" y1="620" x2="1510" y2="620"/>
+<line class="grid" x1="150" y1="532.5" x2="1510" y2="532.5"/>
+<line class="grid" x1="150" y1="445" x2="1510" y2="445"/>
+<line class="grid" x1="150" y1="357.5" x2="1510" y2="357.5"/>
+<line class="grid" x1="150" y1="270" x2="1510" y2="270"/>
+<text class="axis muted" x="132" y="626" text-anchor="end">0</text>
+<text class="axis muted" x="132" y="538.5" text-anchor="end">750</text>
+<text class="axis muted" x="132" y="451" text-anchor="end">1,500</text>
+<text class="axis muted" x="132" y="363.5" text-anchor="end">2,250</text>
+<text class="axis muted" x="132" y="276" text-anchor="end">3,000</text>
+<rect x="150" y="270" width="1360" height="350" fill="none" class="frame"/>
+<text class="small fg" transform="translate(35 445) rotate(-90)" text-anchor="middle">p50 TTFT saved (ms)</text>
+
+<rect x="245" y="577.2" width="110" height="42.8" rx="4" fill="#94a3b8"><title>Llama OLD cache lift: 367 ms</title></rect>
+<rect x="373" y="536.8" width="110" height="83.2" rx="4" fill="#2563eb"><title>Llama NEW cache lift: 713 ms</title></rect>
+<text class="value fg" x="300" y="568" text-anchor="middle">367</text>
+<text class="value fg" x="428" y="527" text-anchor="middle">713</text>
+<text class="small fg" x="364" y="657" text-anchor="middle">Llama · dense GQA</text>
+
+<rect x="665" y="553.4" width="110" height="66.6" rx="4" fill="#94a3b8"><title>Gemma2 OLD cache lift: 571 ms</title></rect>
+<rect x="793" y="448.7" width="110" height="171.3" rx="4" fill="#2563eb"><title>Gemma2 NEW cache lift: 1468 ms</title></rect>
+<text class="value fg" x="720" y="544" text-anchor="middle">571</text>
+<text class="value fg" x="848" y="439" text-anchor="middle">1,468</text>
+<text class="small fg" x="784" y="657" text-anchor="middle">Gemma2 · SWA</text>
+
+<rect x="1085" y="488.4" width="110" height="131.6" rx="4" fill="#94a3b8"><title>DeepSeek MLA OLD cache lift: 1128 ms</title></rect>
+<rect x="1213" y="291.9" width="110" height="328.1" rx="4" fill="#2563eb"><title>DeepSeek MLA NEW cache lift: 2812 ms</title></rect>
+<text class="value fg" x="1140" y="479" text-anchor="middle">1,128</text>
+<text class="value fg" x="1268" y="282" text-anchor="middle">2,812</text>
+<text class="small fg" x="1204" y="657" text-anchor="middle">DeepSeek2 · MLA</text>
+
+<rect x="70" y="698" width="24" height="24" rx="3" fill="#f97316"/>
+<text class="small fg" x="106" y="718">N=1</text>
+<rect x="190" y="698" width="24" height="24" rx="3" fill="#16a34a"/>
+<text class="small fg" x="226" y="718">N=4</text>
+<text class="label fg" x="120" y="765">KvRecurrent: warm p50 TTFT change on NEW</text>
+<text class="small muted" x="1510" y="765" text-anchor="end">Negative is faster · both schedulers restore the exact prefix with zero re-prefill</text>
+<line class="grid" x1="150" y1="800" x2="1510" y2="800"/>
+<line class="grid" x1="150" y1="885" x2="1510" y2="885"/>
+<line class="baseline" x1="150" y1="970" x2="1510" y2="970" stroke-width="2"/>
+<line class="grid" x1="150" y1="1055" x2="1510" y2="1055"/>
+<line class="grid" x1="150" y1="1140" x2="1510" y2="1140"/>
+<text class="axis muted" x="132" y="806" text-anchor="end">+40%</text>
+<text class="axis muted" x="132" y="891" text-anchor="end">+20%</text>
+<text class="axis muted" x="132" y="976" text-anchor="end">0%</text>
+<text class="axis muted" x="132" y="1061" text-anchor="end">−20%</text>
+<text class="axis muted" x="132" y="1146" text-anchor="end">−40%</text>
+<rect x="150" y="800" width="1360" height="340" fill="none" class="frame"/>
+<text class="small fg" transform="translate(35 970) rotate(-90)" text-anchor="middle">NEW vs OLD warm TTFT</text>
+
+<rect x="245" y="949.2" width="110" height="20.8" rx="4" fill="#f97316"><title>Qwen3.5 N=1: 4.9% slower</title></rect>
+<rect x="373" y="970" width="110" height="94.3" rx="4" fill="#16a34a"><title>Qwen3.5 N=4: 22.2% faster</title></rect>
+<text class="value fg" x="300" y="940" text-anchor="middle">+4.9%</text>
+<text class="value fg" x="428" y="1085" text-anchor="middle">−22.2%</text>
+<text class="small fg" x="364" y="1180" text-anchor="middle">Qwen3.5 · hybrid</text>
+
+<rect x="665" y="957.1" width="110" height="12.9" rx="4" fill="#f97316"><title>Falcon-H1 N=1: 3.0% slower</title></rect>
+<rect x="793" y="970" width="110" height="125.4" rx="4" fill="#16a34a"><title>Falcon-H1 N=4: 29.5% faster</title></rect>
+<text class="value fg" x="720" y="948" text-anchor="middle">+3.0%</text>
+<text class="value fg" x="848" y="1116" text-anchor="middle">−29.5%</text>
+<text class="small fg" x="784" y="1180" text-anchor="middle">Falcon-H1 · SSM</text>
+
+<rect x="1085" y="833.6" width="110" height="136.4" rx="4" fill="#f97316"><title>Qwen3-Next N=1: 32.1% slower</title></rect>
+<rect x="1213" y="970" width="110" height="95.6" rx="4" fill="#16a34a"><title>Qwen3-Next N=4: 22.5% faster</title></rect>
+<text class="value fg" x="1140" y="824" text-anchor="middle">+32.1%</text>
+<text class="value fg" x="1268" y="1086" text-anchor="middle">−22.5%</text>
+<text class="small fg" x="1204" y="1180" text-anchor="middle">Qwen3-Next · linear</text>
+
+<text class="small fg" x="70" y="1230">ResidentKv conclusion: NEW retains the full reusable prefix; OLD re-prefills 230–233 tokens.</text>
+<text class="axis muted" x="70" y="1262">KvRecurrent conclusion: exact state reuse is preserved; NEW trades N=1 overhead for lower warm latency at N=4.</text>
+</svg>

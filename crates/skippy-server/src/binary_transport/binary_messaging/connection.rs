@@ -1,3 +1,4 @@
+use super::ConnectionWorkerControl;
 use super::async_forwarder::AsyncForwarder;
 use super::control_messages::{
     handle_generation_control, handle_prefix_cache_control, handle_session_control, handle_stop,
@@ -8,7 +9,7 @@ use super::reply::reply_window_for_message;
 use super::reply::send_stage_reply;
 use super::session_lifecycle::align_session_to_message;
 use super::session_tracker::{
-    ConnectionSessionTracker, combine_connection_and_cleanup_results,
+    ConnectionSessionOwnership, ConnectionSessionTracker, combine_connection_and_cleanup_results,
     release_tracked_connection_sessions,
 };
 use super::summary::BinaryMessageObservation;
@@ -17,10 +18,9 @@ use super::telemetry::UpstreamReplyWriteSpan;
 use super::telemetry::{
     BinaryMessageTiming, emit_binary_message_received, emit_binary_message_timing,
     emit_upstream_reply_write_span, insert_runtime_session_stats, record_prefill_edge_transport,
-    record_verify_window_timing,
+    record_prefill_stage_compute, record_verify_window_timing,
 };
 use crate::binary_transport::BinaryStageExecutionOptions;
-use crate::binary_transport::DecodeFrameBatcher;
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::binary_kv::accumulate_shared_prefill_tokens;
 use crate::binary_transport::binary_kv::add_binary_record_stats;
@@ -32,6 +32,9 @@ use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::kv_eviction::binary_proactive_eviction_plan;
 use crate::binary_transport::kv_eviction::evict_binary_resident_prefix_for_decode;
+use crate::binary_transport::prefill_execution::{
+    executable_prefill_start, suffix_activation_frame,
+};
 use crate::binary_transport::run_binary_stage_message;
 use crate::binary_transport::stage_execution::binary_message_attrs;
 use crate::binary_transport::stage_execution::binary_message_session_id;
@@ -47,8 +50,8 @@ use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_output_activation_capacity;
 use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::kv_integration::KvStageIntegration;
-use crate::runtime_state::RuntimeState;
 use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use anyhow::{Context, Result, bail};
@@ -56,7 +59,6 @@ use serde_json::json;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
 use skippy_protocol::binary::StageWireMessage;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -65,21 +67,19 @@ use skippy_protocol::binary::send_reply_ack_with_stats;
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_binary_connection(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    runtime: &Arc<Mutex<RuntimeState>>,
-    decode_frame_batcher: &DecodeFrameBatcher,
+    iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     downstream: Option<TcpStream>,
     activation_width: i32,
-    wire_dtype: WireActivationDType,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -87,20 +87,21 @@ pub(super) fn handle_binary_connection(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
+    session_ownership: Arc<ConnectionSessionOwnership>,
+    worker_control: &ConnectionWorkerControl,
     first_message: StageWireMessage,
 ) -> Result<()> {
-    let mut session_tracker = ConnectionSessionTracker::default();
+    let mut session_tracker =
+        ConnectionSessionTracker::new(next_connection_session_id(), session_ownership);
     let result = handle_binary_connection_messages(
         config,
         topology,
-        runtime,
-        decode_frame_batcher,
+        iteration_scheduler,
         kv,
         telemetry,
         upstream,
         downstream,
         activation_width,
-        wire_dtype,
         max_inflight,
         reply_credit_limit,
         async_prefill_forward,
@@ -108,11 +109,17 @@ pub(super) fn handle_binary_connection(
         downstream_connect_timeout_secs,
         native_mtp_enabled,
         prediction_return_sinks,
+        worker_control,
         first_message,
         &mut session_tracker,
     );
-    let cleanup_result =
-        release_tracked_connection_sessions(config, runtime, telemetry, &mut session_tracker);
+    let cleanup_result = release_tracked_connection_sessions(
+        config,
+        iteration_scheduler,
+        kv,
+        telemetry,
+        &mut session_tracker,
+    );
     combine_connection_and_cleanup_results(result, cleanup_result)
 }
 
@@ -120,14 +127,12 @@ pub(super) fn handle_binary_connection(
 fn handle_binary_connection_messages(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    runtime: &Arc<Mutex<RuntimeState>>,
-    decode_frame_batcher: &DecodeFrameBatcher,
+    iteration_scheduler: &IterationScheduler,
     kv: Option<&Arc<KvStageIntegration>>,
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<TcpStream>,
     activation_width: i32,
-    wire_dtype: WireActivationDType,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -135,10 +140,11 @@ fn handle_binary_connection_messages(
     downstream_connect_timeout_secs: u64,
     native_mtp_enabled: bool,
     prediction_return_sinks: &PredictionReturnSinks,
+    worker_control: &ConnectionWorkerControl,
     first_message: StageWireMessage,
     session_tracker: &mut ConnectionSessionTracker,
 ) -> Result<()> {
-    let connection_session_id = next_connection_session_id();
+    let connection_session_id = session_tracker.connection_id;
     let max_deferred_prefill_replies =
         reply_credit_limit.unwrap_or_else(|| max_inflight.saturating_sub(1));
     let mut pending_prefill_replies = 0usize;
@@ -163,6 +169,7 @@ fn handle_binary_connection_messages(
         let recv_started = Instant::now();
         let Some(mut message) = receive_next_message(
             upstream,
+            worker_control,
             activation_width,
             next_message.take(),
             pending_prefill_replies,
@@ -191,12 +198,11 @@ fn handle_binary_connection_messages(
         if message.kind == WireMessageKind::Stop {
             handle_stop(
                 config,
-                runtime,
+                iteration_scheduler,
                 kv,
                 telemetry,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -214,9 +220,8 @@ fn handle_binary_connection_messages(
 
         if message.kind.is_verify_retirement() {
             handle_verify_retirement(
-                runtime,
+                iteration_scheduler,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -227,10 +232,9 @@ fn handle_binary_connection_messages(
 
         if message.kind.is_session_control() {
             handle_session_control(
-                runtime,
+                iteration_scheduler,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 &message,
                 &session_key,
@@ -245,10 +249,9 @@ fn handle_binary_connection_messages(
             handle_generation_control(
                 config,
                 topology,
-                runtime,
+                iteration_scheduler,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 downstream_connect_timeout_secs,
                 &message,
@@ -266,12 +269,11 @@ fn handle_binary_connection_messages(
             handle_prefix_cache_control(
                 config,
                 topology,
-                runtime,
+                iteration_scheduler,
                 kv,
                 telemetry,
                 upstream,
                 downstream.as_mut(),
-                wire_dtype,
                 downstream_wire_condition,
                 downstream_connect_timeout_secs,
                 activation_width,
@@ -315,14 +317,23 @@ fn handle_binary_connection_messages(
         }
 
         let token_ids = token_sideband_or_fill(&message)?;
-        let auto_align = align_session_to_message(
-            config,
-            runtime,
-            telemetry,
-            &session_key,
-            session_id,
-            &message,
-        )?;
+        let align_config = config.clone();
+        let align_telemetry = telemetry.clone();
+        let align_session_key = session_key.clone();
+        let align_message = message.clone();
+        let auto_align = iteration_scheduler
+            .execute_runtime("binary-session-align", move |runtime| {
+                align_session_to_message(
+                    &align_config,
+                    runtime,
+                    &align_telemetry,
+                    &align_session_key,
+                    session_id,
+                    &align_message,
+                )
+                .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
+            })
+            .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
         let session_auto_align_count = auto_align.count;
         let session_auto_align_ms = auto_align.elapsed_ms;
         let session_auto_align_trimmed_tokens = auto_align.trimmed_tokens;
@@ -337,28 +348,40 @@ fn handle_binary_connection_messages(
             );
         }
         let mut message_reply_stats = StageReplyStats::default();
-        let lookup_result = maybe_lookup_binary_prefill(
-            config,
-            runtime,
-            kv,
-            telemetry,
-            &session_key,
-            &message,
-            &token_ids,
-            activation_width,
-        );
+        let lookup_config = config.clone();
+        let lookup_kv = kv.cloned();
+        let lookup_telemetry = telemetry.clone();
+        let lookup_session_key = session_key.clone();
+        let lookup_message = message.clone();
+        let lookup_token_ids = token_ids.clone();
+        let lookup_result = iteration_scheduler
+            .execute_runtime("binary-prefix-lookup", move |runtime| {
+                Ok(maybe_lookup_binary_prefill(
+                    &lookup_config,
+                    runtime,
+                    lookup_kv.as_ref(),
+                    &lookup_telemetry,
+                    &lookup_session_key,
+                    &lookup_message,
+                    &lookup_token_ids,
+                    activation_width,
+                ))
+            })
+            .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
         message_reply_stats.merge(lookup_result.stats);
         let restored_prefill =
             lookup_result.restored_tokens >= token_ids.len() && !token_ids.is_empty();
-        let executable_token_ids = if message.kind.is_prefill()
-            && lookup_result.restored_tokens > 0
-            && lookup_result.restored_tokens < token_ids.len()
-            && config.layer_start == 0
-        {
-            &token_ids[lookup_result.restored_tokens..]
-        } else {
-            &token_ids
-        };
+        let executable_prefill_start = executable_prefill_start(
+            message.kind,
+            lookup_result.restored_tokens,
+            token_ids.len(),
+            config.layer_start,
+            config.downstream.is_some(),
+        );
+        let executable_token_ids = &token_ids[executable_prefill_start..];
+        if executable_prefill_start > 0 && message.positions.len() == token_ids.len() {
+            message.positions.drain(..executable_prefill_start);
+        }
         let compute_start_unix_nanos: u64;
         let compute_end_unix_nanos: u64;
         let mut input_activation_decode_ms = 0.0;
@@ -371,7 +394,7 @@ fn handle_binary_connection_messages(
         let mut decode_batch_wait_ms = 0.0;
         let input_activation_bytes = message.activation.len();
         let mut proactive_eviction = None;
-        let (predicted_token, mut predicted_tokens, output, native_mtp_draft, compute_ms) =
+        let (predicted_token, mut predicted_tokens, mut output, native_mtp_draft, compute_ms) =
             if restored_prefill {
                 let now = now_unix_nanos() as u64;
                 compute_start_unix_nanos = now;
@@ -388,8 +411,10 @@ fn handle_binary_connection_messages(
                 )
             } else {
                 let input_decode_started = Instant::now();
-                let input =
-                    input_activation_frame(config, topology, &mut message, activation_width)?;
+                let input = suffix_activation_frame(
+                    input_activation_frame(config, topology, &mut message)?,
+                    executable_prefill_start,
+                )?;
                 input_activation_decode_ms = if input_activation_bytes == 0 {
                     0.0
                 } else {
@@ -409,14 +434,17 @@ fn handle_binary_connection_messages(
                         message.authoritative_session_position().ok_or_else(|| {
                             anyhow::anyhow!("batched decode frame has no authoritative position")
                         })?;
-                    let outcome = decode_frame_batcher
-                        .decode(
+                    let outcome = iteration_scheduler
+                        .execute_frame_iteration(
                             &session_key,
                             target_token_count,
-                            token_id,
+                            &[token_id],
+                            &[],
                             sampling.as_ref(),
                             input,
+                            true,
                         )
+                        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
                         .context("execute batched binary decode frame")?;
                     runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
                     runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
@@ -425,12 +453,6 @@ fn handle_binary_connection_messages(
                     decode_batch_wait_ms = outcome.batch_wait_ms;
                     (outcome.predicted, Vec::new(), outcome.output, None)
                 } else {
-                    let lock_started = Instant::now();
-                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                    runtime_lock_wait_ms = elapsed_ms(lock_started);
-                    runtime_lock_acquires = 1;
-                    let lock_hold_started = Instant::now();
-                    runtime_sessions_before = Some(runtime.session_stats());
                     let eviction_plan = binary_proactive_eviction_plan(
                         message.kind,
                         restored_prefill,
@@ -438,40 +460,81 @@ fn handle_binary_connection_messages(
                         (message.state.prompt_token_count.max(0) as usize)
                             .saturating_sub(message.pos_start.max(0) as usize),
                     );
-                    if eviction_plan.required {
-                        proactive_eviction = Some(evict_binary_resident_prefix_for_decode(
-                            &mut runtime,
-                            kv,
-                            &session_key,
-                            eviction_plan,
-                        )?);
-                    }
-                    let result = run_binary_stage_message(
-                        &mut runtime,
-                        &session_key,
-                        &message,
-                        executable_token_ids,
-                        input.as_ref(),
-                        BinaryStageExecutionOptions::new(
-                            message.kind == WireMessageKind::PrefillFinalEmbd
-                                && downstream.is_none(),
-                            stage_output_activation_capacity(
-                                config,
+                    let output_capacity = stage_output_activation_capacity(
+                        config,
+                        message.token_count,
+                        activation_width,
+                    )?;
+                    let sample_prefill_final =
+                        message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
+                    let scheduler_session_key = session_key.clone();
+                    let scheduler_message = message.clone();
+                    let scheduler_token_ids = executable_token_ids.to_vec();
+                    let scheduler_kv = kv.cloned();
+                    let outcome = iteration_scheduler
+                        .execute_runtime_timed("binary-stage-execute", move |runtime| {
+                            let sessions_before = runtime.session_stats();
+                            let eviction = if eviction_plan.required {
+                                Some(
+                                    evict_binary_resident_prefix_for_decode(
+                                        runtime,
+                                        scheduler_kv.as_ref(),
+                                        &scheduler_session_key,
+                                        eviction_plan,
+                                    )
+                                    .map_err(|error| {
+                                        openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                                    })?,
+                                )
+                            } else {
+                                None
+                            };
+                            let result = run_binary_stage_message(
+                                runtime,
+                                &scheduler_session_key,
+                                &scheduler_message,
+                                &scheduler_token_ids,
+                                input.as_ref(),
+                                BinaryStageExecutionOptions::new(
+                                    sample_prefill_final,
+                                    output_capacity,
+                                    native_mtp_enabled,
+                                ),
+                            )
+                            .map_err(|error| {
+                                openai_frontend::OpenAiError::backend(format!("{error:#}"))
+                            })?;
+                            let sessions_after = runtime.session_stats();
+                            Ok((sessions_before, sessions_after, eviction, result))
+                        })
+                        .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
+                        .with_context(|| {
+                            format!(
+                                "execute scheduler-owned binary stage message \
+                                 kind={:?} pos_start={} token_count={} tokens={} \
+                                 executable_tokens={} activation_bytes={}",
+                                message.kind,
+                                message.pos_start,
                                 message.token_count,
-                                activation_width,
-                            )?,
-                            native_mtp_enabled,
-                        ),
-                    )
-                    .context("execute binary stage message")?;
-                    runtime_sessions_after = Some(runtime.session_stats());
-                    runtime_lock_hold_ms = elapsed_ms(lock_hold_started);
+                                message.tokens.len(),
+                                executable_token_ids.len(),
+                                input_activation_bytes,
+                            )
+                        })?;
+                    runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
+                    runtime_lock_hold_ms = outcome.runtime_lock_hold_ms;
+                    runtime_lock_acquires = 1;
+                    let (sessions_before, sessions_after, eviction, result) = outcome.value;
+                    runtime_sessions_before = Some(sessions_before);
+                    runtime_sessions_after = Some(sessions_after);
+                    proactive_eviction = eviction;
                     result
                 };
                 let compute_ms = elapsed_ms(compute_started);
                 compute_end_unix_nanos = now_unix_nanos() as u64;
                 (result.0, result.1, result.2, result.3, compute_ms)
             };
+        record_prefill_stage_compute(&mut message_reply_stats, config, &message, compute_ms);
         if telemetry.is_debug_enabled() {
             let mut decode_attrs = binary_message_attrs(config, session_id, &message);
             decode_attrs.insert(
@@ -552,19 +615,33 @@ fn handle_binary_connection_messages(
                 .cloned()
         });
         if message.kind.is_prefill() && !restored_prefill {
-            let record = super::prefill_recording::record_completed_prefill(
-                config,
-                runtime,
-                kv,
-                telemetry,
-                &session_key,
-                &message,
-                accumulated_prefill_tokens.as_deref(),
-                &token_ids,
-                lookup_result.restored_tokens as u64,
-                activation_width,
-                &output,
-            );
+            let record_config = config.clone();
+            let record_kv = kv.cloned();
+            let record_telemetry = telemetry.clone();
+            let record_session_key = session_key.clone();
+            let record_message = message.clone();
+            let record_accumulated_prefill_tokens = accumulated_prefill_tokens.clone();
+            let record_token_ids = token_ids.clone();
+            let restored_tokens = lookup_result.restored_tokens as u64;
+            let (record, returned_output) = iteration_scheduler
+                .execute_runtime("binary-prefill-record", move |runtime| {
+                    let record = super::prefill_recording::record_completed_prefill(
+                        &record_config,
+                        runtime,
+                        record_kv.as_ref(),
+                        &record_telemetry,
+                        &record_session_key,
+                        &record_message,
+                        record_accumulated_prefill_tokens.as_deref(),
+                        &record_token_ids,
+                        restored_tokens,
+                        activation_width,
+                        &output,
+                    );
+                    Ok((record, output))
+                })
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
+            output = returned_output;
             if record.recorded_pages > 0 {
                 message_reply_stats.kv_recorded_pages += record.recorded_pages as i64;
                 message_reply_stats.kv_record_stage_mask |= stage_mask(config.stage_index);
@@ -584,17 +661,25 @@ fn handle_binary_connection_messages(
                 .flatten()
         });
         if let Some(full_prompt_tokens) = completed_prompt_tokens {
-            let mut runtime = runtime.lock().expect("runtime lock poisoned");
-            let record = maybe_record_binary_full_prefill(
-                config,
-                &mut runtime,
-                kv,
-                telemetry,
-                &session_key,
-                &message,
-                full_prompt_tokens,
-            );
-            drop(runtime);
+            let record_config = config.clone();
+            let record_kv = kv.cloned();
+            let record_telemetry = telemetry.clone();
+            let record_session_key = session_key.clone();
+            let record_message = message.clone();
+            let record_tokens = full_prompt_tokens.to_vec();
+            let record = iteration_scheduler
+                .execute_runtime("binary-full-prefill-record", move |runtime| {
+                    Ok(maybe_record_binary_full_prefill(
+                        &record_config,
+                        runtime,
+                        record_kv.as_ref(),
+                        &record_telemetry,
+                        &record_session_key,
+                        &record_message,
+                        &record_tokens,
+                    ))
+                })
+                .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
             add_binary_record_stats(&mut message_reply_stats, config, &record);
         }
 
@@ -616,13 +701,8 @@ fn handle_binary_connection_messages(
             if output.payload.is_empty() {
                 bail!("stage has downstream but produced an empty activation payload");
             }
-            let forwarded = forwarded_stage_message_timed(
-                config,
-                &message,
-                &output,
-                wire_dtype,
-                activation_width,
-            )?;
+            let forwarded =
+                forwarded_stage_message_timed(config, &message, &output, activation_width)?;
             forward_activation_encode_ms += forwarded.activation_encode_ms;
             forward_activation_bytes = forwarded.message.activation.len();
             let mut downstream_write_attrs = BTreeMap::new();
@@ -662,7 +742,6 @@ fn handle_binary_connection_messages(
                 forwarder
                     .send(
                         forwarded.message,
-                        wire_dtype,
                         downstream_wire_condition,
                         downstream_write_attrs,
                     )
@@ -681,7 +760,6 @@ fn handle_binary_connection_messages(
                 write_stage_message_conditioned(
                     &mut *downstream,
                     &forwarded.message,
-                    wire_dtype,
                     downstream_wire_condition,
                 )
                 .context("forward activation frame downstream")?;

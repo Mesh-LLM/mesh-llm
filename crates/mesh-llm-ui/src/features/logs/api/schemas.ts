@@ -1,4 +1,5 @@
 import * as v from 'valibot'
+import { commandSummarySchema } from './command-summary'
 import {
   LogArtifactId,
   LogAuditId,
@@ -9,92 +10,19 @@ import {
   type LogReplayChannel
 } from './ids'
 
-export class LogsDtoError extends Error {
-  constructor() {
-    super('The logs service returned an invalid response.')
-    this.name = 'LogsDtoError'
-  }
-}
-
-export type LogOutcome = 'active' | 'completed' | 'failed' | 'rejected' | 'cancelled' | 'dropped'
-export type LogSource = 'active' | 'durable'
-export type LogAuditSource = 'logging_service' | 'logs_api' | 'runtime' | 'mesh' | 'cli'
-export type LogAuditSeverity = 'info' | 'warning' | 'error'
-export type LogArtifactUnavailableReason =
-  | 'streaming_response_not_assembled'
-  | 'response_body_not_bounded'
-  | 'capture_content_limit_exceeded'
-  | 'capture_memory_budget_exceeded'
-  | 'artifact_capture_disabled'
-  | 'artifact_capture_failed'
-export type LogEventKind =
-  | 'admitted'
-  | 'route_selected'
-  | 'attempt_started'
-  | 'attempt_completed'
-  | 'attempt_failed'
-  | 'backend_stream_first_item'
-  | 'stream_started'
-  | 'stream_chunk'
-  | 'stream_completed'
-  | 'usage_recorded'
-  | 'stream_error'
-  | 'audit_error'
-  | 'completed'
-  | 'failed'
-  | 'rejected'
-  | 'cancelled'
-  | 'dropped'
-
-export type LogRequest = {
-  readonly requestId: LogRequestId
-  readonly outcome: LogOutcome
-  readonly createdAt: string
-  readonly terminalAt: string | undefined
-  readonly route: string | undefined
-  readonly model: string | undefined
-  readonly provider: string | undefined
-  readonly engine: string | undefined
-  readonly statusCode: number | undefined
-  readonly source: LogSource
-}
-
-export type LogAuditEntry = {
-  readonly entryId: string
-  readonly occurredAt: string
-  readonly source: LogAuditSource
-  readonly code: string
-  readonly severity?: LogAuditSeverity
-  readonly sequence: number
-  readonly contextVersion?: 1
-  readonly subjectKind?: 'runtime' | 'model' | 'runtime_instance' | 'cli_command'
-  readonly subjectId?: string
-  readonly operationId?: string
-  readonly requestId?: string
-  readonly reasonCode?: string
-  readonly outcome?: string
-  readonly durationMs?: number
-  readonly numericSummaries?: Readonly<Record<string, number>>
-}
-
-export type LogLifecycleEvent = {
-  readonly eventId: LogEventId
-  readonly requestId: LogRequestId
-  readonly occurredAt: string
-  readonly kind: LogEventKind
-  readonly model: string | undefined
-  readonly provider: string | undefined
-  readonly engine: string | undefined
-  readonly attemptId: string | undefined
-  readonly statusCode: number | undefined
-  readonly durationMs: number | undefined
-  /** Legacy completion-token count. */
-  readonly tokens: number | undefined
-  readonly promptTokens?: number
-  readonly cachedPromptTokens?: number
-  readonly completionTokens?: number
-  readonly totalTokens?: number
-}
+import { LogsDtoError } from './schemas/types'
+import type {
+  LogArtifact,
+  LogAuditPage,
+  LogCleanupReceipt,
+  LogDeleteReceipt,
+  LogEventKind,
+  LogExport,
+  LogLifecycleEvent,
+  LogProxyAttempt,
+  LogRequest,
+  LogsPage
+} from './schemas/types'
 
 type LogArtifactBase = {
   readonly artifactId: LogArtifactId
@@ -109,113 +37,32 @@ type LogArtifactBase = {
   readonly truncated: boolean
 }
 
-export type LogArtifact =
-  | (LogArtifactBase & { readonly contentState: 'available'; readonly contentBase64: string | undefined })
-  | (LogArtifactBase & {
-      readonly contentState: 'unavailable'
-      readonly unavailableReason?: LogArtifactUnavailableReason
-      readonly contentBase64: undefined
-    })
-  | (LogArtifactBase & { readonly contentState: 'missing'; readonly contentBase64: undefined })
-  | (LogArtifactBase & { readonly contentState: 'corrupt'; readonly contentBase64: undefined })
-
-export type LogProxyAttempt = {
-  readonly attemptId: string
-  readonly requestId: LogRequestId
-  readonly occurredAt: string
-  readonly target: string
-  readonly provider: string | undefined
-  readonly engine: string | undefined
-  readonly startedAt: string | undefined
-  readonly completedAt: string | undefined
-  readonly statusCode: number | undefined
-}
-
-export type LogsPage<T> = {
-  readonly items: readonly T[]
-  readonly nextCursor: LogPageCursor | undefined
-  /** True only when the UI safety cap stopped server-side pagination. */
-  readonly incomplete?: boolean
-}
-
-export type LogAuditPage = {
-  readonly items: readonly LogAuditEntry[]
-  readonly nextCursor: LogPageCursor | undefined
-  /** True only when the UI safety cap stopped server-side pagination. */
-  readonly incomplete?: boolean
-}
-
-export type LogMaintenanceCounts = {
-  readonly requests: number
-  readonly events: number
-  readonly artifacts: number
-  readonly proxyRecords: number
-  readonly databaseRows: number
-}
-
-export type LogArtifactDeletion = {
-  readonly removed: number
-  readonly failed: number
-  readonly failureClass: 'io' | 'unsafe_path' | undefined
-}
-
-export type LogCleanupOutcome = Exclude<LogOutcome, 'active'>
-
-export type LogCleanupScope = {
-  readonly source: 'durable'
-  readonly cutoffBefore: string
-  readonly requestLimit: number
-  readonly from?: string
-  readonly to?: string
-  readonly route?: string
-  readonly model?: string
-  readonly provider?: string
-  readonly engine?: string
-  readonly outcome?: LogCleanupOutcome
-}
-
-export type LogCleanupReceipt = {
-  readonly operationId: LogOperationId
-  readonly auditId: LogAuditId
-  readonly cutoffBefore: string
-  readonly requestLimit: number
-  readonly scope: LogCleanupScope
-  readonly state: 'previewed' | 'completed' | 'partial'
-  readonly hasMore: boolean
-  readonly selectionFingerprint: string
-  readonly planned: LogMaintenanceCounts
-  readonly executed: LogMaintenanceCounts
-  readonly artifactDeletion: LogArtifactDeletion
-}
-
-type LogDeleteReceiptBase = {
-  readonly operationId: LogOperationId
-  readonly requestId: LogRequestId
-  readonly selectionFingerprint: string
-  readonly planned: LogMaintenanceCounts
-  readonly executed: LogMaintenanceCounts
-  readonly artifactDeletion: LogArtifactDeletion
-}
-
-export type LogDeleteReceipt =
-  | (LogDeleteReceiptBase & { readonly state: 'completed'; readonly auditId: LogAuditId })
-  | (LogDeleteReceiptBase & { readonly state: 'partial'; readonly auditId: LogAuditId | undefined })
-  | (LogDeleteReceiptBase & { readonly state: 'pending'; readonly auditId: undefined })
-
-export type LogExportItem = {
-  readonly summary: LogRequest
-  readonly events: readonly LogLifecycleEvent[]
-  readonly artifacts: readonly LogArtifact[]
-  readonly childIncomplete: boolean
-}
-
-export type LogExport = {
-  readonly items: readonly LogExportItem[]
-  readonly nextCursor: LogPageCursor | undefined
-  readonly truncated: boolean
-  readonly retryRequired: boolean
-  readonly artifactContentIncluded: boolean
-}
+export { LogsDtoError } from './schemas/types'
+export type {
+  LogArtifact,
+  LogArtifactDeletion,
+  LogArtifactUnavailableReason,
+  LogAuditEntry,
+  LogAuditPage,
+  LogAuditSeverity,
+  LogAuditSource,
+  LogCleanupOutcome,
+  LogCleanupReceipt,
+  LogCleanupScope,
+  LogCallerPathType,
+  LogDeleteReceipt,
+  LogEventKind,
+  LogExport,
+  LogExportItem,
+  LogLifecycleEvent,
+  LogMaintenanceCounts,
+  LogOutcome,
+  LogPeerPathType,
+  LogProxyAttempt,
+  LogRequest,
+  LogSource,
+  LogsPage
+} from './schemas/types'
 
 const outcomeSchema = v.picklist(['active', 'completed', 'failed', 'rejected', 'cancelled', 'dropped'])
 const cleanupOutcomeSchema = v.picklist(['completed', 'failed', 'rejected', 'cancelled', 'dropped'])
@@ -242,6 +89,8 @@ const eventKindSchema = v.picklist([
 const channelSchema = v.picklist(['requests', 'operations', 'system'])
 const auditSourceSchema = v.picklist(['logging_service', 'logs_api', 'runtime', 'mesh', 'cli'])
 const auditSeveritySchema = v.picklist(['info', 'warning', 'error'])
+const peerPathTypeSchema = v.picklist(['direct', 'relay'])
+const callerPathTypeSchema = v.picklist(['local_http', 'remote_quic_http', 'relay'])
 const artifactUnavailableReasonSchema = v.picklist([
   'streaming_response_not_assembled',
   'response_body_not_bounded',
@@ -309,7 +158,10 @@ const requestSchema = v.object({
   provider: v.nullable(v.string()),
   engine: v.nullable(v.string()),
   statusCode: v.nullable(statusCodeSchema),
-  source: sourceSchema
+  source: sourceSchema,
+  callerEndpointId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  callerAddr: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  callerPathType: v.optional(callerPathTypeSchema)
 })
 
 const lifecycleEventSchema = v.object({
@@ -377,6 +229,7 @@ const cleanupScopeSchema = v.strictObject({
   from: v.optional(timestampSchema),
   to: v.optional(timestampSchema),
   route: v.optional(cleanupScopeFilterSchema),
+  excludeRoute: v.optional(cleanupScopeFilterSchema),
   model: v.optional(cleanupScopeFilterSchema),
   provider: v.optional(cleanupScopeFilterSchema),
   engine: v.optional(cleanupScopeFilterSchema),
@@ -448,15 +301,24 @@ const auditEntrySchema = v.object({
   sequence: v.pipe(nonNegativeIntegerSchema, v.minValue(1)),
   contextVersion: v.optional(v.literal(1)),
   subjectKind: v.optional(
-    v.union([v.literal('runtime'), v.literal('model'), v.literal('runtime_instance'), v.literal('cli_command')])
+    v.union([
+      v.literal('runtime'),
+      v.literal('model'),
+      v.literal('runtime_instance'),
+      v.literal('cli_command'),
+      v.literal('mesh_peer')
+    ])
   ),
   subjectId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  remoteAddr: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+  pathType: v.optional(peerPathTypeSchema),
   operationId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
   requestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
   reasonCode: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
   outcome: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(64))),
   durationMs: v.optional(nonNegativeIntegerSchema),
-  numericSummaries: v.optional(v.record(v.string(), nonNegativeIntegerSchema))
+  numericSummaries: v.optional(v.record(v.string(), nonNegativeIntegerSchema)),
+  commandSummary: v.optional(commandSummarySchema)
 })
 
 const auditGapSchema = v.object({

@@ -127,19 +127,16 @@ impl StageOpenAiBackend {
         let verify_inputs = native_mtp_verify_window_inputs(*current, &proposal_tokens);
         let window =
             verify_window_scheduler.open(prefill_token_count + *decoded_tokens, *decoded_tokens)?;
-        let message = embedded_verify_window_message(
-            request.wire_dtype,
-            VerifyWindowMessageArgs {
-                window_id: window.id,
-                request_id,
-                session_id,
-                prompt_token_count: request.prompt_token_ids.len(),
-                pos_start: prefill_token_count + *decoded_tokens,
-                decode_step: *decoded_tokens,
-                tokens: &verify_inputs,
-                sampling: wire_sampling.clone(),
-            },
-        )?;
+        let message = embedded_verify_window_message(VerifyWindowMessageArgs {
+            window_id: window.id,
+            request_id,
+            session_id,
+            prompt_token_count: request.prompt_token_ids.len(),
+            pos_start: prefill_token_count + *decoded_tokens,
+            decode_step: *decoded_tokens,
+            tokens: &verify_inputs,
+            sampling: wire_sampling.clone(),
+        })?;
         let verify = self.execute_embedded_stage_message(
             request,
             downstream,

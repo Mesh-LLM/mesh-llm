@@ -4,7 +4,6 @@ use skippy_protocol::binary::LLAMA_TOKEN_NULL;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 use skippy_protocol::binary::StageStateHeader;
 use skippy_protocol::binary::StageWireMessage;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_protocol::binary::WireMessageKind;
 
 pub(super) struct DecodeMessageArgs {
@@ -17,21 +16,15 @@ pub(super) struct DecodeMessageArgs {
     pub(super) sampling: Option<WireSamplingConfig>,
 }
 
-pub(super) fn embedded_decode_message(
-    wire_dtype: WireActivationDType,
-    args: DecodeMessageArgs,
-) -> OpenAiResult<StageWireMessage> {
-    let mut message = ReusableDecodeMessage::new(
-        wire_dtype,
-        ReusableDecodeMessageArgs {
-            request_id: args.request_id,
-            session_id: args.session_id,
-            prompt_token_count: args.prompt_token_count,
-            base_pos_start: args.pos_start,
-            sampling: args.sampling,
-            sideband_capacity: 1,
-        },
-    )?;
+pub(super) fn embedded_decode_message(args: DecodeMessageArgs) -> OpenAiResult<StageWireMessage> {
+    let mut message = ReusableDecodeMessage::new(ReusableDecodeMessageArgs {
+        request_id: args.request_id,
+        session_id: args.session_id,
+        prompt_token_count: args.prompt_token_count,
+        base_pos_start: args.pos_start,
+        sampling: args.sampling,
+        sideband_capacity: 1,
+    })?;
     message.update_at_pos(
         args.decode_step,
         args.pos_start,
@@ -56,11 +49,8 @@ pub(super) struct ReusableDecodeMessage {
 }
 
 impl ReusableDecodeMessage {
-    pub(super) fn new(
-        wire_dtype: WireActivationDType,
-        args: ReusableDecodeMessageArgs,
-    ) -> OpenAiResult<Self> {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+    pub(super) fn new(args: ReusableDecodeMessageArgs) -> OpenAiResult<Self> {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = 0;
         state.prompt_token_count = i32::try_from(args.prompt_token_count)
             .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
@@ -140,7 +130,6 @@ pub(super) struct VerifyWindowMessageArgs<'a> {
 }
 
 pub(super) fn embedded_verify_window_message(
-    wire_dtype: WireActivationDType,
     args: VerifyWindowMessageArgs<'_>,
 ) -> OpenAiResult<StageWireMessage> {
     if args.tokens.is_empty() {
@@ -148,7 +137,7 @@ pub(super) fn embedded_verify_window_message(
             "verify window requires at least one token",
         ));
     }
-    let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
     state.seq_id = args.window_id;
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
         .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
@@ -175,7 +164,6 @@ pub(super) fn embedded_verify_window_message(
 }
 
 pub(super) fn retire_verify_window_message(
-    wire_dtype: WireActivationDType,
     request_id: u64,
     session_id: u64,
     token_start: usize,
@@ -188,7 +176,7 @@ pub(super) fn retire_verify_window_message(
             .map_err(|_| OpenAiError::backend("verify retirement position exceeds i32"))?,
         token_count: i32::try_from(token_count)
             .map_err(|_| OpenAiError::backend("verify retirement count exceeds i32"))?,
-        state: StageStateHeader::new(kind, wire_dtype),
+        state: StageStateHeader::new(kind),
         request_id,
         session_id,
         sampling: None,
@@ -201,7 +189,6 @@ pub(super) fn retire_verify_window_message(
 }
 
 pub(super) fn generation_config_message(
-    wire_dtype: WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
@@ -211,7 +198,6 @@ pub(super) fn generation_config_message(
     let prompt_token_count = i32::try_from(prompt_token_count)
         .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
     Ok(StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         prompt_token_count,
@@ -230,10 +216,9 @@ pub(super) struct OpenAiPrefillChunk<'a> {
 }
 
 pub(super) fn embedded_prefill_message(
-    wire_dtype: WireActivationDType,
     chunk: OpenAiPrefillChunk<'_>,
 ) -> OpenAiResult<StageWireMessage> {
-    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
     state.seq_id =
         i32::try_from(chunk.seq_id).map_err(|_| OpenAiError::backend("prefill seq exceeds i32"))?;
     state.prompt_token_count = i32::try_from(chunk.prefill_token_count)
@@ -263,12 +248,11 @@ pub(super) fn embedded_prefill_message(
 
 pub(super) fn embedded_prefix_cache_message(
     kind: WireMessageKind,
-    wire_dtype: WireActivationDType,
     tokens: &[i32],
     request_id: u64,
     session_id: u64,
 ) -> OpenAiResult<StageWireMessage> {
-    let mut state = StageStateHeader::new(kind, wire_dtype);
+    let mut state = StageStateHeader::new(kind);
     state.prompt_token_count = i32::try_from(tokens.len())
         .map_err(|_| OpenAiError::backend("prefix token count exceeds i32"))?;
     state.current_token = tokens.last().copied().unwrap_or(LLAMA_TOKEN_NULL);
@@ -303,10 +287,9 @@ pub(super) struct RestorePrefillDecodeMessageArgs<'a> {
 }
 
 pub(super) fn embedded_restore_prefill_decode_message(
-    wire_dtype: WireActivationDType,
     args: RestorePrefillDecodeMessageArgs<'_>,
 ) -> OpenAiResult<StageWireMessage> {
-    let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode);
     state.seq_id = 0;
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
         .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
@@ -355,7 +338,6 @@ pub(super) struct MultimodalPrefillArgs {
 }
 
 pub(super) fn multimodal_prefill_message(
-    wire_dtype: WireActivationDType,
     args: MultimodalPrefillArgs,
 ) -> OpenAiResult<StageWireMessage> {
     let kind = if args.final_chunk {
@@ -363,7 +345,7 @@ pub(super) fn multimodal_prefill_message(
     } else {
         WireMessageKind::PrefillEmbd
     };
-    let mut state = StageStateHeader::new(kind, wire_dtype);
+    let mut state = StageStateHeader::new(kind);
     state.seq_id = 0;
     state.prompt_token_count = i32::try_from(args.prompt_token_count)
         .map_err(|_| OpenAiError::backend("multimodal prefill token count exceeds i32"))?;
