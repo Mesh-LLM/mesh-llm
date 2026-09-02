@@ -7,7 +7,7 @@ use super::control_messages::{
 use super::message_receive::{next_connection_session_id, receive_next_message};
 use super::reply::reply_window_for_message;
 use super::reply::send_stage_reply;
-use super::session_lifecycle::align_session_to_target;
+use super::session_lifecycle::{align_session_to_target, record_session_auto_align};
 use super::session_tracker::{
     ConnectionSessionOwnership, ConnectionSessionTracker, combine_connection_and_cleanup_results,
     release_tracked_connection_sessions,
@@ -467,6 +467,17 @@ fn handle_binary_connection_messages(
                     runtime_lock_acquires = 1;
                     decode_batch_size = outcome.batch_size;
                     decode_batch_wait_ms = outcome.batch_wait_ms;
+                    // The batched frame aligns the session internally from its
+                    // target token count, so surface that trim on the same
+                    // counter and event as the explicit alignment paths. It is
+                    // fused into the decode, so it reports no standalone elapsed.
+                    if let Some(align) = outcome.session_alignment.as_ref() {
+                        let observation =
+                            record_session_auto_align(telemetry, &session_key, align, 0.0);
+                        session_auto_align_count = observation.count;
+                        session_auto_align_ms = observation.elapsed_ms;
+                        session_auto_align_trimmed_tokens = observation.trimmed_tokens;
+                    }
                     (outcome.predicted, Vec::new(), outcome.output, None)
                 } else {
                     let eviction_plan = binary_proactive_eviction_plan(
