@@ -1,13 +1,18 @@
+#[cfg(test)]
 use std::collections::HashMap;
 
+#[cfg(test)]
 use anyhow::{Result, anyhow, bail};
+#[cfg(test)]
 use skippy_topology::{
     BoundaryDecision, DiagnosticSeverity, LayerSpec, NodePlacementSignal, NodeSpec, PlannerPolicy,
     TopologyPlanRequest, infer_family_capability, plan_package_aware_contiguous_with_signals,
 };
 
+#[cfg(test)]
 use super::{materialization::StagePackageInfo, package::SkippyPackageIdentity};
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StageTopologyParticipant {
     pub(crate) node_id: iroh::EndpointId,
@@ -19,6 +24,8 @@ pub(crate) struct StageTopologyParticipant {
     pub(crate) availability_score: u32,
 }
 
+/// Shared deployment shape. Production split placement is produced by
+/// `runtime::split_planning` from GGUF/native resource metadata.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MeshStagePlan {
     pub(crate) stage_id: String,
@@ -29,6 +36,7 @@ pub(crate) struct MeshStagePlan {
     pub(crate) parameter_bytes: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MeshTopologyPlan {
     pub(crate) stages: Vec<MeshStagePlan>,
@@ -36,6 +44,9 @@ pub(crate) struct MeshTopologyPlan {
     pub(crate) diagnostics: Vec<String>,
 }
 
+// This adapter deliberately remains test-only. It infers capabilities from a
+// model identifier and must not become a production split-planning input.
+#[cfg(test)]
 pub(crate) fn plan_package_topology(
     topology_id: &str,
     package: &StagePackageInfo,
@@ -141,6 +152,7 @@ pub(crate) fn plan_package_topology(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn plan_package_identity_topology(
     topology_id: &str,
     model_id: &str,
@@ -169,6 +181,7 @@ pub(crate) fn plan_package_identity_topology(
     plan_package_topology(topology_id, &package, participants)
 }
 
+#[cfg(test)]
 fn layer_specs(package: &StagePackageInfo) -> Vec<LayerSpec> {
     let fallback_parameter_bytes = package
         .source_model_bytes
@@ -204,6 +217,21 @@ mod tests {
     use crate::inference::skippy::materialization::StagePackageLayerInfo;
     use iroh::SecretKey;
     use std::path::PathBuf;
+
+    #[test]
+    fn model_identity_adapter_remains_test_only() {
+        let source = include_str!("topology.rs");
+        for signature in [
+            "pub(crate) fn plan_package_topology(",
+            "pub(crate) fn plan_package_identity_topology(",
+        ] {
+            let guarded_signature = format!("#[cfg(test)]\n{signature}");
+            assert!(
+                source.contains(&guarded_signature),
+                "name-driven topology adapter must remain excluded from production builds: {signature}"
+            );
+        }
+    }
 
     fn make_id(seed: u8) -> iroh::EndpointId {
         let mut bytes = [0u8; 32];
