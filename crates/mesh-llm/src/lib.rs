@@ -60,7 +60,14 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         &normalized_args.original,
         normalized_args.explicit_surface,
     );
-    let explicit_surface = normalized_args.explicit_surface.map(map_runtime_surface);
+    let explicit_surface = normalized_args
+        .explicit_surface
+        .or(match cli.command.as_ref() {
+            Some(mesh_llm_cli::Command::Serve) => Some(mesh_llm_cli::RuntimeSurface::Serve),
+            Some(mesh_llm_cli::Command::Client) => Some(mesh_llm_cli::RuntimeSurface::Client),
+            _ => None,
+        })
+        .map(map_runtime_surface);
 
     // Command lifecycle events are terminal noise for one-shot commands unless
     // the user asked for verbose output with --debug. The durable audit bridge
@@ -255,6 +262,7 @@ fn parse_failure_family(
             continue;
         }
         let family = match argument {
+            "serve" | "client" => Some(CliCommandFamily::Runtime),
             "models" | "download" | "model-prepare" | "model-package" => {
                 Some(CliCommandFamily::Models)
             }
@@ -314,6 +322,14 @@ where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
     let args: Vec<_> = args.into_iter().collect();
+    if let [_program, help, target] = args.as_slice() {
+        if help == "help" && target == "serve" {
+            return Some(mesh_llm_cli::RuntimeSurface::Serve);
+        }
+        if help == "help" && target == "client" {
+            return Some(mesh_llm_cli::RuntimeSurface::Client);
+        }
+    }
     let help = args.last()?;
     if help != "--help" && help != "-h" {
         return None;
@@ -603,6 +619,28 @@ mod cli_entrypoint_tests {
             super::parse_failure_family(
                 &[
                     OsString::from("mesh-llm"),
+                    OsString::from("serve"),
+                    OsString::from("--bad-flag")
+                ],
+                None,
+            ),
+            CliCommandFamily::Runtime
+        );
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
+                    OsString::from("client"),
+                    OsString::from("--bad-flag")
+                ],
+                None,
+            ),
+            CliCommandFamily::Runtime
+        );
+        assert_eq!(
+            super::parse_failure_family(
+                &[
+                    OsString::from("mesh-llm"),
                     OsString::from("--port"),
                     OsString::from("bad")
                 ],
@@ -690,5 +728,50 @@ mod cli_entrypoint_tests {
         assert_eq!(config.ngram_min, Some(2));
         assert_eq!(config.ngram_max, Some(6));
         assert_eq!(config.ngram_max_proposal_tokens, Some(5));
+    }
+
+    #[test]
+    fn runtime_surface_help_request_handles_flags_and_help_subcommands() {
+        use mesh_llm_cli::RuntimeSurface;
+
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("serve"),
+                OsString::from("--help"),
+            ]),
+            Some(RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("help"),
+                OsString::from("serve"),
+            ]),
+            Some(RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("client"),
+                OsString::from("-h"),
+            ]),
+            Some(RuntimeSurface::Client)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("help"),
+                OsString::from("client"),
+            ]),
+            Some(RuntimeSurface::Client)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("--help"),
+            ]),
+            None
+        );
     }
 }
