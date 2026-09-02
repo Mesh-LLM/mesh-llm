@@ -38,6 +38,16 @@ const SEGMENT_DIR: &str = "segments";
 const MANIFEST_DIR: &str = "manifests";
 const PREFIX_INDEX_DIR: &str = "prefixes";
 const QUARANTINE_DIR: &str = "quarantine";
+
+/// Evict to this percentage of the budget rather than exactly to it.
+///
+/// An eviction pass is O(manifests x segments): it parses every manifest to
+/// learn which segments would become unreferenced. Measured at 812 ms for 20
+/// manifests of ~9.5k segments, which is what a 19K-token prefix costs at a
+/// 64-row window. Evicting exactly to the cap means a full cache pays that on
+/// every commit; leaving headroom amortises it over the writes that fill the
+/// headroom back up.
+const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// On-disk format version stamped into every manifest. A released change to
 /// the layout bumps this and makes older entries misses, never migrations.
 pub const MANIFEST_VERSION: u32 = 1;
@@ -285,6 +295,38 @@ impl Drop for Reservation<'_> {
     }
 }
 
+/// Holds one segment against collection while its manifest is being built.
+///
+/// A writer puts every segment before committing the manifest that binds them,
+/// so for that window the bytes are unreferenced and eviction would collect
+/// them out from under the commit about to name them. The hold lasts exactly
+/// as long as the writer keeps the guard, so an abandoned write releases on
+/// drop rather than leaking until restart.
+#[derive(Debug)]
+pub struct SegmentHold<'store> {
+    store: &'store HandoffSegmentStore,
+    digest: String,
+}
+
+impl Drop for SegmentHold<'_> {
+    fn drop(&mut self) {
+        self.store
+            .inflight_segments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.digest);
+    }
+}
+
+/// A stored segment and the hold that keeps it collectable-proof until the
+/// caller's manifest commits.
+#[derive(Debug)]
+pub struct StoredSegment<'store> {
+    pub digest: String,
+    pub put: SegmentPut,
+    _hold: SegmentHold<'store>,
+}
+
 /// Holds one manifest against eviction while it is being read or written.
 #[derive(Debug)]
 pub struct ManifestPin<'store> {
@@ -336,6 +378,15 @@ pub struct HandoffSegmentStore {
     evicted_manifests: AtomicU64,
     /// Objects moved to quarantine after failing verification since open.
     quarantined_objects: AtomicU64,
+    /// Segments written but not yet referenced by a committed manifest.
+    ///
+    /// A writer puts every segment before committing the manifest that binds
+    /// them, so for that window the bytes are unreferenced — and eviction
+    /// triggered by another writer (or by this one needing room) would
+    /// collect them out from under the commit that is about to reference
+    /// them. Left unprotected this fails as "manifest references missing
+    /// segment" under exactly the pressure the cache is for.
+    inflight_segments: Mutex<std::collections::BTreeSet<String>>,
 }
 
 pub fn segment_digest(bytes: &[u8]) -> String {
@@ -383,6 +434,7 @@ impl HandoffSegmentStore {
             pins: Mutex::new(std::collections::BTreeMap::new()),
             evicted_manifests: AtomicU64::new(0),
             quarantined_objects: AtomicU64::new(0),
+            inflight_segments: Mutex::new(std::collections::BTreeSet::new()),
         })
     }
 
@@ -505,30 +557,31 @@ impl HandoffSegmentStore {
     /// A segment already present is a no-op that costs nothing and is always
     /// admitted: content addressing means the bytes on disk are the bytes
     /// being written, so re-putting cannot grow the store.
-    pub fn put_segment(&self, bytes: &[u8]) -> Result<(String, SegmentPut)> {
+    pub fn put_segment(&self, bytes: &[u8]) -> Result<StoredSegment<'_>> {
         match self.try_put_segment(bytes)? {
-            Ok(put) => Ok(put),
+            Ok(stored) => Ok(stored),
             Err(refusal) => bail!("cannot store segment: {}", refusal.reason()),
         }
     }
 
     /// As [`Self::put_segment`], returning the refusal rather than an error so
     /// callers can record a miss with its reason and carry on.
-    #[allow(clippy::type_complexity)]
-    pub fn try_put_segment(
-        &self,
-        bytes: &[u8],
-    ) -> Result<Result<(String, SegmentPut), WriteRefusal>> {
+    pub fn try_put_segment(&self, bytes: &[u8]) -> Result<Result<StoredSegment<'_>, WriteRefusal>> {
         let digest = segment_digest(bytes);
         let path = self.segment_path(&digest);
         if path.exists() {
-            return Ok(Ok((
+            // Already stored, but possibly unreferenced: hold it too, or a
+            // concurrent eviction can collect it before this writer's manifest
+            // names it.
+            let hold = self.hold_segment(&digest);
+            return Ok(Ok(StoredSegment {
                 digest,
-                SegmentPut {
+                put: SegmentPut {
                     new: false,
                     bytes: bytes.len() as u64,
                 },
-            )));
+                _hold: hold,
+            }));
         }
         // Reserve before any temporary bytes exist on disk, so two writers
         // cannot both pass the check and together exceed the cap.
@@ -538,14 +591,16 @@ impl HandoffSegmentStore {
         };
         write_atomically(&path, bytes)?;
         fsinfo::restrict_to_owner(&path, 0o600)?;
+        let hold = self.hold_segment(&digest);
         drop(reservation);
-        Ok(Ok((
+        Ok(Ok(StoredSegment {
             digest,
-            SegmentPut {
+            put: SegmentPut {
                 new: true,
                 bytes: bytes.len() as u64,
             },
-        )))
+            _hold: hold,
+        }))
     }
 
     pub fn has_segment(&self, digest: &str) -> bool {
@@ -648,8 +703,11 @@ impl HandoffSegmentStore {
                 WriteRefusal::SkippedOversize.reason()
             );
         }
-        let serialized =
-            serde_json::to_vec_pretty(manifest).context("failed to serialize manifest")?;
+        // Compact, not pretty: a 64-row window turns a long prefix into
+        // thousands of segment refs, and eviction parses every manifest to
+        // build its reference map. Indentation is pure cost on a file nobody
+        // reads by hand.
+        let serialized = serde_json::to_vec(manifest).context("failed to serialize manifest")?;
         // The manifest is what makes the segments loadable, so it is pinned
         // while it lands: eviction triggered by its own admission check must
         // not remove the entry being committed.
@@ -780,8 +838,12 @@ impl HandoffSegmentStore {
             let used = self.managed_usage_bytes()?;
             if used.saturating_add(bytes) > self.limits.budget_bytes {
                 // Make room from inactive entries before refusing: a full
-                // cache is the normal steady state, not an error.
-                self.enforce_budget_to(self.limits.budget_bytes.saturating_sub(bytes))?;
+                // cache is the normal steady state, not an error. Clear to the
+                // low-water mark, or further when this write alone needs more.
+                let target = self
+                    .low_water_bytes()
+                    .min(self.limits.budget_bytes.saturating_sub(bytes));
+                self.enforce_budget_to(target)?;
                 let used = self.managed_usage_bytes()?;
                 if used.saturating_add(bytes) > self.limits.budget_bytes {
                     return Ok(Err(WriteRefusal::InsufficientSpace));
@@ -867,7 +929,20 @@ impl HandoffSegmentStore {
         if self.limits.budget_bytes == 0 {
             return Ok(0);
         }
-        self.enforce_budget_to(self.limits.budget_bytes)
+        // Over the cap, evict below it: the pass is expensive enough that
+        // paying it once per headroom refill beats paying it per commit.
+        if self.managed_usage_bytes()? <= self.limits.budget_bytes {
+            return Ok(0);
+        }
+        self.enforce_budget_to(self.low_water_bytes())
+    }
+
+    /// The level eviction drops to once it runs.
+    fn low_water_bytes(&self) -> u64 {
+        self.limits
+            .budget_bytes
+            .saturating_mul(EVICTION_LOW_WATER_PERCENT)
+            / 100
     }
 
     /// Evict until managed usage is at or below `target_bytes`.
@@ -970,6 +1045,17 @@ impl HandoffSegmentStore {
         Ok(before.saturating_sub(after))
     }
 
+    fn hold_segment(&self, digest: &str) -> SegmentHold<'_> {
+        self.inflight_segments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(digest.to_string());
+        SegmentHold {
+            store: self,
+            digest: digest.to_string(),
+        }
+    }
+
     /// Remove segments referenced by no manifest. Returns bytes freed.
     pub fn collect_unreferenced_segments(&self) -> Result<u64> {
         let mut referenced = std::collections::HashSet::new();
@@ -990,7 +1076,12 @@ impl HandoffSegmentStore {
             else {
                 continue;
             };
-            if !referenced.contains(&stem) {
+            let held = self
+                .inflight_segments
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&stem);
+            if !referenced.contains(&stem) && !held {
                 freed = freed.saturating_add(entry.metadata()?.len());
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to collect segment {stem}"))?;
@@ -1077,24 +1168,44 @@ mod tests {
         HandoffSegmentStore::open(root, budget).expect("open store")
     }
 
-    fn manifest_for(
-        store: &HandoffSegmentStore,
+    /// Builds a manifest and returns the write-side holds alongside it: a
+    /// caller that puts segments and commits later must keep them alive, or an
+    /// eviction in between collects the segments it is about to reference.
+    /// This is the contract `L3Tier::spill` follows in production.
+    fn manifest_for<'store>(
+        store: &'store HandoffSegmentStore,
         payload: &[u8],
         segment_bytes: usize,
-    ) -> HandoffManifest {
+    ) -> (HandoffManifest, Vec<StoredSegment<'store>>) {
         let mut manifest = HandoffManifest::new("blake3:test".to_string(), "full-state".into());
+        let mut held = Vec::new();
         for (index, chunk) in payload.chunks(segment_bytes).enumerate() {
-            let (digest, _) = store.put_segment(chunk).expect("put segment");
+            let stored = store.put_segment(chunk).expect("put segment");
             manifest.segments.push(HandoffSegmentRef {
                 index: index as u32,
                 offset: (index * segment_bytes) as u64,
                 bytes: chunk.len() as u64,
-                digest,
+                digest: stored.digest.clone(),
                 meta_json: None,
             });
+            held.push(stored);
         }
         manifest.total_bytes = payload.len() as u64;
         manifest.payload_digest = segment_digest(payload);
+        (manifest, held)
+    }
+
+    /// Put a payload's segments and commit the manifest that binds them,
+    /// releasing the write-side holds afterwards. The shape production uses:
+    /// hold across the commit, then let eviction have them.
+    fn commit_payload(
+        store: &HandoffSegmentStore,
+        payload: &[u8],
+        segment_bytes: usize,
+    ) -> HandoffManifest {
+        let (manifest, held) = manifest_for(store, payload, segment_bytes);
+        store.commit(&manifest).expect("commit");
+        drop(held);
         manifest
     }
 
@@ -1111,8 +1222,7 @@ mod tests {
         let root = temp_root("roundtrip");
         let store = store(&root, 0);
         let payload: Vec<u8> = (0..100_000u32).map(|value| value as u8).collect();
-        let manifest = manifest_for(&store, &payload, 4096);
-        store.commit(&manifest).expect("commit");
+        let manifest = commit_payload(&store, &payload, 4096);
         let loaded = store
             .load_manifest(&manifest.payload_digest)
             .expect("load manifest");
@@ -1123,11 +1233,13 @@ mod tests {
     fn puts_are_idempotent_and_deduplicated() {
         let root = temp_root("idempotent");
         let store = store(&root, 0);
-        let (first_digest, first) = store.put_segment(b"same bytes").expect("first put");
-        let (second_digest, second) = store.put_segment(b"same bytes").expect("second put");
+        let first = store.put_segment(b"same bytes").expect("first put");
+        let first_digest = first.digest.clone();
+        let second = store.put_segment(b"same bytes").expect("second put");
+        let second_digest = second.digest.clone();
         assert_eq!(first_digest, second_digest);
-        assert!(first.new);
-        assert!(!second.new);
+        assert!(first.put.new);
+        assert!(!second.put.new);
         assert_eq!(store.segment_footprint_bytes().expect("footprint"), 10);
     }
 
@@ -1136,7 +1248,7 @@ mod tests {
         let root = temp_root("completeness");
         let store = store(&root, 0);
         let payload = vec![7u8; 10_000];
-        let mut manifest = manifest_for(&store, &payload, 4096);
+        let (mut manifest, _held) = manifest_for(&store, &payload, 4096);
 
         let mut missing = manifest.clone();
         missing.segments[1].digest = segment_digest(b"never stored");
@@ -1151,8 +1263,7 @@ mod tests {
         let root = temp_root("corruption");
         let store = store(&root, 0);
         let payload = vec![42u8; 8192];
-        let manifest = manifest_for(&store, &payload, 4096);
-        store.commit(&manifest).expect("commit");
+        let manifest = commit_payload(&store, &payload, 4096);
 
         let victim = store.segment_path(&manifest.segments[0].digest);
         let mut bytes = fs::read(&victim).expect("read segment file");
@@ -1169,14 +1280,16 @@ mod tests {
         let store = store(&root, 12_000);
         let old_payload = vec![1u8; 8_000];
         let new_payload = vec![2u8; 8_000];
-        let old_manifest = manifest_for(&store, &old_payload, 4096);
-        store.commit(&old_manifest).expect("commit old");
+        let old_manifest = commit_payload(&store, &old_payload, 4096);
         // Ensure a later mtime for the second manifest.
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let new_manifest = manifest_for(&store, &new_payload, 4096);
-        store.commit(&new_manifest).expect("commit new");
+        let new_manifest = commit_payload(&store, &new_payload, 4096);
 
         let manifests = store.list_manifests().expect("list");
+        assert!(
+            !manifests.contains(&old_manifest.payload_digest),
+            "the older entry survived eviction: {manifests:?}"
+        );
         assert_eq!(manifests, vec![new_manifest.payload_digest.clone()]);
         assert!(store.assemble(&new_manifest).is_ok());
         assert!(store.segment_footprint_bytes().expect("footprint") <= 12_000);
@@ -1187,11 +1300,9 @@ mod tests {
         let root = temp_root("lru-by-use");
         // Fits two payloads plus bookkeeping, not three.
         let store = store(&root, 20_000);
-        let first = manifest_for(&store, &vec![1u8; 8_000], 4096);
-        store.commit(&first).expect("commit first");
+        let first = commit_payload(&store, &vec![1u8; 8_000], 4096);
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let second = manifest_for(&store, &vec![2u8; 8_000], 4096);
-        store.commit(&second).expect("commit second");
+        let second = commit_payload(&store, &vec![2u8; 8_000], 4096);
 
         // The older entry is the one being read, so it is the one that should
         // survive. Under least-recently-written it would be evicted first.
@@ -1199,8 +1310,8 @@ mod tests {
         store.touch_manifest(&first.payload_digest);
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let third = manifest_for(&store, &vec![3u8; 8_000], 4096);
-        store.commit(&third).expect("commit third");
+        // A third entry the budget cannot hold: something must go.
+        commit_payload(&store, &vec![3u8; 8_000], 4096);
 
         let manifests = store.list_manifests().expect("list");
         assert!(
@@ -1233,7 +1344,11 @@ mod tests {
         // written and is not any more.
         let root = temp_root("oversize-commit");
         let uncapped = store(&root, 0);
-        let manifest = manifest_for(&uncapped, &vec![7u8; 16_000], 4_000);
+        let manifest = {
+            let (manifest, held) = manifest_for(&uncapped, &vec![7u8; 16_000], 4_000);
+            drop(held);
+            manifest
+        };
         drop(uncapped);
 
         let capped = store(&root, 8_000);
@@ -1254,7 +1369,7 @@ mod tests {
     fn managed_usage_counts_more_than_segments() {
         let root = temp_root("usage");
         let store = store(&root, 0);
-        let manifest = manifest_for(&store, &vec![5u8; 4096], 4096);
+        let manifest = commit_payload(&store, &vec![5u8; 4096], 4096);
         store.commit(&manifest).expect("commit");
         store
             .link_prefix("namespace", 128, "prefix", &manifest.payload_digest)
@@ -1275,7 +1390,7 @@ mod tests {
         // entry is a miss; the pinned one stays loadable.
         let root = temp_root("pinned");
         let store = store(&root, 12_000);
-        let pinned = manifest_for(&store, &vec![1u8; 8_000], 4096);
+        let pinned = commit_payload(&store, &vec![1u8; 8_000], 4096);
         store.commit(&pinned).expect("commit pinned");
         let guard = store.pin(&pinned.payload_digest);
 
@@ -1332,10 +1447,8 @@ mod tests {
     fn clear_removes_every_unpinned_entry() {
         let root = temp_root("clear");
         let store = store(&root, 0);
-        let first = manifest_for(&store, &vec![1u8; 4096], 4096);
-        store.commit(&first).expect("commit first");
-        let second = manifest_for(&store, &vec![2u8; 4096], 4096);
-        store.commit(&second).expect("commit second");
+        commit_payload(&store, &vec![1u8; 4096], 4096);
+        commit_payload(&store, &vec![2u8; 4096], 4096);
 
         let freed = store.clear().expect("clear");
         assert!(freed > 0, "clear freed nothing");
@@ -1348,7 +1461,7 @@ mod tests {
         let root = temp_root("prune");
         let store = store(&root, 0);
         for fill in 1u8..=3 {
-            let manifest = manifest_for(&store, &vec![fill; 8_000], 4096);
+            let manifest = commit_payload(&store, &vec![fill; 8_000], 4096);
             store.commit(&manifest).expect("commit");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -1362,7 +1475,7 @@ mod tests {
     fn a_corrupt_segment_is_quarantined_not_left_in_place() {
         let root = temp_root("quarantine");
         let store = store(&root, 0);
-        let (digest, _) = store.put_segment(b"segment bytes").expect("put");
+        let digest = store.put_segment(b"segment bytes").expect("put").digest;
         fs::write(
             root.join("segments").join(format!("{digest}.seg")),
             b"tampered",
@@ -1386,14 +1499,84 @@ mod tests {
         );
     }
 
+    /// Not a pass/fail assertion: a stopwatch on the cost that smaller windows
+    /// buy. Eviction parses every manifest to build its reference map, and a
+    /// 64-row window turns a 19K-token entry into ~9.5k segment refs. Run with
+    /// `cargo test -p skippy-cache --lib eviction_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement, not a check; takes tens of seconds"]
+    fn eviction_cost_at_realistic_segment_counts() {
+        const SEGMENTS_PER_MANIFEST: usize = 9_504; // 16 layers x 2 x ceil(19000/64)
+        const MANIFESTS: usize = 20;
+        let root = temp_root("eviction-cost");
+        let store = store(&root, 0);
+
+        // One physical segment shared by every ref: this measures manifest
+        // parsing and reference mapping, not filesystem write throughput.
+        let bytes = vec![7u8; 65_536];
+        let digest = store.put_segment(&bytes).expect("put").digest;
+        let build = std::time::Instant::now();
+        for manifest_index in 0..MANIFESTS {
+            let mut manifest = HandoffManifest::new("blake3:cost".to_string(), "full-state".into());
+            for index in 0..SEGMENTS_PER_MANIFEST {
+                manifest.segments.push(HandoffSegmentRef {
+                    index: index as u32,
+                    offset: (index * bytes.len()) as u64,
+                    bytes: bytes.len() as u64,
+                    digest: digest.clone(),
+                    meta_json: Some(format!("k:{}:0:{}", index % 32, index / 32)),
+                });
+            }
+            manifest.total_bytes = (SEGMENTS_PER_MANIFEST * bytes.len()) as u64;
+            manifest.payload_digest = format!("blake3:manifest-{manifest_index}");
+            store.commit(&manifest).expect("commit");
+        }
+        let build_ms = build.elapsed().as_millis();
+
+        let manifest_bytes = directory_bytes(&root.join(MANIFEST_DIR)).expect("manifest bytes");
+        let usage = store.managed_usage_bytes().expect("usage");
+        let evict = std::time::Instant::now();
+        store.enforce_budget_to(usage / 2).expect("enforce");
+        let evict_ms = evict.elapsed().as_millis();
+
+        println!(
+            "eviction cost: {MANIFESTS} manifests x {SEGMENTS_PER_MANIFEST} refs, \
+             manifest bytes {manifest_bytes} ({} KiB each), build {build_ms} ms, \
+             enforce_budget {evict_ms} ms",
+            manifest_bytes / MANIFESTS as u64 / 1024
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn eviction_leaves_headroom_so_a_full_cache_is_not_repriced_per_commit() {
+        let root = temp_root("low-water");
+        let store = store(&root, 40_000);
+        for fill in 1u8..=6 {
+            let manifest = commit_payload(&store, &vec![fill; 8_000], 4096);
+            // A commit that overflows evicts; one that fits must not.
+            store.commit(&manifest).expect("commit");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let usage = store.managed_usage_bytes().expect("usage");
+        assert!(
+            usage <= 40_000 * EVICTION_LOW_WATER_PERCENT / 100,
+            "eviction stopped at the cap instead of below it: {usage}"
+        );
+        assert_eq!(
+            store.enforce_budget().expect("second pass"),
+            0,
+            "a store already under the cap must not pay for another pass"
+        );
+    }
+
     #[test]
     fn unreferenced_segments_are_collected() {
         let root = temp_root("gc");
         let store = store(&root, 0);
         store.put_segment(b"orphan bytes").expect("orphan put");
         let payload = vec![9u8; 4096];
-        let manifest = manifest_for(&store, &payload, 4096);
-        store.commit(&manifest).expect("commit");
+        let manifest = commit_payload(&store, &payload, 4096);
 
         let freed = store.collect_unreferenced_segments().expect("collect");
         assert_eq!(freed, 12);

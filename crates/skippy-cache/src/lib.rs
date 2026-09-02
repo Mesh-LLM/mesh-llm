@@ -15,8 +15,8 @@ pub use identity::{
 };
 pub use l3::{
     GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
-    MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentPut, StoreLimits,
-    StoreUsage, WriteRefusal, segment_digest,
+    MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentHold, SegmentPut,
+    StoreLimits, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
 pub use payload::{
     CacheBlobStore, CacheBytes, CacheBytesReconstructStats, CacheDedupeStats, ExactStatePayload,

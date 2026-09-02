@@ -202,10 +202,17 @@ impl KvStageIntegration {
 const DEFAULT_L3_BUDGET_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_L3_MINIMUM_FREE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
-/// Cap on rows per segment. Windows are the dedupe granularity for a growing
-/// prefix, so they stay near a conversational turn rather than scaling up with
-/// the model until a whole entry is one segment again.
-const L3_MAX_WINDOW_ROWS: u64 = 512;
+/// Cap on rows per segment.
+///
+/// Windows are the dedupe granularity: a turn leaves a partial window in every
+/// run, and those rows are rewritten next turn, so amplification is roughly
+/// `1 + (tokens_so_far mod window) / new_tokens`. Measured on an M4 mini with
+/// 2000-token base and 300-token turns: 512 rows gives 1.92x over the soak
+/// (worst turn 2.55x) and misses §13.4's 1.2x gate; 128 rows gives 1.18x with
+/// no margin; 64 rows gives 1.07x (worst turn 1.17x). The cost of the smaller
+/// window is segment count, which is why it is capped rather than shrunk
+/// further.
+const L3_MAX_WINDOW_ROWS: u64 = 64;
 
 fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
     let Ok(root) = std::env::var("SKIPPY_L3_DIR") else {
