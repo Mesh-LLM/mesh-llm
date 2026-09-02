@@ -132,7 +132,13 @@ deadline handling.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
   `--generation-admission-timeout-secs` bounds predicted and actual queue wait
-  (default 60 seconds). Embedded serving exposes the same controls with the
+  (default 60 seconds). KV restore and prefill-record work runs on a separate
+  prompt-scaled deadline (admission timeout plus about one minute per 4,000
+  prompt tokens, clamped to 30 minutes), so a legitimate prompt-sized prefill
+  is not
+  killed by the queue-wait bound; when that work deadline does expire the
+  request fails with a `timeout` error frame in the stream, not an empty
+  response. Embedded serving exposes the same controls with the
   `--openai-` prefix. Keep all three explicit in benchmark reports because
   they determine active execution, overload behavior, and tail latency.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface

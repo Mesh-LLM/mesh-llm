@@ -154,7 +154,7 @@ fn ensure_direct_iteration_active(
         ));
     }
     if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return Err(OpenAiError::backend(
+        return Err(OpenAiError::timeout(
             "cache operation deadline exceeded during scheduler iteration",
         ));
     }
@@ -212,7 +212,7 @@ impl CacheRuntimeContext {
                 "cache runtime operation {} was cancelled",
                 self.operation_id
             ))),
-            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::backend(format!(
+            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::timeout(format!(
                 "cache runtime operation {} exceeded its deadline",
                 self.operation_id
             ))),
