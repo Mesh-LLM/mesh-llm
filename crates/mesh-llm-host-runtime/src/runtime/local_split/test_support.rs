@@ -458,7 +458,7 @@ stop = ["END"]
         ],
     );
 
-    let spec = SplitGenerationLoadSpec {
+    let mut spec = SplitGenerationLoadSpec {
         node: &node,
         mesh_config: &mesh_config,
         model_ref: "served-qwen",
@@ -536,6 +536,12 @@ stop = ["END"]
     );
     assert_eq!(settings.embedded_openai.speculative_window, 7);
     assert_eq!(settings.embedded_openai.draft_n_gpu_layers, Some(11));
+    spec.capacity_budget_bytes = Some(0);
+    assert_eq!(
+        split_allocatable_memory_bytes(&spec),
+        None,
+        "a zero optional budget is unset when no pinned-device fallback exists"
+    );
 }
 
 /// Split stage loading must resolve with the compact metadata scanned during

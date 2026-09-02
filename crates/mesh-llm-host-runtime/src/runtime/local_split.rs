@@ -151,9 +151,13 @@ pub(super) fn startup_runtime_plan(
 }
 
 pub(super) async fn start_runtime_split_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+    mut spec: LocalRuntimeModelStartSpec<'_>,
     model_ref: &str,
 ) -> Result<SplitRuntimeStart> {
+    // A zero optional override means no explicit budget. Preserve a real zero
+    // from the selected device/node fallback, where it correctly means that no
+    // capacity is allocatable.
+    spec.capacity_budget_bytes = spec.capacity_budget_bytes.filter(|bytes| *bytes > 0);
     let local_source_required = spec.local_source_required;
     skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
     // A strict-local standby must index its own file before election so the

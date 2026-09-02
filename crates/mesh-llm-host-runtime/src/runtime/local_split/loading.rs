@@ -720,6 +720,7 @@ pub(super) async fn split_generation_load_settings<'a>(
 
 pub(super) fn split_allocatable_memory_bytes(spec: &SplitGenerationLoadSpec<'_>) -> Option<u64> {
     spec.capacity_budget_bytes
+        .filter(|bytes| *bytes > 0)
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
 }
 

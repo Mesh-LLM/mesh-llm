@@ -751,7 +751,9 @@ pub(super) fn split_replan_local_capacity_override(
     capacity_budget_bytes: Option<u64>,
     pinned_gpu_capacity_bytes: Option<u64>,
 ) -> Option<u64> {
-    capacity_budget_bytes.or(pinned_gpu_capacity_bytes)
+    capacity_budget_bytes
+        .filter(|bytes| *bytes > 0)
+        .or(pinned_gpu_capacity_bytes)
 }
 
 fn split_candidate_stage0_is_local(

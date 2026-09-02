@@ -1161,7 +1161,6 @@ impl Node {
                     "unsupported dedicated skippy stage stream type {stream_type:#04x} from {}; control and artifact streams require mesh subprotocol transport",
                     remote.fmt_short()
                 );
-                drop((send, recv));
             }
         }
     }
