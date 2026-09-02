@@ -445,12 +445,11 @@ fn poll_direct_or_downstream_reply_with_timeouts(
             // `peek` only proves that the first byte has arrived. Tunnelled
             // replies may be fragmented, so decode the complete frame under
             // the remainder of the bounded fallback deadline rather than the
-            // nonblocking mode used for the availability check.
+            // short read timeout used for the availability check.
             let remaining = reply_timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 break Err(timeout_error());
             }
-            timeout_restore.prepare_blocking_read()?;
             downstream
                 .set_read_timeout(Some(remaining))
                 .map_err(openai_io_error)?;
@@ -478,6 +477,15 @@ fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
     }
 }
 
+/// Availability peeks run under a short read timeout rather than nonblocking
+/// mode. `O_NONBLOCK` lives on the shared open-file description, so setting it
+/// on this socket would also make writes on any `try_clone()` handle — such as
+/// an `AsyncForwarder` worker forwarding activations to the next stage — fail
+/// with `WouldBlock` once the send buffer fills. A read timeout (`SO_RCVTIMEO`)
+/// affects receives only, so a concurrent cloned writer keeps blocking
+/// semantics.
+const DIRECT_RETURN_PEEK_TIMEOUT: Duration = Duration::from_millis(1);
+
 struct DirectReturnFallbackTimeout {
     downstream: TcpStream,
     previous_timeout: Option<Duration>,
@@ -485,13 +493,15 @@ struct DirectReturnFallbackTimeout {
 }
 
 impl DirectReturnFallbackTimeout {
-    /// Puts the downstream socket into nonblocking mode so availability peeks
-    /// return immediately while the reply wait blocks on the direct-return
-    /// channel instead.
+    /// Give the downstream socket a short read timeout so availability peeks
+    /// return promptly while the reply wait blocks on the direct-return channel,
+    /// without toggling nonblocking mode on the shared file description.
     fn install(downstream: &TcpStream) -> OpenAiResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
-        downstream.set_nonblocking(true).map_err(openai_io_error)?;
+        downstream
+            .set_read_timeout(Some(DIRECT_RETURN_PEEK_TIMEOUT))
+            .map_err(openai_io_error)?;
         Ok(Self {
             downstream: restore_stream,
             previous_timeout,
@@ -499,17 +509,7 @@ impl DirectReturnFallbackTimeout {
         })
     }
 
-    /// Leave nonblocking mode before handing the socket to a frame decode.
-    fn prepare_blocking_read(&mut self) -> OpenAiResult<()> {
-        self.downstream
-            .set_nonblocking(false)
-            .map_err(openai_io_error)
-    }
-
     fn restore(&mut self) -> OpenAiResult<()> {
-        self.downstream
-            .set_nonblocking(false)
-            .map_err(openai_io_error)?;
         self.downstream
             .set_read_timeout(self.previous_timeout)
             .map_err(openai_io_error)?;
@@ -521,7 +521,6 @@ impl DirectReturnFallbackTimeout {
 impl Drop for DirectReturnFallbackTimeout {
     fn drop(&mut self) {
         if !self.restored {
-            let _ = self.downstream.set_nonblocking(false);
             let _ = self.downstream.set_read_timeout(self.previous_timeout);
         }
     }
@@ -628,6 +627,48 @@ mod tests {
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
         (client, server)
+    }
+
+    #[test]
+    fn fallback_guard_keeps_a_cloned_writer_blocking() {
+        use std::io::{Read, Write};
+        // AsyncForwarder clones the downstream socket and writes frames from a
+        // separate worker thread. The fallback-wait guard must not toggle
+        // O_NONBLOCK on the shared open-file description, or those writes would
+        // fail with WouldBlock once the send buffer fills instead of blocking.
+        // A read timeout (SO_RCVTIMEO) affects receives only, so the writer is
+        // unaffected. Regression for michaelneale's review on #1575.
+        const PAYLOAD: usize = 8 * 1024 * 1024;
+        let (downstream, peer) = connected_stream_pair();
+        let writer = downstream.try_clone().unwrap();
+
+        // Peer starts reading only after a delay, forcing the send buffer to
+        // fill so a correct blocking write_all must wait rather than error.
+        let reader = std::thread::spawn(move || {
+            let mut peer = peer;
+            std::thread::sleep(Duration::from_millis(100));
+            let mut sink = vec![0u8; 1 << 16];
+            let mut total = 0usize;
+            while total < PAYLOAD {
+                match peer.read(&mut sink) {
+                    Ok(0) => break,
+                    Ok(n) => total += n,
+                    Err(error) => panic!("peer read failed: {error}"),
+                }
+            }
+            total
+        });
+
+        let guard = DirectReturnFallbackTimeout::install(&downstream).unwrap();
+        let mut writer = writer;
+        // Must block until the peer drains, not fail with WouldBlock (os err 35).
+        writer
+            .write_all(&vec![0u8; PAYLOAD])
+            .expect("cloned writer must keep blocking semantics under the guard");
+        drop(guard);
+        drop(writer);
+        drop(downstream);
+        assert_eq!(reader.join().unwrap(), PAYLOAD);
     }
 
     #[test]
