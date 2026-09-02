@@ -34,7 +34,7 @@ pub use validation::{
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
     STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
     validate_stage_control_request, validate_stage_control_response, validate_stage_transport_open,
@@ -70,7 +70,7 @@ mod tests {
         stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
         StageFrameError, validate_stage_artifact_transfer_request,
         validate_stage_artifact_transfer_response, validate_stage_control_request,
         validate_stage_control_response, validate_stage_transport_open,
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -109,7 +109,6 @@ mod tests {
                 manifest_sha256: "a5".repeat(32),
                 stage_id: "stage-0".to_string(),
                 layer_end: 16,
-                activation_width: 4096,
                 projector_path: Some("/models/mmproj.gguf".to_string()),
                 source_model_sha256: Some("b6".repeat(32)),
                 source_resolution_policy: SourceResolutionPolicy::Fallback as i32,
@@ -366,10 +365,13 @@ mod tests {
             Err(StageFrameError::MissingStageControlCommand)
         ));
 
-        let wrong_gen = StageControlRequest { r#gen: 1, ..frame };
+        let wrong_gen = StageControlRequest {
+            r#gen: STAGE_PROTOCOL_GENERATION - 1,
+            ..frame
+        };
         assert!(matches!(
             validate_stage_control_request(&wrong_gen),
-            Err(StageFrameError::BadGeneration { got: 1 })
+            Err(StageFrameError::BadGeneration { got: 6 })
         ));
     }
 
@@ -390,7 +392,6 @@ mod tests {
                     layer_end: 16,
                     state: StageRuntimeState::Ready as i32,
                     bind_addr: "127.0.0.1:0".to_string(),
-                    activation_width: 4096,
                     shutdown_generation: 7,
                     ctx_size: 8192,
                     lane_count: 2,
@@ -488,7 +489,6 @@ mod tests {
                         layer_end: 16,
                         state: StageRuntimeState::Ready as i32,
                         bind_addr: "127.0.0.1:51234".to_string(),
-                        activation_width: 4096,
                         shutdown_generation: 7,
                         ctx_size: 8192,
                         lane_count: 2,

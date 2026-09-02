@@ -43,6 +43,13 @@ fn native_position_to_u64(native_position: i32) -> Result<u64> {
         .map_err(|_| anyhow!("skippy session has no valid native position"))
 }
 
+fn validate_native_sequence_id(sequence_id: i32) -> Result<i32> {
+    if sequence_id < 0 {
+        return Err(anyhow!("skippy session has no valid native sequence ID"));
+    }
+    Ok(sequence_id)
+}
+
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for StageSession {}
@@ -56,6 +63,12 @@ impl StageSession {
     pub fn native_position(&self) -> Result<u64> {
         let native_position = unsafe { skippy_ffi::skippy_session_position(self.raw) };
         native_position_to_u64(native_position)
+    }
+
+    /// Returns the native llama.cpp sequence used by this session.
+    pub fn native_sequence_id(&self) -> Result<i32> {
+        let sequence_id = unsafe { skippy_ffi::skippy_session_sequence_id(self.raw) };
+        validate_native_sequence_id(sequence_id)
     }
 
     pub fn batch_size(&self) -> Result<usize> {
@@ -429,6 +442,7 @@ impl Drop for StageSession {
 mod tests {
     use super::{
         EMPTY_CHAT_GRAMMAR_METADATA, chat_sampling_metadata_for_native, native_position_to_u64,
+        validate_native_sequence_id,
     };
 
     #[test]
@@ -441,6 +455,14 @@ mod tests {
     fn native_position_conversion_rejects_negative_positions() {
         assert!(native_position_to_u64(-1).is_err());
         assert!(native_position_to_u64(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn native_sequence_id_validation_rejects_negative_sentinels() {
+        assert_eq!(validate_native_sequence_id(0).unwrap(), 0);
+        assert_eq!(validate_native_sequence_id(i32::MAX).unwrap(), i32::MAX);
+        assert!(validate_native_sequence_id(-1).is_err());
+        assert!(validate_native_sequence_id(i32::MIN).is_err());
     }
 
     #[test]

@@ -124,7 +124,10 @@ mod tests {
     #[test]
     fn busy_radix_returns_cold_affinity_without_waiting() {
         let config = test_config();
-        let integration = KvStageIntegration::from_config(&config).unwrap().unwrap();
+        let integration =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .unwrap();
         let radix = Arc::clone(&integration.radix);
         let (locked_tx, locked_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();

@@ -17,6 +17,16 @@ struct FullSurfaceFixture {
     defaults_model: NamedTempFile,
     _projector_file: NamedTempFile,
 }
+
+#[test]
+fn toml_path_escapes_windows_path_separators() {
+    let path = Path::new(r"C:\Users\runner\model.gguf");
+    let parsed: toml::Value = toml::from_str(&format!("path = {}", toml_path(path)))
+        .expect("serialized path should remain valid TOML");
+
+    assert_eq!(parsed["path"].as_str(), Some(r"C:\Users\runner\model.gguf"));
+}
+
 fn full_surface_fixture_with_model_paths() -> FullSurfaceFixture {
     let mut mesh_config = parse_config(FULL_SURFACE_VALID_FIXTURE);
     let explicit_model = temp_model_file();
@@ -228,25 +238,28 @@ draft_min_tokens = 2
 
 #[test]
 fn benchmark_shaped_model_entry_draft_translates_for_direct_embedded_openai() {
-    let mesh_config = parse_config(
+    let model_file = temp_model_file();
+    let draft_file = temp_model_file();
+    let mesh_config = parse_config(&format!(
         r#"
 [[models]]
 model = "Qwen/Qwen3-0.6B:Q4_K_M"
 
 [models.hardware]
-model_path = "/models/qwen3.gguf"
+model_path = {}
 
 [models.speculative]
 strategy = "disabled"
 mode = "draft"
-draft_model_path = "/models/qwen3-draft.gguf"
+draft_model_path = {}
 draft_selection_policy = "manual"
 pairing_fault = "fail_closed"
 draft_max_tokens = 4
 draft_min_tokens = 0
 "#,
-    );
-    let model_file = temp_model_file();
+        toml_path(model_file.path()),
+        toml_path(draft_file.path())
+    ));
 
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &mesh_config,
@@ -266,32 +279,31 @@ draft_min_tokens = 0
         .to_embedded_openai_args(0, false)
         .expect("direct embedded OpenAI args should allow benchmark draft");
     assert_eq!(openai.speculative_window, 4);
-    assert_eq!(
-        openai.draft_model_path.as_deref(),
-        Some(Path::new("/models/qwen3-draft.gguf"))
-    );
+    assert_eq!(openai.draft_model_path.as_deref(), Some(draft_file.path()));
 }
 
 #[test]
 fn benchmark_shaped_hf_identity_row_uses_canonical_selector_for_served_alias() {
     let model_file = temp_model_file();
+    let draft_file = temp_model_file();
     let toml = format!(
         r#"
 [[models]]
 model = "Qwen/Qwen3-GGUF@sha/qwen3-q4_k_m.gguf"
 
 [models.hardware]
-model_path = "{}"
+model_path = {}
 
 [models.speculative]
 strategy = "disabled"
 mode = "draft"
-draft_model_path = "/models/qwen3-draft.gguf"
+draft_model_path = {}
 draft_selection_policy = "manual"
 pairing_fault = "fail_closed"
 draft_max_tokens = 4
 "#,
-        model_file.path().display()
+        toml_path(model_file.path()),
+        toml_path(draft_file.path())
     );
     let mesh_config = parse_config(&toml);
     let config_model_id = mesh_config
@@ -323,10 +335,7 @@ draft_max_tokens = 4
         .to_embedded_openai_args(0, false)
         .expect("direct embedded OpenAI args should include draft");
     assert_eq!(openai.speculative_window, 4);
-    assert_eq!(
-        openai.draft_model_path.as_deref(),
-        Some(Path::new("/models/qwen3-draft.gguf"))
-    );
+    assert_eq!(openai.draft_model_path.as_deref(), Some(draft_file.path()));
 }
 
 #[test]
@@ -360,16 +369,18 @@ prefill_chunk_size = 128
 
 #[test]
 fn incompatible_draft_pairing_warn_disable_turns_speculation_off() {
-    let mesh_config = parse_config(
+    let draft_file = temp_model_file_with_architecture("qwen2");
+    let mesh_config = parse_config(&format!(
         r#"
 [defaults.speculative]
 mode = "draft"
-draft_model_path = "/models/llama-draft.gguf"
+draft_model_path = {}
 draft_selection_policy = "manual"
 pairing_fault = "warn_disable"
 draft_max_tokens = 8
 "#,
-    );
+        toml_path(draft_file.path())
+    ));
     let model_file = temp_model_file();
 
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -390,16 +401,18 @@ draft_max_tokens = 8
 
 #[test]
 fn incompatible_draft_pairing_fail_closed_rejects_before_launch() {
-    let mesh_config = parse_config(
+    let draft_file = temp_model_file_with_architecture("qwen2");
+    let mesh_config = parse_config(&format!(
         r#"
 [defaults.speculative]
 mode = "draft"
-draft_model_path = "/models/llama-draft.gguf"
+draft_model_path = {}
 draft_selection_policy = "manual"
 pairing_fault = "fail_closed"
 draft_max_tokens = 8
 "#,
-    );
+        toml_path(draft_file.path())
+    ));
     let model_file = temp_model_file();
 
     let err = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -416,6 +429,105 @@ draft_max_tokens = 8
     .to_string();
 
     assert!(err.contains("incompatible speculative draft pairing"));
+}
+
+#[test]
+fn missing_draft_architecture_warn_disable_turns_speculation_off() {
+    let draft_file = NamedTempFile::new().expect("temp draft model");
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+mode = "draft"
+draft_model_path = {}
+draft_selection_policy = "manual"
+pairing_fault = "warn_disable"
+draft_max_tokens = 8
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("warn_disable should resolve");
+
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert!(resolved.speculative.draft_model_path.is_none());
+}
+
+#[test]
+fn missing_target_architecture_fail_closed_rejects_before_launch() {
+    let draft_file = temp_model_file();
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+mode = "draft"
+draft_model_path = {}
+draft_selection_policy = "manual"
+pairing_fault = "fail_closed"
+draft_max_tokens = 8
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = NamedTempFile::new().expect("temp target model");
+
+    let err = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "unknown",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("target model architecture metadata is unavailable"));
+}
+
+#[test]
+fn missing_architecture_fail_open_preserves_explicit_draft() {
+    let draft_file = NamedTempFile::new().expect("temp draft model");
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+mode = "draft"
+draft_model_path = {}
+draft_selection_policy = "manual"
+pairing_fault = "fail_open"
+draft_max_tokens = 8
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("fail_open should preserve explicit draft mode");
+
+    assert_eq!(resolved.speculative.mode, "draft");
+    assert_eq!(
+        resolved.speculative.draft_model_path.as_deref(),
+        Some(draft_file.path())
+    );
 }
 
 #[test]
@@ -633,7 +745,8 @@ verify_window_pipeline_depth = 2
 
 #[test]
 fn speculative_runtime_controls_reach_embedded_openai_translation() {
-    let mesh_config = parse_config(
+    let draft_file = temp_model_file();
+    let mesh_config = parse_config(&format!(
         r#"
 [defaults.speculative]
 strategy = "disabled"
@@ -651,7 +764,7 @@ draft_cache_type_v = "f16"
 model = "Qwen/Qwen3-0.6B:Q4_K_M"
 
 [models.speculative]
-draft_model = "/tmp/model-draft.gguf"
+draft_model = {}
 draft_acceptance_threshold = 0.7
 draft_split_probability = 0.8
 draft_device = "CUDA0"
@@ -659,7 +772,8 @@ draft_threads = 6
 draft_cache_type_k = "q8_0"
 draft_cache_type_v = "q4_0"
 "#,
-    );
+        toml_path(draft_file.path())
+    ));
     let model_file = temp_model_file();
 
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
@@ -677,10 +791,7 @@ draft_cache_type_v = "q4_0"
         .to_embedded_openai_args(4096, true)
         .expect("draft runtime controls must translate");
 
-    assert_eq!(
-        args.draft_model_path.as_deref(),
-        Some(Path::new("/tmp/model-draft.gguf"))
-    );
+    assert_eq!(args.draft_model_path.as_deref(), Some(draft_file.path()));
     assert_eq!(args.speculative.draft_acceptance_threshold, 0.7);
     assert_eq!(args.speculative.draft_split_probability, 0.8);
     assert_eq!(args.speculative.draft_device.as_deref(), Some("CUDA0"));

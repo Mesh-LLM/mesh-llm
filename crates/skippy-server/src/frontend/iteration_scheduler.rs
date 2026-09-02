@@ -154,7 +154,7 @@ fn ensure_direct_iteration_active(
         ));
     }
     if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return Err(OpenAiError::backend(
+        return Err(OpenAiError::timeout(
             "cache operation deadline exceeded during scheduler iteration",
         ));
     }
@@ -212,7 +212,7 @@ impl CacheRuntimeContext {
                 "cache runtime operation {} was cancelled",
                 self.operation_id
             ))),
-            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::backend(format!(
+            CACHE_OPERATION_DEADLINE_EXCEEDED => Err(OpenAiError::timeout(format!(
                 "cache runtime operation {} exceeded its deadline",
                 self.operation_id
             ))),
@@ -743,6 +743,34 @@ impl IterationScheduler {
         result.recv().map_err(|error| {
             OpenAiError::backend(format!("iteration scheduler stopped: {error}"))
         })?
+    }
+
+    /// Deadline-bounded variant of [`Self::execute_runtime_timed`] for
+    /// cache-side work (KV record/evict, checkpoint export) that must not
+    /// hold a scheduler lane or a caller past the cache operation deadline.
+    /// Unlike [`Self::execute_cache_aware_runtime_timed`] the operation does
+    /// not join the radix-affinity cache queue; it runs on the plain runtime
+    /// command path as soon as the scheduler can take it.
+    pub(crate) fn execute_runtime_timed_bounded<T>(
+        &self,
+        label: &'static str,
+        operation_id: String,
+        deadline: Instant,
+        cancellation: Option<&openai_frontend::CancellationToken>,
+        operation: impl FnOnce(&mut RuntimeState) -> OpenAiResult<T> + Send + 'static,
+    ) -> OpenAiResult<SchedulerRuntimeOutcome<T>>
+    where
+        T: Send + 'static,
+    {
+        let (runtime_operation, result, control) = cache_runtime_operation(
+            label,
+            operation_id,
+            deadline,
+            cancellation,
+            |runtime, _control| operation(runtime),
+        );
+        self.enqueue_command(SchedulerCommand::ExecuteRuntime(runtime_operation))?;
+        wait_for_cache_runtime(result, &control)
     }
 
     /// Queue cache restore/prefill work by stage-local radix affinity while

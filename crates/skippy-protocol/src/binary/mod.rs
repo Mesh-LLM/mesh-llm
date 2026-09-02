@@ -882,7 +882,7 @@ mod tests {
         let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.source_stage_index = 0;
         state.flags |= state_flags::GEMMA3N_ALTUP_SIDEBAND;
-        let token_count = i32::try_from(MAX_STAGE_ACTIVATION_BYTES / 2 / 4 / 1024 + 1).unwrap();
+        let token_count = i32::try_from(MAX_STAGE_ACTIVATION_BYTES / 2 / 1024 + 1).unwrap();
         let bytes = stage_frame_prefix(WireMessageKind::DecodeEmbd, token_count, 0, 0, state);
 
         assert_invalid_data(
@@ -1049,7 +1049,7 @@ mod tests {
             activation_f32.extend_from_slice(&(value as f32).to_le_bytes());
         }
         let activation =
-            encode_f32_activation_payload_with_state_flags(1, 2, &activation_f32, state.flags)
+            encode_f32_activation_payload_with_state_flags(1, 8, &activation_f32, state.flags)
                 .unwrap();
         let message = StageWireMessage {
             kind: WireMessageKind::DecodeEmbd,
@@ -1067,7 +1067,7 @@ mod tests {
         };
         let mut bytes = Vec::new();
         write_stage_message(&mut bytes, &message).unwrap();
-        let decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 8).unwrap();
         assert_eq!(decoded.activation.len(), 32);
         assert_eq!(
             activation_frame_flags_from_state_flags(decoded.state.flags),

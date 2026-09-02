@@ -11,7 +11,6 @@ use model_ref::{format_canonical_ref, normalize_gguf_distribution_id, parse_mode
 use serde::{Deserialize, Serialize};
 use skippy_runtime::{ModelInfo, TensorInfo};
 
-use crate::gguf_header::activation_width;
 use crate::hash::file_sha256;
 use crate::plan::{layer_count, stage_plan_from_tensors};
 use crate::progress::{PackageProgress, format_bytes};
@@ -24,8 +23,6 @@ pub(crate) struct PackageManifest {
     pub(crate) source_model: PackageSourceModel,
     pub(crate) format: String,
     pub(crate) layer_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) activation_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) generation: Option<PackageGeneration>,
     pub(crate) shared: PackageShared,
@@ -221,7 +218,6 @@ pub(crate) fn write_package(
     let source = ModelSource::open(&input.model_path)?;
     let tensors = &source.tensors;
     let layer_count = layer_count(tensors)?;
-    let activation_width = activation_width(&input.model_path)?;
     let source_sha256 = file_sha256(&input.model_path)?;
     let mut progress = PackageProgress::new(3 + layer_count as usize + projectors.len() + 1);
 
@@ -335,7 +331,6 @@ pub(crate) fn write_package(
         },
         format: "layer-package".to_string(),
         layer_count,
-        activation_width: Some(activation_width),
         generation: package_generation(tensors),
         shared: PackageShared {
             metadata,

@@ -330,6 +330,10 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
 /// RAM-offload credit). Real read on Linux and Windows; zero elsewhere, which
 /// leaves those platforms' VRAM budgets untouched.
 #[cfg(any(feature = "skippy-devices", test))]
+#[cfg_attr(
+    not(any(feature = "skippy-devices", target_os = "linux", target_os = "windows")),
+    allow(dead_code)
+)]
 fn survey_system_ram() -> u64 {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {

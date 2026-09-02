@@ -6,6 +6,22 @@ use crate::network::target_health::TargetHealthOutcome;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
 
+/// Detect an OpenAI-shaped error body carried as an SSE `data:` frame.
+///
+/// Embedded backends report mid-stream failures this way: HTTP stays 200 and
+/// the terminal failure is a `{"error": {...}}` JSON frame. Recognizing it
+/// lets stream relays distinguish a failed stream from a completed one in the
+/// operations log instead of silently counting a contentless stream as
+/// delivered.
+pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    value
+        .get("error")
+        .is_some_and(|error| error.is_object() || error.is_string())
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
     pub(in crate::network::openai) request_id: RequestId,

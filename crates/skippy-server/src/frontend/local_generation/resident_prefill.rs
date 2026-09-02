@@ -94,7 +94,7 @@ fn ensure_suffix_prefill_active(
         ));
     }
     if Instant::now() >= deadline {
-        return Err(OpenAiError::backend(
+        return Err(OpenAiError::timeout(
             "cache operation deadline exceeded during deferred suffix prefill",
         ));
     }

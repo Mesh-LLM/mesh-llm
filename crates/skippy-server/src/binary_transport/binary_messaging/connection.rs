@@ -79,7 +79,8 @@ pub(super) fn handle_binary_connection(
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     downstream: Option<TcpStream>,
-    activation_width: i32,
+    input_activation_width: i32,
+    output_activation_width: i32,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -101,7 +102,8 @@ pub(super) fn handle_binary_connection(
         telemetry,
         upstream,
         downstream,
-        activation_width,
+        input_activation_width,
+        output_activation_width,
         max_inflight,
         reply_credit_limit,
         async_prefill_forward,
@@ -132,7 +134,8 @@ fn handle_binary_connection_messages(
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<TcpStream>,
-    activation_width: i32,
+    input_activation_width: i32,
+    output_activation_width: i32,
     max_inflight: usize,
     reply_credit_limit: Option<usize>,
     async_prefill_forward: bool,
@@ -170,7 +173,7 @@ fn handle_binary_connection_messages(
         let Some(mut message) = receive_next_message(
             upstream,
             worker_control,
-            activation_width,
+            input_activation_width,
             next_message.take(),
             pending_prefill_replies,
             request_summary.message_count,
@@ -276,7 +279,7 @@ fn handle_binary_connection_messages(
                 downstream.as_mut(),
                 downstream_wire_condition,
                 downstream_connect_timeout_secs,
-                activation_width,
+                output_activation_width,
                 native_mtp_enabled,
                 message,
                 &session_key,
@@ -364,7 +367,7 @@ fn handle_binary_connection_messages(
                     &lookup_session_key,
                     &lookup_message,
                     &lookup_token_ids,
-                    activation_width,
+                    output_activation_width,
                 ))
             })
             .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
@@ -463,7 +466,7 @@ fn handle_binary_connection_messages(
                     let output_capacity = stage_output_activation_capacity(
                         config,
                         message.token_count,
-                        activation_width,
+                        output_activation_width,
                     )?;
                     let sample_prefill_final =
                         message.kind == WireMessageKind::PrefillFinalEmbd && downstream.is_none();
@@ -635,7 +638,7 @@ fn handle_binary_connection_messages(
                         record_accumulated_prefill_tokens.as_deref(),
                         &record_token_ids,
                         restored_tokens,
-                        activation_width,
+                        output_activation_width,
                         &output,
                     );
                     Ok((record, output))
@@ -702,7 +705,7 @@ fn handle_binary_connection_messages(
                 bail!("stage has downstream but produced an empty activation payload");
             }
             let forwarded =
-                forwarded_stage_message_timed(config, &message, &output, activation_width)?;
+                forwarded_stage_message_timed(config, &message, &output, output_activation_width)?;
             forward_activation_encode_ms += forwarded.activation_encode_ms;
             forward_activation_bytes = forwarded.message.activation.len();
             let mut downstream_write_attrs = BTreeMap::new();

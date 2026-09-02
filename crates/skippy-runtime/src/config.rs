@@ -7,6 +7,7 @@ use skippy_ffi::{
     TRISTATE_FALSE, TRISTATE_TRUE,
 };
 
+pub const GGML_TYPE_F32: u32 = 0;
 pub const GGML_TYPE_F16: u32 = 1;
 pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;

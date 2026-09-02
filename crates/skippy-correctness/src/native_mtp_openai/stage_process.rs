@@ -125,8 +125,6 @@ pub(super) fn spawn_stage(
         topology_path
             .to_str()
             .context("topology path is not valid UTF-8")?,
-        "--activation-width",
-        &args.activation_width.to_string(),
         "--telemetry-level",
         "debug",
     ]);

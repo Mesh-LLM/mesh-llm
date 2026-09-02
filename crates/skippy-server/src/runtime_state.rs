@@ -7,12 +7,13 @@ use std::{
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
-    ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
-    GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput, IterationBatchPhase,
-    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
-    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
-    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, parse_cache_type,
+    ActivationBoundaryDesc, ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput,
+    DecodeFrameBatchRequest, FlashAttentionType as RuntimeFlashAttentionType,
+    GenerationSignalWindow, GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput,
+    IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
+    ModelStateKind, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc,
+    RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel, StageSession,
+    TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -141,6 +142,13 @@ struct ResidentLanePrefix {
 }
 
 impl RuntimeState {
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.input_activation_boundary()
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.output_activation_boundary()
+    }
     /// A runtime with no model behind it, for tests that exercise code paths
     /// which never touch the model.
     ///
@@ -211,6 +219,22 @@ impl Drop for RuntimeState {
 
 pub fn load_runtime(config: &StageConfig) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     load_runtime_with_overrides(config, &RuntimeLaunchOverrides::default())
+}
+
+/// Return the state semantics captured from the model that was actually
+/// opened by llama.cpp. Callers use this after load so cache selection never
+/// depends on a repository name or pre-load family guess.
+pub fn loaded_model_state_kind(
+    runtime: Option<&Arc<Mutex<RuntimeState>>>,
+) -> Option<ModelStateKind> {
+    runtime.and_then(|runtime| {
+        runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .model
+            .capability()
+            .map(|capability| capability.state_kind)
+    })
 }
 
 pub fn load_runtime_with_overrides(

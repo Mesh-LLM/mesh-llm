@@ -22,7 +22,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -60,13 +60,22 @@ fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubpro
 }
 
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
-    supports_skippy_stage_feature(
-        subprotocols,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V6,
-    ) && supports_skippy_stage_feature(
-        subprotocols,
+    let required_features = [
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-    )
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+    ];
+    subprotocols.iter().any(|subprotocol| {
+        subprotocol.name == skippy_protocol::STAGE_SUBPROTOCOL_NAME
+            && subprotocol.major == skippy_protocol::STAGE_SUBPROTOCOL_MAJOR
+            && required_features.iter().all(|required| {
+                subprotocol
+                    .features
+                    .iter()
+                    .any(|feature| feature == required)
+            })
+    })
 }
 
 fn supports_skippy_stage_feature(
