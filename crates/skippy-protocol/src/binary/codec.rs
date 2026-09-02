@@ -619,17 +619,14 @@ fn read_string_list(mut reader: impl Read, maximum_count: usize) -> io::Result<V
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 23;
-const I64_WIRE_BYTES: usize = std::mem::size_of::<i64>();
-const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * I64_WIRE_BYTES;
+const REPLY_STATS_FIELD_COUNT: usize = 27;
+const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     let fields = reply_stats_fields(stats);
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     for (chunk, value) in bytes
-        .as_chunks_mut::<I64_WIRE_BYTES>()
-        .0
-        .iter_mut()
+        .chunks_exact_mut(std::mem::size_of::<i64>())
         .zip(fields)
     {
         chunk.copy_from_slice(&value.to_le_bytes());
@@ -641,8 +638,11 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
     let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
     reader.read_exact(&mut bytes)?;
     let mut fields = [0_i64; REPLY_STATS_FIELD_COUNT];
-    for (field, chunk) in fields.iter_mut().zip(bytes.as_chunks::<I64_WIRE_BYTES>().0) {
-        *field = i64::from_le_bytes(*chunk);
+    for (field, chunk) in fields
+        .iter_mut()
+        .zip(bytes.chunks_exact(std::mem::size_of::<i64>()))
+    {
+        *field = i64::from_le_bytes(chunk.try_into().expect("i64 chunk size"));
     }
     Ok(reply_stats_from_fields(fields))
 }
@@ -682,6 +682,10 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_edge_stage_index,
         stats.prefill_edge_activation_bytes_max,
         stats.prefill_edge_observation_count,
+        stats.prefill_compute_us_at_slowest_rate,
+        stats.prefill_compute_stage_index,
+        stats.prefill_compute_token_count_at_slowest_rate,
+        stats.prefill_compute_observation_count,
     ]
 }
 
@@ -710,22 +714,30 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_edge_stage_index: fields[20],
         prefill_edge_activation_bytes_max: fields[21],
         prefill_edge_observation_count: fields[22],
+        prefill_compute_us_at_slowest_rate: fields[23],
+        prefill_compute_stage_index: fields[24],
+        prefill_compute_token_count_at_slowest_rate: fields[25],
+        prefill_compute_observation_count: fields[26],
     }
 }
+
+const I32_WIRE_BYTES: usize = std::mem::size_of::<i32>();
 
 fn read_i32_values(mut reader: impl Read, count: usize) -> io::Result<Vec<i32>> {
     const VALUES_PER_CHUNK: usize = 4_096;
     let mut values = Vec::with_capacity(count);
-    let mut bytes = [0_u8; VALUES_PER_CHUNK * std::mem::size_of::<i32>()];
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
     let mut remaining = count;
     while remaining > 0 {
         let chunk_values = remaining.min(VALUES_PER_CHUNK);
-        let chunk_bytes = chunk_values * std::mem::size_of::<i32>();
+        let chunk_bytes = chunk_values * I32_WIRE_BYTES;
         reader.read_exact(&mut bytes[..chunk_bytes])?;
         values.extend(
             bytes[..chunk_bytes]
-                .chunks_exact(std::mem::size_of::<i32>())
-                .map(|chunk| i32::from_le_bytes(chunk.try_into().expect("i32 chunk size"))),
+                .as_chunks::<I32_WIRE_BYTES>()
+                .0
+                .iter()
+                .map(|chunk| i32::from_le_bytes(*chunk)),
         );
         remaining -= chunk_values;
     }
@@ -734,11 +746,13 @@ fn read_i32_values(mut reader: impl Read, count: usize) -> io::Result<Vec<i32>> 
 
 fn write_i32_slice(mut writer: impl Write, values: &[i32]) -> io::Result<()> {
     const VALUES_PER_CHUNK: usize = 4_096;
-    let mut bytes = [0_u8; VALUES_PER_CHUNK * std::mem::size_of::<i32>()];
+    let mut bytes = [0_u8; VALUES_PER_CHUNK * I32_WIRE_BYTES];
     for values in values.chunks(VALUES_PER_CHUNK) {
         let chunk_bytes = std::mem::size_of_val(values);
         for (bytes, value) in bytes[..chunk_bytes]
-            .chunks_exact_mut(std::mem::size_of::<i32>())
+            .as_chunks_mut::<I32_WIRE_BYTES>()
+            .0
+            .iter_mut()
             .zip(values)
         {
             bytes.copy_from_slice(&value.to_le_bytes());

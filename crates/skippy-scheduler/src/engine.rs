@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::{
-    CacheAwareCandidate, IterationPhase, IterationPlan, IterationTelemetry, IterationWork,
-    SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus, order_cache_aware_candidates,
+    CacheAwareCandidate, IterationPhase, IterationPlan, IterationPrediction, IterationTelemetry,
+    IterationWork, SchedulerConfig, SchedulerMetrics, Sequence, SequenceStatus,
+    order_cache_aware_candidates,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -33,7 +34,15 @@ pub struct Scheduler {
     waiting_turn: u64,
     next_waiting_order: u64,
     waiting_order_dirty: bool,
+    decode_us_ewma_by_rows: BTreeMap<usize, f64>,
+    mixed_prefill_viable: bool,
+    mixed_decode_cursor: usize,
 }
+
+const DURATION_EWMA_ALPHA: f64 = 0.25;
+const MIXED_DECODE_SLOWDOWN_FRACTION: f64 = 0.20;
+const MIXED_PREFILL_MIN_EXTRA_US: f64 = 8_000.0;
+const MIXED_PREFILL_MAX_EXTRA_US: f64 = 20_000.0;
 
 impl Scheduler {
     pub fn new(config: SchedulerConfig) -> Self {
@@ -48,6 +57,9 @@ impl Scheduler {
             waiting_turn: 0,
             next_waiting_order: 0,
             waiting_order_dirty: false,
+            decode_us_ewma_by_rows: BTreeMap::new(),
+            mixed_prefill_viable: true,
+            mixed_decode_cursor: 0,
         }
     }
 
@@ -87,6 +99,25 @@ impl Scheduler {
             admitted,
             ..IterationPlan::default()
         };
+        let calibrated_decode_rows = self
+            .active
+            .values()
+            .filter(|sequence| {
+                sequence.prefill_cursor >= sequence.recompute_token_count()
+                    && sequence.pending_decode_token().is_some()
+            })
+            .count()
+            .min(self.config.max_tokens_per_iteration);
+        if self.config.mixed_prefill_decode
+            && self.mixed_prefill_viable
+            && calibrated_decode_rows > 0
+            && self
+                .decode_us_ewma_by_rows
+                .contains_key(&calibrated_decode_rows)
+        {
+            self.plan_mixed_iteration(&mut plan);
+            return plan;
+        }
         let mut budget = self.config.max_tokens_per_iteration;
         let mut prefill_sequences = 0usize;
         let ids = self.active.keys().cloned().collect::<Vec<_>>();
@@ -196,15 +227,164 @@ impl Scheduler {
         plan
     }
 
+    fn plan_mixed_iteration(&mut self, plan: &mut IterationPlan) {
+        let mut budget = self.config.max_tokens_per_iteration;
+        let ids = self.active.keys().cloned().collect::<Vec<_>>();
+
+        // Decode is latency-sensitive and consumes exactly one token per live
+        // sequence. Reserve those rows first so prompt traffic cannot starve
+        // active generation.
+        let decode_start = if ids.is_empty() {
+            0
+        } else {
+            self.mixed_decode_cursor % ids.len()
+        };
+        let mut decode_examined = 0usize;
+        for offset in 0..ids.len() {
+            if budget == 0 {
+                break;
+            }
+            decode_examined = offset + 1;
+            let id = &ids[(decode_start + offset) % ids.len()];
+            let Some(sequence) = self.active.get_mut(id) else {
+                continue;
+            };
+            let replay_len = sequence.recompute_token_count();
+            if sequence.prefill_cursor < replay_len {
+                continue;
+            }
+            let Some(token) = sequence.pending_decode_token() else {
+                continue;
+            };
+            plan.work.push(IterationWork {
+                sequence_id: id.clone(),
+                tokens: vec![token],
+                positions: contiguous_positions(replay_len, 1),
+                sample_last: true,
+                phase: IterationPhase::Decode,
+                sampling: sequence.sampling.clone(),
+            });
+            sequence.prefill_cursor = replay_len.saturating_add(1);
+            plan.token_count += 1;
+            budget -= 1;
+        }
+        if !ids.is_empty() {
+            self.mixed_decode_cursor = (decode_start + decode_examined) % ids.len();
+        }
+
+        let mut prefill_sequences = 0usize;
+        for id in ids {
+            if budget == 0 || prefill_sequences >= self.config.max_prefill_sequences_per_iteration {
+                break;
+            }
+            let Some(sequence) = self.active.get_mut(&id) else {
+                continue;
+            };
+            let replay = sequence.recompute_tokens();
+            if sequence.prefill_cursor >= replay.len() {
+                continue;
+            }
+            let count = self
+                .config
+                .prefill_chunk_tokens
+                .min(replay.len() - sequence.prefill_cursor)
+                .min(budget);
+            let start = sequence.prefill_cursor;
+            let end = start + count;
+            let phase = if sequence.generated_tokens.is_empty() {
+                IterationPhase::Prefill
+            } else {
+                IterationPhase::Recompute
+            };
+            plan.work.push(IterationWork {
+                sequence_id: id,
+                tokens: replay[start..end].to_vec(),
+                positions: contiguous_positions(start, count),
+                sample_last: end == replay.len() && sequence.generated_tokens.is_empty(),
+                phase,
+                sampling: sequence.sampling.clone(),
+            });
+            sequence.prefill_cursor = end;
+            prefill_sequences += 1;
+            plan.token_count += count;
+            budget -= count;
+        }
+
+        self.consecutive_prefill_iterations = 0;
+    }
+
+    /// Feed a completed native step back into duration-aware mixed admission.
+    /// Decode-only steps calibrate the latency-sensitive baseline. A full-size
+    /// mixed step must then prove that its added duration fits the allowance;
+    /// otherwise this scheduler returns to alternating prompt/decode steps.
+    pub fn observe_iteration_duration(&mut self, plan: &IterationPlan, elapsed: Duration) {
+        let elapsed_us = elapsed.as_secs_f64() * 1_000_000.0;
+        if !elapsed_us.is_finite() || elapsed_us <= 0.0 {
+            return;
+        }
+        let prefill_tokens = plan
+            .work
+            .iter()
+            .filter(|work| work.phase != IterationPhase::Decode)
+            .map(|work| work.tokens.len())
+            .sum::<usize>();
+        let decode_rows = plan
+            .work
+            .iter()
+            .filter(|work| work.phase == IterationPhase::Decode)
+            .count();
+        match (prefill_tokens, decode_rows) {
+            (0, 0) => {}
+            (0, _) => {
+                update_duration_ewma(
+                    self.decode_us_ewma_by_rows
+                        .entry(decode_rows)
+                        .or_insert(elapsed_us),
+                    elapsed_us,
+                );
+            }
+            (_, 0) => {}
+            (_, _) => {
+                let Some(predicted_decode_us) = self.decode_us_ewma_by_rows.get(&decode_rows)
+                else {
+                    return;
+                };
+                let observed_extra_us = (elapsed_us - *predicted_decode_us).max(1.0);
+                let allowed_extra_us = (*predicted_decode_us * MIXED_DECODE_SLOWDOWN_FRACTION)
+                    .clamp(MIXED_PREFILL_MIN_EXTRA_US, MIXED_PREFILL_MAX_EXTRA_US);
+                if observed_extra_us > allowed_extra_us {
+                    // A mixed native call has a fixed row-composition cost.
+                    // Trickle-prefilling amplifies it, so preserve the full
+                    // prompt quantum and fall back when that quantum is not a
+                    // latency-safe fit for this model/hardware pair.
+                    self.mixed_prefill_viable = false;
+                }
+            }
+        }
+    }
+
     pub fn complete_iteration(
         &mut self,
         plan: &IterationPlan,
-        predicted_tokens: &[i32],
+        predictions: &[IterationPrediction],
     ) -> IterationTelemetry {
         let mut terminal = Vec::new();
         let mut prefill_tokens = 0usize;
         let mut recompute_tokens = 0usize;
         let mut decode_tokens = 0usize;
+        let mut predicted_tokens = vec![None; plan.work.len()];
+        let mut duplicate_predictions = vec![false; plan.work.len()];
+        for prediction in predictions {
+            let Some(slot) = predicted_tokens.get_mut(prediction.work_index) else {
+                continue;
+            };
+            if slot.is_some() {
+                duplicate_predictions[prediction.work_index] = true;
+                *slot = None;
+            } else if !duplicate_predictions[prediction.work_index] {
+                *slot = Some(prediction.token);
+            }
+        }
 
         for (index, work) in plan.work.iter().enumerate() {
             match work.phase {
@@ -218,7 +398,7 @@ impl Scheduler {
             let Some(sequence) = self.active.get_mut(&work.sequence_id) else {
                 continue;
             };
-            let Some(predicted) = predicted_tokens.get(index).copied() else {
+            let Some(predicted) = predicted_tokens.get(index).copied().flatten() else {
                 sequence.status = SequenceStatus::Failed;
                 terminal.push((work.sequence_id.clone(), true));
                 continue;
@@ -478,6 +658,13 @@ fn is_complete_permutation(order: &[usize], len: usize) -> bool {
         .all(|index| index < len && !std::mem::replace(&mut seen[index], true))
 }
 
+fn update_duration_ewma(estimate: &mut f64, sample: f64) {
+    if !sample.is_finite() || sample <= 0.0 {
+        return;
+    }
+    *estimate += DURATION_EWMA_ALPHA * (sample - *estimate);
+}
+
 fn contiguous_positions(start: usize, count: usize) -> Vec<i32> {
     (start..start.saturating_add(count))
         .map(|position| i32::try_from(position).unwrap_or(i32::MAX))
@@ -509,7 +696,13 @@ mod tests {
         scheduler.submit(sequence("decode", 2, 4)).unwrap();
         let first = scheduler.plan_iteration();
         assert!(first.work[0].sample_last);
-        scheduler.complete_iteration(&first, &[42]);
+        scheduler.complete_iteration(
+            &first,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
         scheduler.submit(sequence("prefill", 8, 4)).unwrap();
 
         let prefill_chunk = scheduler.plan_iteration();
@@ -517,14 +710,20 @@ mod tests {
         assert_eq!(prefill_chunk.work[0].sequence_id, "prefill");
         assert_eq!(prefill_chunk.work[0].phase, IterationPhase::Prefill);
         assert!(!prefill_chunk.work[0].sample_last);
-        scheduler.complete_iteration(&prefill_chunk, &[-1]);
+        scheduler.complete_iteration(&prefill_chunk, &[]);
 
         let final_prefill = scheduler.plan_iteration();
         assert_eq!(final_prefill.work.len(), 1);
         assert_eq!(final_prefill.work[0].sequence_id, "prefill");
         assert_eq!(final_prefill.work[0].phase, IterationPhase::Prefill);
         assert!(final_prefill.work[0].sample_last);
-        scheduler.complete_iteration(&final_prefill, &[100]);
+        scheduler.complete_iteration(
+            &final_prefill,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 100,
+            }],
+        );
 
         let next = scheduler.plan_iteration();
         let decode = next
@@ -548,6 +747,22 @@ mod tests {
     }
 
     #[test]
+    fn prefilled_generation_resumes_at_the_next_decode_position() {
+        let mut scheduler = Scheduler::new(SchedulerConfig::default());
+        let resumed = sequence("resumed", 3, 4).with_prefilled_generation(vec![42]);
+        scheduler.submit(resumed).unwrap();
+
+        let plan = scheduler.plan_iteration();
+
+        assert_eq!(plan.work.len(), 1);
+        assert_eq!(plan.work[0].sequence_id, "resumed");
+        assert_eq!(plan.work[0].phase, IterationPhase::Decode);
+        assert_eq!(plan.work[0].tokens, vec![42]);
+        assert_eq!(plan.work[0].positions, vec![3]);
+        assert!(plan.work[0].sample_last);
+    }
+
+    #[test]
     fn bounded_prefill_iterations_allow_live_decode_progress() {
         let mut scheduler = Scheduler::new(SchedulerConfig {
             max_tokens_per_iteration: 8,
@@ -557,25 +772,306 @@ mod tests {
         });
         scheduler.submit(sequence("decode", 2, 4)).unwrap();
         let initial = scheduler.plan_iteration();
-        scheduler.complete_iteration(&initial, &[42]);
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
         scheduler.submit(sequence("prefill", 8, 4)).unwrap();
 
         let prefill = scheduler.plan_iteration();
         assert_eq!(prefill.work.len(), 1);
         assert_eq!(prefill.work[0].sequence_id, "prefill");
         assert_eq!(prefill.work[0].phase, IterationPhase::Prefill);
-        scheduler.complete_iteration(&prefill, &[-1]);
+        scheduler.complete_iteration(&prefill, &[]);
 
         let decode = scheduler.plan_iteration();
         assert_eq!(decode.work.len(), 1);
         assert_eq!(decode.work[0].sequence_id, "decode");
         assert_eq!(decode.work[0].phase, IterationPhase::Decode);
-        scheduler.complete_iteration(&decode, &[43]);
+        scheduler.complete_iteration(
+            &decode,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
 
         let resumed_prefill = scheduler.plan_iteration();
         assert_eq!(resumed_prefill.work.len(), 1);
         assert_eq!(resumed_prefill.work[0].sequence_id, "prefill");
         assert_eq!(resumed_prefill.work[0].phase, IterationPhase::Prefill);
+    }
+
+    #[test]
+    fn mixed_iteration_schedules_decode_first_and_fills_remaining_budget() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 5,
+            prefill_chunk_tokens: 5,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 4)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&initial, Duration::from_micros(200));
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
+        let decode_only = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&decode_only, Duration::from_millis(10));
+        scheduler.complete_iteration(
+            &decode_only,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        scheduler.submit(sequence("prefill", 8, 4)).unwrap();
+
+        let mixed = scheduler.plan_iteration();
+
+        assert_eq!(mixed.token_count, 5);
+        assert_eq!(mixed.work.len(), 2);
+        assert_eq!(mixed.work[0].sequence_id, "decode");
+        assert_eq!(mixed.work[0].phase, IterationPhase::Decode);
+        assert_eq!(mixed.work[0].tokens, [43]);
+        assert_eq!(mixed.work[1].sequence_id, "prefill");
+        assert_eq!(mixed.work[1].phase, IterationPhase::Prefill);
+        assert_eq!(mixed.work[1].tokens.len(), 4);
+        assert!(!mixed.work[1].sample_last);
+    }
+
+    #[test]
+    fn mixed_decode_budget_rotates_across_all_live_sequences() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 3,
+            max_tokens_per_iteration: 2,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        for id in ["a", "b", "c"] {
+            let mut active = sequence(id, 1, 8);
+            active.prefill_cursor = 1;
+            active.generated_tokens.push(42);
+            scheduler.active.insert(id.to_string(), active);
+        }
+        scheduler.decode_us_ewma_by_rows.insert(2, 1_000.0);
+
+        let expected = [["a", "b"], ["c", "a"], ["b", "c"]];
+        for expected_ids in expected {
+            let plan = scheduler.plan_iteration();
+            assert_eq!(
+                plan.work
+                    .iter()
+                    .map(|work| work.sequence_id.as_str())
+                    .collect::<Vec<_>>(),
+                expected_ids
+            );
+            let predictions = plan
+                .work
+                .iter()
+                .enumerate()
+                .map(|(work_index, _)| IterationPrediction {
+                    work_index,
+                    token: 43 + i32::try_from(work_index).unwrap(),
+                })
+                .collect::<Vec<_>>();
+            scheduler.complete_iteration(&plan, &predictions);
+        }
+    }
+
+    #[test]
+    fn duration_aware_mixed_admission_caps_slow_prompt_work() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 8)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
+        let decode_only = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&decode_only, Duration::from_millis(10));
+        scheduler.complete_iteration(
+            &decode_only,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
+
+        let slow_mixed = scheduler.plan_iteration();
+        assert_eq!(slow_mixed.work[1].tokens.len(), 127);
+        scheduler.observe_iteration_duration(&slow_mixed, Duration::from_millis(170));
+        scheduler.complete_iteration(
+            &slow_mixed,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 44,
+            }],
+        );
+
+        let fallback_prefill = scheduler.plan_iteration();
+
+        assert_eq!(fallback_prefill.work.len(), 1);
+        assert_eq!(fallback_prefill.work[0].phase, IterationPhase::Prefill);
+        assert_eq!(fallback_prefill.work[0].tokens.len(), 128);
+        assert_eq!(fallback_prefill.token_count, 128);
+    }
+
+    #[test]
+    fn mixed_admission_waits_for_the_matching_decode_row_baseline() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 3,
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode-a", 2, 8)).unwrap();
+        scheduler.submit(sequence("decode-b", 2, 8)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(
+            &initial,
+            &[
+                IterationPrediction {
+                    work_index: 0,
+                    token: 42,
+                },
+                IterationPrediction {
+                    work_index: 1,
+                    token: 43,
+                },
+            ],
+        );
+        scheduler.decode_us_ewma_by_rows.insert(1, 10_000.0);
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
+
+        let uncalibrated = scheduler.plan_iteration();
+
+        assert_eq!(uncalibrated.work.len(), 1);
+        assert_eq!(uncalibrated.work[0].sequence_id, "prefill");
+        assert_eq!(uncalibrated.work[0].phase, IterationPhase::Prefill);
+    }
+
+    #[test]
+    fn duration_aware_mixed_admission_keeps_cheap_prompt_work() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_tokens_per_iteration: 128,
+            prefill_chunk_tokens: 128,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("decode", 2, 8)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
+        let decode_only = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&decode_only, Duration::from_millis(10));
+        scheduler.complete_iteration(
+            &decode_only,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        scheduler.submit(sequence("prefill", 256, 4)).unwrap();
+
+        let cheap_mixed = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&cheap_mixed, Duration::from_millis(18));
+        scheduler.complete_iteration(
+            &cheap_mixed,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 44,
+            }],
+        );
+
+        let next_mixed = scheduler.plan_iteration();
+        assert_eq!(next_mixed.work.len(), 2);
+        assert_eq!(next_mixed.work[0].phase, IterationPhase::Decode);
+        assert_eq!(next_mixed.work[1].phase, IterationPhase::Prefill);
+    }
+
+    #[test]
+    fn sparse_iteration_predictions_map_to_their_explicit_work_rows() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 3,
+            max_tokens_per_iteration: 8,
+            prefill_chunk_tokens: 4,
+            mixed_prefill_decode: true,
+            ..SchedulerConfig::default()
+        });
+        scheduler.submit(sequence("a-decode", 2, 4)).unwrap();
+        let initial = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&initial, Duration::from_micros(200));
+        scheduler.complete_iteration(
+            &initial,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 42,
+            }],
+        );
+        let decode_only = scheduler.plan_iteration();
+        scheduler.observe_iteration_duration(&decode_only, Duration::from_millis(10));
+        scheduler.complete_iteration(
+            &decode_only,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        scheduler.submit(sequence("b-prefill", 8, 4)).unwrap();
+        scheduler.submit(sequence("c-final", 2, 4)).unwrap();
+
+        let mixed = scheduler.plan_iteration();
+        assert_eq!(mixed.work.len(), 3);
+        assert!(mixed.work[0].sample_last);
+        assert!(!mixed.work[1].sample_last);
+        assert!(mixed.work[2].sample_last);
+
+        scheduler.complete_iteration(
+            &mixed,
+            &[
+                IterationPrediction {
+                    work_index: 0,
+                    token: 44,
+                },
+                IterationPrediction {
+                    work_index: 2,
+                    token: 99,
+                },
+            ],
+        );
+
+        assert_eq!(
+            scheduler.sequence("a-decode").unwrap().generated_tokens,
+            [42, 43, 44]
+        );
+        assert_eq!(
+            scheduler.sequence("c-final").unwrap().generated_tokens,
+            [99]
+        );
+        assert!(scheduler.sequence("b-prefill").is_some());
     }
 
     #[test]
@@ -642,7 +1138,13 @@ mod tests {
         let first = scheduler.plan_iteration();
         assert_eq!(first.work.len(), 1);
         assert_eq!(first.work[0].sequence_id, "a");
-        scheduler.complete_iteration(&first, &[10]);
+        scheduler.complete_iteration(
+            &first,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 10,
+            }],
+        );
 
         let second = scheduler.plan_iteration();
         assert_eq!(second.work.len(), 1);

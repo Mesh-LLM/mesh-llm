@@ -21,6 +21,17 @@ pub(super) fn stage_runtime_status_key(topology_id: &str, run_id: &str, stage_id
     format!("{topology_id}\n{run_id}\n{stage_id}")
 }
 
+fn path_free_stage_projector_path(
+    package_ref: Option<&str>,
+    projector_path: Option<String>,
+) -> Option<String> {
+    if package_ref.is_some_and(crate::inference::skippy::is_content_addressed_gguf_ref) {
+        None
+    } else {
+        projector_path
+    }
+}
+
 pub(super) fn endpoint_id_from_bytes(bytes: Vec<u8>) -> anyhow::Result<EndpointId> {
     let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
         anyhow::anyhow!(
@@ -37,6 +48,8 @@ pub(super) fn stage_runtime_status_from_snapshot(
     node_id: Option<EndpointId>,
     status: crate::inference::skippy::StageStatusSnapshot,
 ) -> StageRuntimeStatus {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     StageRuntimeStatus {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -49,7 +62,7 @@ pub(super) fn stage_runtime_status_from_snapshot(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned,
-        projector_path: status.projector_path,
+        projector_path,
         stage_id: status.stage_id,
         stage_index: status.stage_index,
         node_id,
@@ -74,6 +87,10 @@ pub(super) fn stage_snapshot_from_runtime_status(
     state: crate::inference::skippy::StageRuntimeState,
     error: Option<String>,
 ) -> crate::inference::skippy::StageStatusSnapshot {
+    let projector_path = path_free_stage_projector_path(
+        status.package_ref.as_deref(),
+        status.projector_path.clone(),
+    );
     crate::inference::skippy::StageStatusSnapshot {
         topology_id: status.topology_id.clone(),
         run_id: status.run_id.clone(),
@@ -86,7 +103,7 @@ pub(super) fn stage_snapshot_from_runtime_status(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path.clone(),
         materialized_pinned: status.materialized_pinned,
-        projector_path: status.projector_path.clone(),
+        projector_path,
         stage_id: status.stage_id.clone(),
         stage_index: status.stage_index,
         layer_start: status.layer_start,
@@ -134,7 +151,7 @@ pub(super) fn stage_topology_from_load(
 pub(super) fn stage_control_request_to_proto(
     requester_id: EndpointId,
     request: crate::inference::skippy::StageControlRequest,
-) -> skippy_stage_proto::StageControlRequest {
+) -> anyhow::Result<skippy_stage_proto::StageControlRequest> {
     use skippy_stage_proto::stage_control_request::Command;
 
     let command = match request {
@@ -142,7 +159,19 @@ pub(super) fn stage_control_request_to_proto(
             Command::ClaimCoordinator(stage_coordinator_claim_to_proto(claim))
         }
         crate::inference::skippy::StageControlRequest::Load(load) => {
+            anyhow::ensure!(
+                !load.local_source_required
+                    && !crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref),
+                "local-required stage load must use the fail-closed LoadLocal command"
+            );
             Command::LoadStage(stage_load_to_proto(load))
+        }
+        crate::inference::skippy::StageControlRequest::LoadLocal(mut load) => {
+            // The command discriminant is the fail-closed contract. Do not let
+            // a stale or manually constructed domain request weaken it by
+            // carrying the fallback policy bit.
+            load.local_source_required = true;
+            Command::LoadLocalStage(stage_load_to_proto(load))
         }
         crate::inference::skippy::StageControlRequest::Stop(stop) => {
             Command::StopStage(skippy_stage_proto::StopStage {
@@ -163,11 +192,23 @@ pub(super) fn stage_control_request_to_proto(
         crate::inference::skippy::StageControlRequest::Inventory(inventory) => {
             Command::GetLayerInventory(skippy_stage_proto::GetLayerInventory {
                 model_id: inventory.model_id,
+                runtime_profile: inventory.runtime_profile,
                 package_ref: inventory.package_ref,
                 manifest_sha256: inventory.manifest_sha256,
+                expected_source_model_sha256: inventory.expected_source_model_sha256,
+                source_resolution_policy: source_resolution_policy_to_proto(
+                    inventory.local_source_required,
+                ) as i32,
             })
         }
         crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
+            anyhow::ensure!(
+                !prepare.load.local_source_required
+                    && !crate::inference::skippy::is_content_addressed_gguf_ref(
+                        &prepare.load.package_ref
+                    ),
+                "local-required stage load cannot use the legacy Prepare command"
+            );
             Command::PrepareStage(skippy_stage_proto::PrepareStage {
                 load_stage: Some(stage_load_to_proto(prepare.load)),
                 coordinator_id: prepare.coordinator_id.map(|id| id.as_bytes().to_vec()),
@@ -188,20 +229,27 @@ pub(super) fn stage_control_request_to_proto(
         }
     };
 
-    skippy_stage_proto::StageControlRequest {
+    let frame = skippy_stage_proto::StageControlRequest {
         r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         command: Some(command),
-    }
+    };
+    skippy_protocol::validate_stage_control_request(&frame)
+        .map_err(|error| anyhow::anyhow!("invalid outbound stage-control request: {error}"))?;
+    Ok(frame)
 }
 
 pub(super) fn stage_load_to_proto(
     load: crate::inference::skippy::StageLoadRequest,
 ) -> skippy_stage_proto::LoadStage {
+    let projector_path = (!load.local_source_required)
+        .then(|| load.projector_path.clone())
+        .flatten();
     skippy_stage_proto::LoadStage {
         topology_id: load.topology_id,
         run_id: load.run_id,
         model_id: load.model_id,
+        runtime_profile: load.runtime_profile,
         backend: load.backend,
         package_ref: load.package_ref,
         manifest_sha256: load.manifest_sha256,
@@ -211,7 +259,10 @@ pub(super) fn stage_load_to_proto(
         layer_end: load.layer_end,
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
-        projector_path: load.projector_path,
+        source_model_sha256: load.source_model_sha256,
+        source_resolution_policy: source_resolution_policy_to_proto(load.local_source_required)
+            as i32,
+        projector_path,
         projector_use_gpu: load.projector_use_gpu,
         media_marker: load.media_marker,
         image_min_tokens: load.image_min_tokens,
@@ -335,6 +386,15 @@ pub(super) fn stage_control_request_from_proto(
         Command::LoadStage(load) => Ok(crate::inference::skippy::StageControlRequest::Load(
             stage_load_from_proto(load)?,
         )),
+        Command::LoadLocalStage(load) => {
+            let mut load = stage_load_from_proto(load)?;
+            // Preserve the command-level invariant even if this conversion is
+            // called on a frame that did not pass the wire validator first.
+            load.local_source_required = true;
+            Ok(crate::inference::skippy::StageControlRequest::LoadLocal(
+                load,
+            ))
+        }
         Command::StopStage(stop) => Ok(crate::inference::skippy::StageControlRequest::Stop(
             crate::inference::skippy::StageStopRequest {
                 topology_id: stop.topology_id,
@@ -357,8 +417,13 @@ pub(super) fn stage_control_request_from_proto(
             Ok(crate::inference::skippy::StageControlRequest::Inventory(
                 crate::inference::skippy::StageInventoryRequest {
                     model_id: inventory.model_id,
+                    runtime_profile: inventory.runtime_profile,
                     package_ref: inventory.package_ref,
                     manifest_sha256: inventory.manifest_sha256,
+                    expected_source_model_sha256: inventory.expected_source_model_sha256,
+                    local_source_required: source_resolution_policy_from_proto(
+                        inventory.source_resolution_policy,
+                    )?,
                 },
             ))
         }
@@ -401,10 +466,15 @@ pub(super) fn stage_control_request_from_proto(
 pub(super) fn stage_load_from_proto(
     load: skippy_stage_proto::LoadStage,
 ) -> anyhow::Result<crate::inference::skippy::StageLoadRequest> {
+    let local_source_required = source_resolution_policy_from_proto(load.source_resolution_policy)?;
+    let projector_path = (!local_source_required)
+        .then(|| load.projector_path.clone())
+        .flatten();
     Ok(crate::inference::skippy::StageLoadRequest {
         topology_id: load.topology_id,
         run_id: load.run_id,
         model_id: load.model_id,
+        runtime_profile: load.runtime_profile,
         backend: load.backend,
         package_ref: load.package_ref,
         manifest_sha256: load.manifest_sha256,
@@ -414,7 +484,9 @@ pub(super) fn stage_load_from_proto(
         layer_end: load.layer_end,
         model_path: load.model_path,
         source_model_bytes: load.source_model_bytes,
-        projector_path: load.projector_path,
+        source_model_sha256: load.source_model_sha256,
+        local_source_required,
+        projector_path,
         projector_use_gpu: load.projector_use_gpu,
         media_marker: load.media_marker,
         image_min_tokens: load.image_min_tokens,
@@ -565,6 +637,9 @@ pub(super) fn stage_control_unavailable_response(
         crate::inference::skippy::StageControlRequest::Load(load) => {
             stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed)
         }
+        crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+            stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed)
+        }
         crate::inference::skippy::StageControlRequest::Stop(stop) => {
             crate::inference::skippy::StageStatusSnapshot {
                 topology_id: stop.topology_id,
@@ -615,6 +690,8 @@ pub(super) fn stage_control_unavailable_response(
                     preparing_ranges: Vec::new(),
                     source_model_path: None,
                     source_model_bytes: None,
+                    source_model_sha256: None,
+                    content_addressed_local_source: None,
                     source_model_kind: crate::inference::skippy::SourceModelKind::Unknown,
                 },
             );
@@ -663,6 +740,8 @@ pub(super) fn stage_status_from_load(
     load: &crate::inference::skippy::StageLoadRequest,
     state: crate::inference::skippy::StageRuntimeState,
 ) -> crate::inference::skippy::StageStatusSnapshot {
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref);
     crate::inference::skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -670,12 +749,16 @@ pub(super) fn stage_status_from_load(
         backend: load.backend.clone(),
         package_ref: Some(load.package_ref.clone()),
         manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: load.model_path.clone(),
-        source_model_sha256: None,
+        source_model_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.model_path.clone())
+            .flatten(),
+        source_model_sha256: load.source_model_sha256.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
-        projector_path: load.projector_path.clone(),
+        projector_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.projector_path.clone())
+            .flatten(),
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
@@ -931,6 +1014,8 @@ pub(super) fn layer_inventory_to_proto(
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
         source_model_kind: source_model_kind_to_proto(inventory.source_model_kind) as i32,
+        source_model_sha256: inventory.source_model_sha256,
+        content_addressed_local_source: inventory.content_addressed_local_source,
     }
 }
 
@@ -964,7 +1049,27 @@ pub(super) fn layer_inventory_from_proto(
             .collect(),
         source_model_path: inventory.source_model_path,
         source_model_bytes: inventory.source_model_bytes,
+        source_model_sha256: inventory.source_model_sha256,
+        content_addressed_local_source: inventory.content_addressed_local_source,
         source_model_kind: source_model_kind_from_proto(inventory.source_model_kind),
+    }
+}
+
+fn source_resolution_policy_to_proto(
+    local_source_required: bool,
+) -> skippy_stage_proto::SourceResolutionPolicy {
+    if local_source_required {
+        skippy_stage_proto::SourceResolutionPolicy::LocalRequired
+    } else {
+        skippy_stage_proto::SourceResolutionPolicy::Fallback
+    }
+}
+
+fn source_resolution_policy_from_proto(value: i32) -> anyhow::Result<bool> {
+    match skippy_stage_proto::SourceResolutionPolicy::try_from(value) {
+        Ok(skippy_stage_proto::SourceResolutionPolicy::Fallback) => Ok(false),
+        Ok(skippy_stage_proto::SourceResolutionPolicy::LocalRequired) => Ok(true),
+        Err(_) => anyhow::bail!("unsupported stage source resolution policy {value}"),
     }
 }
 
@@ -1092,6 +1197,8 @@ pub(super) fn stage_preparation_status_from_proto(
 pub(super) fn stage_status_to_proto(
     status: crate::inference::skippy::StageStatusSnapshot,
 ) -> skippy_stage_proto::StageStatus {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     skippy_stage_proto::StageStatus {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -1118,7 +1225,7 @@ pub(super) fn stage_status_to_proto(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: Some(status.materialized_pinned),
-        projector_path: status.projector_path,
+        projector_path,
         flash_attn_type: stage_flash_attn_type_to_proto(status.flash_attn_type) as i32,
         coordinator_term: status.coordinator_term,
         coordinator_id: status.coordinator_id.map(|id| id.to_string()),
@@ -1129,6 +1236,8 @@ pub(super) fn stage_status_to_proto(
 pub(super) fn stage_status_from_proto(
     status: skippy_stage_proto::StageStatus,
 ) -> anyhow::Result<crate::inference::skippy::StageStatusSnapshot> {
+    let projector_path =
+        path_free_stage_projector_path(status.package_ref.as_deref(), status.projector_path);
     Ok(crate::inference::skippy::StageStatusSnapshot {
         topology_id: status.topology_id,
         run_id: status.run_id,
@@ -1160,7 +1269,7 @@ pub(super) fn stage_status_from_proto(
         source_model_bytes: status.source_model_bytes,
         materialized_path: status.materialized_path,
         materialized_pinned: status.materialized_pinned.unwrap_or(false),
-        projector_path: status.projector_path,
+        projector_path,
         flash_attn_type: stage_flash_attn_type_from_proto(status.flash_attn_type),
         error: status.error,
         shutdown_generation: status.shutdown_generation,

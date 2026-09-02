@@ -16,6 +16,7 @@ use skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS;
 use skippy_protocol::binary::MAX_STAGE_SAMPLERS;
 use skippy_protocol::binary::StageLogitBias as WireLogitBias;
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
+use skippy_protocol::binary::sampling_flags;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::DrySamplingConfig;
@@ -687,6 +688,7 @@ pub(super) fn sampling_config(
     let frequency_penalty = frequency_penalty.unwrap_or(0.0);
     let top_k = optional_i32_extra(extra, "top_k")?.unwrap_or(40);
     let min_p = optional_f32_extra(extra, "min_p")?.unwrap_or(0.05);
+    let ignore_eos = optional_bool_extra(extra, "ignore_eos")?.unwrap_or(false);
     let repeat_penalty = optional_f32_extra(extra, "repeat_penalty")?
         .or(optional_f32_extra(extra, "repetition_penalty")?)
         .unwrap_or(1.0);
@@ -702,7 +704,6 @@ pub(super) fn sampling_config(
     let mirostat_learning_rate =
         optional_f32_extra(extra, "mirostat_learning_rate")?.unwrap_or(0.1);
     let samplers = parse_sampler_order(extra)?;
-    let ignore_eos = optional_bool_extra(extra, "ignore_eos")?.unwrap_or(false);
     validate_sampling_range("temperature", temperature, 0.0..=100.0)?;
     validate_sampling_range("top_p", top_p, 0.0..=1.0)?;
     validate_sampling_range("presence_penalty", presence_penalty, -2.0..=2.0)?;
@@ -758,6 +759,7 @@ pub(super) fn sampling_config(
         || ignore_eos;
     Ok(SamplingConfig {
         enabled,
+        ignore_eos,
         seed,
         temperature,
         top_p,
@@ -778,7 +780,6 @@ pub(super) fn sampling_config(
         mirostat_entropy,
         mirostat_learning_rate,
         samplers,
-        ignore_eos,
     })
 }
 
@@ -1085,7 +1086,15 @@ pub(super) fn wire_sampling_config(sampling: &SamplingConfig) -> Option<WireSamp
         return None;
     }
     let mut wire = WireSamplingConfig {
-        flags: u32::from(sampling.enabled),
+        flags: (if sampling.enabled {
+            sampling_flags::ENABLED
+        } else {
+            0
+        }) | (if sampling.ignore_eos {
+            sampling_flags::IGNORE_EOS
+        } else {
+            0
+        }),
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,

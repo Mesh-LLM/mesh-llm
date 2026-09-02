@@ -1,3 +1,4 @@
+use super::ConnectionWorkerControl;
 use anyhow::{Context, Result};
 use skippy_protocol::binary::{StageWireMessage, read_stage_message};
 use std::io;
@@ -12,6 +13,7 @@ pub(super) fn next_connection_session_id() -> u64 {
 
 pub(super) fn receive_next_message(
     upstream: &mut TcpStream,
+    worker_control: &ConnectionWorkerControl,
     activation_width: i32,
     first_message: Option<StageWireMessage>,
     pending_prefill_replies: usize,
@@ -19,6 +21,15 @@ pub(super) fn receive_next_message(
 ) -> Result<Option<StageWireMessage>> {
     if first_message.is_some() {
         return Ok(first_message);
+    }
+    if !worker_control
+        .wait_for_readable(upstream)
+        .context("wait for the next binary stage message")?
+    {
+        // Shutdown was requested while the connection was idle: end the
+        // worker cleanly instead of blocking in a read that a socket
+        // shutdown cannot interrupt on Windows (#1538).
+        return Ok(None);
     }
     match read_stage_message(upstream, activation_width) {
         Ok(message) => Ok(Some(message)),

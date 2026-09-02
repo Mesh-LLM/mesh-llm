@@ -80,6 +80,26 @@ pub fn order_cache_aware_candidates<'a>(
     aging_cost_per_turn: u64,
     group_waiting_prefixes: bool,
 ) -> Vec<usize> {
+    order_cache_aware_candidates_with_anchor(
+        candidates,
+        current_turn,
+        aging_cost_per_turn,
+        group_waiting_prefixes,
+        None,
+    )
+}
+
+/// Order cache candidates while continuing the most recently selected waiting
+/// prefix subtree inside the normal score band. This keeps a newly opened lane
+/// wave on one shared family even before its first request has materialized a
+/// cache entry; aging and cache value still outrank the locality anchor.
+pub fn order_cache_aware_candidates_with_anchor<'a>(
+    candidates: impl IntoIterator<Item = CacheAwareCandidate<'a>>,
+    current_turn: u64,
+    aging_cost_per_turn: u64,
+    group_waiting_prefixes: bool,
+    anchor_prompt: Option<&[i32]>,
+) -> Vec<usize> {
     let candidates = candidates.into_iter().collect::<Vec<_>>();
     let mut dfs_ranks = vec![0usize; candidates.len()];
     if group_waiting_prefixes {
@@ -88,6 +108,7 @@ pub fn order_cache_aware_candidates<'a>(
             &candidates,
             (0..candidates.len()).collect(),
             0,
+            anchor_prompt,
             &mut dfs_order,
         );
         for (rank, position) in dfs_order.into_iter().enumerate() {
@@ -187,6 +208,7 @@ fn append_dfs_weight_order(
     candidates: &[CacheAwareCandidate<'_>],
     positions: Vec<usize>,
     mut depth: usize,
+    anchor_prompt: Option<&[i32]>,
     output: &mut Vec<usize>,
 ) {
     if positions.len() <= 1 {
@@ -221,9 +243,10 @@ fn append_dfs_weight_order(
     }
     let mut children = children.into_iter().collect::<Vec<_>>();
     children.sort_by(|(left_token, left), (right_token, right)| {
-        right
-            .len()
-            .cmp(&left.len())
+        let anchor_token = anchor_prompt.and_then(|prompt| prompt.get(depth)).copied();
+        (Some(*right_token) == anchor_token)
+            .cmp(&(Some(*left_token) == anchor_token))
+            .then_with(|| right.len().cmp(&left.len()))
             .then_with(|| {
                 minimum_enqueue_order(candidates, left)
                     .cmp(&minimum_enqueue_order(candidates, right))
@@ -231,7 +254,13 @@ fn append_dfs_weight_order(
             .then_with(|| left_token.cmp(right_token))
     });
     for (_, child) in children {
-        append_dfs_weight_order(candidates, child, depth.saturating_add(1), output);
+        append_dfs_weight_order(
+            candidates,
+            child,
+            depth.saturating_add(1),
+            anchor_prompt,
+            output,
+        );
     }
     terminal.sort_by_key(|position| candidates[*position].order);
     output.extend(terminal);
@@ -287,6 +316,46 @@ mod tests {
             true,
         );
         assert_eq!(selected, Some(1));
+    }
+
+    #[test]
+    fn anchor_keeps_a_selected_prefix_group_contiguous() {
+        let cold = CacheAffinity::default();
+        let prompts = [&[9, 9, 9][..], &[1, 2, 3][..], &[1, 2, 4][..]];
+        let first = order_cache_aware_candidates_with_anchor(
+            prompts
+                .iter()
+                .enumerate()
+                .map(|(index, prompt_tokens)| CacheAwareCandidate {
+                    index,
+                    priority: 0,
+                    affinity: &cold,
+                    prompt_tokens,
+                    enqueued_turn: 0,
+                    order: index as u64,
+                }),
+            0,
+            10,
+            true,
+            None,
+        );
+        assert_eq!(first[0], 1);
+
+        let second = order_cache_aware_candidates_with_anchor(
+            [0usize, 2].into_iter().map(|index| CacheAwareCandidate {
+                index,
+                priority: 0,
+                affinity: &cold,
+                prompt_tokens: prompts[index],
+                enqueued_turn: 0,
+                order: index as u64,
+            }),
+            1,
+            10,
+            true,
+            Some(prompts[1]),
+        );
+        assert_eq!(second[0], 2);
     }
 
     #[test]

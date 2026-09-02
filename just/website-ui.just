@@ -13,6 +13,12 @@ website-build:
     cd "{{ website_dir }}" && npm run clean && npm run build
     just crate-docs
 
+# Regenerate and verify the deterministic CLI inventory without running the
+# full website build. The generated source file is intentionally ignored and
+# cleaned with the rest of the website artifacts.
+cli-inventory-check:
+    cd "{{ website_dir }}" && npm run check:cli
+
 # Build Rustdoc for the crates published by the release workflow.
 crate-docs:
     scripts/build-crate-docs.sh

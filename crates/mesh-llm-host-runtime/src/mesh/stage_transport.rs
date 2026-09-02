@@ -881,7 +881,9 @@ impl Node {
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
         self.prepare_stage_control_request(&mut request).await?;
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
@@ -923,11 +925,13 @@ impl Node {
         use prost::Message as _;
 
         let timeout = Self::stage_control_request_timeout(&request);
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(peer_id, load))
                 .await;
         }
-        let frame = stage_control_request_to_proto(self.endpoint.id(), request);
+        let frame = stage_control_request_to_proto(self.endpoint.id(), request)?;
         let response = tokio::time::timeout(timeout, async {
             let (mut send, mut recv) = if self
                 .peer_supports_skippy_subprotocol_feature(
@@ -989,6 +993,9 @@ impl Node {
                 std::time::Duration::from_secs(30)
             }
             crate::inference::skippy::StageControlRequest::Load(load) => {
+                crate::inference::skippy::stage_load_timeout(load)
+            }
+            crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
                 crate::inference::skippy::stage_load_timeout(load)
             }
             crate::inference::skippy::StageControlRequest::Prepare(prepare) => {

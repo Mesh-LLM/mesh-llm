@@ -72,6 +72,7 @@ pub(super) struct SplitTopologyCoordinator {
     pub(super) model_path: PathBuf,
     pub(super) model_ref: String,
     pub(super) config_model_id: Option<String>,
+    pub(super) runtime_profile: String,
     pub(super) package: skippy::SkippyPackageIdentity,
     pub(super) compact_meta: crate::models::gguf::GgufCompactMeta,
     pub(super) active: SplitTopologyGeneration,
@@ -96,6 +97,7 @@ pub(super) struct SplitTopologyCoordinator {
     /// A locked topology may be withdrawn after stage loss, but never replaced
     /// or collapsed to a local fallback.
     pub(super) topology_locked: bool,
+    pub(super) local_source_required: bool,
     pub(super) health_interval: Duration,
 }
 
@@ -163,10 +165,12 @@ impl SplitTopologyCoordinator {
             &self.node,
             &self.model_name,
             &self.model_ref,
+            &self.runtime_profile,
             &self.package,
             self.pinned_gpu
                 .as_ref()
                 .map(|gpu| gpu.allocatable_vram_bytes()),
+            self.local_source_required,
         )
         .await;
         let connected_node_ids = split_connected_node_ids(&self.node).await;
@@ -630,6 +634,7 @@ impl SplitTopologyCoordinator {
             mesh_config: &self.mesh_config,
             model_ref: &self.model_ref,
             config_model_id: self.config_model_id.as_deref(),
+            runtime_profile: &self.runtime_profile,
             model_path: &self.model_path,
             package: &self.package,
             generation: &candidate,
@@ -648,6 +653,7 @@ impl SplitTopologyCoordinator {
             skippy_telemetry: self.skippy_telemetry.clone(),
             survey_telemetry: self.survey_telemetry.clone(),
             serving_hooks_factory: None,
+            local_source_required: self.local_source_required,
         })
         .await?;
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();

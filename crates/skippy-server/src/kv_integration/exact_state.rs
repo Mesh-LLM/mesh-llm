@@ -18,6 +18,17 @@ impl KvStageIntegration {
         session_id: &str,
         identities: &[PrefillKvIdentity],
     ) -> Result<Option<ExactStateRestore>> {
+        runtime.restore_transaction(session_id, |runtime| {
+            self.restore_exact_state_inner(runtime, session_id, identities)
+        })
+    }
+
+    fn restore_exact_state_inner(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identities: &[PrefillKvIdentity],
+    ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || !self.payload.is_exact_state() {
             return Ok(None);
         }
@@ -47,68 +58,131 @@ impl KvStageIntegration {
             let mut reconstruct_blocks = 0usize;
             let mut kv_import_ms = 0.0;
             let mut recurrent_import_ms = 0.0;
-            match lookup.value.payload.kind().into() {
-                StagePrefixCachePayload::FullState => {
-                    let (full_state, stats) = lookup
-                        .value
-                        .payload
-                        .full_state_bytes_timed()
-                        .context("reconstruct cached full-state payload")?;
-                    add_reconstruct_stats(
-                        &mut reconstruct_ms,
-                        &mut reconstruct_bytes,
-                        &mut reconstruct_blocks,
-                        stats,
-                    );
-                    let import_started = Instant::now();
-                    runtime.import_full_state_for_token_count(
-                        session_id,
-                        full_state.as_ref(),
-                        token_count,
-                    )?;
-                    kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
-                }
-                StagePrefixCachePayload::KvRecurrent => {
-                    if let Some((kv, stats)) = lookup
-                        .value
-                        .payload
-                        .kv_bytes_timed()
-                        .context("reconstruct cached KV payload")?
-                    {
+            let mut deterministic_failure = false;
+            let restore_result = (|| -> Result<bool> {
+                match lookup.value.payload.kind().into() {
+                    StagePrefixCachePayload::FullState => {
+                        let (full_state, stats) = lookup
+                            .value
+                            .payload
+                            .full_state_bytes_timed()
+                            .context("reconstruct cached full-state payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?;
+                        if full_state.is_empty() {
+                            deterministic_failure = true;
+                            return Err(anyhow::anyhow!("cached full-state payload is empty"));
+                        }
                         add_reconstruct_stats(
                             &mut reconstruct_ms,
                             &mut reconstruct_bytes,
                             &mut reconstruct_blocks,
                             stats,
                         );
-                        if let Some(desc) = lookup.value.extra.kv_desc.as_ref() {
-                            let import_started = Instant::now();
-                            runtime.import_kv_page(session_id, desc, kv.as_ref())?;
-                            kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
-                        } else if !kv.is_empty() {
-                            continue;
-                        }
+                        let import_started = Instant::now();
+                        runtime.import_full_state_for_token_count(
+                            session_id,
+                            full_state.as_ref(),
+                            token_count,
+                        )?;
+                        kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
                     }
-                    let (recurrent, stats) = lookup
-                        .value
-                        .payload
-                        .recurrent_state_bytes_timed()
-                        .context("reconstruct cached recurrent payload")?;
-                    add_reconstruct_stats(
-                        &mut reconstruct_ms,
-                        &mut reconstruct_bytes,
-                        &mut reconstruct_blocks,
-                        stats,
-                    );
-                    let import_started = Instant::now();
-                    runtime.import_recurrent_state_for_token_count(
-                        session_id,
-                        recurrent.as_ref(),
-                        token_count,
-                    )?;
-                    recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                    StagePrefixCachePayload::KvRecurrent => {
+                        if let Some((kv, stats)) = lookup
+                            .value
+                            .payload
+                            .kv_bytes_timed()
+                            .context("reconstruct cached KV payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?
+                        {
+                            add_reconstruct_stats(
+                                &mut reconstruct_ms,
+                                &mut reconstruct_bytes,
+                                &mut reconstruct_blocks,
+                                stats,
+                            );
+                            if let Some(desc) = lookup.value.extra.kv_desc.as_ref() {
+                                desc.validate_payload(kv.len()).map_err(|error| {
+                                    mark_deterministic_failure(&mut deterministic_failure, error)
+                                })?;
+                                if desc.token_start != 0 || desc.token_count != token_count {
+                                    deterministic_failure = true;
+                                    return Err(anyhow::anyhow!(
+                                        "cached KV page token range mismatch for exact-state checkpoint"
+                                    ));
+                                }
+                                let import_started = Instant::now();
+                                runtime.import_kv_page(session_id, desc, kv.as_ref())?;
+                                kv_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                            } else if !kv.is_empty() {
+                                deterministic_failure = true;
+                                return Err(anyhow::anyhow!(
+                                    "cached KV payload is missing its descriptor"
+                                ));
+                            }
+                        }
+                        let (recurrent, stats) = lookup
+                            .value
+                            .payload
+                            .recurrent_state_bytes_timed()
+                            .context("reconstruct cached recurrent payload")
+                            .map_err(|error| {
+                                mark_deterministic_failure(&mut deterministic_failure, error)
+                            })?;
+                        if recurrent.is_empty() {
+                            deterministic_failure = true;
+                            return Err(anyhow::anyhow!("cached recurrent-state payload is empty"));
+                        }
+                        add_reconstruct_stats(
+                            &mut reconstruct_ms,
+                            &mut reconstruct_bytes,
+                            &mut reconstruct_blocks,
+                            stats,
+                        );
+                        let import_started = Instant::now();
+                        runtime.import_recurrent_state_for_token_count(
+                            session_id,
+                            recurrent.as_ref(),
+                            token_count,
+                        )?;
+                        recurrent_import_ms = import_started.elapsed().as_secs_f64() * 1000.0;
+                    }
+                    _ => return Ok(false),
                 }
-                _ => continue,
+                Ok(true)
+            })();
+            let restored_payload = match restore_result {
+                Ok(restored_payload) => restored_payload,
+                Err(error) => {
+                    drop(lease);
+                    if deterministic_failure
+                        && let Err(quarantine_error) = self.quarantine_exact_state_entry(
+                            &identity.namespace,
+                            &lookup.stored_tokens,
+                            &lookup.value.page_id,
+                        )
+                    {
+                        let _ =
+                            mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+                                message: "Skippy exact-state quarantine failed".to_string(),
+                                context: Some(format!(
+                                    "page_id={} error={quarantine_error:#}",
+                                    lookup.value.page_id
+                                )),
+                            });
+                        return Err(error.context(format!(
+                            "failed to fully quarantine corrupt exact-state entry: {quarantine_error:#}"
+                        )));
+                    }
+                    return Err(error);
+                }
+            };
+            if !restored_payload {
+                drop(lease);
+                continue;
             }
             let restored = ExactStateRestore {
                 page_id: lookup.value.page_id,
@@ -127,6 +201,29 @@ impl KvStageIntegration {
             return Ok(Some(restored));
         }
         Ok(None)
+    }
+
+    fn quarantine_exact_state_entry(
+        &self,
+        namespace: &str,
+        tokens: &[i32],
+        page_id: &str,
+    ) -> Result<bool> {
+        let removed = self
+            .radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove_recurrent_if(namespace, tokens, |entry| entry.page_id == page_id);
+        let Some(entry) = removed else {
+            return Ok(false);
+        };
+        entry.payload.release_from(
+            &mut self
+                .exact_blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        Ok(true)
     }
 
     pub fn record_exact_state(
@@ -299,6 +396,14 @@ fn is_native_kv_unavailable(error: &anyhow::Error) -> bool {
         message.contains("runtime memory type is not supported for native KV pages")
             || message.contains("runtime has no attention KV cache")
     })
+}
+
+fn mark_deterministic_failure(
+    deterministic_failure: &mut bool,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    *deterministic_failure = true;
+    error
 }
 
 impl StagePrefixCachePayload {

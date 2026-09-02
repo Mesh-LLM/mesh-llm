@@ -17,6 +17,10 @@ on:
       artifact_path:
         required: true
         type: string
+      ui_artifact_name:
+        description: Immutable console UI producer artifact.
+        required: true
+        type: string
       binary_name:
         required: false
         default: mesh-llm
@@ -80,6 +84,14 @@ on:
         required: false
 
 env:
+  CACHE_NAMESPACE: mesh-llm
+  # These values are part of the Rust SDK smoke cache ABI. Keep the target
+  # and linker/profile recipe separate from the action's own rustc/manifest
+  # suffix so a compatible cache can never cross a toolchain or image epoch.
+  SDK_RUST_TARGET: x86_64-unknown-linux-gnu
+  SDK_RUST_IMAGE_DIGEST: 8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+  SDK_RUST_TOOLCHAIN_EPOCH: rust-stable-2026-07-16-4cda84d5c5c54efe2404f9d843567869ab1699d4
+  SDK_RUST_PROFILE_LINKER: debug-fuse-ld-lld
   MODEL_URL: ${{ inputs.model_url }}
   MODEL_FILE: ${{ inputs.model_file }}
 
@@ -112,6 +124,15 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+
+      - name: Download immutable UI distribution
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ inputs.ui_artifact_name }}
+          path: crates/mesh-llm-ui/dist
+
+      - name: Verify UI distribution input
+        run: test -s crates/mesh-llm-ui/dist/index.html
 
       - name: Validate bounded SDK smoke inputs
         shell: bash
@@ -231,6 +252,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
         if: ${{ inputs.sdk_kind == 'rust' }}
 
+      - if: ${{ inputs.sdk_kind == 'rust' }}
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 snapshot 2026-03-12
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          # Swatinem/rust-cache appends its runner OS/arch, rustc/environment,
+          # and Cargo manifest/lock hashes to this prefix. The explicit prefix
+          # carries the boundaries that the action cannot infer: the pinned
+          # Linux image, toolchain epoch, test profile/linker recipe, and the
+          # workflow/scripts/cache-version inputs that define this smoke lane.
+          prefix-key: ${{ format('{0}-sdk-rust-cargo-v1-{1}-{2}-{3}-image-{4}-{5}-{6}-{7}', env.CACHE_NAMESPACE, runner.os, runner.arch, env.SDK_RUST_TARGET, env.SDK_RUST_IMAGE_DIGEST, env.SDK_RUST_TOOLCHAIN_EPOCH, env.SDK_RUST_PROFILE_LINKER, hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', '**/Cargo.toml', 'scripts/ci-rust-sdk-smoke.sh', 'scripts/ci-sdk-fixture.sh', 'scripts/ci-prepare-native-runtime.sh', 'scripts/package-sdk-console-assets.sh', 'scripts/check-sdk-contract.sh', 'scripts/verify-sdk-console-assets.sh', '.github/workflows/sdk-smoke.yml')) }}
+          shared-key: ci-sdk-smoke-rust
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+
       - name: Verify prebuilt smoke environment
         if: ${{ inputs.sdk_kind != 'swift' }}
         run: verify-runner-image public cpu
@@ -258,7 +294,7 @@ jobs:
 
       - name: Rust SDK smoke test
         if: ${{ inputs.sdk_kind == 'rust' }}
-        run: scripts/ci-rust-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"
+        run: scripts/ci-rust-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}" --skip-build
 
       - name: Kotlin SDK smoke test
         if: ${{ inputs.sdk_kind == 'kotlin' }}
@@ -270,7 +306,8 @@ jobs:
             "${{ inputs.kotlin_artifact_path }}" \
             "${{ inputs.kotlin_artifact_target }}" \
             "${{ inputs.kotlin_artifact_backend }}" \
-            "${{ inputs.kotlin_artifact_profile }}"
+            "${{ inputs.kotlin_artifact_profile }}" \
+            --skip-build
 
       - name: Swift SDK smoke test
         if: ${{ inputs.sdk_kind == 'swift' }}
@@ -286,4 +323,5 @@ jobs:
             "$HOME/.models/${{ inputs.model_file }}" \
             "$SWIFT_INPUT_ARCHIVE" \
             "$SWIFT_INPUT_MODE" \
-            "$SWIFT_INPUT_BINDING"
+            "$SWIFT_INPUT_BINDING" \
+            --skip-build

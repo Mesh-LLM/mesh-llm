@@ -15,7 +15,7 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 4
+tip, and activations flow through the stage chain. Stage protocol generation 6
 is a compatibility-breaking contract: prediction-bearing replies return
 directly from the final/readout tip to the driver-facing stage instead of being
 relayed back through intermediate stages. Middle-out is the prefill optimization
@@ -103,11 +103,11 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-5 stage protocol.
-  Stage compatibility requires `stage-generation-5`; direct prediction return and
+- `serve-binary` participates in the breaking generation-6 stage protocol.
+  Stage compatibility requires `stage-generation-6`; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-5 topology.
+  generation-6 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -123,13 +123,18 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-5 prediction returns flow directly from the final stage to stage 0.
+  generation-6 prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
   `--generation-concurrency` controls how many chat generation requests may run
-  at once; keep it explicit in benchmark reports because it can serialize or
-  expose concurrent stage-chain behavior.
+  at once and defaults to the config's KV-derived `lane_count`.
+  `--generation-queue-capacity` independently bounds additional waiting
+  requests (default `clamp(8 * lanes, 16, 256)`), while
+  `--generation-admission-timeout-secs` bounds predicted and actual queue wait
+  (default 60 seconds). Embedded serving exposes the same controls with the
+  `--openai-` prefix. Keep all three explicit in benchmark reports because
+  they determine active execution, overload behavior, and tail latency.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface
   telemetry when `--metrics-otlp-grpc` and `--telemetry-level debug` are set.
   The spans account for the full request path visible to the backend:
@@ -173,10 +178,19 @@ deadline handling.
   the first prefill chunk, `256` for the second, and repeats `384` afterward.
   `adaptive-ramp` starts at `--openai-prefill-adaptive-start`, grows by
   `--openai-prefill-adaptive-step` up to `--openai-prefill-adaptive-max` when
-  downstream wait is hidden under stage0 compute/write, and backs off when
-  downstream wait is exposed. Prefill spans record the selected policy,
-  schedule/adaptive knobs, and min/max observed chunk sizes so reports can
-  compare fixed, scheduled, and adaptive runs.
+  downstream transport is hidden under the slowest measured stage, and backs
+  off when transport is exposed. Each stage folds its maximum prefill compute
+  sample into the deferred ACK statistics; stage0 combines those samples with
+  its own compute/write/wait timing, updates a lane-pool EWMA, and seeds the
+  next request from that calibrated bottleneck. The measured slowest-stage
+  token rate derives a chunk ceiling for
+  `--openai-prefill-adaptive-target-ms` (100 ms by default), rounded down to an
+  adaptive step. The configured start is the minimum feasible chunk and
+  `adaptive_max` remains the hard starvation ceiling, so calibration cannot
+  weaken the scheduler's bounded-prefill decode-progress guarantee. Prefill
+  and calibration spans record the selected
+  policy, schedule/adaptive knobs, min/max observed chunk sizes, bottleneck
+  stage, bottleneck duration, and transport-to-compute ratios.
 - Embedded stage-0 OpenAI serving can run neural draft speculative decoding with
   `--openai-draft-model-path`, `--openai-speculative-window`, and
   `--openai-adaptive-speculative-window`. The draft model runs locally in the

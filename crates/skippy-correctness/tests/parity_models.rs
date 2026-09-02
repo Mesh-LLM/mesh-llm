@@ -5,7 +5,7 @@ mod harness;
 
 use harness::{
     activation_handoff_matches_full_model, assert_manifest_row_complete,
-    cache_state_restore_matches_recompute, p0_p1_manifest_rows,
+    cache_state_restore_matches_recompute, mixed_iteration_matches_serial, p0_p1_manifest_rows,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,6 +39,12 @@ macro_rules! family_module {
             #[ignore = "downloads and loads model-family GGUF/package artifacts"]
             fn cache_state_restore_matches_recompute() {
                 super::cache_state_restore_matches_recompute(SPEC).unwrap();
+            }
+
+            #[test]
+            #[ignore = "downloads and loads model-family GGUF/package artifacts"]
+            fn mixed_iteration_matches_serial() {
+                super::mixed_iteration_matches_serial(SPEC).unwrap();
             }
         }
     };

@@ -1,14 +1,39 @@
 //! Logging initialization shared by the embedded SDK startup boundary.
 
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
-/// Validate an embedded configuration before starting its worker thread.
+/// Validate an embedded configuration and retain the exact validated image.
 ///
-/// This keeps configuration errors attributable to the SDK caller rather than
-/// reducing them to an early worker-thread exit during readiness polling.
-pub(crate) fn validate_embedded_config(config_path: Option<&Path>) -> Result<()> {
-    crate::plugin::load_config(config_path).map(|_| ())
+/// Embedded startup crosses a worker-thread boundary and several subsystems
+/// load configuration independently. Snapshotting the bytes after validation
+/// ensures every startup load observes the image accepted by the SDK caller,
+/// even if the original pathname changes while the worker starts.
+pub(crate) fn snapshot_validated_config(config_path: Option<&Path>) -> Result<NamedTempFile> {
+    let resolved_path = crate::plugin::config_path(config_path)?;
+    let raw = if resolved_path.exists() {
+        std::fs::read(&resolved_path)
+            .with_context(|| format!("Failed to read config {}", resolved_path.display()))?
+    } else {
+        Vec::new()
+    };
+    let raw_text = std::str::from_utf8(&raw)
+        .with_context(|| format!("Invalid config {}", resolved_path.display()))?;
+    crate::plugin::parse_config_toml(raw_text)
+        .with_context(|| format!("Invalid config {}", resolved_path.display()))?;
+
+    let mut snapshot = NamedTempFile::new().context("create embedded config snapshot")?;
+    snapshot
+        .write_all(&raw)
+        .context("write embedded config snapshot")?;
+    snapshot.flush().context("flush embedded config snapshot")?;
+    Ok(snapshot)
+}
+
+pub(crate) fn snapshot_path(snapshot: &NamedTempFile) -> PathBuf {
+    snapshot.path().to_path_buf()
 }
 
 /// Install the host-owned logging foundation for an embedded runtime.
@@ -39,6 +64,31 @@ mod tests {
             format!("[logging]\nenabled = {enabled}\napplication_state_root = \"{root}\"\n"),
         )
         .expect("write embedded logging config");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn validated_config_snapshot_is_stable_when_source_changes() {
+        let temporary_directory = tempfile::tempdir().expect("temporary config directory");
+        let config_path = temporary_directory.path().join("mesh-llm.toml");
+        let validated_root = temporary_directory.path().join("validated-logging");
+        let swapped_root = temporary_directory.path().join("swapped-logging");
+        write_logging_config(&config_path, true, &validated_root);
+
+        let snapshot = snapshot_validated_config(Some(&config_path))
+            .expect("snapshot validated embedded config");
+        write_logging_config(&config_path, true, &swapped_root);
+        initialize_embedded_logging(Some(snapshot.path()))
+            .await
+            .expect("initialize logging from validated snapshot");
+
+        assert_eq!(
+            crate::logging_foundation()
+                .expect("installed foundation")
+                .app_state_root(),
+            validated_root
+        );
+        assert!(!swapped_root.exists());
     }
 
     #[tokio::test]

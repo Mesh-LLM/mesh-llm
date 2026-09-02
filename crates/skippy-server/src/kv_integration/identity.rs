@@ -166,7 +166,7 @@ mod tests {
         StageConfig {
             run_id: "run".to_string(),
             topology_id: "topology".to_string(),
-            model_id: "org/model:Q4_K_M".to_string(),
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
             package_ref: None,
             manifest_sha256: None,
             source_model_path: None,
@@ -230,7 +230,7 @@ mod tests {
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             topology_id: "topology".to_string(),
-            model_id: Some("org/model:Q4_K_M".to_string()),
+            model_id: Some("hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string()),
             tokenizer_id: None,
             chat_template_id: Some("template".to_string()),
             seq: Some(1),
@@ -306,6 +306,7 @@ mod tests {
     fn exact_state_radix_finds_cached_non_grid_prefix_length() {
         let config = StageConfig {
             ctx_size: 8192,
+            model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
                 payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 256,
@@ -354,6 +355,7 @@ mod tests {
     #[test]
     fn exact_shared_checkpoint_rejects_empty_zero_minimum_checkpoint() {
         let config = StageConfig {
+            model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
                 payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 0,

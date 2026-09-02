@@ -2,9 +2,9 @@ use std::io;
 
 use super::invalid_data;
 
-// v13 extends the sampling payload with the full configurable sampler chain. Stage peers must be
-// upgraded together so older readers reject the changed payload contract.
-pub const STAGE_STATE_VERSION: i32 = 13;
+// v14 expands the fixed StageReplyStats payload from 23 to 27 i64 fields. Stage peers must be
+// upgraded together so older readers reject the changed wire contract before decoding it.
+pub const STAGE_STATE_VERSION: i32 = 14;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -262,6 +262,11 @@ pub struct StageSamplingConfig {
     pub ignore_eos: bool,
 }
 
+pub mod sampling_flags {
+    pub const ENABLED: u32 = 1 << 0;
+    pub const IGNORE_EOS: u32 = 1 << 1;
+}
+
 impl Default for StageSamplingConfig {
     fn default() -> Self {
         Self {
@@ -308,7 +313,7 @@ impl Default for StageSamplingConfig {
 
 impl StageSamplingConfig {
     pub fn enabled(&self) -> bool {
-        self.flags != 0
+        (self.flags & sampling_flags::ENABLED) != 0
     }
 }
 
@@ -624,6 +629,10 @@ pub struct StageReplyStats {
     pub prefill_edge_stage_index: i64,
     pub prefill_edge_activation_bytes_max: i64,
     pub prefill_edge_observation_count: i64,
+    pub prefill_compute_us_at_slowest_rate: i64,
+    pub prefill_compute_stage_index: i64,
+    pub prefill_compute_token_count_at_slowest_rate: i64,
+    pub prefill_compute_observation_count: i64,
 }
 
 impl StageReplyStats {
@@ -659,6 +668,18 @@ impl StageReplyStats {
             self.prefill_edge_activation_bytes_max = other.prefill_edge_activation_bytes_max;
         }
         self.prefill_edge_observation_count += other.prefill_edge_observation_count;
+        if better_prefill_calibration_sample(
+            other.prefill_compute_us_at_slowest_rate,
+            other.prefill_compute_token_count_at_slowest_rate,
+            self.prefill_compute_us_at_slowest_rate,
+            self.prefill_compute_token_count_at_slowest_rate,
+        ) {
+            self.prefill_compute_us_at_slowest_rate = other.prefill_compute_us_at_slowest_rate;
+            self.prefill_compute_stage_index = other.prefill_compute_stage_index;
+            self.prefill_compute_token_count_at_slowest_rate =
+                other.prefill_compute_token_count_at_slowest_rate;
+        }
+        self.prefill_compute_observation_count += other.prefill_compute_observation_count;
     }
 
     pub fn observe_prefill_edge_transport(
@@ -682,6 +703,28 @@ impl StageReplyStats {
         self.prefill_edge_observation_count = self.prefill_edge_observation_count.saturating_add(1);
     }
 
+    pub fn observe_prefill_compute(
+        &mut self,
+        stage_index: u32,
+        compute_us: i64,
+        token_count: usize,
+    ) {
+        let compute_us = compute_us.max(0);
+        let token_count = i64::try_from(token_count).unwrap_or(i64::MAX).max(1);
+        if better_prefill_calibration_sample(
+            compute_us,
+            token_count,
+            self.prefill_compute_us_at_slowest_rate,
+            self.prefill_compute_token_count_at_slowest_rate,
+        ) {
+            self.prefill_compute_us_at_slowest_rate = compute_us;
+            self.prefill_compute_stage_index = i64::from(stage_index);
+            self.prefill_compute_token_count_at_slowest_rate = token_count;
+        }
+        self.prefill_compute_observation_count =
+            self.prefill_compute_observation_count.saturating_add(1);
+    }
+
     pub fn is_empty(self) -> bool {
         self.kv_lookup_hits == 0
             && self.kv_lookup_misses == 0
@@ -701,7 +744,30 @@ impl StageReplyStats {
             && self.verify_window_token_count == 0
             && self.verify_window_max_tokens == 0
             && self.prefill_edge_observation_count == 0
+            && self.prefill_compute_observation_count == 0
     }
+}
+
+fn better_prefill_calibration_sample(
+    candidate_us: i64,
+    candidate_tokens: i64,
+    current_us: i64,
+    current_tokens: i64,
+) -> bool {
+    if candidate_us <= 0 || candidate_tokens <= 0 {
+        return false;
+    }
+    if current_us <= 0 || current_tokens <= 0 {
+        return true;
+    }
+    // Compare stages at the largest representative chunk size. A short final
+    // remainder pays fixed launch overhead and can look much slower per token
+    // than the full chunks that the calibration is intended to bound.
+    if candidate_tokens != current_tokens {
+        return candidate_tokens > current_tokens;
+    }
+    i128::from(candidate_us) * i128::from(current_tokens)
+        > i128::from(current_us) * i128::from(candidate_tokens)
 }
 
 fn expected_phase(kind: WireMessageKind) -> WireStagePhase {

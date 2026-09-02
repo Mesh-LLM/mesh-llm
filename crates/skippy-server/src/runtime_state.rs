@@ -9,10 +9,10 @@ use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
-    GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchPhase, IterationBatchRequest, MediaInput,
-    MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
-    RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel,
-    StageSession, TokenSignal, parse_cache_type,
+    GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput, IterationBatchPhase,
+    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
+    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
+    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -60,6 +60,8 @@ pub struct RuntimeState {
     max_idle_sessions: Option<usize>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    #[cfg(test)]
+    modelless_for_test: bool,
 }
 
 struct RuntimeLaneSession {
@@ -166,11 +168,22 @@ impl RuntimeState {
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
+            modelless_for_test: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_session_tokens_for_test(&mut self, session_id: &str, token_count: u64) {
+        self.session_token_counts
+            .insert(session_id.to_string(), token_count);
     }
 
     pub fn lane_count(&self) -> u32 {
         self.lane_count
+    }
+
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     /// Total KV cell pool available to this context, in tokens (`n_ctx`).
@@ -181,6 +194,11 @@ impl RuntimeState {
     /// configured default.
     pub fn kv_pool_tokens(&self) -> u32 {
         self.ctx_size
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_modelless_for_test(&self) -> bool {
+        self.modelless_for_test
     }
 }
 
@@ -237,6 +255,8 @@ pub fn load_runtime_with_overrides(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
 }
 
@@ -287,6 +307,8 @@ pub fn load_runtime_with_overrides_and_open_events(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
 }
 

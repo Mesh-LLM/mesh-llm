@@ -752,8 +752,7 @@ impl OpenAiHookPolicy for DenyingHangOnTerminalPolicy {
 /// `guard.fire` gives it the same exactly-once + `Drop`-fallback
 /// guarantee as the admitted path.
 #[tokio::test]
-async fn cancelling_a_denied_requests_terminal_delivery_still_fires_exactly_one_terminal_event()
-{
+async fn cancelling_a_denied_requests_terminal_delivery_still_fires_exactly_one_terminal_event() {
     let backend = Arc::new(RecordingBackend {
         seen: Mutex::new(None),
     });

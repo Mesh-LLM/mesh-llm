@@ -59,7 +59,7 @@ impl PrefillChunkSchedule {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum PrefillChunkPolicy {
     Fixed {
         chunk_size: usize,
@@ -73,6 +73,7 @@ pub(super) enum PrefillChunkPolicy {
         start: usize,
         step: usize,
         max: usize,
+        target_ms: f64,
     },
 }
 
@@ -83,6 +84,7 @@ pub(super) struct PrefillChunkPolicyArgs<'a> {
     pub(super) adaptive_start: usize,
     pub(super) adaptive_step: usize,
     pub(super) adaptive_max: usize,
+    pub(super) adaptive_target_ms: f64,
     pub(super) schedule_arg: &'static str,
     pub(super) policy_arg: &'static str,
 }
@@ -94,10 +96,26 @@ pub(super) struct PrefillChunkObservation {
     pub(super) downstream_wait_ms: f64,
 }
 
+pub(super) fn representative_prefill_compute_sample(
+    current_ms: f64,
+    current_tokens: usize,
+    candidate_ms: f64,
+    candidate_tokens: usize,
+) -> (f64, usize) {
+    if candidate_tokens > current_tokens
+        || (candidate_tokens == current_tokens && candidate_ms > current_ms)
+    {
+        (candidate_ms, candidate_tokens)
+    } else {
+        (current_ms, current_tokens)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PrefillChunkPlanner {
     pub(super) policy: PrefillChunkPolicy,
     pub(super) next_adaptive_size: usize,
+    duration_ceiling: Option<usize>,
 }
 
 impl PrefillChunkPolicy {
@@ -134,9 +152,11 @@ impl PrefillChunkPolicy {
                     || args.adaptive_step == 0
                     || args.adaptive_max == 0
                     || args.adaptive_start > args.adaptive_max
+                    || !args.adaptive_target_ms.is_finite()
+                    || args.adaptive_target_ms <= 0.0
                 {
                     bail!(
-                        "{} adaptive-ramp requires positive start/step/max with start <= max",
+                        "{} adaptive-ramp requires positive start/step/max/target-ms with start <= max",
                         args.policy_arg
                     );
                 }
@@ -145,6 +165,7 @@ impl PrefillChunkPolicy {
                     start: args.adaptive_start,
                     step: args.adaptive_step,
                     max: args.adaptive_max,
+                    target_ms: args.adaptive_target_ms,
                 })
             }
             other => bail!(
@@ -163,6 +184,7 @@ impl PrefillChunkPolicy {
         PrefillChunkPlanner {
             policy: self.clone(),
             next_adaptive_size,
+            duration_ceiling: None,
         }
     }
 
@@ -193,11 +215,15 @@ impl PrefillChunkPolicy {
         }
     }
 
-    pub(super) fn adaptive_params(&self) -> Option<(usize, usize, usize)> {
+    pub(super) fn adaptive_params(&self) -> Option<(usize, usize, usize, f64)> {
         match self {
             Self::AdaptiveRamp {
-                start, step, max, ..
-            } => Some((*start, *step, *max)),
+                start,
+                step,
+                max,
+                target_ms,
+                ..
+            } => Some((*start, *step, *max, *target_ms)),
             _ => None,
         }
     }
@@ -215,8 +241,43 @@ impl PrefillChunkPlanner {
             PrefillChunkPolicy::AdaptiveRamp {
                 fixed_chunk_size, ..
             } if chunk_index == 0 && prefill_token_count <= *fixed_chunk_size => *fixed_chunk_size,
-            PrefillChunkPolicy::AdaptiveRamp { .. } => self.next_adaptive_size,
+            PrefillChunkPolicy::AdaptiveRamp { .. } => self
+                .duration_ceiling
+                .map_or(self.next_adaptive_size, |ceiling| {
+                    self.next_adaptive_size.min(ceiling)
+                }),
         }
+    }
+
+    pub(super) fn calibrate_slowest_stage_rate(&mut self, compute_ms_per_token: f64) {
+        let PrefillChunkPolicy::AdaptiveRamp {
+            start,
+            step,
+            max,
+            target_ms,
+            ..
+        } = &self.policy
+        else {
+            return;
+        };
+        if !compute_ms_per_token.is_finite() || compute_ms_per_token <= 0.0 {
+            return;
+        }
+        let predicted_tokens = (*target_ms / compute_ms_per_token).floor();
+        let predicted_tokens = if predicted_tokens.is_finite() && predicted_tokens > 0.0 {
+            predicted_tokens as usize
+        } else {
+            *start
+        };
+        let stepped = predicted_tokens
+            .saturating_sub(*start)
+            .checked_div(*step)
+            .unwrap_or(0)
+            .saturating_mul(*step)
+            .saturating_add(*start);
+        let ceiling = stepped.clamp(*start, *max);
+        self.duration_ceiling = Some(ceiling);
+        self.next_adaptive_size = self.next_adaptive_size.min(ceiling);
     }
 
     pub(super) fn observe(&mut self, observation: PrefillChunkObservation) {
@@ -236,6 +297,9 @@ impl PrefillChunkPlanner {
         } else if downstream_exposed {
             self.next_adaptive_size = self.next_adaptive_size.saturating_sub(*step).max(*start);
         }
+        if let Some(ceiling) = self.duration_ceiling {
+            self.next_adaptive_size = self.next_adaptive_size.min(ceiling);
+        }
     }
 
     #[cfg(test)]
@@ -251,6 +315,17 @@ impl PrefillChunkPlanner {
 pub(super) struct EmbeddedPrefillDrain {
     pub(super) drained_replies: usize,
     pub(super) downstream_wait_ms: f64,
+    pub(super) downstream_wait_max_ms: f64,
+}
+
+impl EmbeddedPrefillDrain {
+    pub(super) fn absorb(&mut self, current: Self) {
+        self.drained_replies = self.drained_replies.saturating_add(current.drained_replies);
+        self.downstream_wait_ms += current.downstream_wait_ms;
+        self.downstream_wait_max_ms = self
+            .downstream_wait_max_ms
+            .max(current.downstream_wait_max_ms);
+    }
 }
 
 pub(super) fn drain_one_embedded_prefill_reply(
@@ -275,6 +350,7 @@ pub(super) fn drain_one_embedded_prefill_reply(
     Ok(EmbeddedPrefillDrain {
         drained_replies: 1,
         downstream_wait_ms,
+        downstream_wait_max_ms: downstream_wait_ms,
     })
 }
 
@@ -286,10 +362,7 @@ pub(super) fn drain_embedded_prefill_replies(
     let mut drained = EmbeddedPrefillDrain::default();
     while *pending_prefill_replies > 0 {
         let current = drain_one_embedded_prefill_reply(downstream, pending_prefill_replies, stats)?;
-        drained.drained_replies = drained
-            .drained_replies
-            .saturating_add(current.drained_replies);
-        drained.downstream_wait_ms += current.downstream_wait_ms;
+        drained.absorb(current);
     }
     Ok(drained)
 }

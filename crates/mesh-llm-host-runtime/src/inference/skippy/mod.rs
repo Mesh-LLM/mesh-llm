@@ -6,6 +6,7 @@ mod family_policy;
 mod hash_cache;
 mod hooks;
 mod kv_cache;
+mod local_source;
 mod materialization;
 pub(crate) mod metal_pipeline_cache;
 mod package;
@@ -52,6 +53,12 @@ pub(crate) use family_policy::{
 };
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
+#[cfg(test)]
+pub(crate) use local_source::local_source_required_for_model;
+pub(crate) use local_source::{
+    apply_verified_local_source, effective_local_source_required, is_content_addressed_gguf_ref,
+    register_local_source_policy, unregister_local_source_policy, verify_registered_content_source,
+};
 pub use materialization::{
     configure_materialized_stage_cache, is_layer_package_ref, materialize_stage_config,
     materialized_stage_cache_dir, materialized_stages_for_sources,
@@ -60,7 +67,8 @@ pub use materialization::{
 };
 pub(crate) use package::direct_gguf_source_paths;
 pub use package::{
-    SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
+    SkippyPackageIdentity, identity_from_layer_package, synthetic_content_addressed_gguf_package,
+    synthetic_direct_gguf_package,
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
@@ -524,12 +532,19 @@ fn embedded_openai_args_from(
         request_defaults: embedded_args.request_defaults,
         generation_concurrency: embedded_args.generation_concurrency,
         continuous_batching: embedded_args.continuous_batching,
+        adaptive_generation_min_concurrency: None,
+        generation_queue_capacity: embedded_args
+            .generation_concurrency
+            .saturating_mul(8)
+            .clamp(16, 256),
+        generation_admission_timeout_secs: 60,
         prefill_chunk_size: embedded_args.prefill_chunk_size,
         prefill_chunk_policy: embedded_args.prefill_chunk_policy,
         prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
         prefill_adaptive_start: embedded_args.prefill_adaptive_start,
         prefill_adaptive_step: embedded_args.prefill_adaptive_step,
         prefill_adaptive_max: embedded_args.prefill_adaptive_max,
+        prefill_adaptive_target_ms: embedded_args.prefill_adaptive_target_ms,
         draft_model_path: embedded_args.draft_model_path,
         speculative_window: embedded_args.speculative_window,
         adaptive_speculative_window: embedded_args.adaptive_speculative_window,

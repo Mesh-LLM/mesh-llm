@@ -31,6 +31,30 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
+`nightly-competitive-benchmark.yml` is an opt-in daily or explicit manual
+trusted-main benchmark on the persistent Linux `white` runner. Placement uses
+the fixed `[self-hosted, Linux, X64, cuda]` label set and then fails closed
+unless `RUNNER_NAME` is exactly `white`. It has read-only permissions, never
+accepts a ref or runner label, installs no tools, consumes pre-baked inputs
+selected by `MESH_NIGHTLY_COMPETITIVE_*` repository variables, and retains
+complete or partial benchmark/report evidence for 30 days. The pre-baked
+Hugging Face CLI is selected explicitly by
+`MESH_NIGHTLY_COMPETITIVE_HF_CLI`; it is required only when history is enabled.
+The workflow captures stable GPU/driver identity plus observed clocks and
+temperature.
+When `MESH_PERFORMANCE_HISTORY_ENABLED=1`, it requires the dataset repo
+variable and write-token secret, downloads prior immutable JSONL shards,
+verifies the checked-in schema, emits an exact-cohort regression report, and
+appends one source/run-addressed shard. Thresholds and promotion remain
+report-only reviewed decisions.
+`nightly-stability.yml` calls the fixed GitHub-hosted
+`nightly-stability-run.yml`; the reusable run executes both the general
+stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
+both evidence sets, and fails after both have had a chance to run.
+`nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted schedule
+for a much larger deterministic radix/blob ownership corpus. It uses the
+pinned `public cpu` image, has no secrets, records exact seed/step budgets and
+source SHA, and uploads the reproducible failure log.
 `llama-upstream-canary.yml` runs only on its daily schedule or an explicit
 manual dispatch; it is not ordinary push or PR CI. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
@@ -45,16 +69,18 @@ shard, and requires every shard that carries `*.block_count` and
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-all-family shard while retaining the plan as evidence. The runner's `.env` exports
+selected-family shard while retaining the plan as evidence. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
 local disk and moves each repo to NFS). The workflow builds its four
 certification binaries before the manifest lanes; the family battery builds
 them once itself unless `--skip-build` is selected, in which case it verifies
-that every binary already exists. A manual dispatch may set `force_certify` to
-run build, smoke, and the full family battery when the upstream SHA is
-unchanged. Before any certification starts, every selected GGUF is resolved
+that every binary already exists. A scheduled unchanged pin selects the four
+`nightly` cache-mechanism sentinels (Qwen3 dense, Falcon-H1, Qwen3Next, and
+Mamba). A changed pin selects `llama-bump`; a manual dispatch may set
+`force_certify` to select `manual-full`. Both latter cadences retain the full
+family battery. Before any certification starts, every selected GGUF is resolved
 directly by the immutable snapshot SHA checked into
 `ci/llama-canary/family-certified.json`. The runtime preflight records the
 revisions, verifies all shard/tensor scans and declared runtime/MTP layer
@@ -121,8 +147,8 @@ removable after this branch's runner contract is active on protected main.
 | `ci-linux-lane.yml` | Linux host/runtime/product/Rust/SDK/smoke graph with one platform-local UI producer |
 | `ci-macos-lane.yml` | macOS host/runtime/product/platform/Swift/Metal graph with one platform-local UI producer |
 | `ci-windows-lane.yml` | Windows host/runtime/product/platform graph with one platform-local UI producer |
-| `ci-quality-slice.yml` | Contracts, format, Clippy and CLI/docs guard; additive protected authority sentinel |
-| `ci-web-slice.yml` | Console quality, console Playwright E2E, and public website build |
+| `ci-quality-slice.yml` | Contracts, format, Clippy and generated CLI inventory freshness; additive protected authority sentinel |
+| `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture |
@@ -131,13 +157,13 @@ removable after this branch's runner contract is active on protected main.
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
-| `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls |
+| `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
 | `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke |
-| `sdk-smoke.yml` | Artifact-based SDK consumers |
+| `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
 
 All workflow calls use typed, bounded semantic inputs. Credential-bearing smoke
@@ -178,6 +204,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `website` | `public web` |
 | `website-pages.yml` | `build` | `public web` |
 | `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (several CUDA/ROCm/Vulkan build/compose rows) | per-backend `public` digests | pre-existing, unrelated to this containerization work; each row pins its own backend digest via `ci/slices.yml` / job matrix, not a shared convention |
 
 `public cpu` and `public web` are separate image builds (the latter adds

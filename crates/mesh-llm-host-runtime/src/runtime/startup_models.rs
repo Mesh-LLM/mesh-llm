@@ -19,6 +19,11 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+mod local_required;
+
+use local_required::resolve_local_required_startup_model;
+pub(super) use local_required::validate_local_required_source;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 
 pub(super) struct StartupMeshCreationState {
@@ -47,6 +52,7 @@ pub(super) struct StartupModelSpec {
     pub(super) n_batch: Option<u32>,
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
+    pub(super) local_source_required: bool,
     pub(super) profile: String,
 }
 
@@ -80,6 +86,7 @@ pub(super) struct StartupModelPlan {
     pub(super) n_batch: Option<u32>,
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
+    pub(super) local_source_required: bool,
     pub(super) profile: String,
 }
 
@@ -108,7 +115,7 @@ pub(super) fn resolve_owner_passphrase(path: &Path) -> Result<Option<Zeroizing<S
 
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
         let prompt = format!("Enter owner keystore passphrase for {}: ", path.display());
-        let passphrase = rpassword::prompt_password_stderr(&prompt)?;
+        let passphrase = rpassword::prompt_password(&prompt)?;
         return Ok(Some(Zeroizing::new(passphrase)));
     }
 
@@ -450,7 +457,11 @@ pub(super) async fn prepare_runtime_startup(
     // management, OpenAI, plugin, and control surfaces.
     let requested_model_names = startup_specs
         .iter()
-        .map(|spec| spec.model_ref.to_string_lossy().into_owned())
+        .map(|spec| {
+            spec.declared_ref
+                .clone()
+                .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned())
+        })
         .collect();
     Ok(Some(PreparedRuntimeStartup {
         startup_specs,
@@ -671,6 +682,7 @@ fn effective_startup_model_config(
         model_fit: profile_entry.model_fit,
         hardware: profile_entry.hardware,
         throughput: profile_entry.throughput,
+        skippy: profile_entry.skippy,
         ..plugin::ModelConfigEntry::default()
     }
 }
@@ -762,6 +774,16 @@ fn has_explicit_startup_device(options: &RuntimeOptions) -> bool {
     })
 }
 
+pub(super) fn skippy_local_source_required(
+    model_skippy: Option<&plugin::SkippyConfig>,
+    default_skippy: Option<&plugin::SkippyConfig>,
+) -> bool {
+    model_skippy
+        .and_then(|skippy| skippy.source_policy.as_deref())
+        .or_else(|| default_skippy.and_then(|skippy| skippy.source_policy.as_deref()))
+        == Some("local-required")
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -771,6 +793,10 @@ pub(super) fn build_startup_model_specs(
     }
 
     let mut specs = Vec::new();
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
     if cli_has_explicit_models(options) {
         let defaults = config.defaults.as_ref();
         // `--gguf <path> --model <alias>` names the local file rather than
@@ -782,6 +808,11 @@ pub(super) fn build_startup_model_specs(
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
             let effective = effective_startup_model_config(&alias, None, defaults);
+            let local_source_required =
+                skippy_local_source_required(effective.skippy.as_ref(), None);
+            if local_source_required {
+                validate_local_required_source(path, &alias)?;
+            }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: Some(alias),
@@ -802,6 +833,7 @@ pub(super) fn build_startup_model_specs(
                 flash_attention: effective
                     .flash_attention
                     .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
                 profile: effective.derived_profile(),
             });
             return Ok(specs);
@@ -813,6 +845,11 @@ pub(super) fn build_startup_model_specs(
             }
             let effective =
                 effective_startup_model_config(&path.display().to_string(), None, defaults);
+            let local_source_required =
+                skippy_local_source_required(effective.skippy.as_ref(), None);
+            if local_source_required {
+                validate_local_required_source(path, path.to_str().unwrap_or("local model"))?;
+            }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: None,
@@ -830,6 +867,7 @@ pub(super) fn build_startup_model_specs(
                 flash_attention: effective
                     .flash_attention
                     .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
                 profile: effective.derived_profile(),
             });
         }
@@ -837,6 +875,13 @@ pub(super) fn build_startup_model_specs(
             let matching_config = matching_config_model(config, model)?;
             let effective =
                 effective_startup_model_config(&model.display().to_string(), None, defaults);
+            let local_source_required = skippy_local_source_required(
+                matching_config.and_then(|model| model.skippy.as_ref()),
+                default_skippy,
+            );
+            if local_source_required {
+                validate_local_required_source(model, model.to_str().unwrap_or("local model"))?;
+            }
             let persisted_gpu_id = matching_config
                 .and_then(|model| configured_model_gpu_id(config, model))
                 .or_else(|| configured_default_gpu_id(config));
@@ -857,6 +902,7 @@ pub(super) fn build_startup_model_specs(
                 flash_attention: effective
                     .flash_attention
                     .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
                 profile: effective.derived_profile(),
             });
         }
@@ -882,6 +928,8 @@ pub(super) fn build_startup_model_specs(
     for model in &config.models {
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
+        let local_source_required =
+            skippy_local_source_required(model.skippy.as_ref(), default_skippy);
         let configured_model_path = model
             .hardware
             .as_ref()
@@ -916,6 +964,9 @@ pub(super) fn build_startup_model_specs(
             } else {
                 (PathBuf::from(model.model.clone()), None)
             };
+        if local_source_required {
+            validate_local_required_source(&model_ref, &model.model)?;
+        }
         specs.push(StartupModelSpec {
             model_ref,
             declared_ref: alias.or(fallback_declared_ref),
@@ -933,6 +984,7 @@ pub(super) fn build_startup_model_specs(
             flash_attention: effective
                 .flash_attention
                 .unwrap_or(FlashAttentionType::Auto),
+            local_source_required,
             profile: effective.derived_profile(),
         });
     }
@@ -980,6 +1032,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
+            local_source_required: spec.local_source_required,
             profile: spec.profile.clone(),
         });
     }
@@ -1008,6 +1061,10 @@ async fn resolve_startup_models_with_package_discovery(
 ) -> Result<Vec<StartupModelPlan>> {
     let mut plans = Vec::with_capacity(specs.len());
     for spec in specs {
+        if spec.local_source_required {
+            plans.push(resolve_local_required_startup_model(spec)?);
+            continue;
+        }
         let requested_ref = spec
             .config_model_id
             .clone()
@@ -1070,6 +1127,7 @@ async fn resolve_startup_models_with_package_discovery(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
+            local_source_required: false,
             profile: spec.profile.clone(),
         });
     }

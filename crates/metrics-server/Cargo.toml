@@ -10,7 +10,7 @@ axum = "0.8"
 clap.workspace = true
 rusqlite = { version = "0.37", features = ["bundled"] }
 skippy-metrics = { path = "../skippy-metrics" }
-opentelemetry-proto = "0.31.0"
+opentelemetry-proto = "0.32.0"
 prost = "0.14"
 serde.workspace = true
 serde_json.workspace = true

@@ -324,6 +324,77 @@ mod standalone_speculative_config_tests {
     }
 
     #[test]
+    fn short_reply_classifies_as_early_reject_at_its_final_row() {
+        // A stateful sampler stops verification at the first mismatched row,
+        // so the runtime legally returns fewer predictions than the draft:
+        // the matched prefix plus the correction.
+        let decision = classify_verify_window(&[10, 20, 30, 40], &[10, 99], 0, 16, |_| Ok(false))
+            .expect("classify short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn short_reply_rejecting_the_first_row_commits_only_the_correction() {
+        let decision = classify_verify_window(&[10, 20, 30], &[99], 0, 16, |_| Ok(false))
+            .expect("classify first-row short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 0,
+                commit_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn short_reply_correction_hitting_eog_stops_the_request() {
+        let decision =
+            classify_verify_window(&[10, 20, 30, 40], &[10, 77], 0, 16, |token| Ok(token == 77))
+                .expect("classify short reply with eog correction");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn fully_matched_short_reply_commits_its_verified_prefix() {
+        let decision = classify_verify_window(&[10, 20, 30], &[10, 20], 0, 16, |_| Ok(false))
+            .expect("classify fully-matched short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 2,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_reply_for_a_nonempty_draft_is_an_error() {
+        let error = classify_verify_window(&[10, 20], &[], 0, 16, |_| Ok(false))
+            .expect_err("empty reply must error");
+        assert!(error.to_string().contains("returned no tokens"));
+    }
+
+    #[test]
     fn acceptance_threshold_accepts_exact_boundary_and_empty_window() {
         assert!(acceptance_threshold_met(2, 4, 0.5));
         assert!(acceptance_threshold_met(0, 0, 1.0));
@@ -1059,13 +1130,19 @@ pub(super) fn classify_verify_window<F>(
 where
     F: FnMut(i32) -> OpenAiResult<bool>,
 {
-    if predicted_tokens.len() < draft_tokens.len() {
+    if predicted_tokens.is_empty() && !draft_tokens.is_empty() {
         return Err(OpenAiError::backend(format!(
-            "verify window returned too few tokens: got {} expected {}",
-            predicted_tokens.len(),
+            "verify window returned no tokens for {} draft tokens",
             draft_tokens.len()
         )));
     }
+    // A reply shorter than the draft is the runtime's sampler guard, not an
+    // error: with a stateful sampler (grammar, penalties, RNG) verification
+    // stops at the first mismatched row so the sampler never absorbs tokens
+    // from the rejected suffix. Every returned token is authoritative — the
+    // matched prefix plus the correction row — so a short reply classifies
+    // exactly like a full reply whose mismatch sits at its final row.
+    let short_reply = predicted_tokens.len() < draft_tokens.len();
 
     let mut accepted_before_reject = 0usize;
     let mut commit_count = 0usize;
@@ -1096,6 +1173,18 @@ where
         };
         return Ok(VerifyWindowDecision {
             kind,
+            accepted_before_reject,
+            commit_count,
+        });
+    }
+
+    if short_reply {
+        // The runtime only truncates at a mismatched row, so the loop above
+        // normally returns from its reject arm first. If every returned row
+        // matched anyway, the committed prefix is still all verified accepts;
+        // the unverified draft tail is simply dropped and re-proposed.
+        return Ok(VerifyWindowDecision {
+            kind: VerifyWindowDecisionKind::EarlyReject,
             accepted_before_reject,
             commit_count,
         });

@@ -154,6 +154,7 @@ pub struct PeerAnnouncement {
     pub(crate) artifact_transfer_supported: bool,
     pub(crate) stage_protocol_generation_supported: bool,
     pub(crate) stage_status_list_supported: bool,
+    pub(crate) local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
@@ -255,6 +256,7 @@ pub struct PeerInfo {
     pub artifact_transfer_supported: bool,
     pub stage_protocol_generation_supported: bool,
     pub stage_status_list_supported: bool,
+    pub local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
@@ -345,6 +347,7 @@ impl PeerInfo {
             artifact_transfer_supported: ann.artifact_transfer_supported,
             stage_protocol_generation_supported: ann.stage_protocol_generation_supported,
             stage_status_list_supported: ann.stage_status_list_supported,
+            local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,

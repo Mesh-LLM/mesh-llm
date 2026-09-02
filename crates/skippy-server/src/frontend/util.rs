@@ -88,19 +88,6 @@ pub(super) fn stable_wire_id(parts: &[&[u8]]) -> u64 {
     if id == 0 { 1 } else { id }
 }
 
-pub(super) fn detokenize_bytes_with_runtime(
-    runtime: &Arc<Mutex<RuntimeState>>,
-    token_ids: &[i32],
-) -> OpenAiResult<Vec<u8>> {
-    let runtime = runtime
-        .lock()
-        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-    runtime
-        .model
-        .detokenize_bytes(token_ids)
-        .map_err(openai_backend_error)
-}
-
 pub(super) fn token_is_eog_with_runtime(
     runtime: &Arc<Mutex<RuntimeState>>,
     token_id: i32,
