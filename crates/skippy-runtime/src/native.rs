@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
@@ -14,7 +14,8 @@ use crate::runtime_events;
 use crate::session::StageSession;
 use crate::{
     ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult, ChatTemplateMessage,
-    ChatTemplateOptions, RuntimeConfig, RuntimeEvent, Status,
+    ChatTemplateOptions, LoadedModelCapability, ModelStateKind, RuntimeConfig, RuntimeEvent,
+    Status,
 };
 
 pub struct StageModel {
@@ -25,6 +26,7 @@ pub struct StageModel {
 struct StageModelInner {
     raw: *mut RawModel,
     include_output: bool,
+    capability: Option<LoadedModelCapability>,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -43,12 +45,78 @@ unsafe impl Sync for StageModelInner {}
 // Rust stage-server access is additionally serialized behind a Mutex.
 unsafe impl Send for StageModel {}
 
+fn classify_model_state(recurrent: bool, hybrid: bool, diffusion: bool) -> ModelStateKind {
+    if diffusion {
+        ModelStateKind::Diffusion
+    } else if hybrid {
+        ModelStateKind::Hybrid
+    } else if recurrent {
+        ModelStateKind::Recurrent
+    } else {
+        ModelStateKind::Dense
+    }
+}
+
+fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> {
+    let model = unsafe { skippy_ffi::skippy_model_llama_model(raw) };
+    if model.is_null() {
+        return None;
+    }
+    let architecture = loaded_model_metadata(model, "general.architecture").unwrap_or_default();
+    let state_kind = classify_model_state(
+        unsafe { skippy_ffi::llama_model_is_recurrent(model) },
+        unsafe { skippy_ffi::llama_model_is_hybrid(model) },
+        unsafe { skippy_ffi::llama_model_is_diffusion(model) },
+    );
+    Some(LoadedModelCapability {
+        architecture,
+        state_kind,
+    })
+}
+
+fn loaded_model_metadata(model: *const skippy_ffi::Opaque, key: &str) -> Result<String> {
+    let key = CString::new(key).context("model metadata key contains an interior NUL byte")?;
+    let length =
+        unsafe { skippy_ffi::llama_model_meta_val_str(model, key.as_ptr(), ptr::null_mut(), 0) };
+    if length < 0 {
+        return Err(anyhow!(
+            "loaded model metadata {} is unavailable",
+            key.to_string_lossy()
+        ));
+    }
+    let capacity = usize::try_from(length)
+        .context("loaded model metadata length is invalid")?
+        .checked_add(1)
+        .context("loaded model metadata length overflow")?;
+    let mut output = vec![0_u8; capacity];
+    let written = unsafe {
+        skippy_ffi::llama_model_meta_val_str(
+            model,
+            key.as_ptr(),
+            output.as_mut_ptr().cast(),
+            output.len(),
+        )
+    };
+    if written < 0 {
+        return Err(anyhow!(
+            "loaded model metadata {} could not be read",
+            key.to_string_lossy()
+        ));
+    }
+    CStr::from_bytes_until_nul(&output)
+        .context("loaded model metadata is not NUL terminated")?
+        .to_str()
+        .context("loaded model metadata is not UTF-8")
+        .map(str::to_owned)
+}
+
 impl StageModel {
     pub fn new_dummy() -> Self {
         Self {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
                 include_output: true,
+                capability: None,
             }),
             media: None,
         }
@@ -62,6 +130,7 @@ impl StageModel {
         if raw.is_null() {
             return Err(anyhow!(null_handle_message));
         }
+        let capability = loaded_model_capability(raw);
         let media = config
             .projector_path
             .as_deref()
@@ -71,6 +140,7 @@ impl StageModel {
             inner: Arc::new(StageModelInner {
                 raw,
                 include_output: config.include_output,
+                capability,
             }),
             media,
         })
@@ -392,6 +462,10 @@ impl StageModel {
         StageModelReader {
             inner: Arc::clone(&self.inner),
         }
+    }
+
+    pub fn capability(&self) -> Option<&LoadedModelCapability> {
+        self.inner.capability.as_ref()
     }
 
     pub fn apply_chat_template(
@@ -878,9 +952,30 @@ impl Drop for StageModel {
 #[cfg(test)]
 mod output_capacity_tests {
     use super::{
-        OPTIMISTIC_OUTPUT_HEADROOM, optimistic_chat_metadata_capacity,
-        optimistic_chat_parse_capacity, optimistic_chat_prompt_capacity, optimistic_token_capacity,
+        ModelStateKind, OPTIMISTIC_OUTPUT_HEADROOM, classify_model_state,
+        optimistic_chat_metadata_capacity, optimistic_chat_parse_capacity,
+        optimistic_chat_prompt_capacity, optimistic_token_capacity,
     };
+
+    #[test]
+    fn loaded_model_flags_classify_state_without_family_names() {
+        assert_eq!(
+            classify_model_state(false, false, false),
+            ModelStateKind::Dense
+        );
+        assert_eq!(
+            classify_model_state(true, false, false),
+            ModelStateKind::Recurrent
+        );
+        assert_eq!(
+            classify_model_state(true, true, false),
+            ModelStateKind::Hybrid
+        );
+        assert_eq!(
+            classify_model_state(true, true, true),
+            ModelStateKind::Diffusion
+        );
+    }
 
     #[test]
     fn token_capacity_is_optimistic_but_never_exceeds_bound() {

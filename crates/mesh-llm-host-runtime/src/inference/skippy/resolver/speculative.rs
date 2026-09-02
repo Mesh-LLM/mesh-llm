@@ -12,7 +12,6 @@ use skippy_server::{
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     SpeculativeDecodeConfig, VerifyWindowConfig,
 };
-use skippy_topology::infer_family_capability;
 
 use super::support::{pick_owned, pick_string, pick_string_owned};
 use super::types::ResolvedSpeculativeConfig;
@@ -21,7 +20,7 @@ use crate::plugin::{BoolOrAuto, SpeculativeConfig};
 pub(super) fn resolve_speculative_config(
     model_config: Option<&SpeculativeConfig>,
     global_config: Option<&SpeculativeConfig>,
-    model_id: &str,
+    _model_id: &str,
     model_path: &Path,
     package_generation: Option<&PackageGenerationInfo>,
 ) -> Result<ResolvedSpeculativeConfig> {
@@ -131,7 +130,6 @@ pub(super) fn resolve_speculative_config(
             &mut draft_model_path,
             draft_max_tokens,
             pairing_fault.as_str(),
-            model_id,
             model_path,
         )?;
     } else {
@@ -744,7 +742,6 @@ fn resolve_draft_speculative_mode(
     draft_model_path: &mut Option<PathBuf>,
     draft_max_tokens: u32,
     pairing_fault: &str,
-    model_id: &str,
     model_path: &Path,
 ) -> Result<()> {
     if draft_model_path.is_none() {
@@ -755,7 +752,7 @@ fn resolve_draft_speculative_mode(
     }
     *mode = "draft".to_string();
     let draft_path = draft_model_path.as_ref().expect("checked above");
-    if let Some(reason) = incompatible_draft_pair_reason(model_id, model_path, draft_path) {
+    if let Some(reason) = incompatible_draft_pair_reason(model_path, draft_path) {
         match pairing_fault {
             "warn_disable" => {
                 *mode = "disabled".to_string();
@@ -804,24 +801,30 @@ fn normalize_pairing_fault(value: &str) -> String {
     value.replace('-', "_")
 }
 
-fn incompatible_draft_pair_reason(
-    model_id: &str,
-    model_path: &Path,
-    draft_model_path: &Path,
-) -> Option<String> {
-    let target_family = infer_family_capability(model_id, 0, 0)
-        .map(|capability| capability.family_id.to_string())
-        .or_else(|| infer_family_from_path_string(model_path));
-    let draft_family = infer_family_from_path_string(draft_model_path);
-    match (target_family, draft_family) {
-        (Some(target_family), Some(draft_family)) if target_family != draft_family => Some(
-            format!("target family {target_family} does not match draft family {draft_family}"),
-        ),
+fn incompatible_draft_pair_reason(model_path: &Path, draft_model_path: &Path) -> Option<String> {
+    let target_architecture = model_architecture_from_path(model_path);
+    let draft_architecture = model_architecture_from_path(draft_model_path);
+    match (target_architecture, draft_architecture) {
+        (None, None) => {
+            Some("target and draft model architecture metadata is unavailable".to_string())
+        }
+        (None, Some(_)) => Some("target model architecture metadata is unavailable".to_string()),
+        (Some(_), None) => Some("draft model architecture metadata is unavailable".to_string()),
+        (Some(target), Some(draft)) if target != draft => Some(format!(
+            "target architecture {target} does not match draft architecture {draft}"
+        )),
         _ => None,
     }
 }
 
-fn infer_family_from_path_string(path: &Path) -> Option<String> {
-    infer_family_capability(&path.display().to_string(), 0, 0)
-        .map(|capability| capability.family_id.to_string())
+fn model_architecture_from_path(path: &Path) -> Option<String> {
+    scan_gguf_compact_meta(path)
+        .or_else(|| scan_gguf_compact_meta(&path.join("shared/metadata.gguf")))
+        .map(|meta| {
+            meta.architecture
+                .trim()
+                .to_ascii_lowercase()
+                .replace('-', "_")
+        })
+        .filter(|architecture| !architecture.is_empty())
 }

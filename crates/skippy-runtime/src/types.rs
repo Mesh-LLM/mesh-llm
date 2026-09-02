@@ -9,6 +9,25 @@ use skippy_ffi::{
 
 pub const MAX_LOGIT_BIAS: usize = 256;
 
+/// Runtime memory semantics reported by the loaded llama.cpp model.
+///
+/// This is intentionally derived from the native model descriptor rather than
+/// a repository-name or family-name lookup. New architectures therefore
+/// inherit llama.cpp's own classification without a MeshLLM table update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelStateKind {
+    Dense,
+    Recurrent,
+    Hybrid,
+    Diffusion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModelCapability {
+    pub architecture: String,
+    pub state_kind: ModelStateKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorInfo {
     pub name: String,

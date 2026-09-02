@@ -390,20 +390,42 @@ impl GgufCompactMeta {
         if self.recurrent_layers.len() == layer_count {
             return self.recurrent_layers.clone();
         }
-        match self.architecture.as_str() {
-            "falcon-h1" => vec![true; layer_count],
-            "qwen3next" | "qwen35" | "qwen35moe" | "qwen4exp" => {
-                let interval = if self.full_attention_interval == 0 {
-                    4
-                } else {
-                    self.full_attention_interval as usize
-                };
-                (0..layer_count)
-                    .map(|layer| (layer + 1) % interval != 0)
-                    .collect()
-            }
-            _ => vec![false; layer_count],
+
+        let has_recurrent_state = self.ssm_conv_kernel > 0
+            || self.ssm_inner_size > 0
+            || self.ssm_state_size > 0
+            || self.ssm_group_count > 0;
+        if !has_recurrent_state {
+            return vec![false; layer_count];
         }
+
+        // Hybrid GGUFs can expose a per-layer KV-head count. Recurrent layers
+        // have no attention KV heads, so this is an architecture-independent
+        // state mask.
+        if self.kv_head_counts.len() == layer_count {
+            let mask = self
+                .kv_head_counts
+                .iter()
+                .map(|count| *count == 0)
+                .collect::<Vec<_>>();
+            if mask.iter().any(|recurrent| *recurrent) {
+                return mask;
+            }
+        }
+
+        // Some models expose a generic full-attention cadence rather than an
+        // explicit mask. Use the metadata directly, without naming families.
+        if self.full_attention_interval > 0 {
+            let interval = self.full_attention_interval as usize;
+            return (0..layer_count)
+                .map(|layer| (layer + 1) % interval != 0)
+                .collect();
+        }
+
+        // With recurrent state dimensions but no layer-level discriminator,
+        // charge every layer. Overestimating resource use is safer than
+        // silently omitting native recurrent state.
+        vec![true; layer_count]
     }
 }
 
@@ -1046,6 +1068,51 @@ mod tests {
             vec![expected * 2, expected * 2, expected * 2, 0]
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recurrent_mask_uses_per_layer_metadata_for_unknown_architecture() {
+        let meta = GgufCompactMeta {
+            architecture: "future_hybrid_arch".to_string(),
+            layer_count: 4,
+            kv_head_counts: vec![0, 8, 0, 8],
+            ssm_inner_size: 128,
+            ..Default::default()
+        };
+
+        assert_eq!(meta.recurrent_layer_mask(), vec![true, false, true, false]);
+    }
+
+    #[test]
+    fn recurrent_mask_does_not_treat_scalar_kv_heads_as_a_layer_discriminator() {
+        let composite = GgufCompactMeta {
+            architecture: "future_composite_arch".to_string(),
+            layer_count: 4,
+            kv_head_count: 8,
+            kv_head_counts: vec![8; 4],
+            ssm_state_size: 64,
+            ..Default::default()
+        };
+
+        assert_eq!(composite.recurrent_layer_mask(), vec![true; 4]);
+    }
+
+    #[test]
+    fn recurrent_mask_fails_safe_without_family_knowledge() {
+        let recurrent = GgufCompactMeta {
+            architecture: "future_recurrent_arch".to_string(),
+            layer_count: 3,
+            ssm_state_size: 64,
+            ..Default::default()
+        };
+        let dense = GgufCompactMeta {
+            architecture: "future_dense_arch".to_string(),
+            layer_count: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(recurrent.recurrent_layer_mask(), vec![true; 3]);
+        assert_eq!(dense.recurrent_layer_mask(), vec![false; 3]);
     }
 
     fn push_tokenizer_inventory_kvs(bytes: &mut Vec<u8>) {

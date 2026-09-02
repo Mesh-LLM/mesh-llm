@@ -10,9 +10,10 @@ use skippy_runtime::{
     ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
     GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput, IterationBatchPhase,
-    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
-    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig,
-    SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal, parse_cache_type,
+    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, ModelStateKind, MtpSource,
+    NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode,
+    SamplingConfig, SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenSignal,
+    parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -211,6 +212,22 @@ impl Drop for RuntimeState {
 
 pub fn load_runtime(config: &StageConfig) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     load_runtime_with_overrides(config, &RuntimeLaunchOverrides::default())
+}
+
+/// Return the state semantics captured from the model that was actually
+/// opened by llama.cpp. Callers use this after load so cache selection never
+/// depends on a repository name or pre-load family guess.
+pub fn loaded_model_state_kind(
+    runtime: Option<&Arc<Mutex<RuntimeState>>>,
+) -> Option<ModelStateKind> {
+    runtime.and_then(|runtime| {
+        runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .model
+            .capability()
+            .map(|capability| capability.state_kind)
+    })
 }
 
 pub fn load_runtime_with_overrides(
