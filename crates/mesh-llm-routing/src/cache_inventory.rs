@@ -141,6 +141,10 @@ impl CacheInventory {
         if prefill_micros_per_token == 0 {
             return;
         }
+        // When the per-model map is full, new models are silently ignored and
+        // continue to use the configured default prefill rate for routing cost
+        // estimates. Operators debugging unexpected routing behavior should check
+        // whether the model appears in the gossip cost map.
         if !self.model_prefill_micros_per_token.contains_key(model)
             && self.model_prefill_micros_per_token.len() >= self.max_entries
         {
