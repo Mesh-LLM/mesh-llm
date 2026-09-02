@@ -25,7 +25,7 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides},
+    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -282,7 +282,9 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
-    let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
+    let kv =
+        KvStageIntegration::from_loaded_model(&config, loaded_model_state_kind(Some(&runtime)))?
+            .map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
     let session_ownership = Arc::new(ConnectionSessionOwnership::default());

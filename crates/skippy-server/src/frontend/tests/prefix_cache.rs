@@ -38,7 +38,7 @@ fn proactive_eviction_attrs_are_bounded_and_request_free() {
 #[test]
 fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
@@ -75,7 +75,7 @@ fn resident_capacity_rejection_is_side_effect_free_and_retryable() {
 #[test]
 fn resident_capacity_unknown_fails_closed() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let mut runtime = crate::runtime_state::RuntimeState::new_modelless_for_test(1);
@@ -103,7 +103,7 @@ fn resident_capacity_admission_evicts_for_the_aggregate_active_four_wave() {
         }),
         ..prefix_cache_test_config()
     };
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let mut runtime = crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(
@@ -180,7 +180,7 @@ fn openai_cache_stats_default_to_disabled() {
 #[test]
 fn cache_identity_reuses_repeated_prompts_without_client_cache_key() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let first_request = prefix_cache_base_with_request("request-a", "session-a");
@@ -208,7 +208,7 @@ fn cache_identity_reuses_repeated_prompts_without_client_cache_key() {
 #[test]
 fn cache_identity_namespaces_explicit_prompt_cache_keys() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let tokens = (0..1024).collect::<Vec<_>>();
@@ -239,7 +239,8 @@ fn disabled_cache_config_has_no_stage_integration() {
         ..prefix_cache_test_config()
     };
 
-    let kv = KvStageIntegration::from_config(&config).unwrap();
+    let kv =
+        KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense).unwrap();
 
     assert!(kv.is_none());
 }
@@ -247,7 +248,7 @@ fn disabled_cache_config_has_no_stage_integration() {
 #[test]
 fn cold_resident_prefix_lookup_misses_before_recording() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let identity = kv.prefill_identity(
@@ -263,7 +264,7 @@ fn cold_resident_prefix_lookup_misses_before_recording() {
 #[test]
 fn resident_prefix_cache_hits_radix_common_prefix_without_a_record_ladder() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let base = prefix_cache_test_base();
@@ -303,7 +304,7 @@ fn resident_prefix_cache_rejects_common_prefix_below_configured_minimum() {
         }),
         ..prefix_cache_test_config()
     };
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let donor = prefix_cache_base_with_request("donor-request", "donor-session");
@@ -326,7 +327,7 @@ fn resident_prefix_cache_rejects_common_prefix_below_configured_minimum() {
 #[test]
 fn stage0_full_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let base = prefix_cache_test_base();
@@ -360,7 +361,7 @@ fn stage0_full_prefill_uses_one_radix_path_per_request() {
 #[test]
 fn stage0_chunked_prefill_uses_one_radix_path_per_request() {
     let config = prefix_cache_test_config();
-    let kv = KvStageIntegration::from_config(&config)
+    let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
         .unwrap()
         .expect("resident prefix cache enabled");
     let base = prefix_cache_test_base();

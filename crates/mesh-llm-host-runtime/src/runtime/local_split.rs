@@ -358,7 +358,6 @@ async fn prepare_split_runtime_start(
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
         &package,
         &compact_meta,
-        model_ref,
         spec.cache_type_k_override,
         spec.cache_type_v_override,
     )?;

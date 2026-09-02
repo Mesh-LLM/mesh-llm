@@ -94,6 +94,12 @@ unsafe extern "C" {
 
     pub fn skippy_model_llama_model(model: *const Model) -> *const Opaque;
 
+    pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_hybrid(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
+
     pub fn skippy_session_create(
         model: *mut Model,
         out_session: *mut *mut Session,

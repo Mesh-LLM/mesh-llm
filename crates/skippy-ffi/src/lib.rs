@@ -45,7 +45,10 @@ pub use multimodal::{
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams, MtmdInputChunkType,
     MtmdInputChunks, MtmdInputText,
 };
-pub use runtime::{NativeRuntimeLoadError, abi_features, try_abi_features};
+pub use runtime::{
+    NativeRuntimeLoadError, abi_features, llama_model_is_diffusion, llama_model_is_hybrid,
+    llama_model_is_recurrent, try_abi_features,
+};
 pub use sampling::{
     GenerationSignalWindow, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
     MAX_SAMPLERS, NATIVE_MTP_MAX_DRAFT_TOKENS, NativeMtpDraft, SamplingConfig, TokenSignal,

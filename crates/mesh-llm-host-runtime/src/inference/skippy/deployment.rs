@@ -265,7 +265,6 @@ mod tests {
             package: &package,
             family_policy: &crate::inference::skippy::family_policy::family_policy_for_model_path(
                 "model.gguf",
-                Some("Qwen/Qwen3-0.6B:Q8_0"),
             ),
             activation_width: 1024,
             ctx_size: 8192,

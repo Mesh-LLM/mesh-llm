@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn resident_activation_records_and_restores_exact_frame() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn resident_activation_rejects_mismatched_frame_token_count() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn resident_activation_records_identity_matched_shared_prefix_frame() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn restore_hits_shared_prefix_activation_for_extended_prompt() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let recorded_tokens = (0..2214).collect::<Vec<i32>>();
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn resident_activation_keys_include_activation_width() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn resident_activation_rejects_ambiguous_cached_token_count() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn resident_activation_does_not_alias_flagged_frame_to_shorter_identity() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident cache enabled");
         let tokens = (0..300).collect::<Vec<_>>();
