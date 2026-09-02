@@ -74,7 +74,12 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     // installed below is unaffected by this toggle.
     mesh_llm_events::set_cli_command_event_verbose(cli.debug);
 
-    if cli.command.is_some() {
+    if cli.command.as_ref().is_some_and(|c| {
+        !matches!(
+            c,
+            mesh_llm_cli::Command::Serve | mesh_llm_cli::Command::Client
+        )
+    }) {
         // Install the durable audit bridge before command dispatch. This
         // performs only config-backed logging setup; one-shot commands do not
         // need a native runtime, a model, or serving infrastructure.
@@ -322,19 +327,57 @@ where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
     let args: Vec<_> = args.into_iter().collect();
-    if let [_program, help, target] = args.as_slice() {
-        if help == "help" && target == "serve" {
-            return Some(mesh_llm_cli::RuntimeSurface::Serve);
+    let has_help_flag = args.iter().any(|arg| arg == "--help" || arg == "-h");
+
+    let value_taking_options: Vec<String> = mesh_llm_cli::Cli::command()
+        .get_arguments()
+        .filter(|argument| {
+            matches!(
+                argument.get_action(),
+                clap::ArgAction::Set | clap::ArgAction::Append
+            )
+        })
+        .flat_map(|argument| {
+            argument
+                .get_long()
+                .map(|long| format!("--{long}"))
+                .into_iter()
+                .chain(argument.get_short().map(|short| format!("-{short}")))
+        })
+        .collect();
+    let is_value_taking_option =
+        |argument: &str| value_taking_options.iter().any(|option| option == argument);
+
+    let mut positional: Vec<&str> = Vec::new();
+    let mut skip_next = false;
+    for arg in args.iter().skip(1).filter_map(|arg| arg.to_str()) {
+        if skip_next {
+            skip_next = false;
+            continue;
         }
-        if help == "help" && target == "client" {
-            return Some(mesh_llm_cli::RuntimeSurface::Client);
+        if let Some((option, _value)) = arg.split_once('=')
+            && is_value_taking_option(option)
+        {
+            continue;
         }
+        if is_value_taking_option(arg) {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        positional.push(arg);
     }
-    let help = args.last()?;
-    if help != "--help" && help != "-h" {
-        return None;
+
+    match positional.as_slice() {
+        ["help", "serve", ..] => Some(mesh_llm_cli::RuntimeSurface::Serve),
+        ["help", "client", ..] => Some(mesh_llm_cli::RuntimeSurface::Client),
+        ["serve", ..] if has_help_flag => Some(mesh_llm_cli::RuntimeSurface::Serve),
+        ["client", ..] if has_help_flag => Some(mesh_llm_cli::RuntimeSurface::Client),
+        [] if has_help_flag => mesh_llm_cli::normalize_runtime_surface_args(args).explicit_surface,
+        _ => None,
     }
-    mesh_llm_cli::normalize_runtime_surface_args(args).explicit_surface
 }
 
 fn print_advanced_help() {
@@ -753,6 +796,35 @@ mod cli_entrypoint_tests {
         assert_eq!(
             super::runtime_surface_help_request([
                 OsString::from("mesh-llm"),
+                OsString::from("help"),
+                OsString::from("serve"),
+                OsString::from("--help"),
+            ]),
+            Some(RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("--config"),
+                OsString::from("mesh.toml"),
+                OsString::from("help"),
+                OsString::from("serve"),
+            ]),
+            Some(RuntimeSurface::Serve)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("--log-format"),
+                OsString::from("json"),
+                OsString::from("help"),
+                OsString::from("client"),
+            ]),
+            Some(RuntimeSurface::Client)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
                 OsString::from("client"),
                 OsString::from("-h"),
             ]),
@@ -763,6 +835,15 @@ mod cli_entrypoint_tests {
                 OsString::from("mesh-llm"),
                 OsString::from("help"),
                 OsString::from("client"),
+            ]),
+            Some(RuntimeSurface::Client)
+        );
+        assert_eq!(
+            super::runtime_surface_help_request([
+                OsString::from("mesh-llm"),
+                OsString::from("help"),
+                OsString::from("client"),
+                OsString::from("-h"),
             ]),
             Some(RuntimeSurface::Client)
         );
