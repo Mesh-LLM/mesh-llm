@@ -479,27 +479,6 @@ impl StageControlState {
         let bind_addr = materialize_stage_bind_addr(parse_bind_addr(&load.bind_addr)?)?;
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
-        if effective_load.local_source_required {
-            let expected_sha256 = effective_load
-                .source_model_sha256
-                .as_deref()
-                .context("local-required stage load is missing expected SHA-256")?;
-            let identity = crate::inference::skippy::verify_registered_content_source(
-                &effective_load.model_id,
-                &effective_load.package_ref,
-                &effective_load.manifest_sha256,
-                expected_sha256,
-            )?;
-            effective_load.model_path = Some(
-                identity
-                    .source_model_path
-                    .to_str()
-                    .context("verified local GGUF path is not valid UTF-8")?
-                    .to_string(),
-            );
-            effective_load.source_model_bytes = Some(identity.source_model_bytes);
-            effective_load.source_model_sha256 = Some(identity.source_model_sha256);
-        }
         super::configure_materialized_stage_cache();
         let package_request = effective_load.clone();
         let mut resolved_package = None;
