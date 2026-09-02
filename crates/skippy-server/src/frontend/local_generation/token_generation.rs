@@ -870,43 +870,14 @@ impl StageOpenAiBackend {
                 runtime_lock_acquires =
                     runtime_lock_acquires.saturating_add(checkpoint_prefill.chunk_count);
 
-                let checkpoint_tokens = request.prompt_token_ids[..boundary].to_vec();
-                let scheduler_backend = self.clone();
-                let scheduler_session_id = session_id.to_string();
-                let scheduler_ids = request.ids.clone();
-                if let Ok(checkpoint_outcome) =
-                    self.iteration_scheduler.execute_runtime_timed_bounded(
-                        "feature-kv-shared-checkpoint",
-                        request.ids.request_id_string(),
-                        cache_operation_deadline,
-                        request.cancellation,
-                        move |runtime| {
-                            let recorded = scheduler_backend.record_exact_state_at_tokens(
-                                runtime,
-                                &scheduler_session_id,
-                                &scheduler_ids,
-                                &checkpoint_tokens,
-                                "shared_prefill_checkpoint",
-                            );
-                            Ok((
-                                recorded,
-                                scheduler_backend
-                                    .telemetry
-                                    .is_debug_enabled()
-                                    .then(|| runtime.session_stats()),
-                            ))
-                        },
-                    )
-                {
-                    let (recorded, sessions_after) = checkpoint_outcome.value;
-                    runtime_lock_wait_ms += checkpoint_outcome.runtime_lock_wait_ms;
-                    runtime_lock_hold_ms += checkpoint_outcome.runtime_lock_hold_ms;
-                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
-                    if recorded {
-                        record.resident_recorded_pages =
-                            record.resident_recorded_pages.saturating_add(1);
-                    }
-                    runtime_sessions_after = sessions_after;
+                if self.enqueue_exact_state_record_at_tokens(
+                    session_id,
+                    request.ids,
+                    request.prompt_token_ids[..boundary].to_vec(),
+                    "shared_prefill_checkpoint",
+                ) {
+                    record.resident_recorded_pages =
+                        record.resident_recorded_pages.saturating_add(1);
                 }
                 suffix_start = boundary;
             }
@@ -939,43 +910,14 @@ impl StageOpenAiBackend {
                 // the native session at the full-prompt boundary. Exporting
                 // that state is useful for growing prompts, but is strictly
                 // best-effort after the preferred shared checkpoint above.
-                let final_prompt_tokens = request.prompt_token_ids.to_vec();
-                let scheduler_backend = self.clone();
-                let scheduler_session_id = session_id.to_string();
-                let scheduler_ids = request.ids.clone();
-                if let Ok(final_record_outcome) =
-                    self.iteration_scheduler.execute_runtime_timed_bounded(
-                        "feature-kv-final-state",
-                        request.ids.request_id_string(),
-                        cache_operation_deadline,
-                        request.cancellation,
-                        move |runtime| {
-                            let recorded = scheduler_backend.record_exact_state_at_tokens(
-                                runtime,
-                                &scheduler_session_id,
-                                &scheduler_ids,
-                                &final_prompt_tokens,
-                                "final_prefill_state",
-                            );
-                            Ok((
-                                recorded,
-                                scheduler_backend
-                                    .telemetry
-                                    .is_debug_enabled()
-                                    .then(|| runtime.session_stats()),
-                            ))
-                        },
-                    )
-                {
-                    let (recorded, sessions_after) = final_record_outcome.value;
-                    runtime_lock_wait_ms += final_record_outcome.runtime_lock_wait_ms;
-                    runtime_lock_hold_ms += final_record_outcome.runtime_lock_hold_ms;
-                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
-                    if recorded {
-                        record.resident_recorded_pages =
-                            record.resident_recorded_pages.saturating_add(1);
-                    }
-                    runtime_sessions_after = sessions_after;
+                if self.enqueue_exact_state_record_at_tokens(
+                    session_id,
+                    request.ids,
+                    request.prompt_token_ids.to_vec(),
+                    "final_prefill_state",
+                ) {
+                    record.resident_recorded_pages =
+                        record.resident_recorded_pages.saturating_add(1);
                 }
             } else {
                 let scheduler_backend = self.clone();
@@ -1370,47 +1312,48 @@ impl StageOpenAiBackend {
         else {
             return false;
         };
-        let mut attrs = self.openai_attrs(request.ids);
+        self.enqueue_exact_state_record_at_tokens(
+            session_id,
+            request.ids,
+            checkpoint_tokens,
+            "post_decode_checkpoint",
+        )
+    }
+
+    pub(in crate::frontend) fn enqueue_exact_state_record_at_tokens(
+        &self,
+        session_id: &str,
+        ids: &OpenAiGenerationIds,
+        checkpoint_tokens: Vec<i32>,
+        decision_prefix: &'static str,
+    ) -> bool {
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
-        let scheduler_ids = request.ids.clone();
-        let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
-            "feature-post-decode-checkpoint",
+        let scheduler_ids = ids.clone();
+        let enqueue = self.iteration_scheduler.execute_runtime_detached(
+            "feature-exact-state-checkpoint",
             move |runtime| {
-                Ok(scheduler_backend.record_exact_state_at_tokens(
+                scheduler_backend.record_exact_state_at_tokens(
                     runtime,
                     &scheduler_session_id,
                     &scheduler_ids,
                     &checkpoint_tokens,
-                    "post_decode_checkpoint",
-                ))
+                    decision_prefix,
+                );
             },
-        ) else {
+        );
+        if let Err(error) = enqueue {
+            let mut attrs = self.openai_attrs(ids);
             attrs.insert(
                 "skippy.kv.decision".to_string(),
-                json!("post_decode_checkpoint_scheduler_error"),
+                json!(format!("{decision_prefix}_scheduler_error")),
             );
+            attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
             return false;
-        };
-        let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
-        let recorded = outcome.value;
-        attrs.insert(
-            "skippy.kv.decision".to_string(),
-            json!(if recorded {
-                "post_decode_checkpoint_recorded"
-            } else {
-                "post_decode_checkpoint_skipped"
-            }),
-        );
-        attrs.insert(
-            "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
-        );
-        self.telemetry
-            .emit("stage.openai_kv_record_decision", attrs);
-        recorded
+        }
+        true
     }
 
     /// Record a recurrent state only when the native session is at the exact

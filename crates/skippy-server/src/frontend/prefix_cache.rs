@@ -512,13 +512,6 @@ impl StageOpenAiBackend {
                             .try_into()
                             .unwrap_or(usize::MAX)
                             .min(scheduler_token_ids.len());
-                        if token_count == scheduler_token_ids.len() {
-                            let _ = scheduler_kv.record_exact_state(
-                                runtime,
-                                &scheduler_session_id,
-                                identity,
-                            );
-                        }
                         scheduler_kv
                             .record_resident_prefix(
                                 runtime,
@@ -531,7 +524,14 @@ impl StageOpenAiBackend {
                     .collect::<OpenAiResult<Vec<_>>>()
             },
         )?;
-        let mut recorded_any = false;
+        let exact_record_queued = kv.payload_is_exact_state()
+            && self.enqueue_exact_state_record_at_tokens(
+                session_id,
+                ids,
+                token_ids.to_vec(),
+                "embedded_full_prefill_state",
+            );
+        let mut recorded_any = exact_record_queued;
         for record in records.into_iter().flatten() {
             recorded_any = true;
             let mut attrs = self.openai_attrs(ids);

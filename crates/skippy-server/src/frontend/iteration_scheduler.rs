@@ -745,6 +745,24 @@ impl IterationScheduler {
         })?
     }
 
+    /// Enqueue best-effort runtime work without keeping the request worker
+    /// waiting for it. Commands remain FIFO with subsequent iterations, so a
+    /// checkpoint queued at an exact session boundary runs before that session
+    /// can advance.
+    pub(crate) fn execute_runtime_detached(
+        &self,
+        label: &'static str,
+        operation: impl FnOnce(&mut RuntimeState) + Send + 'static,
+    ) -> OpenAiResult<()> {
+        let (operation, result) = runtime_operation(label, move |runtime| {
+            operation(runtime);
+            Ok(())
+        });
+        self.enqueue_command(SchedulerCommand::ExecuteRuntime(operation))?;
+        drop(result);
+        Ok(())
+    }
+
     /// Deadline-bounded variant of [`Self::execute_runtime_timed`] for
     /// cache-side work (KV record/evict, checkpoint export) that must not
     /// hold a scheduler lane or a caller past the cache operation deadline.
@@ -2378,6 +2396,55 @@ mod tests {
         assert!(outcome.queue_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_wait_ms >= 0.0);
         assert!(outcome.runtime_lock_hold_ms >= 0.0);
+    }
+
+    #[test]
+    fn detached_runtime_operation_returns_before_work_completes() {
+        let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(3)));
+        let (commands, receiver) = std_mpsc::sync_channel(8);
+        let worker = thread::spawn(move || {
+            SchedulerWorker {
+                runtime,
+                scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8)),
+                requests: BTreeMap::new(),
+                direct_iterations: VecDeque::new(),
+                cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
+                commands: receiver,
+                kv_capacity_tokens: 64,
+                max_direct_batch_size: 3,
+                max_commands_per_turn: 8,
+                iteration_interval: Duration::ZERO,
+                active_runtime_sessions: 0,
+                direct_wave_full: false,
+                telemetry: None,
+                last_served_direct: false,
+                last_served_cache_runtime: false,
+                last_emitted_lifecycle_counters: (0, 0, 0, 0),
+            }
+            .run();
+        });
+        let scheduler = IterationScheduler {
+            shared: Arc::new(IterationSchedulerShared {
+                commands,
+                owner_count: AtomicUsize::new(1),
+                worker: Mutex::new(Some(worker)),
+            }),
+        };
+        let (started_tx, started_rx) = std_mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std_mpsc::sync_channel(1);
+
+        scheduler
+            .execute_runtime_detached("detached-test", move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release_tx.send(()).unwrap();
+        scheduler
+            .execute_runtime("detached-test-barrier", |_| Ok(()))
+            .unwrap();
     }
 
     #[test]
