@@ -315,6 +315,8 @@ class SkippyLlamaParityTests(unittest.TestCase):
             return (
                 "llama_model_free(model); "
                 f'const char * message = "{message}"; '
+                "if (event_scope != nullptr) { "
+                "event_scope->emit_failure(SKIPPY_STATUS_INVALID_ARGUMENT, message); } "
                 "skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, message); "
                 "return SKIPPY_STATUS_INVALID_ARGUMENT;"
             )

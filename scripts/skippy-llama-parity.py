@@ -493,6 +493,54 @@ def executable_cpp(
     return "".join(masked)
 
 
+def _skip_balanced(text: str, index: int, open_char: str, close_char: str) -> int:
+    depth = 0
+    while index < len(text):
+        if text[index] == open_char:
+            depth += 1
+        elif text[index] == close_char:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return index
+
+
+def has_unbraced_control_statement(executable_source: str) -> bool:
+    """Detect a depth-0 control statement whose body is not a braced block.
+
+    Braced control bodies are opaque to the failure-path checks once nested
+    blocks are masked, so they cannot conditionally expose a failure path (the
+    production guards emit failure events through exactly such a block). An
+    unbraced control statement leaves its single statement visible to the
+    ordered failure-path match while keeping it conditionally executed, so a
+    guard like `if (false) llama_model_free(model); ...` must be rejected.
+    """
+    keyword_pattern = re.compile(r"\b(?:if|for|while|switch|catch|do|try|else)\b")
+    index = 0
+    while True:
+        match = keyword_pattern.search(executable_source, index)
+        if match is None:
+            return False
+        cursor = match.end()
+        if match.group(0) == "else" and executable_source[cursor:].lstrip().startswith(
+            "if"
+        ):
+            # `else if` is validated through the nested `if` match.
+            index = cursor
+            continue
+        if match.group(0) not in {"do", "try", "else"}:
+            while cursor < len(executable_source) and executable_source[cursor].isspace():
+                cursor += 1
+            if cursor < len(executable_source) and executable_source[cursor] == "(":
+                cursor = _skip_balanced(executable_source, cursor, "(", ")")
+        while cursor < len(executable_source) and executable_source[cursor].isspace():
+            cursor += 1
+        if cursor >= len(executable_source) or executable_source[cursor] != "{":
+            return True
+        index = _skip_balanced(executable_source, cursor, "{", "}")
+
+
 def mask_nested_blocks(source: str) -> str:
     masked = list(source)
     depth = 0
@@ -632,10 +680,9 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     for name, guard, message in invalid_argument_contracts:
         body = extract_braced_block(admission, guard)
         executable_body = (
-            mask_nested_blocks(executable_cpp(body, (f'"{message}"',)))
-            if body is not None
-            else ""
+            executable_cpp(body, (f'"{message}"',)) if body is not None else ""
         )
+        masked_body = mask_nested_blocks(executable_body) if body is not None else ""
         required_failure_path = (
             r"llama_model_free\s*\(\s*model\s*\)\s*;"
             r"[\s\S]*?const\s+char\s*\*\s*message\s*=\s*"
@@ -644,10 +691,10 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;"
             r"[\s\S]*?return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;"
         )
-        failure_match = re.search(required_failure_path, executable_body)
-        first_return = re.search(r"\breturn\b", executable_body)
+        failure_match = re.search(required_failure_path, masked_body)
+        first_return = re.search(r"\breturn\b", masked_body)
         expected_return = re.search(
-            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;", executable_body
+            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;", masked_body
         )
         if (
             body is None
@@ -655,8 +702,7 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
             or first_return is None
             or expected_return is None
             or first_return.start() != expected_return.start()
-            or re.search(r"\b(?:if|for|while|switch|do|try|catch)\b", executable_body)
-            is not None
+            or has_unbraced_control_statement(executable_body)
         ):
             missing_checks.append(name)
 
@@ -675,24 +721,22 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     for name, guard, message in boundary_contracts:
         body = extract_braced_block(admission, guard)
         executable_body = (
-            mask_nested_blocks(executable_cpp(body, (f'"{message}"',)))
-            if body is not None
-            else ""
+            executable_cpp(body, (f'"{message}"',)) if body is not None else ""
         )
+        masked_body = mask_nested_blocks(executable_body) if body is not None else ""
         failure_path = (
             r"return\s+fail_boundary_load\s*\(\s*"
             + re.escape(f'"{message}"')
             + r"\s*\)\s*;"
         )
-        failure_match = re.search(failure_path, executable_body)
-        first_return = re.search(r"\breturn\b", executable_body)
+        failure_match = re.search(failure_path, masked_body)
+        first_return = re.search(r"\breturn\b", masked_body)
         if (
             body is None
             or failure_match is None
             or first_return is None
             or first_return.start() != failure_match.start()
-            or re.search(r"\b(?:if|for|while|switch|do|try|catch)\b", executable_body)
-            is not None
+            or has_unbraced_control_statement(executable_body)
         ):
             missing_checks.append(name)
     if missing_checks:
