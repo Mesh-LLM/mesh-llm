@@ -1336,6 +1336,7 @@ impl SchedulerWorker {
     }
 
     fn run_direct_iteration_batch(&mut self) {
+        let now = Instant::now();
         let has_decode = self
             .direct_iterations
             .iter()
@@ -1344,9 +1345,26 @@ impl SchedulerWorker {
             .direct_iterations
             .iter()
             .any(|request| request.phase == IterationBatchPhase::Prefill);
-        let phase = self
-            .direct_work_arbiter
-            .direct_phase_filter(has_decode, has_prefill);
+        let oldest_decode_wait = self
+            .direct_iterations
+            .iter()
+            .filter(|request| request.phase == IterationBatchPhase::Decode)
+            .map(|request| now.saturating_duration_since(request.enqueued_at))
+            .max()
+            .unwrap_or_default();
+        let oldest_prefill_wait = self
+            .direct_iterations
+            .iter()
+            .filter(|request| request.phase == IterationBatchPhase::Prefill)
+            .map(|request| now.saturating_duration_since(request.enqueued_at))
+            .max()
+            .unwrap_or_default();
+        let phase = self.direct_work_arbiter.direct_phase_filter_with_waits(
+            has_decode,
+            has_prefill,
+            oldest_decode_wait,
+            oldest_prefill_wait,
+        );
         let batch = take_direct_iteration_batch_for_phase(
             &mut self.direct_iterations,
             self.max_direct_batch_size,
@@ -2731,6 +2749,65 @@ mod tests {
     }
 
     #[test]
+    fn phase_age_prioritizes_normalized_oldest_wait() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::PhaseAge);
+
+        assert_eq!(
+            arbiter.direct_phase_filter_with_waits(
+                true,
+                true,
+                Duration::from_millis(10),
+                Duration::from_millis(10),
+            ),
+            Some(IterationBatchPhase::Decode)
+        );
+        assert_eq!(
+            arbiter.direct_phase_filter_with_waits(
+                true,
+                true,
+                Duration::from_millis(10),
+                Duration::from_millis(100),
+            ),
+            Some(IterationBatchPhase::Prefill)
+        );
+        assert_eq!(
+            arbiter.direct_phase_filter_with_waits(
+                true,
+                true,
+                Duration::from_millis(20),
+                Duration::from_millis(100),
+            ),
+            Some(IterationBatchPhase::Decode)
+        );
+    }
+
+    #[test]
+    fn phase_age_retains_hard_prefill_progress_bound() {
+        let mut arbiter = DirectWorkArbiter::new(DirectWorkPolicy::PhaseAge);
+
+        for _ in 0..64 {
+            assert_eq!(
+                arbiter.direct_phase_filter_with_waits(
+                    true,
+                    true,
+                    Duration::from_secs(10),
+                    Duration::from_millis(1),
+                ),
+                Some(IterationBatchPhase::Decode)
+            );
+        }
+        assert_eq!(
+            arbiter.direct_phase_filter_with_waits(
+                true,
+                true,
+                Duration::from_secs(10),
+                Duration::from_millis(1),
+            ),
+            Some(IterationBatchPhase::Prefill)
+        );
+    }
+
+    #[test]
     fn direct_work_policy_parser_defaults_safely_and_rejects_unknown_values() {
         assert_eq!(
             DirectWorkPolicy::from_value(Some("decode-burst")).unwrap(),
@@ -2743,6 +2820,10 @@ mod tests {
         assert_eq!(
             DirectWorkPolicy::from_value(Some("phase-burst")).unwrap(),
             DirectWorkPolicy::PhaseBurst
+        );
+        assert_eq!(
+            DirectWorkPolicy::from_value(Some("PHASE-AGE")).unwrap(),
+            DirectWorkPolicy::PhaseAge
         );
         assert_eq!(
             DirectWorkPolicy::from_value(Some("DECODE-FIRST")).unwrap(),

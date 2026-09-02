@@ -8,6 +8,9 @@ const TIME_DEFICIT_PLANNED_SHARE: u32 = 3;
 const TIME_DEFICIT_MAX_PLANNED_TURNS: u32 = 64;
 const PHASE_BURST_DECODE_TURNS: u32 = 8;
 const DECODE_FIRST_MAX_TURNS: u32 = 64;
+const PHASE_AGE_DECODE_WAIT_TARGET: Duration = Duration::from_millis(20);
+const PHASE_AGE_PREFILL_WAIT_TARGET: Duration = Duration::from_millis(160);
+const PHASE_AGE_MAX_DECODE_TURNS: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum DirectWorkPolicy {
@@ -16,6 +19,7 @@ pub(super) enum DirectWorkPolicy {
     DecodeBurst,
     TimeDeficit,
     PhaseBurst,
+    PhaseAge,
     DecodeFirst,
 }
 
@@ -25,10 +29,11 @@ impl DirectWorkPolicy {
             Some("decode-burst") => Ok(Self::DecodeBurst),
             Some("time-deficit") => Ok(Self::TimeDeficit),
             Some("phase-burst") => Ok(Self::PhaseBurst),
+            Some("phase-age") => Ok(Self::PhaseAge),
             Some("decode-first") => Ok(Self::DecodeFirst),
             Some("alternate") | None => Ok(Self::Alternate),
             Some(value) => Err(OpenAiError::invalid_request(format!(
-                "invalid direct work policy {value:?}; expected alternate, decode-burst, time-deficit, phase-burst, or decode-first"
+                "invalid direct work policy {value:?}; expected alternate, decode-burst, time-deficit, phase-burst, phase-age, or decode-first"
             ))),
         }
     }
@@ -39,6 +44,7 @@ impl DirectWorkPolicy {
             Self::DecodeBurst => "decode-burst",
             Self::TimeDeficit => "time-deficit",
             Self::PhaseBurst => "phase-burst",
+            Self::PhaseAge => "phase-age",
             Self::DecodeFirst => "decode-first",
         }
     }
@@ -72,9 +78,9 @@ impl DirectWorkArbiter {
                     self.planned_time_debt.is_zero()
                         || self.planned_turns_since_direct >= TIME_DEFICIT_MAX_PLANNED_TURNS
                 }
-                DirectWorkPolicy::PhaseBurst | DirectWorkPolicy::DecodeFirst => {
-                    !self.last_served_direct
-                }
+                DirectWorkPolicy::PhaseBurst
+                | DirectWorkPolicy::PhaseAge
+                | DirectWorkPolicy::DecodeFirst => !self.last_served_direct,
             },
             (true, false) => true,
             (false, _) => false,
@@ -106,17 +112,37 @@ impl DirectWorkArbiter {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn direct_phase_filter(
         &mut self,
         has_decode: bool,
         has_prefill: bool,
     ) -> Option<super::IterationBatchPhase> {
+        self.direct_phase_filter_with_waits(has_decode, has_prefill, Duration::ZERO, Duration::ZERO)
+    }
+
+    pub(super) fn direct_phase_filter_with_waits(
+        &mut self,
+        has_decode: bool,
+        has_prefill: bool,
+        oldest_decode_wait: Duration,
+        oldest_prefill_wait: Duration,
+    ) -> Option<super::IterationBatchPhase> {
+        if self.policy == DirectWorkPolicy::PhaseAge {
+            return self.age_weighted_direct_phase(
+                has_decode,
+                has_prefill,
+                oldest_decode_wait,
+                oldest_prefill_wait,
+            );
+        }
         let max_decode_turns = match self.policy {
             DirectWorkPolicy::PhaseBurst => PHASE_BURST_DECODE_TURNS,
             DirectWorkPolicy::DecodeFirst => DECODE_FIRST_MAX_TURNS,
             DirectWorkPolicy::Alternate
             | DirectWorkPolicy::DecodeBurst
-            | DirectWorkPolicy::TimeDeficit => return None,
+            | DirectWorkPolicy::TimeDeficit
+            | DirectWorkPolicy::PhaseAge => return None,
         };
         match (has_decode, has_prefill) {
             (true, true) if self.direct_decode_turns_since_prefill < max_decode_turns => {
@@ -127,6 +153,48 @@ impl DirectWorkArbiter {
             (true, true) => {
                 self.direct_decode_turns_since_prefill = 0;
                 Some(super::IterationBatchPhase::Prefill)
+            }
+            (true, false) => {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Decode)
+            }
+            (false, true) => {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Prefill)
+            }
+            (false, false) => None,
+        }
+    }
+
+    fn age_weighted_direct_phase(
+        &mut self,
+        has_decode: bool,
+        has_prefill: bool,
+        oldest_decode_wait: Duration,
+        oldest_prefill_wait: Duration,
+    ) -> Option<super::IterationBatchPhase> {
+        match (has_decode, has_prefill) {
+            (true, true)
+                if self.direct_decode_turns_since_prefill >= PHASE_AGE_MAX_DECODE_TURNS =>
+            {
+                self.direct_decode_turns_since_prefill = 0;
+                Some(super::IterationBatchPhase::Prefill)
+            }
+            (true, true) => {
+                let decode_score = oldest_decode_wait
+                    .as_nanos()
+                    .saturating_mul(PHASE_AGE_PREFILL_WAIT_TARGET.as_nanos());
+                let prefill_score = oldest_prefill_wait
+                    .as_nanos()
+                    .saturating_mul(PHASE_AGE_DECODE_WAIT_TARGET.as_nanos());
+                if decode_score >= prefill_score {
+                    self.direct_decode_turns_since_prefill =
+                        self.direct_decode_turns_since_prefill.saturating_add(1);
+                    Some(super::IterationBatchPhase::Decode)
+                } else {
+                    self.direct_decode_turns_since_prefill = 0;
+                    Some(super::IterationBatchPhase::Prefill)
+                }
             }
             (true, false) => {
                 self.direct_decode_turns_since_prefill = 0;
