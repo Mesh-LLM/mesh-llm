@@ -139,6 +139,64 @@ class SkippyLlamaParityTests(unittest.TestCase):
 
         self.assertEqual(failures, 1)
 
+    def test_runtime_slice_admission_rejects_inactive_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(inactive_controls=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
+    def test_runtime_slice_admission_rejects_nested_invalid_argument_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(nested_invalid_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
+    def test_runtime_slice_admission_rejects_failure_after_early_return(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(early_return_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
+    def test_runtime_slice_admission_rejects_nested_boundary_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            llama_root = Path(tmp)
+            source = llama_root / "src/skippy/model_loading.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                self.runtime_slice_admission_source(nested_boundary_failure=True),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr"):
+                failures = self.parity.validate_runtime_slice_admission(llama_root)
+
+        self.assertEqual(failures, 1)
+
     def test_runtime_slice_admission_accepts_architecture_independent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             llama_root = Path(tmp)
@@ -175,6 +233,10 @@ class SkippyLlamaParityTests(unittest.TestCase):
         controls: bool = True,
         detached_failure: bool = False,
         commented_control: bool = False,
+        inactive_controls: bool = False,
+        nested_invalid_failure: bool = False,
+        nested_boundary_failure: bool = False,
+        early_return_failure: bool = False,
     ) -> str:
         checks = (
             "layer_end exceeds model layer count",
@@ -223,6 +285,19 @@ class SkippyLlamaParityTests(unittest.TestCase):
             )
         if commented_control:
             control_lines = (f"/* {control_lines[0]} */", *control_lines[1:])
+        if nested_invalid_failure:
+            guard, message = invalid_argument_checks[0]
+            control_lines = (
+                f"if ({guard}) {{ if (false) {{ {invalid_argument_failure(message)} }} }}",
+                *control_lines[1:],
+            )
+        if early_return_failure:
+            guard, message = invalid_argument_checks[0]
+            control_lines = (
+                f"if ({guard}) {{ return SKIPPY_STATUS_OK; "
+                f"{invalid_argument_failure(message)} }}",
+                *control_lines[1:],
+            )
         if controls:
             boundary_lines = (
                 "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
@@ -230,10 +305,25 @@ class SkippyLlamaParityTests(unittest.TestCase):
                 "if (!stage_model->ctx->get_input_activation_boundary(type, elements, bytes)) { "
                 f'return fail_boundary_load("{checks[5]}"); }}',
             )
+            if nested_boundary_failure:
+                boundary_lines = (
+                    "if (!stage_model->ctx->get_activation_boundary(type, elements, bytes)) { "
+                    f'if (false) {{ return fail_boundary_load("{checks[4]}"); }} }}',
+                    boundary_lines[1],
+                )
         else:
             control_lines = ()
             boundary_lines = tuple(
                 f'const char * diagnostic = "{check}";' for check in checks
+            )
+        if inactive_controls:
+            control_lines = ("#if 0", "#if 1", *control_lines, "#endif", "#endif")
+            boundary_lines = (
+                "#if 0",
+                "#if 1",
+                *boundary_lines,
+                "#endif",
+                "#endif",
             )
         return "\n".join(
             (

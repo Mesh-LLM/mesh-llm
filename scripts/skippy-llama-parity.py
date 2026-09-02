@@ -470,8 +470,50 @@ def mask_cpp_comments(source: str) -> str:
     return "".join(masked)
 
 
+def executable_cpp(source: str) -> str:
+    return mask_cpp_comments(source)
+
+
+def mask_nested_blocks(source: str) -> str:
+    masked = list(source)
+    depth = 0
+    state = "code"
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if state in {"single-quote", "double-quote"}:
+            if depth > 0 and char != "\n":
+                masked[index] = " "
+            if char == "\\":
+                index += 1
+                if index < len(source) and depth > 0 and source[index] != "\n":
+                    masked[index] = " "
+            elif (state == "single-quote" and char == "'") or (
+                state == "double-quote" and char == '"'
+            ):
+                state = "code"
+        elif char == "'":
+            state = "single-quote"
+            if depth > 0:
+                masked[index] = " "
+        elif char == '"':
+            state = "double-quote"
+            if depth > 0:
+                masked[index] = " "
+        elif char == "{":
+            depth += 1
+            masked[index] = " "
+        elif char == "}":
+            masked[index] = " "
+            depth = max(0, depth - 1)
+        elif depth > 0 and char != "\n":
+            masked[index] = " "
+        index += 1
+    return "".join(masked)
+
+
 def extract_braced_block(source: str, header_pattern: str) -> str | None:
-    executable_source = mask_cpp_comments(source)
+    executable_source = executable_cpp(source)
     match = re.search(header_pattern + r"\s*\{", executable_source)
     if match is None:
         return None
@@ -530,12 +572,21 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
         return 1
 
     admission = source[function_start:function_end]
+    if re.search(
+        r"(?m)^\s*#\s*(?:if|ifdef|ifndef|elif|else|endif)\b",
+        executable_cpp(admission),
+    ):
+        print(
+            "Runtime-slice admission contract must not use preprocessor branches",
+            file=sys.stderr,
+        )
+        return 1
     validation_end = admission.find("skippy_model * stage_model")
     if validation_end < 0:
         print("Cannot locate Skippy runtime-slice validation boundary", file=sys.stderr)
         return 1
     validation = admission[:validation_end]
-    executable_validation = mask_cpp_comments(validation)
+    executable_validation = executable_cpp(validation)
     architecture_guards = sorted(
         set(
             re.findall(
@@ -582,19 +633,28 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     missing_checks = []
     for name, guard, message in invalid_argument_contracts:
         body = extract_braced_block(admission, guard)
-        executable_body = mask_cpp_comments(body) if body is not None else ""
-        required_failure_paths = (
-            r"llama_model_free\s*\(\s*model\s*\)\s*;",
-            r"const\s+char\s*\*\s*message\s*=\s*"
-            + re.escape(f'"{message}"')
-            + r"\s*;",
-            r"skippy_set_error\s*\(\s*out_error\s*,\s*"
-            r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;",
-            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;",
+        executable_body = (
+            mask_nested_blocks(executable_cpp(body)) if body is not None else ""
         )
-        if body is None or any(
-            re.search(pattern, executable_body) is None
-            for pattern in required_failure_paths
+        required_failure_path = (
+            r"llama_model_free\s*\(\s*model\s*\)\s*;"
+            r"[\s\S]*?const\s+char\s*\*\s*message\s*=\s*"
+            + re.escape(f'"{message}"')
+            + r"\s*;[\s\S]*?skippy_set_error\s*\(\s*out_error\s*,\s*"
+            r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;"
+            r"[\s\S]*?return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;"
+        )
+        failure_match = re.search(required_failure_path, executable_body)
+        first_return = re.search(r"\breturn\b", executable_body)
+        expected_return = re.search(
+            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;", executable_body
+        )
+        if (
+            body is None
+            or failure_match is None
+            or first_return is None
+            or expected_return is None
+            or first_return.start() != expected_return.start()
         ):
             missing_checks.append(name)
 
@@ -612,13 +672,22 @@ def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
     )
     for name, guard, message in boundary_contracts:
         body = extract_braced_block(admission, guard)
-        executable_body = mask_cpp_comments(body) if body is not None else ""
+        executable_body = (
+            mask_nested_blocks(executable_cpp(body)) if body is not None else ""
+        )
         failure_path = (
             r"return\s+fail_boundary_load\s*\(\s*"
             + re.escape(f'"{message}"')
             + r"\s*\)\s*;"
         )
-        if body is None or re.search(failure_path, executable_body) is None:
+        failure_match = re.search(failure_path, executable_body)
+        first_return = re.search(r"\breturn\b", executable_body)
+        if (
+            body is None
+            or failure_match is None
+            or first_return is None
+            or first_return.start() != failure_match.start()
+        ):
             missing_checks.append(name)
     if missing_checks:
         failures += len(missing_checks)
