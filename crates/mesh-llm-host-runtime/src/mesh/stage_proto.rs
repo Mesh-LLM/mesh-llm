@@ -1303,6 +1303,8 @@ fn activation_boundary_to_proto(
         layout: value.layout,
         elements_per_token: value.elements_per_token,
         bytes_per_token: value.bytes_per_token,
+        required_frame_flags: value.required_frame_flags,
+        required_sidebands: value.required_sidebands,
     }
 }
 
@@ -1315,6 +1317,8 @@ fn activation_boundary_from_proto(
         layout: value.layout,
         elements_per_token: value.elements_per_token,
         bytes_per_token: value.bytes_per_token,
+        required_frame_flags: value.required_frame_flags,
+        required_sidebands: value.required_sidebands,
     }
 }
 
@@ -1566,6 +1570,8 @@ mod tests {
             layout: 3,
             elements_per_token: 2_560,
             bytes_per_token: 10_240,
+            required_frame_flags: 0x04,
+            required_sidebands: 0x02,
         };
         let encoded = activation_boundary_to_proto(expected).encode_to_vec();
         let decoded = skippy_stage_proto::ActivationBoundaryDescriptor::decode(encoded.as_slice())

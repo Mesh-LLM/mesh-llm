@@ -65,6 +65,28 @@ fn qwen3_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
     })
     .unwrap();
 }
+
+#[test]
+#[ignore = "downloads and loads the pinned Gemma3n GGUF artifact"]
+fn gemma3n_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
+    graph_boundary_contract_matches_stage_roles(FamilySpec {
+        priority: "p0",
+        llama_model: "gemma3n",
+        family: "gemma3n",
+    })
+    .unwrap();
+}
+
+#[test]
+#[ignore = "loads the remote-only Qwen4Exp GGUF artifact"]
+fn qwen4exp_graph_boundary_contract_matches_first_middle_and_final_stage_roles() {
+    graph_boundary_contract_matches_stage_roles(FamilySpec {
+        priority: "p2",
+        llama_model: "qwen4exp",
+        family: "qwen4exp",
+    })
+    .unwrap();
+}
 family_module!(p0_qwen3next_qwen3next, "p0", "qwen3next", "qwen3next");
 family_module!(p0_qwen35moe_qwen35moe, "p0", "qwen35moe", "qwen35moe");
 family_module!(p0_qwen2vl_qwen2vl, "p0", "qwen2vl", "qwen2vl");

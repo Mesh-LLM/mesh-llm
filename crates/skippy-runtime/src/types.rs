@@ -11,6 +11,10 @@ use skippy_ffi::{
 pub const MAX_LOGIT_BIAS: usize = 256;
 pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 1;
 pub const ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR: u32 = 1;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS: u64 =
+    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS: u64 =
+    skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS;
 
 /// Runtime memory semantics reported by the loaded llama.cpp model.
 ///
@@ -37,6 +41,8 @@ pub struct ActivationBoundaryDesc {
     pub layout: u32,
     pub elements_per_token: u64,
     pub bytes_per_token: u64,
+    pub required_frame_flags: u64,
+    pub required_sidebands: u64,
 }
 
 impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
@@ -47,6 +53,8 @@ impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
             layout: raw.layout,
             elements_per_token: raw.elements_per_token,
             bytes_per_token: raw.bytes_per_token,
+            required_frame_flags: raw.required_frame_flags,
+            required_sidebands: raw.required_sidebands,
         }
     }
 }
@@ -75,6 +83,20 @@ impl ActivationBoundaryDesc {
         }
         if self.elements_per_token == 0 {
             bail!("graph-observed {edge} activation boundary has zero elements per token");
+        }
+        let unsupported_required_frame_flags =
+            self.required_frame_flags & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS;
+        if unsupported_required_frame_flags != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported frame flags {unsupported_required_frame_flags:#x}"
+            );
+        }
+        let unsupported_required_sidebands =
+            self.required_sidebands & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS;
+        if unsupported_required_sidebands != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported sidebands {unsupported_required_sidebands:#x}"
+            );
         }
         let expected_bytes = self
             .elements_per_token
@@ -793,6 +815,8 @@ mod activation_boundary_descriptor_tests {
             layout: ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR,
             elements_per_token,
             bytes_per_token: elements_per_token.saturating_mul(std::mem::size_of::<f32>() as u64),
+            required_frame_flags: 0,
+            required_sidebands: 0,
         }
     }
 
@@ -824,6 +848,20 @@ mod activation_boundary_descriptor_tests {
         let mut inconsistent_bytes = f32_boundary(1024);
         inconsistent_bytes.bytes_per_token -= 1;
         cases.push((inconsistent_bytes, "reports 4095 bytes"));
+
+        let mut unsupported_required_frame_flags = f32_boundary(1024);
+        unsupported_required_frame_flags.required_frame_flags = 1 << 63;
+        cases.push((
+            unsupported_required_frame_flags,
+            "requires unsupported frame flags",
+        ));
+
+        let mut unsupported_required_sidebands = f32_boundary(1024);
+        unsupported_required_sidebands.required_sidebands = 1 << 63;
+        cases.push((
+            unsupported_required_sidebands,
+            "requires unsupported sidebands",
+        ));
 
         let mut byte_overflow = f32_boundary(1);
         byte_overflow.elements_per_token = u64::MAX;

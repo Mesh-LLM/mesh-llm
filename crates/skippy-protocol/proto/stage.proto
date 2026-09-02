@@ -207,6 +207,8 @@ message ActivationBoundaryDescriptor {
   uint32 layout = 3;
   uint64 elements_per_token = 4;
   uint64 bytes_per_token = 5;
+  uint64 required_frame_flags = 6;
+  uint64 required_sidebands = 7;
 }
 
 message StageStatus {

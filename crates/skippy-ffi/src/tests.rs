@@ -63,13 +63,15 @@ fn rejects_major_and_minor_mismatches() {
 
 #[test]
 fn activation_boundary_descriptor_matches_native_layout() {
-    assert_eq!(size_of::<ActivationBoundaryDesc>(), 32);
+    assert_eq!(size_of::<ActivationBoundaryDesc>(), 48);
     assert_eq!(offset_of!(ActivationBoundaryDesc, version), 0);
     assert_eq!(offset_of!(ActivationBoundaryDesc, ggml_type), 4);
     assert_eq!(offset_of!(ActivationBoundaryDesc, layout), 8);
     assert_eq!(offset_of!(ActivationBoundaryDesc, reserved), 12);
     assert_eq!(offset_of!(ActivationBoundaryDesc, elements_per_token), 16);
     assert_eq!(offset_of!(ActivationBoundaryDesc, bytes_per_token), 24);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, required_frame_flags), 32);
+    assert_eq!(offset_of!(ActivationBoundaryDesc, required_sidebands), 40);
 }
 
 #[test]

@@ -671,6 +671,8 @@ mod tests {
             layout: 1,
             elements_per_token: 1024,
             bytes_per_token: 4096,
+            required_frame_flags: 0,
+            required_sidebands: 0,
         };
 
         {

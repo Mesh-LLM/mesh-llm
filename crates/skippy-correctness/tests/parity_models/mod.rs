@@ -81,9 +81,7 @@ pub(crate) fn activation_handoff_matches_full_model(spec: FamilySpec) -> Result<
 
 pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> Result<()> {
     prepare_native_logs()?;
-    let Some(case) = resolve_case_for_ignored_test(spec)? else {
-        return Ok(());
-    };
+    let case = ResolvedCase::resolve_boundary_contract(spec)?;
     let layout = case.layout()?;
     if case.row.is_package_only() {
         bail!(
@@ -163,17 +161,100 @@ pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> R
         }
     }
     if first_output != middle_input {
-        bail!("first-to-middle graph boundary contracts do not match");
+        bail!(
+            "first-to-middle graph boundary contracts do not match: producer {first_output:?}, consumer {middle_input:?}"
+        );
     }
     if middle_output != final_input {
-        bail!("middle-to-final graph boundary contracts do not match");
+        bail!(
+            "middle-to-final graph boundary contracts do not match: producer {middle_output:?}, consumer {final_input:?}"
+        );
+    }
+
+    let (expected_required_frame_flags, expected_required_sidebands) = match spec.family {
+        "gemma3n" => (
+            skippy_runtime::ACTIVATION_FLAG_GEMMA3N_ALTUP,
+            skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS,
+        ),
+        "qwen4exp" => (0, skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS),
+        _ => (0, 0),
+    };
+    for (edge, boundary) in [
+        ("first stage output", first_output),
+        ("middle stage input", middle_input),
+        ("middle stage output", middle_output),
+        ("final stage input", final_input),
+    ] {
+        if boundary.required_frame_flags != expected_required_frame_flags {
+            bail!(
+                "{edge} required frame flags {:#x}, expected {expected_required_frame_flags:#x}",
+                boundary.required_frame_flags
+            );
+        }
+        if boundary.required_sidebands != expected_required_sidebands {
+            bail!(
+                "{edge} required sidebands {:#x}, expected {expected_required_sidebands:#x}",
+                boundary.required_sidebands
+            );
+        }
     }
 
     let tokens = first.tokenize(case_prompt(case.row), true)?;
-    let mut session = first.create_session()?;
-    session.prefill_chunk_frame(&tokens, None, 0)?;
+    let mut first_session = first.create_session()?;
+    let first_frame = first_session.prefill_chunk_frame(&tokens, None, 0)?;
+    assert_frame_matches_graph_boundary(
+        "first stage output",
+        &first_frame,
+        first_output,
+        tokens.len(),
+    )?;
     if first.output_activation_boundary() != Some(first_output) {
         bail!("first stage graph boundary changed after prefill execution");
+    }
+    let mut middle_session = middle.create_session()?;
+    let middle_frame = middle_session.prefill_chunk_frame(&tokens, Some(&first_frame), 0)?;
+    assert_frame_matches_graph_boundary(
+        "middle stage output",
+        &middle_frame,
+        middle_output,
+        tokens.len(),
+    )?;
+    let mut final_session = final_stage.create_session()?;
+    let final_frame = final_session.prefill_chunk_frame(&tokens, Some(&middle_frame), 0)?;
+    if !final_frame.payload.is_empty() || final_frame.desc.payload_bytes != 0 {
+        bail!("final stage unexpectedly emitted an activation frame");
+    }
+    Ok(())
+}
+
+fn assert_frame_matches_graph_boundary(
+    edge: &str,
+    frame: &ActivationFrame,
+    boundary: skippy_runtime::ActivationBoundaryDesc,
+    expected_token_count: usize,
+) -> Result<()> {
+    if frame.desc.token_count as usize != expected_token_count {
+        bail!(
+            "{edge} emitted {} tokens, expected {expected_token_count}",
+            frame.desc.token_count
+        );
+    }
+    let expected_payload_bytes = boundary.payload_bytes(edge, frame.desc.token_count)?;
+    if frame.desc.payload_bytes != expected_payload_bytes
+        || frame.payload.len() as u64 != expected_payload_bytes
+    {
+        bail!(
+            "{edge} emitted {} descriptor bytes and {} payload bytes, expected {expected_payload_bytes}",
+            frame.desc.payload_bytes,
+            frame.payload.len()
+        );
+    }
+    if frame.desc.flags != boundary.required_frame_flags {
+        bail!(
+            "{edge} frame flags {:#x} do not match boundary flags {:#x}",
+            frame.desc.flags,
+            boundary.required_frame_flags
+        );
     }
     Ok(())
 }
@@ -631,6 +712,25 @@ struct StagePath {
 impl ResolvedCase {
     fn resolve(spec: FamilySpec) -> Result<Self> {
         assert_manifest_row_complete(spec)?;
+        Self::resolve_artifact(spec)
+    }
+
+    fn resolve_boundary_contract(spec: FamilySpec) -> Result<Self> {
+        let row = manifest_row(spec)?;
+        if row.repo.trim().is_empty() {
+            bail!("{} / {} is missing repo", row.llama_model, row.family);
+        }
+        if row.include()?.files().is_empty() {
+            bail!(
+                "{} / {} is missing include files",
+                row.llama_model,
+                row.family
+            );
+        }
+        Self::resolve_artifact(spec)
+    }
+
+    fn resolve_artifact(spec: FamilySpec) -> Result<Self> {
         let row = manifest_row(spec)?;
         download_if_requested(row)?;
         let artifact = if row.include()?.is_package_manifest_only() {

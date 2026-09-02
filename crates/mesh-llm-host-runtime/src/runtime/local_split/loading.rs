@@ -1227,6 +1227,8 @@ mod activation_boundary_tests {
             layout: 1,
             elements_per_token,
             bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
+            required_frame_flags: 0,
+            required_sidebands: 0,
         }
     }
 
@@ -1284,6 +1286,14 @@ mod activation_boundary_tests {
             },
             ActivationBoundaryDesc {
                 bytes_per_token: producer.bytes_per_token + 4,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                required_frame_flags: skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP,
+                ..producer
+            },
+            ActivationBoundaryDesc {
+                required_sidebands: skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS,
                 ..producer
             },
         ];

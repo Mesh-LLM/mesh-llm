@@ -37,7 +37,8 @@ pub use abi::{
     TensorRole, runtime_abi_supported,
 };
 pub use activation::{
-    ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationBoundaryDesc, ActivationDesc, LogitBias, TensorInfo,
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_INKLING_MTP_EMBD, ACTIVATION_SIDEBAND_TOKEN_IDS,
+    ActivationBoundaryDesc, ActivationDesc, LogitBias, TensorInfo,
 };
 pub use model::{
     GgmlType, LlamaFileType, LlamaModelImatrixData, LlamaModelKvOverride, LlamaModelKvOverrideType,

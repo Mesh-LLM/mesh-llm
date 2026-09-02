@@ -859,6 +859,8 @@ pub(super) fn test_stage_status_from_load(
         layout: 1,
         elements_per_token: 4096,
         bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
+        required_frame_flags: 0,
+        required_sidebands: 0,
     });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),

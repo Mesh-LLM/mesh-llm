@@ -573,6 +573,8 @@ mod shutdown_tests {
             layout: 1,
             elements_per_token,
             bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
+            required_frame_flags: 0,
+            required_sidebands: 0,
         }
     }
 

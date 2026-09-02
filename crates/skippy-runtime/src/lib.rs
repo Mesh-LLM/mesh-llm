@@ -45,6 +45,7 @@ pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
+    ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_SIDEBAND_TOKEN_IDS,
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
 };
 pub use types::{
