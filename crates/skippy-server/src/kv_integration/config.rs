@@ -6,11 +6,13 @@ use std::{
 use anyhow::Result;
 use mesh_llm_events::OutputEvent;
 use skippy_cache::{
-    CacheBlobStore, L3Tier, ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy,
-    StoreLimits, UnifiedRadixCache, prefix_namespace_hash,
+    CacheBlobStore, GeometryBlock, GeometryKind, L3Tier, PayloadGeometry, ResidentActivationCache,
+    ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits, UnifiedRadixCache,
+    prefix_namespace_hash,
 };
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
-use skippy_runtime::ModelStateKind;
+use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
+use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
     EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
@@ -200,6 +202,10 @@ impl KvStageIntegration {
 const DEFAULT_L3_BUDGET_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_L3_MINIMUM_FREE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
+/// Cap on rows per segment. Windows are the dedupe granularity for a growing
+/// prefix, so they stay near a conversational turn rather than scaling up with
+/// the model until a whole entry is one segment again.
+const L3_MAX_WINDOW_ROWS: u64 = 512;
 
 fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
     let Ok(root) = std::env::var("SKIPPY_L3_DIR") else {
@@ -272,6 +278,111 @@ fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
     Ok(Some(Arc::new(tier)))
 }
 
+/// Describe an exported KV page so the store can cut segments where a growing
+/// prefix keeps its bytes still.
+///
+/// The runtime writes every selected layer's K rows, then every layer's V rows,
+/// then the indexer rows, each run holding one row per token in token order
+/// (`llama_kv_cache::stage_export_kv_page`). Cutting that on fixed byte offsets
+/// re-writes the whole payload every turn, because adding tokens shifts every
+/// run after the first — measured at 8x on an M4 mini. Cutting per run into
+/// fixed token windows writes only the new rows.
+///
+/// Returns `None` when the layout is not one this mapping can state exactly;
+/// the store then falls back to fixed-size cutting, which is correct but not
+/// cheap.
+fn kv_page_geometry(desc: &RuntimeKvPageDesc, payload_bytes: u64) -> Option<PayloadGeometry> {
+    // A composite (ISWA) page is two independently-shaped components; its
+    // geometry is not this single-run description.
+    if desc.component_count != 0 || desc.token_count == 0 || desc.layer_count == 0 {
+        return None;
+    }
+    let rows = desc.token_count;
+    let layers = desc.layer_count;
+    let k_stride = u64::from(desc.k_row_bytes);
+    if k_stride == 0 {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    for layer in 0..layers {
+        blocks.push(GeometryBlock {
+            stride: k_stride,
+            kind: GeometryKind::Key,
+            layer,
+            column: 0,
+        });
+    }
+    let transposed = desc.flags & skippy_runtime::KV_PAGE_FLAG_V_TRANSPOSED != 0;
+    if transposed {
+        // Transposed V is stored column-major, but each column is still one
+        // contiguous run of one element per token, so it windows the same way.
+        // The column count is not in the descriptor; derive it from the bytes
+        // the K and indexer runs do not claim.
+        let element_bytes = u64::from(desc.v_element_bytes);
+        let k_idx_stride = u64::from(desc.k_idx_row_bytes);
+        let claimed = u64::from(layers)
+            .checked_mul(rows)?
+            .checked_mul(k_stride.checked_add(k_idx_stride)?)?;
+        let v_bytes = payload_bytes.checked_sub(claimed)?;
+        let per_layer = v_bytes.checked_div(u64::from(layers))?;
+        let column_bytes = rows.checked_mul(element_bytes)?;
+        if element_bytes == 0 || column_bytes == 0 || per_layer % column_bytes != 0 {
+            return None;
+        }
+        let columns = u32::try_from(per_layer / column_bytes).ok()?;
+        for layer in 0..layers {
+            for column in 0..columns {
+                blocks.push(GeometryBlock {
+                    stride: element_bytes,
+                    kind: GeometryKind::Value,
+                    layer,
+                    column,
+                });
+            }
+        }
+    } else if desc.v_row_bytes > 0 {
+        for layer in 0..layers {
+            blocks.push(GeometryBlock {
+                stride: u64::from(desc.v_row_bytes),
+                kind: GeometryKind::Value,
+                layer,
+                column: 0,
+            });
+        }
+    }
+    if desc.k_idx_row_bytes > 0 {
+        for layer in 0..layers {
+            blocks.push(GeometryBlock {
+                stride: u64::from(desc.k_idx_row_bytes),
+                kind: GeometryKind::KeyIndex,
+                layer,
+                column: 0,
+            });
+        }
+    }
+    // The window must depend only on the model's shape, never on this entry's
+    // token count, or the boundaries move between turns and nothing dedupes.
+    let widest = blocks.iter().map(|block| block.stride).max()?;
+    let window_rows = (L3_SEGMENT_BYTES as u64 / widest.max(1))
+        .clamp(1, L3_MAX_WINDOW_ROWS)
+        .next_power_of_two()
+        .min(L3_MAX_WINDOW_ROWS);
+    let geometry = PayloadGeometry {
+        blocks,
+        rows,
+        window_rows,
+        // A recurrent snapshot rides after the KV page and has no row
+        // structure; it is whatever the payload has left.
+        tail_bytes: 0,
+    };
+    let described = geometry.total_bytes();
+    let tail = payload_bytes.checked_sub(described)?;
+    Some(PayloadGeometry {
+        tail_bytes: tail,
+        ..geometry
+    })
+}
+
 fn emit_cache_disabled_warning(config: &StageConfig, reason: &str) {
     let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
         message: "Skippy KV cache disabled for this model stage".to_string(),
@@ -301,11 +412,17 @@ fn store_exact_radix_record(
             .kv_desc
             .as_ref()
             .and_then(|desc| serde_json::to_string(desc).ok());
+        let geometry = pending
+            .extra
+            .kv_desc
+            .as_ref()
+            .and_then(|desc| kv_page_geometry(desc, pending.payload.byte_len()));
         if let Err(error) = l3.spill(
             &pending.namespace,
             &pending.token_ids,
             &pending.payload,
             kv_desc_json,
+            geometry.as_ref(),
         ) {
             static WARNED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
@@ -630,6 +747,108 @@ mod tests {
         let status = tier.status().unwrap();
         assert_eq!(status.activity.writes, 2);
         assert_eq!(status.activity.fills, 1);
+    }
+
+    fn kv_desc(layers: u32, tokens: u64, k_row: u32, v_row: u32) -> RuntimeKvPageDesc {
+        let mut desc = RuntimeKvPageDesc {
+            version: 1,
+            layer_start: 0,
+            layer_end: layers as i32,
+            token_start: 0,
+            token_count: tokens,
+            layer_count: layers,
+            k_type: 1,
+            v_type: 1,
+            k_row_bytes: k_row,
+            v_row_bytes: v_row,
+            v_element_bytes: 2,
+            k_idx_row_bytes: 0,
+            payload_bytes: 0,
+            flags: 0,
+            codec: 0,
+            component_count: 0,
+            components: Default::default(),
+        };
+        desc.payload_bytes = u64::from(layers) * tokens * (u64::from(k_row) + u64::from(v_row));
+        desc
+    }
+
+    #[test]
+    fn kv_page_geometry_describes_the_runtime_export_layout() {
+        // Every layer's K rows, then every layer's V rows: the order
+        // `stage_export_kv_page` writes them in.
+        let desc = kv_desc(4, 2048, 1024, 1024);
+        let geometry =
+            kv_page_geometry(&desc, desc.payload_bytes).expect("dense page must be describable");
+
+        assert_eq!(geometry.blocks.len(), 8);
+        assert_eq!(geometry.rows, 2048);
+        assert!(
+            geometry.blocks[..4]
+                .iter()
+                .all(|block| block.kind == GeometryKind::Key)
+        );
+        assert!(
+            geometry.blocks[4..]
+                .iter()
+                .all(|block| block.kind == GeometryKind::Value)
+        );
+        assert_eq!(geometry.total_bytes(), desc.payload_bytes);
+        assert!(geometry.matches(desc.payload_bytes));
+    }
+
+    #[test]
+    fn kv_page_geometry_windows_are_stable_as_the_prefix_grows() {
+        // The property the whole fix rests on: the same model must produce the
+        // same window size at every length, or turn N+1's cuts land elsewhere
+        // and nothing is reused.
+        let short = kv_desc(4, 2048, 1024, 1024);
+        let long = kv_desc(4, 4096, 1024, 1024);
+        let short_geometry = kv_page_geometry(&short, short.payload_bytes).expect("short");
+        let long_geometry = kv_page_geometry(&long, long.payload_bytes).expect("long");
+        assert_eq!(short_geometry.window_rows, long_geometry.window_rows);
+        assert_eq!(short_geometry.blocks, long_geometry.blocks);
+    }
+
+    #[test]
+    fn kv_page_geometry_accounts_for_a_recurrent_tail() {
+        let desc = kv_desc(2, 512, 512, 512);
+        let tail = 4096;
+        let geometry = kv_page_geometry(&desc, desc.payload_bytes + tail).expect("hybrid page");
+        assert_eq!(geometry.tail_bytes, tail);
+        assert!(geometry.matches(desc.payload_bytes + tail));
+    }
+
+    #[test]
+    fn kv_page_geometry_declines_what_it_cannot_state_exactly() {
+        // A composite ISWA page is two differently-shaped components.
+        let mut composite = kv_desc(4, 512, 1024, 1024);
+        composite.component_count = 2;
+        assert!(kv_page_geometry(&composite, composite.payload_bytes).is_none());
+
+        // Bytes that the described runs cannot account for.
+        let desc = kv_desc(4, 512, 1024, 1024);
+        assert!(kv_page_geometry(&desc, desc.payload_bytes - 1).is_none());
+    }
+
+    #[test]
+    fn kv_page_geometry_windows_transposed_value_columns() {
+        // Transposed V is column-major, but each column is one contiguous run
+        // of one element per token, so it windows like any other run.
+        let mut desc = kv_desc(2, 256, 1024, 0);
+        desc.flags = skippy_runtime::KV_PAGE_FLAG_V_TRANSPOSED;
+        desc.v_element_bytes = 2;
+        let columns = 512u64;
+        let payload = desc.payload_bytes + u64::from(desc.layer_count) * columns * 256 * 2;
+        let geometry = kv_page_geometry(&desc, payload).expect("transposed page");
+
+        let value_blocks = geometry
+            .blocks
+            .iter()
+            .filter(|block| block.kind == GeometryKind::Value)
+            .count();
+        assert_eq!(value_blocks as u64, u64::from(desc.layer_count) * columns);
+        assert!(geometry.matches(payload));
     }
 
     #[test]

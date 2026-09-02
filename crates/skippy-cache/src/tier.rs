@@ -17,8 +17,8 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::l3::{
-    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, StoreLimits,
-    StoreUsage, segment_digest,
+    HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
+    StoreLimits, StoreUsage, segment_digest,
 };
 use crate::payload::{ExactStatePayload, ExactStatePayloadKind};
 
@@ -31,6 +31,10 @@ struct L3Activity {
     hits: AtomicU64,
     misses: AtomicU64,
     writes: AtomicU64,
+    /// Spills whose caller-supplied geometry did not describe the payload, so
+    /// the store fell back to fixed-size cutting. A non-zero count here is why
+    /// write amplification would be high.
+    geometry_rejected: AtomicU64,
     bytes_read: AtomicU64,
     bytes_written: AtomicU64,
     last_error: Mutex<Option<String>>,
@@ -62,6 +66,9 @@ pub struct L3ActivitySnapshot {
     pub corrupt_entries: u64,
     pub bytes_read: u64,
     pub bytes_written: u64,
+    /// Spills that fell back to fixed-size cutting because the geometry did
+    /// not match the payload.
+    pub geometry_rejected: u64,
     pub last_error: Option<String>,
 }
 
@@ -182,6 +189,7 @@ impl L3Tier {
             corrupt_entries: usage.as_ref().map_or(0, |usage| usage.quarantined_objects),
             bytes_read: self.activity.bytes_read.load(Ordering::Relaxed),
             bytes_written: self.activity.bytes_written.load(Ordering::Relaxed),
+            geometry_rejected: self.activity.geometry_rejected.load(Ordering::Relaxed),
             last_error: self
                 .activity
                 .last_error
@@ -220,8 +228,9 @@ impl L3Tier {
         token_ids: &[i32],
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
+        geometry: Option<&PayloadGeometry>,
     ) -> Result<String> {
-        let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json);
+        let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json, geometry);
         if let Err(error) = &result {
             self.activity.record_error(error);
         }
@@ -234,6 +243,7 @@ impl L3Tier {
         token_ids: &[i32],
         payload: &ExactStatePayload,
         kv_desc_json: Option<String>,
+        geometry: Option<&PayloadGeometry>,
     ) -> Result<String> {
         if payload.byte_len() == 0 {
             bail!(
@@ -285,18 +295,49 @@ impl L3Tier {
         manifest.recurrent_bytes = recurrent.len() as u64;
         manifest.kv_desc_json = kv_desc_json;
         manifest.token_count = token_count;
+        // Cut on the payload's own geometry when the caller knows it, so a
+        // longer prefix reuses the segments of the shorter one it extends. A
+        // geometry that does not describe these exact bytes is ignored rather
+        // than trusted: mis-cutting would still reassemble, but silently write
+        // the whole payload again every turn.
+        let geometry = geometry.filter(|geometry| {
+            let matches = geometry.matches(wire.len() as u64);
+            if !matches {
+                self.activity
+                    .geometry_rejected
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            matches
+        });
+        let cuts = match geometry {
+            Some(geometry) => geometry.plan(self.segment_bytes as u64),
+            None => {
+                let mut cuts = Vec::new();
+                let mut offset = 0u64;
+                while (offset as usize) < wire.len() {
+                    let len = self.segment_bytes.min(wire.len() - offset as usize) as u64;
+                    cuts.push((offset, len, String::new()));
+                    offset += len;
+                }
+                cuts
+            }
+        };
         let mut new_bytes = 0u64;
-        for (index, chunk) in wire.chunks(self.segment_bytes).enumerate() {
-            let (digest, put) = self.store.put_segment(chunk)?;
+        for (index, (offset, len, label)) in cuts.into_iter().enumerate() {
+            let start = usize::try_from(offset).context("segment offset exceeds usize")?;
+            let end = start
+                .checked_add(usize::try_from(len).context("segment length exceeds usize")?)
+                .context("segment range overflows")?;
+            let (digest, put) = self.store.put_segment(&wire[start..end])?;
             if put.new {
                 new_bytes = new_bytes.saturating_add(put.bytes);
             }
             manifest.segments.push(HandoffSegmentRef {
                 index: index as u32,
-                offset: (index * self.segment_bytes) as u64,
-                bytes: chunk.len() as u64,
+                offset,
+                bytes: len,
                 digest,
-                meta_json: None,
+                meta_json: (!label.is_empty()).then_some(label),
             });
         }
         self.store.commit(&manifest)?;
@@ -470,6 +511,7 @@ impl L3Tier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::l3::{GeometryBlock, GeometryKind};
 
     fn temp_root(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir()
@@ -487,6 +529,161 @@ mod tests {
         (0..len as i32).collect()
     }
 
+    /// Mirrors the runtime's export layout: every layer's K rows, then every
+    /// layer's V rows, each run holding one row per token in token order.
+    fn kv_geometry(
+        layers: u32,
+        rows: u64,
+        k_stride: u64,
+        v_stride: u64,
+        window: u64,
+    ) -> PayloadGeometry {
+        let mut blocks = Vec::new();
+        for layer in 0..layers {
+            blocks.push(GeometryBlock {
+                stride: k_stride,
+                kind: GeometryKind::Key,
+                layer,
+                column: 0,
+            });
+        }
+        for layer in 0..layers {
+            blocks.push(GeometryBlock {
+                stride: v_stride,
+                kind: GeometryKind::Value,
+                layer,
+                column: 0,
+            });
+        }
+        PayloadGeometry {
+            blocks,
+            rows,
+            window_rows: window,
+            tail_bytes: 0,
+        }
+    }
+
+    /// A growing prefix keeps earlier tokens' rows byte-identical, so the
+    /// export for turn N+1 is turn N's runs each extended in place.
+    fn kv_payload(layers: u32, rows: u64, k_stride: u64, v_stride: u64) -> ExactStatePayload {
+        let mut wire = Vec::new();
+        for (kind, stride) in [(0u8, k_stride), (1u8, v_stride)] {
+            for layer in 0..layers {
+                for row in 0..rows {
+                    // Stamp kind, layer and row into every row so no two runs
+                    // can hash alike: content addressing would legitimately
+                    // collapse them, and the test would be measuring that
+                    // instead of the windowing.
+                    for byte in 0..stride {
+                        wire.push(match byte {
+                            0 => kind,
+                            1 => layer as u8,
+                            2 => row as u8,
+                            3 => (row >> 8) as u8,
+                            _ => (byte as u8).wrapping_mul(7) ^ (row as u8).wrapping_mul(31),
+                        });
+                    }
+                }
+            }
+        }
+        ExactStatePayload::kv_recurrent(wire, Vec::new())
+    }
+
+    #[test]
+    fn geometry_cut_segments_survive_prefix_growth() {
+        // The measured failure: the export is layer-major, so a fixed byte cut
+        // lands in a different place every turn and nothing is reused.
+        let (layers, k_stride, v_stride, window) = (4u32, 64u64, 64u64, 8u64);
+        let tier = tier("geometry-growth", "blake3:geometry");
+
+        let first = kv_payload(layers, 32, k_stride, v_stride);
+        tier.spill(
+            "ns",
+            &tokens(32),
+            &first,
+            None,
+            Some(&kv_geometry(layers, 32, k_stride, v_stride, window)),
+        )
+        .expect("spill 32");
+        let after_first = tier.status().expect("status").activity.bytes_written;
+        assert_eq!(
+            after_first,
+            first.byte_len(),
+            "first spill writes everything"
+        );
+
+        // Eight more tokens: only the new rows are new bytes.
+        let second = kv_payload(layers, 40, k_stride, v_stride);
+        tier.spill(
+            "ns",
+            &tokens(40),
+            &second,
+            None,
+            Some(&kv_geometry(layers, 40, k_stride, v_stride, window)),
+        )
+        .expect("spill 40");
+        let status = tier.status().expect("status");
+        let physical = status.activity.bytes_written - after_first;
+        let ideal = second.byte_len() - first.byte_len();
+        assert_eq!(status.activity.geometry_rejected, 0);
+        assert_eq!(
+            physical, ideal,
+            "growth wrote {physical} bytes for {ideal} bytes of new state"
+        );
+
+        // And the entry still reassembles to exactly what was spilled.
+        let fill = tier
+            .fill_longest("ns", &tokens(40), 64)
+            .expect("fill")
+            .expect("entry must be loadable");
+        assert_eq!(
+            fill.payload
+                .kv_bytes()
+                .expect("kv")
+                .expect("some")
+                .into_owned(),
+            second.kv_bytes().expect("kv").expect("some").into_owned()
+        );
+    }
+
+    #[test]
+    fn fixed_offset_cutting_is_what_fails_the_gate() {
+        // The same growth without geometry: this is the 8x the probe measured,
+        // kept as a test so the regression is visible rather than remembered.
+        let (layers, k_stride, v_stride) = (4u32, 64u64, 64u64);
+        let tier = tier("geometry-fixed", "blake3:geometry");
+        let first = kv_payload(layers, 32, k_stride, v_stride);
+        tier.spill("ns", &tokens(32), &first, None, None)
+            .expect("spill 32");
+        let after_first = tier.status().expect("status").activity.bytes_written;
+        let second = kv_payload(layers, 40, k_stride, v_stride);
+        tier.spill("ns", &tokens(40), &second, None, None)
+            .expect("spill 40");
+        let physical = tier.status().expect("status").activity.bytes_written - after_first;
+        let ideal = second.byte_len() - first.byte_len();
+        assert!(
+            physical > ideal * 2,
+            "fixed cutting unexpectedly deduped: {physical} vs {ideal}"
+        );
+    }
+
+    #[test]
+    fn a_geometry_that_does_not_describe_the_payload_is_ignored() {
+        let tier = tier("geometry-mismatch", "blake3:geometry");
+        let payload = kv_payload(2, 16, 32, 32);
+        // Wrong row count: cutting to it would silently mis-window every turn.
+        let wrong = kv_geometry(2, 15, 32, 32, 4);
+        tier.spill("ns", &tokens(16), &payload, None, Some(&wrong))
+            .expect("spill still succeeds");
+        let status = tier.status().expect("status");
+        assert_eq!(status.activity.geometry_rejected, 1);
+        let fill = tier
+            .fill_longest("ns", &tokens(16), 8)
+            .expect("fill")
+            .expect("entry must be loadable");
+        assert_eq!(fill.payload.byte_len(), payload.byte_len());
+    }
+
     #[test]
     fn status_counters_reconcile_with_what_the_tier_did() {
         let root = temp_root("status");
@@ -498,9 +695,9 @@ mod tests {
             .collect();
         let payload = ExactStatePayload::full_state(bytes);
 
-        tier.spill("ns", &[1, 2, 3], &payload, None).unwrap();
+        tier.spill("ns", &[1, 2, 3], &payload, None, None).unwrap();
         // Identical bytes again: a write, but no new segment bytes.
-        tier.spill("ns", &[1, 2, 3], &payload, None).unwrap();
+        tier.spill("ns", &[1, 2, 3], &payload, None, None).unwrap();
         assert!(
             tier.locate_longest("ns", &[1, 2, 3, 4], 8)
                 .unwrap()
@@ -552,6 +749,7 @@ mod tests {
                 &tokens(512),
                 &payload,
                 Some("{\"desc\":1}".to_string()),
+                None,
             )
             .expect("spill");
             let fill = tier
@@ -598,12 +796,14 @@ mod tests {
             &tokens(800),
             &ExactStatePayload::full_state(vec![1u8; 2048]),
             None,
+            None,
         )
         .expect("spill 800");
         tier.spill(
             "ns",
             &tokens(1200),
             &ExactStatePayload::full_state(vec![2u8; 2048]),
+            None,
             None,
         )
         .expect("spill 1200");
@@ -642,6 +842,7 @@ mod tests {
             &tokens(600),
             &ExactStatePayload::full_state(vec![3u8; 1024]),
             None,
+            None,
         )
         .expect("spill");
         let mut divergent = tokens(600);
@@ -673,6 +874,7 @@ mod tests {
                 &tokens(128),
                 &ExactStatePayload::full_state(vec![5u8; 1024]),
                 None,
+                None,
             )
             .expect("spill");
         let reader = L3Tier::open(&root, 0, "blake3:identity-b".to_string(), 4096).unwrap();
@@ -687,12 +889,14 @@ mod tests {
             &tokens(100),
             &ExactStatePayload::full_state(vec![1u8; 2048]),
             None,
+            None,
         )
         .expect("first spill");
         tier.spill(
             "ns",
             &tokens(100),
             &ExactStatePayload::full_state(vec![2u8; 2048]),
+            None,
             None,
         )
         .expect("second spill");
@@ -717,7 +921,7 @@ mod tests {
     fn empty_payloads_are_refused_at_spill() {
         let tier = tier("empty", "blake3:identity-a");
         let empty = ExactStatePayload::kv_recurrent(Vec::new(), Vec::new());
-        assert!(tier.spill("ns", &tokens(128), &empty, None).is_err());
+        assert!(tier.spill("ns", &tokens(128), &empty, None, None).is_err());
         assert!(
             tier.fill_longest("ns", &tokens(128), 64)
                 .expect("fill")
@@ -735,6 +939,7 @@ mod tests {
             "ns",
             &tokens(400),
             &ExactStatePayload::full_state(vec![7u8; 4096]),
+            None,
             None,
         )
         .expect("spill");
@@ -773,6 +978,7 @@ mod tests {
                 &tokens(300),
                 &ExactStatePayload::full_state(vec![1u8; 512]),
                 None,
+                None,
             )
             .unwrap();
         tier_b
@@ -780,6 +986,7 @@ mod tests {
                 "ns",
                 &tokens(700),
                 &ExactStatePayload::full_state(vec![2u8; 512]),
+                None,
                 None,
             )
             .unwrap();
