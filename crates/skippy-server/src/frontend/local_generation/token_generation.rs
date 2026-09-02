@@ -17,7 +17,6 @@ use crate::frontend::iteration_scheduler::CacheRuntimeContext;
 use crate::frontend::iteration_scheduler::DirectIterationChannel;
 use crate::frontend::iteration_scheduler::ScheduledGenerationRequest;
 use crate::frontend::iteration_scheduler::ScheduledResumeRequest;
-use crate::frontend::iteration_scheduler::cache_operation_deadline;
 use crate::frontend::linear_proposal::greedy_linear_proposal_admitted;
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
