@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
-use std::time::Instant;
 
 mod fused_decode;
 mod lifecycle;
+mod prefix_restore;
 mod speculative_policy;
 
 use super::*;
@@ -41,6 +41,7 @@ use lifecycle::{
     queued_active_tokens, refill_pipeline_ngram_candidates, speculation_after_prefix_restore,
 };
 use openai_frontend::{OpenAiError, OpenAiResult};
+use prefix_restore::EmbeddedPrefixRestore;
 use serde_json::json;
 use skippy_protocol::binary::{StageReplyStats, WireReplyKind, recv_reply};
 
@@ -117,114 +118,24 @@ impl StageOpenAiBackend {
                         "miss"
                     };
                 }
-                let prefix_restore_allowed = !request.native_mtp_enabled;
-                let prefix_restore_started = Instant::now();
-                if !prefix_restore_allowed && self.kv.is_some() {
-                    let mut attrs = self.openai_attrs(request.ids);
-                    attrs.insert(
-                        "skippy.kv.decision".to_string(),
-                        json!("bypass_native_mtp_sidecar"),
-                    );
-                    attrs.insert(
-                        "skippy.kv.prompt_token_count".to_string(),
-                        json!(prefill_token_count),
-                    );
-                    self.telemetry
-                        .emit("stage.openai_kv_lookup_decision", attrs);
-                }
-                if prefix_restore_allowed && request.max_tokens > 0 && request.draft.is_none() {
-                    let current = *request
-                        .prompt_token_ids
-                        .last()
-                        .expect("checked non-empty prompt");
-                    if let Some(cached) = self.try_restore_embedded_split_exact_replay(
-                        &request,
-                        &session_key,
-                        downstream,
-                    )? {
-                        prefill_chain_cache_restored = true;
-                        prefill_chain_restored_tokens = request
-                            .prompt_token_ids
-                            .len()
-                            .saturating_add(cached.predicted_tokens.len().saturating_sub(1));
-                        prefill_chain_cache_stats = cached.reply_stats;
-                        cache_stats.cached_prompt_tokens =
-                            saturating_u32(request.prompt_token_ids.len());
-                        cache_stats.matched_prefix_tokens =
-                            saturating_u32(request.prompt_token_ids.len());
-                        cache_stats.suffix_prefill_tokens = 0;
-                        cache_stats.status = "hit";
-                        cache_stats.hit_kind = Some("chain_exact_replay");
-                        fused_first_decode = Some(cached);
-                    } else if let Some(cached) = self
-                        .try_restore_embedded_split_full_prompt_first_token(
-                            &request,
-                            &session_key,
-                            downstream,
-                        )?
-                    {
-                        prefill_chain_cache_restored = true;
-                        prefill_chain_restored_tokens = request.prompt_token_ids.len();
-                        prefill_chain_cache_stats = cached.reply_stats;
-                        cache_stats.cached_prompt_tokens =
-                            saturating_u32(request.prompt_token_ids.len());
-                        cache_stats.matched_prefix_tokens =
-                            saturating_u32(request.prompt_token_ids.len());
-                        cache_stats.suffix_prefill_tokens = 0;
-                        cache_stats.status = "hit";
-                        cache_stats.hit_kind = Some("chain_full_prompt_first_token");
-                        fused_first_decode = Some(cached);
-                    } else if let Some(fused) = self.try_restore_embedded_split_prefill_and_decode(
-                        &request,
-                        &session_key,
-                        downstream,
-                        prefill_tokens,
-                        current,
-                        wire_sampling.clone(),
-                    )? {
-                        prefill_chain_cache_restored = true;
-                        prefill_chain_restored_tokens = prefill_token_count;
-                        prefill_chain_cache_stats = fused.reply_stats;
-                        cache_stats.cached_prompt_tokens = saturating_u32(prefill_token_count);
-                        cache_stats.matched_prefix_tokens = saturating_u32(prefill_token_count);
-                        cache_stats.suffix_prefill_tokens = 0;
-                        cache_stats.status = "hit";
-                        cache_stats.hit_kind = Some("chain_fused_exact_prefix");
-                        fused_first_decode = Some(fused);
-                    }
-                }
-                let split_prefill_restore =
-                    if prefill_chain_cache_restored || !prefix_restore_allowed {
-                        None
-                    } else {
-                        self.try_restore_embedded_split_prefill(
-                            &request,
-                            &session_key,
-                            downstream,
-                            prefill_tokens,
-                        )?
-                    };
-                if let Some(restore) = split_prefill_restore {
-                    prefill_chain_restored_tokens = restore.restored_tokens;
-                    prefill_chain_cache_restored =
-                        prefill_chain_restored_tokens >= prefill_tokens.len();
-                    prefill_chain_cache_stats = restore.stats;
-                    cache_stats.cached_prompt_tokens =
-                        saturating_u32(prefill_chain_restored_tokens);
-                    cache_stats.matched_prefix_tokens =
-                        saturating_u32(prefill_chain_restored_tokens);
-                    cache_stats.suffix_prefill_tokens = saturating_u32(
-                        prefill_tokens
-                            .len()
-                            .saturating_sub(prefill_chain_restored_tokens),
-                    );
-                    cache_stats.status = "hit";
-                    cache_stats.hit_kind = Some("chain_prefix");
-                }
-                if cache_stats.cached_prompt_tokens > 0 {
-                    cache_stats.restore_ms =
-                        prefix_restore_started.elapsed().as_secs_f64() * 1_000.0;
-                }
+                let EmbeddedPrefixRestore {
+                    allowed: prefix_restore_allowed,
+                    chain_cache_restored,
+                    chain_restored_tokens,
+                    chain_cache_stats,
+                    fused_first_decode: restored_first_decode,
+                } = self.restore_embedded_prefix(
+                    &request,
+                    &session_key,
+                    downstream,
+                    prefill_tokens,
+                    wire_sampling.clone(),
+                    &mut cache_stats,
+                )?;
+                prefill_chain_cache_restored = chain_cache_restored;
+                prefill_chain_restored_tokens = chain_restored_tokens;
+                prefill_chain_cache_stats = chain_cache_stats;
+                fused_first_decode = restored_first_decode;
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
                 let mut chunk_index = 0usize;
                 while pos_start < prefill_tokens.len() {

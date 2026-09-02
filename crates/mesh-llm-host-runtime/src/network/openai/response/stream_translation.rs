@@ -1,7 +1,5 @@
-use super::common::{
-    CacheCostObservation, ResponseRetryPolicy, RouteAttemptResult, parse_cache_cost_from_json_body,
-    parse_token_usage_from_json_body,
-};
+use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
+use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
 use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
@@ -141,7 +139,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
                 observed_usage = Some(usage);
             }
             observed_cache_cost =
-                parse_cache_cost_from_json_body(data.as_bytes()).or(observed_cache_cost);
+                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
             let normalized = state.normalize_data(&data);
             write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
             if upstream_error_seen {
@@ -248,8 +246,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         if !should_parse_stream_chunk(data, state.model.is_empty(), state.usage.is_none()) {
             return Ok(());
         }
-        state.observed_cache_cost =
-            parse_cache_cost_from_json_body(data.as_bytes()).or(state.observed_cache_cost);
+        state.observed_cache_cost = state
+            .observed_cache_cost
+            .or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
         process_translated_responses_frame(tcp_stream, response_capture, state, data).await?;
         if progress.first_chunk_seen {
             route_observer.stream_chunk();
@@ -806,7 +805,7 @@ mod tests {
             .await
             .unwrap();
         upstream_writer
-            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"prompt_ms\":99.0,\"queue_wait_ms\":99.0,\"cache_restore_ms\":99.0,\"suffix_prefill_n\":1}}\n\ndata: [DONE]\n\n")
             .await
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
