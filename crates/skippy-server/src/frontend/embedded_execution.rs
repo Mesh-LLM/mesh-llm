@@ -401,23 +401,25 @@ fn poll_direct_or_downstream_reply(
         prediction_return,
         expected_replies,
         DIRECT_RETURN_FALLBACK_POLL,
+        DIRECT_RETURN_PEEK_TIMEOUT,
         stage_reply_timeout(),
     )
 }
 
-// The fallback poll interval is injectable so a test can widen it and assert the
-// direct-return wake fires well inside one interval — proving the wait is
-// event-driven rather than quantized to the poll — without depending on
-// sub-poll scheduler latency, which a loaded or virtualized CI runner cannot
-// guarantee.
+// The fallback poll and availability-peek intervals are injectable so tests can
+// widen them: a wide fallback poll proves the wake is event-driven rather than
+// quantized to the poll (without depending on sub-poll scheduler latency), and a
+// wide peek interval proves the peek is bounded by the remaining reply deadline
+// rather than overrunning it by a fixed interval.
 fn poll_direct_or_downstream_reply_with_timeouts(
     downstream: &mut TcpStream,
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
     fallback_poll: Duration,
+    peek_timeout: Duration,
     reply_timeout: Duration,
 ) -> OpenAiResult<StageReply> {
-    let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
+    let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream, peek_timeout)?;
     let started = Instant::now();
     let timeout_error = || {
         OpenAiError::backend(format!(
@@ -441,6 +443,16 @@ fn poll_direct_or_downstream_reply_with_timeouts(
         {
             break Ok(reply);
         }
+        // The channel wait above may have consumed the deadline; recompute the
+        // budget and bound the availability peek by it so the whole wait honours
+        // `reply_timeout` rather than overrunning by a fixed peek interval.
+        let remaining = reply_timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break Err(timeout_error());
+        }
+        downstream
+            .set_read_timeout(Some(remaining.min(peek_timeout)))
+            .map_err(openai_io_error)?;
         if downstream_reply_available(downstream)? {
             // `peek` only proves that the first byte has arrived. Tunnelled
             // replies may be fragmented, so decode the complete frame under
@@ -496,11 +508,11 @@ impl DirectReturnFallbackTimeout {
     /// Give the downstream socket a short read timeout so availability peeks
     /// return promptly while the reply wait blocks on the direct-return channel,
     /// without toggling nonblocking mode on the shared file description.
-    fn install(downstream: &TcpStream) -> OpenAiResult<Self> {
+    fn install(downstream: &TcpStream, peek_timeout: Duration) -> OpenAiResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
         downstream
-            .set_read_timeout(Some(DIRECT_RETURN_PEEK_TIMEOUT))
+            .set_read_timeout(Some(peek_timeout))
             .map_err(openai_io_error)?;
         Ok(Self {
             downstream: restore_stream,
@@ -659,7 +671,8 @@ mod tests {
             total
         });
 
-        let guard = DirectReturnFallbackTimeout::install(&downstream).unwrap();
+        let guard =
+            DirectReturnFallbackTimeout::install(&downstream, DIRECT_RETURN_PEEK_TIMEOUT).unwrap();
         let mut writer = writer;
         // Must block until the peer drains, not fail with WouldBlock (os err 35).
         writer
@@ -680,15 +693,22 @@ mod tests {
         let effective_original = stream.read_timeout().unwrap();
 
         {
-            let _restore = DirectReturnFallbackTimeout::install(&stream).unwrap();
-            // Nonblocking mode makes an availability peek on a silent socket
-            // return immediately instead of blocking out the read timeout.
+            let _restore =
+                DirectReturnFallbackTimeout::install(&stream, DIRECT_RETURN_PEEK_TIMEOUT).unwrap();
+            // The short read timeout makes an availability peek on a silent
+            // socket return promptly instead of blocking out the original read
+            // timeout. A timed-out peek surfaces as WouldBlock on Unix and
+            // TimedOut on Windows.
             let started = Instant::now();
             let mut byte = [0u8; 1];
             let peek = stream.peek(&mut byte);
             assert!(matches!(
                 peek,
-                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+                Err(ref error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    )
             ));
             assert!(started.elapsed() < Duration::from_millis(50));
         }
@@ -757,6 +777,7 @@ mod tests {
                 &receiver,
                 &[WireReplyKind::PredictedToken],
                 WIDE_FALLBACK_POLL,
+                DIRECT_RETURN_PEEK_TIMEOUT,
                 stage_reply_timeout(),
             )
             .unwrap();
@@ -784,7 +805,12 @@ mod tests {
     #[test]
     fn direct_return_fallback_wait_stays_within_reply_deadline() {
         const REPLY_TIMEOUT: Duration = Duration::from_millis(50);
-        const WIDE_FALLBACK_POLL: Duration = Duration::from_secs(2);
+        // A short fallback poll guarantees the loop reaches an availability peek
+        // with time still on the clock, and a peek interval far larger than the
+        // deadline means an unbounded peek would overrun by ~2s. Bounding the
+        // peek by the remaining budget keeps the whole wait near REPLY_TIMEOUT.
+        const SHORT_FALLBACK_POLL: Duration = Duration::from_millis(10);
+        const WIDE_PEEK_POLL: Duration = Duration::from_secs(2);
         let hub = Arc::new(PredictionReturnHub::default());
         let receiver = hub.register(81, 83).unwrap();
         let (mut downstream, _peer) = connected_stream_pair();
@@ -794,7 +820,8 @@ mod tests {
             &mut downstream,
             &receiver,
             &[WireReplyKind::PredictedToken],
-            WIDE_FALLBACK_POLL,
+            SHORT_FALLBACK_POLL,
+            WIDE_PEEK_POLL,
             REPLY_TIMEOUT,
         )
         .unwrap_err();
@@ -803,8 +830,8 @@ mod tests {
         assert!(error.to_string().contains("timed out waiting for one of"));
         assert!(elapsed >= REPLY_TIMEOUT);
         assert!(
-            elapsed < Duration::from_millis(750),
-            "reply wait took {elapsed:?} with a {REPLY_TIMEOUT:?} deadline and {WIDE_FALLBACK_POLL:?} fallback poll"
+            elapsed < Duration::from_millis(400),
+            "reply wait took {elapsed:?} with a {REPLY_TIMEOUT:?} deadline and {WIDE_PEEK_POLL:?} peek interval; the availability peek is not bounded by the remaining budget"
         );
         assert_eq!(downstream.read_timeout().unwrap(), None);
     }
