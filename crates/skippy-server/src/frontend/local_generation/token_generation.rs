@@ -87,7 +87,11 @@ struct PromptPrefillResult {
 }
 
 struct KvRecordResult {
+    /// Pages synchronously written during the restore phase.
     resident_recorded_pages: usize,
+    /// Exact-state checkpoint tasks enqueued for detached async execution.
+    /// These may not result in a write if the session has already advanced.
+    resident_enqueued_checkpoints: usize,
     proactive_eviction_status: &'static str,
     proactive_eviction_error_kind: Option<&'static str>,
     proactive_eviction_target_tokens: u64,
@@ -128,6 +132,7 @@ impl Default for KvRecordResult {
     fn default() -> Self {
         Self {
             resident_recorded_pages: 0,
+            resident_enqueued_checkpoints: 0,
             proactive_eviction_status: "disabled",
             proactive_eviction_error_kind: None,
             proactive_eviction_target_tokens: 0,
@@ -877,8 +882,8 @@ impl StageOpenAiBackend {
                     request.prompt_token_ids[..boundary].to_vec(),
                     "shared_prefill_checkpoint",
                 ) {
-                    record.resident_recorded_pages =
-                        record.resident_recorded_pages.saturating_add(1);
+                    record.resident_enqueued_checkpoints =
+                        record.resident_enqueued_checkpoints.saturating_add(1);
                 }
                 suffix_start = boundary;
             }
@@ -917,8 +922,8 @@ impl StageOpenAiBackend {
                     request.prompt_token_ids.to_vec(),
                     "final_prefill_state",
                 ) {
-                    record.resident_recorded_pages =
-                        record.resident_recorded_pages.saturating_add(1);
+                    record.resident_enqueued_checkpoints =
+                        record.resident_enqueued_checkpoints.saturating_add(1);
                 }
             } else {
                 let scheduler_backend = self.clone();
@@ -1000,6 +1005,10 @@ impl StageOpenAiBackend {
             attrs.insert(
                 "skippy.kv.recorded_pages".to_string(),
                 json!(record.resident_recorded_pages),
+            );
+            attrs.insert(
+                "skippy.kv.enqueued_checkpoint_pages".to_string(),
+                json!(record.resident_enqueued_checkpoints),
             );
             insert_resident_capacity_attrs(&mut attrs, &capacity);
             attrs.insert(
