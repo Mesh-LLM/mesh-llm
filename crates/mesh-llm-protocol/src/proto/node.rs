@@ -173,6 +173,9 @@ pub struct CacheAffinityEntry {
     pub restore_micros: u64,
     #[prost(uint64, tag = "7")]
     pub queue_delay_micros: u64,
+    /// measured; zero means unavailable
+    #[prost(uint64, tag = "8")]
+    pub prefill_micros_per_token: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MeshSubprotocol {

@@ -308,6 +308,7 @@ impl OpenAiBackend for FakeBackend {
                         finish_reason: None,
                     }],
                     usage: None,
+                    timings: None,
                 }),
                 Ok(ChatCompletionChunk::done(model)),
             ])));

@@ -378,6 +378,12 @@ impl AffinityState {
 type RoutingKeys = shared_affinity::RoutingKeys;
 pub use shared_affinity::{PreparedTargets, TargetSelection};
 
+pub(in crate::network) struct LocalCacheCost {
+    pub(in crate::network) queue_delay_micros: u64,
+    pub(in crate::network) restore_micros: u64,
+    pub(in crate::network) prefill_micros_per_token: Option<u64>,
+}
+
 #[cfg(test)]
 pub(crate) fn extract_session_hint_from_body(body: &Value) -> Option<String> {
     shared_affinity::extract_session_hint_from_body(body, &["user", "session_id"])
@@ -404,6 +410,7 @@ pub(crate) fn cache_prefix_hash(parsed_body: Option<&Value>) -> Option<u64> {
 impl crate::mesh::Node {
     /// Record only provider-confirmed local L1 reuse. A successful request with
     /// zero cached tokens is intentionally not evidence of residency.
+    #[cfg(test)]
     pub(crate) fn record_local_cache_hit(
         &self,
         model: &str,
@@ -422,6 +429,45 @@ impl crate::mesh::Node {
                 suffix_prefill_tokens,
                 queue_delay_micros,
             );
+    }
+
+    pub(in crate::network) fn record_local_cache_hit_with_cost(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        cached_tokens: u32,
+        suffix_prefill_tokens: u32,
+        cost: LocalCacheCost,
+    ) {
+        let mut inventory = self
+            .cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(prefill_micros_per_token) = cost.prefill_micros_per_token {
+            inventory.observe_prefill_cost(model, prefill_micros_per_token);
+        }
+        inventory.record_l1_hit_with_cost(
+            model,
+            prefix_hash,
+            cached_tokens,
+            suffix_prefill_tokens,
+            cost.restore_micros,
+            cost.queue_delay_micros,
+        );
+    }
+
+    pub(crate) fn observe_local_prefill_cost(
+        &self,
+        model: &str,
+        prefill_micros_per_token: Option<u64>,
+    ) {
+        let Some(prefill_micros_per_token) = prefill_micros_per_token else {
+            return;
+        };
+        self.cache_affinity_inventory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe_prefill_cost(model, prefill_micros_per_token);
     }
 
     /// Remove provider-refuted local cache evidence immediately instead of

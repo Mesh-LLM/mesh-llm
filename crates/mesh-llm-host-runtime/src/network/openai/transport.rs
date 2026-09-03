@@ -34,7 +34,7 @@ pub(crate) use super::routing_rank::{
 };
 
 use super::response::{
-    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
+    CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, completion_tokens_for_result, request_outcome_for_status,
     request_service_for_target, route_attempt_result_label, route_http_endpoint_attempt,
     route_local_attempt, route_remote_attempt, target_health_outcome_for_attempt,
@@ -848,7 +848,11 @@ fn handle_mesh_attempt_result(
     attempt_result: RouteAttemptResult,
 ) -> MeshAttemptDisposition {
     match attempt_result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
+        RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+        } => {
             let outcome = request_outcome_for_status(
                 status_code,
                 crate::network::metrics::RequestService::Remote,
@@ -862,7 +866,11 @@ fn handle_mesh_attempt_result(
                 );
             }
             handle_delivered_mesh_attempt(context, status_code);
-            MeshAttemptDisposition::Return(RouteAttemptResult::Delivered { status_code, usage })
+            MeshAttemptDisposition::Return(RouteAttemptResult::Delivered {
+                status_code,
+                usage,
+                cache_cost,
+            })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
@@ -907,6 +915,7 @@ fn terminal_outcome_for_mesh_route_result(
         RouteAttemptResult::Delivered {
             status_code,
             usage: Some(usage),
+            ..
         } if (200..400).contains(&status_code) => {
             crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
         }
@@ -1465,7 +1474,9 @@ pub async fn route_to_target(
         "openai route_to_target result"
     );
     match result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
+        RouteAttemptResult::Delivered {
+            status_code, usage, ..
+        } => {
             let service = request_service_for_target(&target);
             let outcome = request_outcome_for_status(status_code, service);
             if let Some(usage) = usage.as_ref() {
@@ -1562,7 +1573,9 @@ pub async fn route_http_endpoint_request(
         "openai route_http_endpoint_request result"
     );
     match result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
+        RouteAttemptResult::Delivered {
+            status_code, usage, ..
+        } => {
             let outcome = request_outcome_for_status(
                 status_code,
                 crate::network::metrics::RequestService::Endpoint,
