@@ -369,6 +369,7 @@ class PlanCiTests(unittest.TestCase):
                 "two-node-split",
                 "model-download",
                 "metal-model-load",
+                "windows-runtime-events",
             },
         )
         self.assertIn(

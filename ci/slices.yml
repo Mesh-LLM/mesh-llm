@@ -160,8 +160,8 @@
   "domain_rows": {
     "runtime-product": ["linux-cpu"],
     "ui": ["linux-cpu"],
-    "native-abi": ["linux-cpu"],
-    "protocol": ["linux-cpu"],
+    "native-abi": ["linux-cpu", "windows-cpu"],
+    "protocol": ["linux-cpu", "windows-cpu"],
     "split-serving": ["linux-cpu"],
     "model-download": ["linux-cpu"],
     "sdk-rust": ["linux-cpu"],
@@ -176,12 +176,12 @@
   "smoke_domain_rows": {
     "runtime-product": ["core", "two-node-client", "two-node-split"],
     "ui": ["core"],
-    "native-abi": ["core"],
-    "protocol": ["two-node-client"],
+    "native-abi": ["core", "windows-runtime-events"],
+    "protocol": ["two-node-client", "windows-runtime-events"],
     "split-serving": ["two-node-split"],
     "model-download": ["model-download"],
     "platform-macos": ["metal-model-load"],
-    "platform-windows": ["core"],
+    "platform-windows": ["core", "windows-runtime-events"],
     "backend-cuda": ["core-cuda"],
     "backend-rocm": ["core"],
     "backend-vulkan": ["core"]
@@ -224,7 +224,8 @@
     {"id": "two-node-client", "kind": "two-node-client", "runner_role": "linux-build-4"},
     {"id": "two-node-split", "kind": "two-node-split", "runner_role": "linux-build-8"},
     {"id": "model-download", "kind": "model-download", "runner_role": "linux-build-4"},
-    {"id": "metal-model-load", "kind": "metal-model-load", "runner_role": "macos-build"}
+    {"id": "metal-model-load", "kind": "metal-model-load", "runner_role": "macos-build"},
+    {"id": "windows-runtime-events", "kind": "runtime-events-smoke", "platform": "windows", "backend": "cpu", "runner_role": "windows-build"}
   ],
   "batch_limits": {"clippy": 3, "rust_tests": 4},
   "slices": [

@@ -137,6 +137,7 @@
         "scripts/ci-*-smoke.sh",
         "scripts/ci-*-smoke.py",
         "scripts/ci-*-smoke.cjs",
+        "scripts/ci-*-smoke.ps1",
         "scripts/compose-product*",
         "scripts/package-release*",
         "scripts/verify-host-dependencies.py",

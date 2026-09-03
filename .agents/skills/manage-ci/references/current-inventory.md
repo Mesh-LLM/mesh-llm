@@ -156,6 +156,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
 | `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable, and Windows log-store privacy ACL checks |
+| `ci-windows-runtime-events-smoke-slice.yml` | Windows CPU `runtime-events-smoke` row (`windows-runtime-events`); consumes the existing Windows CPU runtime/product artifacts, runs the three focused runtime-event Rust test batches, then `scripts/ci-windows-runtime-events-smoke.ps1` for route/capability/SSE/shutdown coverage against the composed product with no model download |
 | `ci-linux-product-smoke-slice.yml`, `ci-macos-product-smoke-slice.yml` | Platform-local CPU, CUDA (`gpu-nvidia` self-hosted), two-node, Metal and model-download consumers; ROCm/Vulkan products remain package-verified pending eligible inference runners |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
@@ -420,6 +421,12 @@ source commit.
 - Runtime-event contracts and the future host `api/routes/runtime_events/` and
   `runtime_events/` directories map directly to `protocol`; the workspace-wide
   crate rule also maps the contract crate to `rust`.
+- The `native-abi`, `platform-windows`, and `protocol` domains each select the
+  `windows-runtime-events` smoke row (`kind: runtime-events-smoke`) alongside
+  a Windows CPU (`windows-cpu`) runtime/product row, so the Windows lane
+  always builds the artifacts that row's smoke script consumes whenever one
+  of those three domains is selected — never a smoke row without its matching
+  Windows CPU host/runtime/product build.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
   cache modes and worker budgets.
 - `ci/ci-plan.schema.json` versions the machine-readable output.

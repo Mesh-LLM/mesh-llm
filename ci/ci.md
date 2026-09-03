@@ -274,6 +274,39 @@ runtime producers are not duplicated.
   that join only their matching immutable host and runtime artifacts.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable, and
   focused Windows log-store privacy ACL checks.
+- `ci-windows-runtime-events-smoke-slice.yml` — the Windows CPU
+  `runtime-events-smoke` row (`windows-runtime-events`). Its smoke phase
+  consumes the existing `ci-runtime-windows-<architecture>-<backend>` and
+  `ci-product-windows-<architecture>-<backend>` CPU artifacts with no
+  separate product composition. Its Rust-test phase runs the three focused
+  `skippy-ffi` / `skippy-runtime runtime_events` / `mesh-llm-host-runtime
+  runtime_event_api` batches, which link the patched llama.cpp CPU ABI the
+  same way `ci-windows-runtime-slice.yml`'s CPU row does (identical
+  `LLAMA_STAGE_BACKEND=cpu` / `build_dir` / toolchain-epoch cache key via
+  `restore-windows-abi-cache`): on a PR run this slice runs after
+  `native_runtimes`/`runtime_product` in the same lane, so the ABI cache
+  they just warmed is restored (no rebuild); on `main`/`manual-full`, where
+  that PR-scoped ABI cache is never populated, this phase performs a real
+  (sccache-accelerated) native ABI build the first time. After both phases,
+  `scripts/ci-windows-runtime-events-smoke.ps1` runs against the composed
+  product to prove the `GET /api/runtime/events/v1` route,
+  `capabilities.runtime_events` on both `/api/status` and `/api/runtime`, SSE
+  initial/gap-recovery framing against the shared
+  `crates/mesh-llm-runtime-event-contracts/fixtures/runtime_events_v1`
+  fixtures, and a clean CTRL_BREAK shutdown. Requires no model download. No
+  real native model-open callback executes on Windows in this coverage, and
+  the static non-unix build path has no runtime events by construction (only
+  the dynamic-native-runtime path is exercised). Selected by the
+  `native-abi`, `platform-windows`, and `protocol` domains alongside the
+  matching Windows CPU host/runtime/product rows. Added Windows wall time is
+  an ESTIMATE (no real Windows-runner measurement exists yet — replace with
+  the first real run's timing): ~4-6 minutes on a warm-ABI-cache PR run
+  (three short focused `cargo test` invocations plus one PowerShell smoke
+  script against an already-composed product), extrapolated from the
+  sibling `ci-windows-runtime-slice.yml` CPU row's cache-restore path and
+  `ci-windows-product-slice.yml`'s composition step (timeout-minutes: 20);
+  materially longer (closer to the CPU row's own ~90-minute ceiling) on a
+  cold-cache `main`/`manual-full` run that must build the native ABI itself.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local CPU core, CUDA,
   two-node, Metal and model-download consumers using only composed artifacts.
