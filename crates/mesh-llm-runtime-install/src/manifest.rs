@@ -42,29 +42,89 @@ pub async fn load_release_manifest(
     Ok(load_release_manifest_with_bundle_dirs(options).await?.0)
 }
 
+/// Which catalogs a merged manifest load consulted, so callers can explain a
+/// selection (or a rejection) in terms of where the candidates came from.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NativeRuntimeCatalogSources {
+    /// Explicit `--manifest` file that was read.
+    pub manifest_path: Option<PathBuf>,
+    /// Remote manifest URL that was consulted (explicit, environment, or the
+    /// default release URL).
+    pub manifest_url: Option<String>,
+    /// Why the remote manifest could not be used, when bundled artifacts
+    /// carried the load instead. `None` when the fetch succeeded or was not
+    /// attempted.
+    pub remote_error: Option<String>,
+    /// Bundle directories whose artifacts were merged in.
+    pub bundle_dirs: Vec<PathBuf>,
+}
+
 pub(crate) async fn load_release_manifest_with_bundle_dirs(
-    mut options: NativeRuntimeManifestOptions,
+    options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, Vec<PathBuf>)> {
+    let (manifest, sources) = load_release_manifest_with_sources(options).await?;
+    Ok((manifest, sources.bundle_dirs))
+}
+
+/// Merges every catalog the options allow: an explicit manifest file, else a
+/// remote manifest (explicit URL, environment URL, or the default release
+/// URL), plus every discovered bundle directory.
+///
+/// Precedence:
+/// 1. An explicit manifest file is required: a read failure is an error.
+/// 2. A remote manifest is consulted even when bundle directories exist, so
+///    an adjacent bundle cannot hide downloadable runtimes. If the fetch
+///    fails and bundles were discovered, the bundles carry the load and the
+///    failure is recorded in `NativeRuntimeCatalogSources::remote_error`.
+///    Without bundles the fetch failure is an error, as before.
+/// 3. Bundle artifacts are appended after the manifest artifacts. The
+///    manifest's `mesh_version` and `skippy_abi` win when a manifest was
+///    loaded; bundle values only describe the release when no manifest was
+///    available at all.
+///
+/// Candidates with the same identity coming from several sources are
+/// deduplicated downstream by the resolver, which also prefers a bundled copy
+/// over a download for the same artifact.
+pub(crate) async fn load_release_manifest_with_sources(
+    mut options: NativeRuntimeManifestOptions,
+) -> Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
     options.bundle_dirs = discover_native_runtime_bundle_dirs(&options.bundle_dirs)?;
+    let mut sources = NativeRuntimeCatalogSources {
+        bundle_dirs: options.bundle_dirs.clone(),
+        ..Default::default()
+    };
     let mut artifacts = Vec::new();
     let mut mesh_version = options.mesh_version.clone();
     let mut skippy_abi = current_skippy_abi_version();
-    if let Some(path) = options.manifest_path {
+    let mut manifest_loaded = false;
+    if let Some(path) = options.manifest_path.take() {
         let manifest = NativeRuntimeReleaseManifest::read_from_path(&path)?;
+        sources.manifest_path = Some(path);
         mesh_version = manifest.mesh_version.clone();
         skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
+        manifest_loaded = true;
     } else if let Some(url) = manifest_url(&options) {
-        let manifest = download_release_manifest(&url).await?;
-        mesh_version = manifest.mesh_version.clone();
-        skippy_abi = manifest.skippy_abi.clone();
-        artifacts.extend(manifest.artifacts);
+        sources.manifest_url = Some(url_without_query(&url));
+        match download_release_manifest(&url).await {
+            Ok(manifest) => {
+                mesh_version = manifest.mesh_version.clone();
+                skippy_abi = manifest.skippy_abi.clone();
+                artifacts.extend(manifest.artifacts);
+                manifest_loaded = true;
+            }
+            Err(err) if !options.bundle_dirs.is_empty() => {
+                sources.remote_error = Some(format!("{err:#}"));
+            }
+            Err(err) => return Err(err),
+        }
     }
     append_bundle_artifacts(
         &mut artifacts,
         &mut mesh_version,
         &mut skippy_abi,
         &options.bundle_dirs,
+        manifest_loaded,
     )?;
     Ok((
         NativeRuntimeReleaseManifest {
@@ -72,7 +132,7 @@ pub(crate) async fn load_release_manifest_with_bundle_dirs(
             skippy_abi,
             artifacts,
         },
-        options.bundle_dirs,
+        sources,
     ))
 }
 
@@ -186,7 +246,12 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
                 .filter(|value| !value.trim().is_empty())
         })
         .or_else(|| {
-            (options.allow_default_manifest_url && options.bundle_dirs.is_empty())
+            // Bundle directories no longer suppress the default catalog: an
+            // adjacent CPU bundle must not hide downloadable GPU runtimes
+            // (#1612). Offline hosts fall back to the bundles when the fetch
+            // fails, see `load_release_manifest_with_sources`.
+            options
+                .allow_default_manifest_url
                 .then(|| request_default_manifest_url(&options.mesh_version))
         })
 }
@@ -196,17 +261,36 @@ pub(crate) fn append_bundle_artifacts(
     mesh_version: &mut String,
     skippy_abi: &mut String,
     bundle_dirs: &[PathBuf],
+    manifest_loaded: bool,
 ) -> Result<()> {
     for dir in bundle_dirs {
         let manifest = NativeRuntimeManifest::read_from_dir(dir)
             .with_context(|| format!("read bundled native runtime {}", dir.display()))?;
-        if let Some(version) = &manifest.runtime.mesh_version {
-            *mesh_version = version.clone();
+        // A loaded release manifest describes the release; a bundle only
+        // stands in for it when no manifest was available at all.
+        if !manifest_loaded {
+            if let Some(version) = &manifest.runtime.mesh_version {
+                *mesh_version = version.clone();
+            }
+            *skippy_abi = manifest.runtime.skippy_abi.clone();
         }
-        *skippy_abi = manifest.runtime.skippy_abi.clone();
-        artifacts.push(manifest.runtime);
+        // The same runtime can be both bundled and published. Keep one entry
+        // so listings stay unambiguous; the resolver still prefers the bundle
+        // directory as the source for that identity.
+        let duplicate = artifacts
+            .iter()
+            .any(|existing| same_artifact_identity(existing, &manifest.runtime));
+        if !duplicate {
+            artifacts.push(manifest.runtime);
+        }
     }
     Ok(())
+}
+
+fn same_artifact_identity(left: &NativeRuntimeArtifact, right: &NativeRuntimeArtifact) -> bool {
+    left.id == right.id
+        && left.mesh_version == right.mesh_version
+        && left.skippy_abi == right.skippy_abi
 }
 
 pub(crate) fn normalize_sha256(value: &str) -> Result<String> {

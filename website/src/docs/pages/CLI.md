@@ -584,9 +584,11 @@ mesh-llm runtime drain-model --endpoint '<control-endpoint>' --instance-id '<ins
 ```
 
 Plain `mesh-llm runtime list` lists locally discoverable native runtimes. Use
-`mesh-llm runtime list --available` to list release-manifest or bundled
-runtimes instead. `--installed` is the explicit compatibility spelling for the
-default local-discovery behavior.
+`mesh-llm runtime list --available` to list the release-manifest and bundled
+runtimes together: an adjacent bundle (for example the cpu runtime shipped
+next to the Windows binary) no longer hides the downloadable GPU runtimes of
+the release catalog. `--installed` is the explicit compatibility spelling for
+the default local-discovery behavior.
 
 Use `--json` for machine-readable output. Runtime selection is constrained by
 the running Mesh version, platform, backend, and Skippy ABI.
