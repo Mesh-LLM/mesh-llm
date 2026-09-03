@@ -660,6 +660,7 @@ class AgenticReplayTest(unittest.TestCase):
         baseline = {
             "label": "base",
             "concurrency": 1,
+            "failed_requests": 0,
             "prompt_tokens_min": 19_100,
             "prompt_tokens_max": 19_900,
             "cache_pct": 80.0,
@@ -683,7 +684,8 @@ class AgenticReplayTest(unittest.TestCase):
         )
 
         self.assertTrue(gates["passed"])
-        self.assertEqual(len(gates["checks"]), 8)
+        self.assertTrue(gates["evaluated"])
+        self.assertEqual(len(gates["checks"]), 10)
 
     def test_acceptance_gate_failure_is_explicit(self) -> None:
         gates = BENCH.evaluate_gates(
@@ -691,6 +693,7 @@ class AgenticReplayTest(unittest.TestCase):
                 {
                     "label": "candidate",
                     "concurrency": 4,
+                    "failed_requests": 1,
                     "prompt_tokens_min": 17_999,
                     "prompt_tokens_max": 19_000,
                     "cache_pct": 20.0,
@@ -713,6 +716,7 @@ class AgenticReplayTest(unittest.TestCase):
                 {
                     "label": "candidate",
                     "concurrency": 1,
+                    "failed_requests": 0,
                     "ttft_p50_seconds_delta_pct": None,
                 }
             ],
@@ -720,8 +724,35 @@ class AgenticReplayTest(unittest.TestCase):
         )
 
         self.assertFalse(gates["passed"])
-        self.assertEqual(len(gates["checks"]), 1)
-        self.assertIn("observed=unavailable", gates["checks"][0]["detail"])
+        self.assertEqual(len(gates["checks"]), 2)
+        self.assertIn("observed=unavailable", gates["checks"][1]["detail"])
+
+    def test_acceptance_gate_rejects_failed_measured_requests(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [
+                {
+                    "label": "candidate",
+                    "concurrency": 1,
+                    "failed_requests": 49,
+                    "cache_pct": 100.0,
+                }
+            ],
+            min_cache_pct=75.0,
+        )
+
+        self.assertTrue(gates["evaluated"])
+        self.assertFalse(gates["passed"])
+        self.assertEqual(gates["checks"][0]["name"], "failed-requests:candidate/c1")
+        self.assertFalse(gates["checks"][0]["passed"])
+
+    def test_acceptance_gates_are_not_evaluated_without_configuration(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [{"label": "candidate", "concurrency": 1, "failed_requests": 0}]
+        )
+
+        self.assertFalse(gates["evaluated"])
+        self.assertIsNone(gates["passed"])
+        self.assertEqual(gates["checks"], [])
 
     def test_pooled_rows_preserve_legacy_comparability_without_hashes(self) -> None:
         def successful_cell():

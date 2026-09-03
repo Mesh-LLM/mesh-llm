@@ -1523,6 +1523,17 @@ def evaluate_gates(
     require_output_match: bool = False,
     max_ttft_regression_pct: Optional[float] = None,
 ) -> dict[str, Any]:
+    configured = any(
+        (
+            prompt_token_range is not None,
+            min_cache_pct is not None,
+            require_output_match,
+            max_ttft_regression_pct is not None,
+        )
+    )
+    if not configured:
+        return {"evaluated": False, "passed": None, "checks": []}
+
     checks: list[dict[str, Any]] = []
 
     def record(name: str, passed: bool, detail: str) -> None:
@@ -1530,6 +1541,12 @@ def evaluate_gates(
 
     for row in rows:
         cell = f"{row['label']}/c{row['concurrency']}"
+        failed_requests = row.get("failed_requests")
+        record(
+            f"failed-requests:{cell}",
+            failed_requests == 0,
+            f"observed={failed_requests} required=0",
+        )
         if prompt_token_range is not None:
             minimum, maximum = prompt_token_range
             observed_min = row.get("prompt_tokens_min")
@@ -1575,6 +1592,7 @@ def evaluate_gates(
                 ),
             )
     return {
+        "evaluated": True,
         "passed": all(check["passed"] for check in checks),
         "checks": checks,
     }
@@ -1828,9 +1846,12 @@ def write_report(output: Path, run_document: dict[str, Any]) -> Path:
     gates = run_document.get("gates")
     if gates is not None:
         lines.extend(["## Acceptance gates", ""])
-        for check in gates["checks"]:
-            marker = "PASS" if check["passed"] else "FAIL"
-            lines.append(f"- **{marker}** `{check['name']}` — {check['detail']}")
+        if not gates.get("evaluated", True):
+            lines.append("- **NOT EVALUATED** — no acceptance gates were configured.")
+        else:
+            for check in gates["checks"]:
+                marker = "PASS" if check["passed"] else "FAIL"
+                lines.append(f"- **{marker}** `{check['name']}` — {check['detail']}")
         lines.append("")
     report_path = summary / "REPORT.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -2058,7 +2079,7 @@ def run_benchmark(args: argparse.Namespace) -> Path:
     )
     write_json(existing, run_document)
     report = write_report(args.output, run_document)
-    if not run_document["gates"]["passed"]:
+    if run_document["gates"]["passed"] is False:
         raise RuntimeError(f"benchmark acceptance gates failed; see {report}")
     return report
 
