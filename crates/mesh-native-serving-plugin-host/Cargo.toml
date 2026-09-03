@@ -10,7 +10,7 @@ readme = "README.md"
 
 [dependencies]
 anyhow.workspace = true
-libloading = "0.8"
+libloading = "0.9"
 mesh-native-serving-plugin-api = { path = "../mesh-native-serving-plugin-api", version = "0.76.0-rc9" }
 skippy-server = { path = "../skippy-server", version = "0.76.0-rc9" }
 skippy-tokenizer = { path = "../skippy-tokenizer", version = "0.76.0-rc9" }

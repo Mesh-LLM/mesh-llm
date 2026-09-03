@@ -74,7 +74,117 @@ pub fn synthetic_direct_gguf_package(
     model_id: &str,
     model_path: &Path,
 ) -> Result<SkippyPackageIdentity> {
+    if let Some(root) = safetensors_checkpoint_root(model_path) {
+        return synthetic_safetensors_package(model_id, &root);
+    }
     synthetic_gguf_package(model_id, model_path, SyntheticIdentityMode::LegacyPath)
+}
+
+fn safetensors_checkpoint_root(model_path: &Path) -> Option<PathBuf> {
+    let root = if model_path.is_dir() {
+        model_path
+    } else {
+        model_path.parent()?
+    };
+    (root.join("config.json").is_file()
+        && (root.join("model.safetensors").is_file()
+            || root.join("model.safetensors.index.json").is_file()))
+    .then(|| root.to_path_buf())
+}
+
+fn synthetic_safetensors_package(
+    model_id: &str,
+    checkpoint_root: &Path,
+) -> Result<SkippyPackageIdentity> {
+    let checkpoint_root = checkpoint_root
+        .canonicalize()
+        .with_context(|| format!("canonicalize checkpoint {}", checkpoint_root.display()))?;
+    let config_path = checkpoint_root.join("config.json");
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&config_path)
+            .with_context(|| format!("read checkpoint config {}", config_path.display()))?,
+    )
+    .with_context(|| format!("parse checkpoint config {}", config_path.display()))?;
+    let config_u32 = |key: &str| -> Result<u32> {
+        let value = config
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .with_context(|| format!("checkpoint config missing integer {key}"))?;
+        u32::try_from(value).with_context(|| format!("checkpoint config {key} exceeds u32"))
+    };
+    let layer_count = config_u32("num_hidden_layers")?;
+    let activation_width = config_u32("hidden_size")?;
+    anyhow::ensure!(layer_count > 0, "checkpoint layer count must be positive");
+    anyhow::ensure!(
+        activation_width > 0,
+        "checkpoint hidden size must be positive"
+    );
+    let architecture = config
+        .get("model_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("safetensors");
+    let context_length = config
+        .get("max_position_embeddings")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_else(|| {
+            if architecture == "granitemoehybrid" {
+                1 << 20
+            } else {
+                0
+            }
+        });
+    let plan = skippy_model::hf_checkpoint::inspect_hf_checkpoint(&checkpoint_root, None, 1.0)?;
+    let tensor_count = u64::try_from(plan.tensor_count).context("tensor count exceeds u64")?;
+
+    let mut source_paths = skippy_model::hf_checkpoint::discover_safetensors(&checkpoint_root)?;
+    for name in [
+        "config.json",
+        "model.safetensors.index.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "tokenizer.model",
+        "chat_template.jinja",
+    ] {
+        let path = checkpoint_root.join(name);
+        if path.is_file() {
+            source_paths.push(path);
+        }
+    }
+    source_paths.sort();
+    source_paths.dedup();
+    let digest_cache = SidecarDigestCache::open_default();
+    let source_files = direct_gguf_source_files_from_paths(source_paths, digest_cache.as_ref())?;
+    let source_model_bytes = source_files.iter().map(|file| file.bytes).sum();
+    let source_model_sha256 = legacy_identity::aggregate_source_sha256(&source_files);
+    let package_ref = format!("safetensors://{}", checkpoint_root.display());
+    let manifest_sha256 = synthetic_manifest_sha256(SyntheticManifestInput {
+        model_id,
+        package_kind: "direct-safetensors",
+        package_ref: &package_ref,
+        source_model_path: &checkpoint_root.to_string_lossy(),
+        source_model_sha256: &source_model_sha256,
+        source_model_bytes,
+        source_files: &source_files,
+        architecture,
+        context_length,
+        layer_count,
+        activation_width,
+        tensor_count,
+    })?;
+    Ok(SkippyPackageIdentity {
+        package_ref,
+        manifest_sha256,
+        source_model_path: checkpoint_root,
+        source_model_sha256,
+        source_model_bytes,
+        source_files,
+        layer_weight_bytes: Vec::new(),
+        layer_count,
+        activation_width,
+        tensor_count,
+        generation: None,
+    })
 }
 
 fn synthetic_gguf_package(
@@ -161,6 +271,7 @@ fn synthetic_gguf_package(
             let package_ref = format!("gguf://{}", source_model_path.display());
             let manifest_sha256 = synthetic_manifest_sha256(SyntheticManifestInput {
                 model_id,
+                package_kind: "direct-gguf",
                 package_ref: &package_ref,
                 source_model_path: &source_model_path.to_string_lossy(),
                 source_model_sha256: &source_model_sha256,
@@ -212,6 +323,7 @@ fn synthetic_gguf_package(
 
 struct SyntheticManifestInput<'a> {
     model_id: &'a str,
+    package_kind: &'a str,
     package_ref: &'a str,
     source_model_path: &'a str,
     source_model_sha256: &'a str,
@@ -236,7 +348,7 @@ fn synthetic_manifest_sha256(input: SyntheticManifestInput<'_>) -> Result<String
         .collect::<Vec<_>>();
     let manifest = SyntheticGgufManifest {
         schema_version: 1,
-        package_kind: "direct-gguf",
+        package_kind: input.package_kind,
         model_id: input.model_id,
         package_ref: input.package_ref,
         source_model_path: input.source_model_path,
@@ -629,6 +741,46 @@ mod tests {
     use skippy_runtime::TensorInfo;
 
     #[test]
+    fn synthetic_direct_identity_accepts_safetensors_checkpoint_directory() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("config.json"),
+            r#"{
+              "model_type": "qwen2",
+              "num_hidden_layers": 1,
+              "hidden_size": 4,
+              "max_position_embeddings": 128
+            }"#,
+        )
+        .unwrap();
+        let header = serde_json::json!({
+            "model.layers.0.input_layernorm.weight": {
+                "dtype": "F32",
+                "shape": [1],
+                "data_offsets": [0, 4]
+            }
+        })
+        .to_string();
+        let mut safetensors = Vec::new();
+        safetensors.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        safetensors.extend_from_slice(header.as_bytes());
+        safetensors.extend_from_slice(&1.0_f32.to_le_bytes());
+        std::fs::write(root.path().join("model.safetensors"), safetensors).unwrap();
+
+        let identity = synthetic_direct_gguf_package("test", root.path()).unwrap();
+
+        assert!(identity.package_ref.starts_with("safetensors://"));
+        assert_eq!(
+            identity.source_model_path,
+            root.path().canonicalize().unwrap()
+        );
+        assert_eq!(identity.layer_count, 1);
+        assert_eq!(identity.activation_width, 4);
+        assert_eq!(identity.tensor_count, 1);
+        assert_eq!(identity.source_files.len(), 2);
+    }
+
+    #[test]
     fn synthetic_manifest_identity_is_stable_and_metadata_sensitive() {
         let source_files = vec![SkippyPackageSourceFile {
             path: PathBuf::from("/models/model.gguf"),
@@ -637,6 +789,7 @@ mod tests {
         }];
         let first = synthetic_manifest_sha256(SyntheticManifestInput {
             model_id: "model-a",
+            package_kind: "direct-gguf",
             package_ref: "gguf:///models/model.gguf",
             source_model_path: "/models/model.gguf",
             source_model_sha256: "abc123",
@@ -651,6 +804,7 @@ mod tests {
         .unwrap();
         let second = synthetic_manifest_sha256(SyntheticManifestInput {
             model_id: "model-a",
+            package_kind: "direct-gguf",
             package_ref: "gguf:///models/model.gguf",
             source_model_path: "/models/model.gguf",
             source_model_sha256: "abc123",
@@ -665,6 +819,7 @@ mod tests {
         .unwrap();
         let changed = synthetic_manifest_sha256(SyntheticManifestInput {
             model_id: "model-a",
+            package_kind: "direct-gguf",
             package_ref: "gguf:///models/model.gguf",
             source_model_path: "/models/model.gguf",
             source_model_sha256: "abc123",

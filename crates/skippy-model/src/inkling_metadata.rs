@@ -1,3 +1,5 @@
+//! Inkling checkpoint metadata conversion.
+
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};

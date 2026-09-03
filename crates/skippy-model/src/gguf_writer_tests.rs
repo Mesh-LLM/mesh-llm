@@ -1,3 +1,5 @@
+//! Canonical GGUF writer tests.
+
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;

@@ -20,13 +20,12 @@ pub use error::{PluginError, PluginResult, PluginRpcResult, STARTUP_DISABLED_ERR
 pub use helpers::{
     BulkTransferSequence, CompletionFuture, CompletionRouter, JsonOperationFuture, OperationFuture,
     OperationRequest, OperationRouter, PromptFuture, PromptRouter, ResourceFuture, ResourceRouter,
-    SubscriptionSet, TaskCancelFuture, TaskInfoFuture, TaskListFuture, TaskRecord,
-    TaskResultFuture, TaskRouter, TaskStore, accept_bulk_transfer_message, bulk_transfer_message,
-    bulk_transfer_sequence, cancel_task_result, channel_message, complete_result,
-    empty_object_schema, get_prompt_result, get_task_payload_result, get_task_result, json_bytes,
-    json_channel_message, json_reply_channel_message, json_response, json_schema_for,
+    SubscriptionSet, TaskCancelFuture, TaskGetFuture, TaskRecord, TaskRouter, TaskStore,
+    TaskUpdateFuture, accept_bulk_transfer_message, bulk_transfer_message, bulk_transfer_sequence,
+    channel_message, complete_result, empty_object_schema, get_prompt_result, get_task_result,
+    json_bytes, json_channel_message, json_reply_channel_message, json_response, json_schema_for,
     json_schema_operation, json_string, list_prompts, list_resource_templates, list_resources,
-    list_tasks, list_tools, operation_error, operation_with_schema, parse_get_prompt_request,
+    list_tools, operation_error, operation_with_schema, parse_get_prompt_request,
     parse_optional_json, parse_read_resource_request, parse_rpc_params, plugin_server_info,
     plugin_server_info_full, prompt, prompt_argument, read_resource_result, resource_template,
     structured_tool_result, task, text_resource,
@@ -83,7 +82,11 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/meshllm.plugin.v1.rs"));
 }
 
-pub const PROTOCOL_VERSION: u32 = 2;
+// RMCP 3 implements the SEP-2663 task lifecycle (`tasks/get`, `tasks/update`, and
+// `tasks/cancel`) instead of the legacy draft task methods exposed by protocol 2.
+// Keep strict host/plugin negotiation honest rather than letting an older plugin
+// initialize successfully and fail only when a task method is invoked.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[macro_export]
 macro_rules! plugin_manifest {

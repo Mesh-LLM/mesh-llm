@@ -39,6 +39,52 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -525,7 +571,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -541,7 +591,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -615,16 +666,18 @@ open class ConsoleHandle: ConsoleHandleProtocol, @unchecked Sendable {
 
 
 open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_consolehandle_stop(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func url() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_consolehandle_url(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -752,66 +805,74 @@ open class MeshClientHandle: MeshClientHandleProtocol, @unchecked Sendable {
 
 
 open func cancel(requestId: String)  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_cancel(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(requestId),$0
+        FfiConverterString.lower(requestId),uniffiCallStatus
     )
 }
 }
 
 open func chat(request: ChatRequestNative, listener: EventListener)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_chat(
             self.uniffiCloneHandle(),
         FfiConverterTypeChatRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),$0
+        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
     )
 })
 }
 
 open func inferenceListModels()throws  -> [ModelNative]  {
     return try  FfiConverterSequenceTypeModelNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_inference_list_models(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func reconnect()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_reconnect(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func responses(request: ResponsesRequestNative, listener: EventListener)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_responses(
             self.uniffiCloneHandle(),
         FfiConverterTypeResponsesRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),$0
+        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
     )
 })
 }
 
 open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_start(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func status() -> ClientStatus  {
     return try!  FfiConverterTypeClientStatus_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_status(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func stop()  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshclienthandle_stop(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -973,215 +1034,240 @@ open class MeshNodeHandle: MeshNodeHandleProtocol, @unchecked Sendable {
 
 
 open func cancel(requestId: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_cancel(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(requestId),$0
+        FfiConverterString.lower(requestId),uniffiCallStatus
     )
 }
 }
 
 open func chat(request: ChatRequestNative, listener: EventListener)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_chat(
             self.uniffiCloneHandle(),
         FfiConverterTypeChatRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),$0
+        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
     )
 })
 }
 
 open func cleanupModels(policy: CleanupPolicy)throws  -> CleanupResult  {
     return try  FfiConverterTypeCleanupResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_cleanup_models(
             self.uniffiCloneHandle(),
-        FfiConverterTypeCleanupPolicy_lower(policy),$0
+        FfiConverterTypeCleanupPolicy_lower(policy),uniffiCallStatus
     )
 })
 }
 
 open func deleteModel(modelRef: String, options: DeleteModelOptions)throws  -> DeleteModelResult  {
     return try  FfiConverterTypeDeleteModelResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_delete_model(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(modelRef),
-        FfiConverterTypeDeleteModelOptions_lower(options),$0
+        FfiConverterTypeDeleteModelOptions_lower(options),uniffiCallStatus
     )
 })
 }
 
 open func downloadModel(modelRef: String)throws  -> DownloadedModel  {
     return try  FfiConverterTypeDownloadedModel_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_download_model(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),$0
+        FfiConverterString.lower(modelRef),uniffiCallStatus
     )
 })
 }
 
 open func inferenceListModels()throws  -> [ModelNative]  {
     return try  FfiConverterSequenceTypeModelNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_inference_list_models(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func installedModels()throws  -> [InstalledModel]  {
     return try  FfiConverterSequenceTypeInstalledModel.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_installed_models(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func loadServingModel(modelRef: String, options: LoadModelOptions)throws  -> ServedModel  {
     return try  FfiConverterTypeServedModel_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_load_serving_model(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(modelRef),
-        FfiConverterTypeLoadModelOptions_lower(options),$0
+        FfiConverterTypeLoadModelOptions_lower(options),uniffiCallStatus
     )
 })
 }
 
 open func modelCacheStatus()throws  -> ModelCacheStatus  {
     return try  FfiConverterTypeModelCacheStatus_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_model_cache_status(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func pruneDerivedCache(policy: PrunePolicy)throws  -> PruneResult  {
     return try  FfiConverterTypePruneResult_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_prune_derived_cache(
             self.uniffiCloneHandle(),
-        FfiConverterTypePrunePolicy_lower(policy),$0
+        FfiConverterTypePrunePolicy_lower(policy),uniffiCallStatus
     )
 })
 }
 
 open func recommendedModels()throws  -> [ModelSummary]  {
     return try  FfiConverterSequenceTypeModelSummary.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_recommended_models(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func reconnect()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_reconnect(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func responses(request: ResponsesRequestNative, listener: EventListener)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_responses(
             self.uniffiCloneHandle(),
         FfiConverterTypeResponsesRequestNative_lower(request),
-        FfiConverterCallbackInterfaceEventListener_lower(listener),$0
+        FfiConverterCallbackInterfaceEventListener_lower(listener),uniffiCallStatus
     )
 })
 }
 
 open func searchModels(query: ModelSearchQuery)throws  -> [ModelSummary]  {
     return try  FfiConverterSequenceTypeModelSummary.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_search_models(
             self.uniffiCloneHandle(),
-        FfiConverterTypeModelSearchQuery_lower(query),$0
+        FfiConverterTypeModelSearchQuery_lower(query),uniffiCallStatus
     )
 })
 }
 
 open func servedModels()throws  -> [ServedModel]  {
     return try  FfiConverterSequenceTypeServedModel.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_served_models(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func servingStatus()throws  -> ServingStatus  {
     return try  FfiConverterTypeServingStatus_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_serving_status(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func setDevicePolicy(policy: DevicePolicy)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_set_device_policy(
             self.uniffiCloneHandle(),
-        FfiConverterTypeDevicePolicy_lower(policy),$0
+        FfiConverterTypeDevicePolicy_lower(policy),uniffiCallStatus
     )
 }
 }
 
 open func showModel(modelRef: String)throws  -> ModelDetails  {
     return try  FfiConverterTypeModelDetails_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_show_model(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(modelRef),$0
+        FfiConverterString.lower(modelRef),uniffiCallStatus
     )
 })
 }
 
 open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_start(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func startConsole(options: ConsoleOptionsNative)throws  -> ConsoleHandle  {
     return try  FfiConverterTypeConsoleHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console(
             self.uniffiCloneHandle(),
-        FfiConverterTypeConsoleOptionsNative_lower(options),$0
+        FfiConverterTypeConsoleOptionsNative_lower(options),uniffiCallStatus
     )
 })
 }
 
 open func status() -> ClientStatus  {
     return try!  FfiConverterTypeClientStatus_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_status(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
 
 open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_stop(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
 
 open func unloadServingInstance(instanceId: String, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_instance(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(instanceId),
-        FfiConverterTypeUnloadModelOptions_lower(options),$0
+        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
     )
 }
 }
 
 open func unloadServingModel(target: UnloadTarget, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model(
             self.uniffiCloneHandle(),
         FfiConverterTypeUnloadTarget_lower(target),
-        FfiConverterTypeUnloadModelOptions_lower(options),$0
+        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
     )
 }
 }
 
 open func unloadServingModelById(modelId: String, options: UnloadModelOptions)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_method_meshnodehandle_unload_serving_model_by_id(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(modelId),
-        FfiConverterTypeUnloadModelOptions_lower(options),$0
+        FfiConverterTypeUnloadModelOptions_lower(options),uniffiCallStatus
     )
 }
 }
@@ -3069,8 +3155,7 @@ public func FfiConverterTypeUnloadModelOptions_lower(_ value: UnloadModelOptions
     return FfiConverterTypeUnloadModelOptions.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum CapabilityLevel: Equatable, Hashable {
 
@@ -3143,8 +3228,7 @@ public func FfiConverterTypeCapabilityLevel_lower(_ value: CapabilityLevel) -> R
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum ClientEvent: Equatable, Hashable {
 
@@ -3265,8 +3349,7 @@ public func FfiConverterTypeClientEvent_lower(_ value: ClientEvent) -> RustBuffe
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum DevicePolicy: Equatable, Hashable {
 
@@ -3343,7 +3426,8 @@ public func FfiConverterTypeDevicePolicy_lower(_ value: DevicePolicy) -> RustBuf
 
 
 
-public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public
+enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
 
 
@@ -3520,8 +3604,7 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
     return FfiConverterTypeFfiError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum ModelKind: Equatable, Hashable {
 
@@ -3601,8 +3684,7 @@ public func FfiConverterTypeModelKind_lower(_ value: ModelKind) -> RustBuffer {
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum ModelSource: Equatable, Hashable {
 
@@ -3675,8 +3757,7 @@ public func FfiConverterTypeModelSource_lower(_ value: ModelSource) -> RustBuffe
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum NativeRuntimePruneModeNative: Equatable, Hashable {
 
@@ -3742,8 +3823,7 @@ public func FfiConverterTypeNativeRuntimePruneModeNative_lower(_ value: NativeRu
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum NativeRuntimeVerificationPolicyNative: Equatable, Hashable {
 
@@ -3809,8 +3889,7 @@ public func FfiConverterTypeNativeRuntimeVerificationPolicyNative_lower(_ value:
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum ServingModelState: Equatable, Hashable {
 
@@ -3907,8 +3986,7 @@ public func FfiConverterTypeServingModelState_lower(_ value: ServingModelState) 
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 
 public enum UnloadTarget: Equatable, Hashable {
 
@@ -3996,9 +4074,8 @@ fileprivate struct UniffiCallbackInterfaceEventListener {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceEventListener] = [UniffiVTableCallbackInterfaceEventListener(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceEventListener = UniffiVTableCallbackInterfaceEventListener(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterCallbackInterfaceEventListener.handleMap.remove(handle: uniffiHandle)
@@ -4037,11 +4114,23 @@ fileprivate struct UniffiCallbackInterfaceEventListener {
                 writeReturn: writeReturn
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceEventListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceEventListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitEventListener() {
-    uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener(UniffiCallbackInterfaceEventListener.vtable)
+    uniffi_meshllm_ffi_fn_init_callback_vtable_eventlistener(UniffiCallbackInterfaceEventListener.vtablePtr)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -4120,9 +4209,8 @@ fileprivate struct UniffiCallbackInterfaceNativeRuntimeProgressListener {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceNativeRuntimeProgressListener] = [UniffiVTableCallbackInterfaceNativeRuntimeProgressListener(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceNativeRuntimeProgressListener = UniffiVTableCallbackInterfaceNativeRuntimeProgressListener(
         uniffiFree: { (uniffiHandle: UInt64) -> () in
             do {
                 try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.handleMap.remove(handle: uniffiHandle)
@@ -4161,11 +4249,23 @@ fileprivate struct UniffiCallbackInterfaceNativeRuntimeProgressListener {
                 writeReturn: writeReturn
             )
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceNativeRuntimeProgressListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceNativeRuntimeProgressListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitNativeRuntimeProgressListener() {
-    uniffi_meshllm_ffi_fn_init_callback_vtable_nativeruntimeprogresslistener(UniffiCallbackInterfaceNativeRuntimeProgressListener.vtable)
+    uniffi_meshllm_ffi_fn_init_callback_vtable_nativeruntimeprogresslistener(UniffiCallbackInterfaceNativeRuntimeProgressListener.vtablePtr)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -4597,94 +4697,106 @@ fileprivate struct FfiConverterSequenceTypeServedModel: FfiConverterRustBuffer {
 }
 public func createAutoClient(ownerKeypairBytesHex: String, query: PublicMeshQuery)throws  -> MeshClientHandle  {
     return try  FfiConverterTypeMeshClientHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_create_auto_client(
         FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterTypePublicMeshQuery_lower(query),$0
+        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
     )
 })
 }
 public func createAutoNode(ownerKeypairBytesHex: String, query: PublicMeshQuery)throws  -> MeshNodeHandle  {
     return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_create_auto_node(
         FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterTypePublicMeshQuery_lower(query),$0
+        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
     )
 })
 }
 public func createClient(ownerKeypairBytesHex: String, inviteToken: String)throws  -> MeshClientHandle  {
     return try  FfiConverterTypeMeshClientHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_create_client(
         FfiConverterString.lower(ownerKeypairBytesHex),
-        FfiConverterString.lower(inviteToken),$0
+        FfiConverterString.lower(inviteToken),uniffiCallStatus
     )
 })
 }
 public func createNode(ownerKeypairBytesHex: String, inviteToken: String, cacheDir: String?, runtimeDir: String?, servingEnabled: Bool)throws  -> MeshNodeHandle  {
     return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_create_node(
         FfiConverterString.lower(ownerKeypairBytesHex),
         FfiConverterString.lower(inviteToken),
         FfiConverterOptionString.lower(cacheDir),
         FfiConverterOptionString.lower(runtimeDir),
-        FfiConverterBool.lower(servingEnabled),$0
+        FfiConverterBool.lower(servingEnabled),uniffiCallStatus
     )
 })
 }
 public func currentMeshVersion() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_meshllm_ffi_fn_func_current_mesh_version($0
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_func_current_mesh_version(uniffiCallStatus
     )
 })
 }
 public func currentSkippyAbiVersion() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_meshllm_ffi_fn_func_current_skippy_abi_version($0
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_func_current_skippy_abi_version(uniffiCallStatus
     )
 })
 }
 public func discoverPublicMeshes(query: PublicMeshQuery)throws  -> [PublicMesh]  {
     return try  FfiConverterSequenceTypePublicMesh.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_discover_public_meshes(
-        FfiConverterTypePublicMeshQuery_lower(query),$0
+        FfiConverterTypePublicMeshQuery_lower(query),uniffiCallStatus
     )
 })
 }
 public func generateOwnerKeypairHex() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex($0
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_func_generate_owner_keypair_hex(uniffiCallStatus
     )
 })
 }
 public func installNativeRuntime(options: NativeRuntimeInstallOptionsNative, progress: NativeRuntimeProgressListener?)throws  -> NativeRuntimeInstallOutcomeNative  {
     return try  FfiConverterTypeNativeRuntimeInstallOutcomeNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_install_native_runtime(
         FfiConverterTypeNativeRuntimeInstallOptionsNative_lower(options),
-        FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListener.lower(progress),$0
+        FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListener.lower(progress),uniffiCallStatus
     )
 })
 }
 public func installedNativeRuntimes(cacheDir: String?)throws  -> [InstalledNativeRuntimeNative]  {
     return try  FfiConverterSequenceTypeInstalledNativeRuntimeNative.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_installed_native_runtimes(
-        FfiConverterOptionString.lower(cacheDir),$0
+        FfiConverterOptionString.lower(cacheDir),uniffiCallStatus
     )
 })
 }
 public func pruneNativeRuntimes(cacheDir: String?, activeMeshVersion: String?, mode: NativeRuntimePruneModeNative)throws  -> NativeRuntimePruneResultNative  {
     return try  FfiConverterTypeNativeRuntimePruneResultNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_prune_native_runtimes(
         FfiConverterOptionString.lower(cacheDir),
         FfiConverterOptionString.lower(activeMeshVersion),
-        FfiConverterTypeNativeRuntimePruneModeNative_lower(mode),$0
+        FfiConverterTypeNativeRuntimePruneModeNative_lower(mode),uniffiCallStatus
     )
 })
 }
 public func removeNativeRuntime(cacheDir: String?, meshVersion: String, nativeRuntimeId: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
     uniffi_meshllm_ffi_fn_func_remove_native_runtime(
         FfiConverterOptionString.lower(cacheDir),
         FfiConverterString.lower(meshVersion),
-        FfiConverterString.lower(nativeRuntimeId),$0
+        FfiConverterString.lower(nativeRuntimeId),uniffiCallStatus
     )
 })
 }
@@ -4704,151 +4816,151 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 16973) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_client() != 62041) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 45845) {
+    if (uniffi_meshllm_ffi_checksum_func_create_auto_node() != 850) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_client() != 49213) {
+    if (uniffi_meshllm_ffi_checksum_func_create_client() != 55438) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 26976) {
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 84) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 33957) {
+    if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 21058) {
+    if (uniffi_meshllm_ffi_checksum_func_current_skippy_abi_version() != 63557) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 33302) {
+    if (uniffi_meshllm_ffi_checksum_func_discover_public_meshes() != 37324) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 2785) {
+    if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 56015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 2951) {
+    if (uniffi_meshllm_ffi_checksum_func_install_native_runtime() != 10411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 28322) {
+    if (uniffi_meshllm_ffi_checksum_func_installed_native_runtimes() != 6385) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 53652) {
+    if (uniffi_meshllm_ffi_checksum_func_prune_native_runtimes() != 43279) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 19262) {
+    if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 31371) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 24687) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 55833) {
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 59091) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 22097) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 6671) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 13614) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_chat() != 36123) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 16388) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_inference_list_models() != 43178) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 818) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_reconnect() != 39153) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 28958) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_responses() != 48676) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 65171) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_start() != 21105) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 26002) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_status() != 42860) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 47420) {
+    if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_stop() != 62273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 310) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 63362) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 42393) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_chat() != 47286) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 63183) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cleanup_models() != 1378) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 14553) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_delete_model() != 42636) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 38255) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_download_model() != 24332) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 18715) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_inference_list_models() != 32986) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 60028) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_installed_models() != 40175) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 37197) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_load_serving_model() != 38763) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 36857) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_model_cache_status() != 44993) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 31455) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_prune_derived_cache() != 12315) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 46303) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_recommended_models() != 59349) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 53825) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_reconnect() != 9842) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 49381) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_responses() != 61480) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 45752) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_search_models() != 20273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 1478) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_served_models() != 46217) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 34534) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_serving_status() != 3309) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 42711) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_set_device_policy() != 42971) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 59120) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_show_model() != 2410) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 37489) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 16152) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 62311) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 52588) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 55890) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 9399) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 57983) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 41330) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_instance() != 55061) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 61320) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model() != 17553) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 13409) {
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_unload_serving_model_by_id() != 57560) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 9933) {
+    if (uniffi_meshllm_ffi_checksum_method_eventlistener_on_event() != 39203) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 289) {
+    if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {
         return InitializationResult.apiChecksumMismatch
     }
 

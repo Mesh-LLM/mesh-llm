@@ -268,7 +268,10 @@ runtime producers are not duplicated.
   test batches consuming the static ABI artifact and its producer-owned
   toolchain epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
-  and leave publication to one trusted-main batch.
+  and leave publication to one trusted-main batch. Related Skippy crate changes
+  on pull requests also run an immutable SmolLM2 revision through the complete
+  Mesh config/resolver/server/native SafeTensors path through tokenizer, sampled
+  prefill, and decode with every supported load-time quantization.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime
@@ -303,6 +306,9 @@ runtime producers are not duplicated.
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
+The Swift SDK smoke consumes the lane's immutable UI distribution with
+`--skip-build`; it does not install Node or pnpm and owns no package-manager
+cache.
 
 ## Fan-out and timing controls
 

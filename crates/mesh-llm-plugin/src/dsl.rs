@@ -625,10 +625,10 @@ impl McpResourceBuilder {
         let register = Box::new(move |router: &mut ResourceRouter| {
             let mut resource = text_resource(uri.clone(), name.clone());
             if let Some(description) = description.clone() {
-                resource.raw.description = Some(description);
+                resource.description = Some(description);
             }
             if let Some(mime_type) = mime_type.clone() {
-                resource.raw.mime_type = Some(mime_type);
+                resource.mime_type = Some(mime_type);
             }
             let handler = Arc::clone(&handler);
             router.add_exact(resource, move |request, context| {
@@ -692,10 +692,10 @@ impl McpResourceTemplateBuilder {
         let register = Box::new(move |router: &mut ResourceRouter| {
             let mut template = resource_template_definition(uri_template.clone(), name.clone());
             if let Some(description) = description.clone() {
-                template.raw.description = Some(description);
+                template.description = Some(description);
             }
             if let Some(mime_type) = mime_type.clone() {
-                template.raw.mime_type = Some(mime_type);
+                template.mime_type = Some(mime_type);
             }
             let handler = Arc::clone(&handler);
             router.add_prefix_template(template, prefix.clone(), move |request, context| {

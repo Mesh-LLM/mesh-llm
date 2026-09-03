@@ -472,7 +472,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
               with:
                 ref: ${{ needs.metadata.outputs.tag }}
                 persist-credentials: false
-            - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+            - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
             - name: Prepare dispatched release version
               if: github.event_name == 'workflow_dispatch'
               env:

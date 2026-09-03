@@ -1753,6 +1753,13 @@ class CiArtifactActionTests(unittest.TestCase):
             "if: ${{ inputs.sdk_kind == 'rust' }}",
             consumer_workflow,
         )
+        self.assertNotIn("pnpm/action-setup@", consumer_workflow)
+        self.assertNotIn("actions/setup-node@", consumer_workflow)
+        self.assertIn(
+            'LEGACY_PNPM_STORE="$(pnpm store path --silent)"',
+            consumer_script,
+        )
+        self.assertIn('mkdir -p "$LEGACY_PNPM_STORE"', consumer_script)
 
         for forbidden in (
             "cargo ",
@@ -2742,7 +2749,11 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
             "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
             "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},
-            "ci-rust-tests-slice.yml": {"runner_policy", "rust_tests"},
+            "ci-rust-tests-slice.yml": {
+                "runner_policy",
+                "rust_tests",
+                "safetensors_runtime_smoke",
+            },
             "ci-macos-host-slice.yml": {"runner_policy", "macos_host"},
             "ci-platform-checks-slice.yml": {"runner_policy", "platform_checks"},
             "ci-windows-host-slice.yml": {"runner_policy", "windows_host"},

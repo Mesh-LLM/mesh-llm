@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod certification;
+mod checkpoint;
 mod deployment;
 mod family_policy;
 mod hash_cache;
@@ -185,6 +186,8 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) op_offload: Option<bool>,
     pub(crate) no_host_buffer: bool,
     pub(crate) check_tensors: bool,
+    pub(crate) checkpoint_quantization: Option<String>,
+    pub(crate) checkpoint_imatrix: Option<String>,
     pub(crate) direct_io: bool,
     pub(crate) main_gpu: Option<u32>,
     pub(crate) split_mode: skippy_protocol::SplitMode,
@@ -304,6 +307,8 @@ impl SkippyModelLoadOptions {
             op_offload: None,
             no_host_buffer: false,
             check_tensors: false,
+            checkpoint_quantization: None,
+            checkpoint_imatrix: None,
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
@@ -1261,6 +1266,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let family_policy = family_policy_for_model_path(&options.model_path);
+    let checkpoint = checkpoint::prepare(options)?;
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),
@@ -1315,6 +1321,12 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
+        checkpoint_quantization: options
+            .checkpoint_quantization
+            .as_ref()
+            .map(|_| checkpoint.quantization.canonical_name().to_string()),
+        checkpoint_imatrix: checkpoint.imatrix,
+        checkpoint_imatrix_sha256: checkpoint.imatrix_sha256,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,
         native_mtp_enabled: options.native_mtp_enabled,
@@ -1327,6 +1339,11 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         .kv_cache
         .clone()
         .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
+    checkpoint::emit_load_notice(
+        &options.model_path,
+        checkpoint.quantization,
+        config.checkpoint_imatrix.is_some(),
+    );
     Ok(config)
 }
 
@@ -1605,6 +1622,19 @@ mod tests {
         assert_eq!(config.load_mode, LoadMode::RuntimeSlice);
         assert!(config.upstream.is_none());
         assert!(config.downstream.is_none());
+    }
+
+    #[test]
+    fn single_stage_config_canonicalizes_checkpoint_quantization_aliases() {
+        let mut options =
+            SkippyModelLoadOptions::for_direct_gguf("Qwen3-8B-Q4_K_M", "/models/qwen.gguf")
+                .with_layer_end(36)
+                .with_package_identity(fake_package_identity(36));
+        options.checkpoint_quantization = Some("Q4_K".to_string());
+
+        let config = single_stage_config(&options).unwrap();
+
+        assert_eq!(config.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
     }
 
     #[test]

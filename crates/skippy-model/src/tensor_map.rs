@@ -1,14 +1,16 @@
+//! Hugging Face to llama.cpp tensor name mapping.
+
 use anyhow::{Result, anyhow, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TensorNameMap {
+pub enum TensorNameMap {
     Raw,
     HfToGguf,
     HfToGgufWithMtp { layer_start: u32 },
 }
 
 impl TensorNameMap {
-    pub(crate) fn map_tensor_name(self, name: &str) -> Result<String> {
+    pub fn map_tensor_name(self, name: &str) -> Result<String> {
         match self {
             Self::Raw => Ok(name.to_string()),
             Self::HfToGguf => map_hf_to_gguf(name, None),
@@ -231,6 +233,14 @@ impl<'a> HfLayerTensor<'a> {
             "self_attn.k_proj.bias" => Ok(format!("blk.{bid}.attn_k.bias")),
             "self_attn.v_proj.bias" => Ok(format!("blk.{bid}.attn_v.bias")),
             "self_attn.o_proj.weight" => Ok(format!("blk.{bid}.attn_output.weight")),
+            "mamba.in_proj.weight" => Ok(format!("blk.{bid}.ssm_in.weight")),
+            "mamba.conv1d.weight" => Ok(format!("blk.{bid}.ssm_conv1d.weight")),
+            "mamba.conv1d.bias" => Ok(format!("blk.{bid}.ssm_conv1d.bias")),
+            "mamba.dt_bias" => Ok(format!("blk.{bid}.ssm_dt.bias")),
+            "mamba.A_log" => Ok(format!("blk.{bid}.ssm_a")),
+            "mamba.D" => Ok(format!("blk.{bid}.ssm_d")),
+            "mamba.norm.weight" => Ok(format!("blk.{bid}.ssm_norm.weight")),
+            "mamba.out_proj.weight" => Ok(format!("blk.{bid}.ssm_out.weight")),
             "self_attn.q_norm.weight" => Ok(format!("blk.{bid}.attn_q_norm.weight")),
             "self_attn.k_norm.weight" => Ok(format!("blk.{bid}.attn_k_norm.weight")),
             "self_attn.q_a_proj.weight" => Ok(format!("blk.{bid}.attn_q_a.weight")),
@@ -270,6 +280,7 @@ impl<'a> HfLayerTensor<'a> {
             "mlp.down_proj.weight" => Ok(format!("blk.{bid}.ffn_down.weight")),
             "mlp.gate_proj.weight" => Ok(format!("blk.{bid}.ffn_gate.weight")),
             "mlp.up_proj.weight" => Ok(format!("blk.{bid}.ffn_up.weight")),
+            "shared_mlp.output_linear.weight" => Ok(format!("blk.{bid}.ffn_down.weight")),
             "mlp.gate.weight" => Ok(format!("blk.{bid}.ffn_gate_inp.weight")),
             "mlp.shared_expert_gate" => Ok(format!("blk.{bid}.ffn_gate_inp_shexp.weight")),
             "mlp.gate.e_score_correction_bias" => Ok(format!("blk.{bid}.exp_probs_b.bias")),

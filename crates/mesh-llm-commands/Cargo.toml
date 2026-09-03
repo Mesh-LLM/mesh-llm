@@ -22,7 +22,7 @@ hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = fa
 hex = "0.4.3"
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 json5 = "1.3.1"
-nix = { version = "0.29.0", default-features = false, features = ["signal"] }
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 mesh-llm-build-info.workspace = true
 mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.76.0-rc9" }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.76.0-rc9" }
@@ -38,14 +38,14 @@ model-hf = { path = "../model-hf", version = "0.76.0-rc9" }
 model-package = { path = "../model-package", version = "0.76.0-rc9" }
 model-ref = { path = "../model-ref", version = "0.76.0-rc9" }
 rpassword = "7.5"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 strum = { workspace = true }
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-toml = "0.9"
+toml = "1.1"
 toml_edit = "0.25"
 url = "2"
 zeroize = { version = "1", features = ["derive"] }
@@ -53,5 +53,5 @@ zeroize = { version = "1", features = ["derive"] }
 [dev-dependencies]
 clap.workspace = true
 rand = "0.10"
-serial_test = "3"
+serial_test = "4"
 tempfile = "3"

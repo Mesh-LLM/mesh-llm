@@ -155,7 +155,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture; related PR changes additionally smoke an immutable SmolLM2 SafeTensors checkpoint through the complete Mesh config/resolver/server/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -241,11 +241,15 @@ class is invisible to `actionlint`.
 
 ### `job.container.id == ''` gating
 
-When a job has both a containerized and a bare-metal row (the two rows
-above), `actions/setup-python`, `actions/setup-node`, and
-`pnpm/action-setup` steps are gated `if: job.container.id == ''` rather than
-deleted, because the bare-metal row still needs them -- the image is not
-present there. **Deliberate exception: `actions/setup-java` in
+When a job has both a containerized and a bare-metal row, setup actions needed
+only by the bare-metal row are gated `if: job.container.id == ''` rather than
+allowed to shadow tools from the image. `sdk-smoke.yml`'s bare-metal Swift row
+consumes the immutable UI artifact with `--skip-build`, so it needs neither
+Node nor pnpm; those setup actions and their unused package cache are absent.
+Its smoke script temporarily creates the legacy protected-main workflow's
+computed pnpm store when that older workflow installed pnpm, preventing the
+setup-node post-job cache hook from failing before this workflow change lands
+on `main`. **Deliberate exception: `actions/setup-java` in
 `sdk-smoke.yml` is never gated.** `verify-runner-image`'s asserted tool list
 has no JDK, so the image provides nothing for it to shadow; gating it would
 break the Kotlin SDK smoke on the containerized row instead of protecting it.

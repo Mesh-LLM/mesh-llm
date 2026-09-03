@@ -3,19 +3,19 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::gguf_template::metadata_from_hf_config;
-use crate::gguf_writer::{
+use crate::memory_budget::MemorySize;
+use crate::output::{format_bytes, print_info, print_json_pretty, print_success};
+use crate::types::ConvertOutputType;
+use skippy_model::gguf_template::metadata_from_hf_config;
+use skippy_model::gguf_writer::{
     RawGgufValidation, RawGgufWriteOptions, TensorSelection, validate_raw_safetensors_gguf,
     write_raw_safetensors_gguf,
 };
-use crate::hf_checkpoint::{
+use skippy_model::hf_checkpoint::{
     HfCheckpointPlan, inspect_hf_checkpoint, verify_hf_checkpoint_tensor_streams,
 };
-use crate::memory_budget::MemorySize;
-use crate::output::{format_bytes, print_info, print_json_pretty, print_success};
-use crate::tensor_map::TensorNameMap;
-use crate::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
-use crate::types::ConvertOutputType;
+use skippy_model::tensor_map::TensorNameMap;
+use skippy_model::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
 
 #[derive(Debug, Parser)]
 pub(crate) struct PlanConvertArgs {
@@ -41,7 +41,11 @@ pub(crate) struct PlanConvertArgs {
 }
 
 pub(crate) fn run_plan_convert(args: PlanConvertArgs) -> Result<()> {
-    let mut plan = inspect_hf_checkpoint(&args.source, args.max_memory, args.staging_fraction)?;
+    let mut plan = inspect_hf_checkpoint(
+        &args.source,
+        args.max_memory.map(|memory| memory.bytes()),
+        args.staging_fraction,
+    )?;
     let mut native_validation = None;
     if args.verify_streaming {
         plan.stream_verification = Some(verify_hf_checkpoint_tensor_streams(

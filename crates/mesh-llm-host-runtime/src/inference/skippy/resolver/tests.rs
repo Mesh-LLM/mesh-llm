@@ -4,10 +4,11 @@ use crate::inference::skippy::SkippyTelemetryOptions;
 use crate::plugin::{
     MeshConfig, ModelConfigDefaults, ModelConfigEntry, ReasoningBudget, RequestDefaultsConfig,
 };
+use anyhow::Context as _;
 use serde_json::Value;
 use skippy_protocol::{LoadMode, StageKvCacheMode, StageKvCachePayload};
 use skippy_server::{EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat};
-use std::path::Path;
+use std::{io::Write, path::Path};
 use tempfile::NamedTempFile;
 
 fn resolve_qwen_config_with_request_defaults(
@@ -957,6 +958,131 @@ fn hardware_check_tensors_true_and_false_reach_different_stage_configs() {
         stage_true, stage_false,
         "hardware.check_tensors=true and =false must reach the stage config differently"
     );
+}
+
+#[test]
+fn hardware_checkpoint_quantization_reaches_stage_config() {
+    let model_file = temp_model_file();
+    let stage = hardware_stage_json(
+        "[defaults.hardware]\ncheckpoint_quantization = \"Q4_K_M\"\n",
+        HARDWARE_TEST_MODEL_ID,
+        model_file.path(),
+    );
+
+    assert_eq!(
+        stage.get("checkpoint_quantization"),
+        Some(&Value::String("Q4_K_M".to_string()))
+    );
+}
+
+/// Exercises the same Mesh configuration -> resolver -> stage-config ->
+/// skippy-server model-open and inference path used by the embedded host. CI
+/// supplies a pinned Hugging Face checkpoint directory rather than checking
+/// model bytes into the repository.
+#[test]
+#[ignore = "requires SKIPPY_SAFETENSORS_SMOKE_DIR with a complete checkpoint"]
+fn safetensors_checkpoint_reaches_mesh_host_runtime() -> anyhow::Result<()> {
+    let checkpoint = std::env::var_os("SKIPPY_SAFETENSORS_SMOKE_DIR")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("SKIPPY_SAFETENSORS_SMOKE_DIR is not set"))?;
+    let quantization = std::env::var("SKIPPY_SAFETENSORS_SMOKE_QUANTIZATION")
+        .unwrap_or_else(|_| "preserve".to_string());
+    let gpu_layers = std::env::var("SKIPPY_SAFETENSORS_SMOKE_GPU_LAYERS")
+        .unwrap_or_else(|_| "0".to_string())
+        .parse::<i32>()
+        .context("parse SKIPPY_SAFETENSORS_SMOKE_GPU_LAYERS")?;
+    let mut synthetic_imatrix = None;
+    let checkpoint_imatrix = match std::env::var("SKIPPY_SAFETENSORS_SMOKE_IMATRIX").ok() {
+        Some(value) if value == "synthetic" => {
+            let mut file = NamedTempFile::new().context("create synthetic importance matrix")?;
+            let direct =
+                skippy_model::gguf_writer::DirectCheckpoint::open(&checkpoint, 1024 * 1024)?;
+            let layout = direct.imatrix_layout()?;
+            let entry_count =
+                i32::try_from(layout.len()).context("imatrix entry count exceeds i32")?;
+            file.write_all(&entry_count.to_le_bytes())?;
+            for entry in layout {
+                let name = entry.name.as_bytes();
+                file.write_all(&i32::try_from(name.len())?.to_le_bytes())?;
+                file.write_all(name)?;
+                file.write_all(&1_i32.to_le_bytes())?;
+                file.write_all(&i32::try_from(entry.value_count)?.to_le_bytes())?;
+                for _ in 0..entry.value_count {
+                    file.write_all(&1_f32.to_le_bytes())?;
+                }
+            }
+            file.flush()?;
+            let path = file.path().to_string_lossy().into_owned();
+            synthetic_imatrix = Some(file);
+            Some(path)
+        }
+        Some(path) => Some(path),
+        None => None,
+    };
+    let quantization_toml = toml::Value::String(quantization.clone()).to_string();
+    let imatrix_toml = checkpoint_imatrix
+        .as_ref()
+        .map(|path| {
+            format!(
+                "checkpoint_imatrix = {}\n",
+                toml::Value::String(path.clone())
+            )
+        })
+        .unwrap_or_default();
+    let mesh_config = parse_config(&format!(
+        "[defaults.model_fit]\nctx_size = 128\nbatch = 128\nubatch = 128\n\
+         \n[defaults.hardware]\ngpu_layers = {gpu_layers}\ncheckpoint_quantization = {quantization_toml}\n{imatrix_toml}"
+    ));
+    let identity =
+        crate::inference::skippy::synthetic_direct_gguf_package("safetensors-smoke", &checkpoint)?;
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "safetensors-smoke",
+        model_path: &checkpoint,
+        model_bytes: identity.source_model_bytes,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })?;
+    let stage = resolved.to_stage_config(Some(identity), LoadMode::RuntimeSlice)?;
+
+    assert_eq!(stage.model_path.as_deref(), checkpoint.to_str());
+    assert_eq!(
+        stage.checkpoint_quantization.as_deref(),
+        Some(quantization.as_str())
+    );
+    let canonical_checkpoint_imatrix = checkpoint_imatrix
+        .as_deref()
+        .map(std::fs::canonicalize)
+        .transpose()?
+        .map(|path| path.to_string_lossy().into_owned());
+    assert_eq!(
+        stage.checkpoint_imatrix.as_deref(),
+        canonical_checkpoint_imatrix.as_deref()
+    );
+    if checkpoint_imatrix.is_some() {
+        anyhow::ensure!(
+            stage.checkpoint_imatrix_sha256.is_some(),
+            "importance matrix digest was not included in stage identity"
+        );
+    }
+    let runtime = skippy_server::runtime_state::load_runtime(&stage)?
+        .ok_or_else(|| anyhow::anyhow!("Mesh host did not open the checkpoint"))?;
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tokens = runtime.model.tokenize("Hello from Mesh", true)?;
+    anyhow::ensure!(
+        !tokens.is_empty(),
+        "checkpoint tokenizer returned no tokens"
+    );
+    let first = runtime.prefill_chunked_sampled("safetensors-smoke", &tokens, None)?;
+    anyhow::ensure!(first >= 0, "sampled prefill returned invalid token {first}");
+    let second = runtime.decode("safetensors-smoke", first)?;
+    anyhow::ensure!(second >= 0, "decode returned invalid token {second}");
+    drop(synthetic_imatrix);
+    Ok(())
 }
 
 #[test]

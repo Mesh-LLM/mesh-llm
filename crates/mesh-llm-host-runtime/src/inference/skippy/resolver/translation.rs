@@ -133,6 +133,12 @@ impl ResolvedSkippyConfig {
         options.op_offload = self.hardware.op_offload;
         options.no_host_buffer = self.hardware.no_host_buffer;
         options.check_tensors = self.hardware.check_tensors;
+        options
+            .checkpoint_quantization
+            .clone_from(&self.hardware.checkpoint_quantization);
+        options
+            .checkpoint_imatrix
+            .clone_from(&self.hardware.checkpoint_imatrix);
         options.direct_io = self.hardware.direct_io;
         options.main_gpu = self.hardware.main_gpu;
         options.split_mode = self.hardware.split_mode;
