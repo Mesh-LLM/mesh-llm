@@ -25,6 +25,6 @@ tokio = { version = "1", features = ["rt"] }
 tracing = "0.1"
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = "4"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }

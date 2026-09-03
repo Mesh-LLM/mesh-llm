@@ -30,4 +30,4 @@ thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = "4"
