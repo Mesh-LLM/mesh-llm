@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Strip common GGUF quantization suffixes from a lowercased stem.
 /// e.g. "qwen3vl-2b-instruct-q4_k_m" → "qwen3vl-2b-instruct"
@@ -182,6 +182,12 @@ pub fn find_mmproj_path(_model_name: &str, model_path: &Path) -> Option<PathBuf>
     // existing local-path layout logic recognizes the directory being scanned
     // as an HF snapshot. Check the path as supplied so a symlink from a shared
     // local directory cannot borrow the identity of its snapshot target.
+    if model_path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return None;
+    }
     super::identity_from_snapshot_layout_ancestors(model_path)?;
 
     // No named matches: try quant-aware selection among all siblings, then precision fallback.
@@ -337,6 +343,32 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let model = temp.path().join("Qwen3-8B-Q4_K_M.gguf");
         let unrelated_mmproj = temp.path().join("mmproj-Qwen2.5-VL-7B-Instruct-BF16.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&unrelated_mmproj, b"mmproj").unwrap();
+
+        assert!(find_mmproj_path("Qwen3-8B-Q4_K_M", &model).is_none());
+    }
+
+    #[test]
+    fn mmproj_path_ignores_generic_sibling_for_lexically_traversing_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let shared = temp.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let model_name = "Qwen3-8B-Q4_K_M.gguf";
+        let model = snapshot
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("shared")
+            .join(model_name);
+        let unrelated_mmproj = shared.join("mmproj-Qwen2.5-VL-7B-Instruct-BF16.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&unrelated_mmproj, b"mmproj").unwrap();
 
