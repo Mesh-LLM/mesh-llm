@@ -414,6 +414,7 @@ mod tests {
         // test in this binary; the var is cleared before the next test runs.
         unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled") };
         let result = load_config(Some(&config_path));
+        // SAFETY: see above.
         unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
 
         let config = result.expect("config should load through the production wrapper");
@@ -438,6 +439,7 @@ mod tests {
         // SAFETY: see above.
         unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled") };
         let result = load_config(Some(&config_path));
+        // SAFETY: see above.
         unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
 
         let config =
@@ -458,6 +460,7 @@ mod tests {
         // SAFETY: see above.
         unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode") };
         let result = load_config(Some(&config_path));
+        // SAFETY: see above.
         unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
 
         let err = result.expect_err(
@@ -478,6 +481,7 @@ mod tests {
         // SAFETY: see above.
         unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode") };
         let result = validate_config_file(Some(&config_path));
+        // SAFETY: see above.
         unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
 
         let err = result.expect_err(

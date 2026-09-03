@@ -34,6 +34,7 @@ AUDITED_FILES = (
     "crates/skippy-protocol/build.rs",
     "crates/mesh-llm-plugin/build.rs",
     "crates/mesh-llm-config/src/env_overrides.rs",
+    "crates/mesh-llm-host-runtime/src/plugin/config.rs",
     "crates/mesh-llm-host-runtime/src/capture.rs",
     "crates/mesh-llm-host-runtime/src/runtime/instance.rs",
     "crates/mesh-llm-host-runtime/src/models/maintenance.rs",
