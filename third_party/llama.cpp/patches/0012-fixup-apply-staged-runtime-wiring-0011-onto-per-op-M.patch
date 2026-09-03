@@ -1,41 +1,41 @@
-From a50dd009619634b32d588f8af9d2c81984c9a648 Mon Sep 17 00:00:00 2001
+From d277f5c260a28b54388b1848c3d28e9d0ca5c901 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 25 Aug 2026 23:23:33 +1000
-Subject: [PATCH 12/32] fixup: apply staged runtime wiring (0011) onto per-op
+Subject: [PATCH 12/51] fixup: apply staged runtime wiring (0011) onto per-op
  Metal layout
 
 ---
  CMakeLists.txt                        |   5 ++
  common/CMakeLists.txt                 |   1 +
- ggml/src/ggml-metal/ggml-metal-impl.h |  61 ++++++++++---
+ ggml/src/ggml-metal/ggml-metal-impl.h |  61 ++++++++++++---
  include/skippy.h                      |   8 ++
- include/skippy/activation.h           |   9 ++
+ include/skippy/activation.h           |   9 +++
  include/skippy/common.h               |  12 +++
  include/skippy/devices.h              |   7 ++
  include/skippy/events.h               |  11 +++
- include/skippy/execution.h            |  19 ++++
+ include/skippy/execution.h            |  19 +++++
  include/skippy/model_package.h        |  15 ++++
- include/skippy/runtime.h              |  25 ++++++
+ include/skippy/runtime.h              |  25 +++++++
  include/skippy/sampling.h             |   6 ++
- include/skippy/signals.h              |   9 ++
+ include/skippy/signals.h              |   9 +++
  include/skippy/speculative_decoding.h |  11 +++
- include/skippy/state.h                |  19 ++++
+ include/skippy/state.h                |  19 +++++
  include/skippy/tokenization.h         |  11 +++
- src/CMakeLists.txt                    |  17 ++++
+ src/CMakeLists.txt                    |  17 +++++
  src/llama-arch.cpp                    |   6 ++
  src/llama-arch.h                      |   6 ++
- src/llama-context.cpp                 | 102 ++++++---------------
+ src/llama-context.cpp                 | 102 +++++++-------------------
  src/llama-hparams.cpp                 |  10 +++
  src/llama-hparams.h                   |   4 +
- src/llama-model.cpp                   |  70 +++++++++------
- src/llama-model.h                     |  19 ++++
+ src/llama-model.cpp                   |  70 +++++++++++-------
+ src/llama-model.h                     |  19 +++++
  src/models/glm-dsa.cpp                |   3 +
  src/models/models.h                   |   4 -
  src/skippy/sampling.cpp               |   2 +
  tests/CMakeLists.txt                  |   3 +
- tests/test-llama-archs.cpp            | 125 +++++++++++++++++++++++++-
- tools/mtmd/mtmd-image.cpp             |  72 +++++++++++++++
- 30 files changed, 548 insertions(+), 124 deletions(-)
+ tests/test-llama-archs.cpp            |  20 +++++
+ tools/mtmd/mtmd-image.cpp             |  72 ++++++++++++++++++
+ 30 files changed, 447 insertions(+), 120 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 1d4bcf45f..586bf97f6 100644
@@ -73,7 +73,7 @@ index 36f1e0cd5..9757ba821 100644
      speculative.h
      subproc.cpp
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 49102afe9..c8057a232 100644
+index bdcd9c9e3..c9147ebf5 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
 @@ -992,6 +992,17 @@ typedef struct {
@@ -94,7 +94,7 @@ index 49102afe9..c8057a232 100644
  } ggml_metal_kargs_solve_tri;
  
  typedef struct {
-@@ -1204,20 +1215,46 @@ typedef struct {
+@@ -1215,20 +1226,46 @@ typedef struct {
  } ggml_metal_kargs_memset;
  
  typedef struct {
@@ -670,9 +670,7 @@ index 86bc95ede..adbc4d640 100644
  #include "common.h"
  
  #ifdef __cplusplus
-@@ -10,8 +15,9 @@ extern "C" {
- #define SKIPPY_MAX_LOGIT_BIAS 256
- #define SKIPPY_SAMPLING_FLAG_ENABLED (1u << 0)
+@@ -12,6 +17,7 @@ extern "C" {
  #define SKIPPY_SAMPLING_FLAG_IGNORE_EOS (1u << 1)
  
  
@@ -991,7 +989,7 @@ index 8922dc12a..7ee82c713 100644
              unicode-data.cpp
              unicode.cpp
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 37b2d3147..c51057643 100644
+index 7e83bb1d2..224ef9dba 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
 @@ -72,6 +72,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
@@ -1015,7 +1013,7 @@ index 37b2d3147..c51057643 100644
      { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
      { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 644fac937..195dbe88d 100644
+index fe95cde69..a99b3d9e3 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
 @@ -77,6 +77,7 @@ enum llm_arch {
@@ -1039,10 +1037,10 @@ index 644fac937..195dbe88d 100644
      LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
      LLM_KV_FULL_ATTENTION_INTERVAL,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index af3fe661f..aa3d6230d 100644
+index 4c082bade..1fccc162d 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1263,7 +1263,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+@@ -1264,7 +1264,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
      if (sampler && can_offload) {
          auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
  
@@ -1051,7 +1049,7 @@ index af3fe661f..aa3d6230d 100644
  
          sampling.samplers[seq_id] = sampler;
  
-@@ -1626,90 +1626,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
+@@ -1627,90 +1627,38 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
      return seq_to_row;
  }
  
@@ -1161,7 +1159,7 @@ index af3fe661f..aa3d6230d 100644
      }
  }
  
-@@ -2058,11 +2006,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -2061,11 +2009,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
              const auto stride = n_vocab;
  
              // async copy the sampling data from the backend to the host
@@ -1177,7 +1175,7 @@ index af3fe661f..aa3d6230d 100644
          }
  
          n_outputs_prev += n_outputs;
-@@ -3675,6 +3622,7 @@ llama_context_params llama_context_default_params() {
+@@ -3698,6 +3645,7 @@ llama_context_params llama_context_default_params() {
          /*.n_seq_max                   =*/ 1,
          /*.n_rs_seq                    =*/ 0,
          /*.n_outputs_max               =*/ 0,
@@ -1186,10 +1184,10 @@ index af3fe661f..aa3d6230d 100644
          /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
          /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
 diff --git a/src/llama-hparams.cpp b/src/llama-hparams.cpp
-index 9fbce9bdf..351f18a25 100644
+index 5f32a8e34..e5a54de5c 100644
 --- a/src/llama-hparams.cpp
 +++ b/src/llama-hparams.cpp
-@@ -180,6 +180,16 @@ uint32_t llama_hparams::n_embd_v_gqa_max() const {
+@@ -196,6 +196,16 @@ uint32_t llama_hparams::n_embd_v_gqa_max() const {
      return val;
  }
  
@@ -1207,7 +1205,7 @@ index 9fbce9bdf..351f18a25 100644
      if (n_embd_r_impl != 0) {
          // explicit override (e.g. inkling: 4 packed shortconv streams per layer)
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index 402015415..d5b060efe 100644
+index ccb617b87..1b947078c 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
 @@ -57,6 +57,8 @@ struct llama_hparams {
@@ -1217,9 +1215,9 @@ index 402015415..d5b060efe 100644
 +
 +    int32_t router_layer = -1;
      uint32_t n_expert = 0;
-     uint32_t n_expert_used = 0;
      uint32_t n_rel_attn_bkts = 0;
-@@ -449,6 +451,8 @@ struct llama_hparams {
+ 
+@@ -460,6 +462,8 @@ struct llama_hparams {
  
      bool has_kv(uint32_t il) const;
  
@@ -1229,7 +1227,7 @@ index 402015415..d5b060efe 100644
      uint32_t n_layer() const;
  
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 6ac2fa322..550dd6c15 100644
+index cad8e2924..2368c2608 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -178,6 +178,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -1241,7 +1239,7 @@ index 6ac2fa322..550dd6c15 100644
          case LLM_ARCH_OPENELM:
              return new llama_model_openelm(params);
          case LLM_ARCH_GPTNEOX:
-@@ -2593,15 +2595,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2617,15 +2619,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
                          filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                      }
  
@@ -1260,7 +1258,7 @@ index 6ac2fa322..550dd6c15 100644
                          if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                              filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                          } else {
-@@ -2611,24 +2607,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2635,24 +2631,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
  
                      filter = skippy_stage_memory_filter(std::move(filter), params.ctx_type);
  
@@ -1286,7 +1284,7 @@ index 6ac2fa322..550dd6c15 100644
                          GGML_ASSERT(hparams.is_swa_any());
  
                          if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-@@ -2749,6 +2728,7 @@ llama_model_params llama_model_default_params() {
+@@ -2773,6 +2752,7 @@ llama_model_params llama_model_default_params() {
          /*.use_extra_bufts             =*/ true,
          /*.no_host                     =*/ false,
          /*.no_alloc                    =*/ false,
@@ -1294,7 +1292,7 @@ index 6ac2fa322..550dd6c15 100644
      };
  
      return result;
-@@ -2892,6 +2872,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -2916,6 +2896,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_DEEPSEEK2OCR:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DEEPSEEK4:
@@ -1302,7 +1300,7 @@ index 6ac2fa322..550dd6c15 100644
          case LLM_ARCH_PLM:
          case LLM_ARCH_CHATGLM:
          case LLM_ARCH_GRANITE:
-@@ -3225,3 +3206,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+@@ -3249,3 +3230,38 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
  uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
      return (uint32_t) model->target_layer_ids.size();
  }
@@ -1342,10 +1340,10 @@ index 6ac2fa322..550dd6c15 100644
 +    return (uint32_t) nelements;
 +}
 diff --git a/src/llama-model.h b/src/llama-model.h
-index dea1118d8..468de3e56 100644
+index b12bf93cb..f05e46e5a 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -133,6 +133,7 @@ enum llm_type {
+@@ -134,6 +134,7 @@ enum llm_type {
      LLM_TYPE_100B_A6B,
      LLM_TYPE_102B_A12B, // Solar-Open
      LLM_TYPE_106B_A12B, // GLM-4.5-Air
@@ -1353,7 +1351,7 @@ index dea1118d8..468de3e56 100644
      LLM_TYPE_120B_A12B, // Nemotron 3 Super
      LLM_TYPE_122B_A10B, // Qwen3.5
      LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
-@@ -228,6 +229,24 @@ struct llama_layer_nextn {
+@@ -229,6 +230,24 @@ struct llama_layer_nextn {
      struct ggml_tensor * shared_head_norm      = nullptr;
  };
  
@@ -1379,10 +1377,10 @@ index dea1118d8..468de3e56 100644
      // normalization
      struct ggml_tensor * attn_norm       = nullptr;
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
-index 93a1448b4..000b95cdc 100644
+index 44d883274..a7b71f616 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
-@@ -218,6 +218,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
+@@ -212,6 +212,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
  
      // the indexer head layout is [rope | nope]
      GGML_ASSERT(hparams.n_rot() <= n_embd_indexer_head);
@@ -1408,10 +1406,10 @@ index 716f4a5e8..39a09fe21 100644
          graph(const llama_model & model, const llm_graph_params & params);
      };
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 8440e5b97..74eb3aa59 100644
+index 9a3a1c769..1e342060c 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -372,9 +372,11 @@ llama_sampler * skippy_build_sampling_chain(
+@@ -384,9 +384,11 @@ llama_sampler * skippy_build_sampling_chain(
      const int32_t penalty_last_n = sampling->penalty_last_n == 0 ? -1 : sampling->penalty_last_n;
      const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
      if (repeat_penalty != 1.0f || sampling->frequency_penalty != 0.0f || sampling->presence_penalty != 0.0f) {
@@ -1424,7 +1422,7 @@ index 8440e5b97..74eb3aa59 100644
                          repeat_penalty,
                          sampling->frequency_penalty,
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index fe3d14ffc..9c6fc6828 100644
+index c46377c76..5dd7461a0 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -152,6 +152,9 @@ llama_build(test-recurrent-state-rollback.cpp)
@@ -1438,170 +1436,10 @@ index fe3d14ffc..9c6fc6828 100644
      llama_build_and_test(test-unicode.cpp)
      llama_build_and_test(test-sampling.cpp)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 35a3286e4..906f00ef4 100644
+index b2ea245ab..aef3a07c8 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -14,6 +14,7 @@
- #include <cinttypes>
- #include <cstddef>
- #include <cstdio>
-+#include <cstdlib>
- #include <cstring>
- #include <cstdint>
- #include <random>
-@@ -79,10 +80,24 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
-     return ret;
- }
- 
--static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
-+enum class glm_dsa_indexshare_fixture {
-+    DEFAULT,
-+    CONFLICTING_METADATA,
-+    SHARED_FIRST,
-+    FULL_SHARED,
-+    FULL_SHARED_SHARED,
-+    PERIODIC_FULL_SHARED,
-+};
-+
-+static gguf_context_ptr get_gguf_ctx(
-+        const llm_arch arch,
-+        const bool moe,
-+        const glm_dsa_indexshare_fixture glm_dsa_indexshare = glm_dsa_indexshare_fixture::DEFAULT,
-+        const uint32_t context_length = 256,
-+        const uint32_t glm_dsa_indexer_top_k = 8) {
-     gguf_context_ptr ret(gguf_init_empty());
-     llama_model_saver ms(arch, ret.get());
--    const uint32_t n_ctx = 256;
-+    const uint32_t n_ctx = context_length;
- 
-     uint32_t n_vocab = 128;
-     uint32_t n_embd  = 256;
-@@ -262,9 +277,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
-               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
- 
--    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        arch == LLM_ARCH_GLM_DSA ? glm_dsa_indexer_top_k : uint32_t(8));
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
-     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
-+    if (arch == LLM_ARCH_GLM_DSA) {
-+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K_FREQUENCY, uint32_t(1));
-+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_SKIP_TOP_K_OFFSET, uint32_t(0));
-+        std::vector<uint32_t> indexer_types;
-+        indexer_types.reserve(n_layer);
-+        for (uint32_t il = 0; il < n_layer; il++) {
-+            indexer_types.push_back(il % 2 ? 0 : 1);
-+        }
-+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
-+    }
-     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
- 
-     if (arch == LLM_ARCH_DEEPSEEK4) {
-@@ -345,9 +370,57 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
-     return true;
- }
- 
-+static void set_test_env(const char * name, const char * value) {
-+#if defined(_WIN32)
-+    _putenv_s(name, value);
-+#else
-+    setenv(name, value, true);
-+#endif
-+}
-+
-+static void unset_test_env(const char * name) {
-+#if defined(_WIN32)
-+    _putenv_s(name, "");
-+#else
-+    unsetenv(name);
-+#endif
-+}
-+
-+static bool test_env_enabled(const char * name) {
-+    const char * value = getenv(name);
-+    return value != nullptr && strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "FALSE") != 0;
-+}
-+
-+class scoped_test_env {
-+public:
-+    scoped_test_env(const char * name, const char * value) : name(name) {
-+        const char * old_value = getenv(name);
-+        if (old_value != nullptr) {
-+            had_old_value = true;
-+            this->old_value = old_value;
-+        }
-+        set_test_env(name, value);
-+    }
-+
-+    ~scoped_test_env() {
-+        if (had_old_value) {
-+            set_test_env(name, old_value.c_str());
-+        } else {
-+            unset_test_env(name);
-+        }
-+    }
-+
-+private:
-+    const char * name;
-+    bool had_old_value = false;
-+    std::string old_value;
-+};
-+
- static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
--        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
-+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-+        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr,
-+        const llama_flash_attn_type flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO) {
-     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
-     llama_model_params model_params = llama_model_default_params();
-     model_params.progress_callback = silent_model_load_progress;
-@@ -363,6 +436,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-     if (!encode) {
-         ctx_params.n_ubatch = 64;
-     }
-+    ctx_params.flash_attn_type = flash_attn_type;
-+    ctx_params.cb_eval = cb_eval;
-+    ctx_params.cb_eval_user_data = cb_eval_user_data;
- 
-     size_t tmp = seed;
-     llama_model_ptr model(gguf_ctx != nullptr ?
-@@ -378,6 +454,20 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-     return std::make_pair(std::move(model), std::move(lctx));
- }
- 
-+static void decode_tokens(llama_context * lctx, const std::vector<llama_token> & tokens, llama_pos start_pos, bool output_all = true) {
-+    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-+    for (size_t i = 0; i < tokens.size(); ++i) {
-+        const bool output = output_all || i + 1 == tokens.size();
-+        common_batch_add(batch, tokens[i], start_pos + (llama_pos) i, {0}, output);
-+    }
-+    batch.n_tokens = tokens.size();
-+    if (llama_decode(lctx, batch)) {
-+        llama_batch_free(batch);
-+        throw std::runtime_error("failed to decode batch");
-+    }
-+    llama_batch_free(batch);
-+}
-+
- static std::vector<float> get_logits(
-         llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
-     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -517,6 +607,13 @@ static bool arch_supported(const llm_arch arch) {
-     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
-         return false;
-     }
-+    if (arch == LLM_ARCH_DEEPSEEK4) {
-+        return false;
-+    }
-+    if (arch == LLM_ARCH_INKLING) {
-+        return false; // TODO fixture params for the arch-specific hparams (d_rel, rel_extent, shortconv, logit_scale_denom)
-+    }
-+
-     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
- #ifdef GGML_USE_WEBGPU
-     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP) {
-@@ -535,6 +632,20 @@ static bool arch_supported(const llm_arch arch) {
+@@ -559,6 +559,20 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -1619,12 +1457,12 @@ index 35a3286e4..906f00ef4 100644
 +    return true;
 +}
 +
- static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
+ static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir) {
      struct user_data_t {
          struct {
-@@ -700,6 +811,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
-                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
+@@ -735,6 +749,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                  char nmse_str[12] = {0};
+ 
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
 +                if (arch == LLM_ARCH_GLM_DSA && !glm_dsa_backend_config_supported(dc.devs)) {
 +                    skip = true;
@@ -1636,7 +1474,7 @@ index 35a3286e4..906f00ef4 100644
                      if (logits_cpu.empty()) {
                          model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
 diff --git a/tools/mtmd/mtmd-image.cpp b/tools/mtmd/mtmd-image.cpp
-index 0dda8770f..ec9bc8f88 100644
+index 890578978..ae0c30171 100644
 --- a/tools/mtmd/mtmd-image.cpp
 +++ b/tools/mtmd/mtmd-image.cpp
 @@ -481,6 +481,78 @@ private:
@@ -1720,3 +1558,4 @@ index 0dda8770f..ec9bc8f88 100644
  //
 -- 
 2.55.0
+
