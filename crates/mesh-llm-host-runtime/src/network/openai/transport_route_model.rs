@@ -70,11 +70,12 @@ async fn cache_target_for_request(
         return Some(target);
     }
 
+    let lease_epoch = affinity.cache_lease_epoch();
     let selected = node
         .select_cache_target(model, prefix_hash, candidates)
         .await;
     if let Some(target) = selected.as_ref() {
-        affinity.remember_cache_lease(model, prefix_hash, target);
+        affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
     }
     selected
 }
@@ -354,40 +355,47 @@ fn update_local_cache_evidence(
     if !(200..400).contains(&status_code) {
         return;
     }
-    let (Some(prefix_hash), election::InferenceTarget::Local(_), Some(cached_tokens)) = (
-        context.selection.prefix_hash,
-        context.target,
-        usage.and_then(|usage| usage.cached_prompt_tokens),
-    ) else {
+    let is_local = matches!(context.target, election::InferenceTarget::Local(_));
+    if is_local {
+        context.node.observe_local_prefill_cost(
+            context.model,
+            cache_cost.and_then(|cost| cost.prefill_micros_per_token),
+        );
+    }
+
+    let Some(prefix_hash) = context.selection.prefix_hash else {
+        return;
+    };
+    let Some(cached_tokens) = usage.and_then(|usage| usage.cached_prompt_tokens) else {
         return;
     };
     if cached_tokens > 0 {
-        let suffix = usage
-            .and_then(|usage| usage.prompt_tokens)
-            .unwrap_or(cached_tokens)
-            .saturating_sub(cached_tokens);
-        context.node.record_local_cache_hit_with_cost(
-            context.model,
-            prefix_hash,
-            u32::try_from(cached_tokens).unwrap_or(u32::MAX),
-            u32::try_from(suffix).unwrap_or(u32::MAX),
-            crate::network::affinity::LocalCacheCost {
-                queue_delay_micros: cache_cost.map_or(0, |cost| cost.queue_delay_micros),
-                restore_micros: cache_cost.map_or(0, |cost| cost.restore_micros),
-                prefill_micros_per_token: cache_cost.and_then(|cost| cost.prefill_micros_per_token),
-            },
-        );
+        if is_local {
+            let suffix = usage
+                .and_then(|usage| usage.prompt_tokens)
+                .unwrap_or(cached_tokens)
+                .saturating_sub(cached_tokens);
+            context.node.record_local_cache_hit_with_cost(
+                context.model,
+                prefix_hash,
+                u32::try_from(cached_tokens).unwrap_or(u32::MAX),
+                u32::try_from(suffix).unwrap_or(u32::MAX),
+                crate::network::affinity::LocalCacheCost {
+                    queue_delay_micros: cache_cost.map_or(0, |cost| cost.queue_delay_micros),
+                    restore_micros: cache_cost.map_or(0, |cost| cost.restore_micros),
+                    // The model-level observation was recorded above so each
+                    // response contributes exactly once to its EWMA.
+                    prefill_micros_per_token: None,
+                },
+            );
+        }
         return;
     }
 
-    context.node.observe_local_prefill_cost(
-        context.model,
-        cache_cost.and_then(|cost| cost.prefill_micros_per_token),
-    );
-
-    let inventory_invalidated = context
-        .node
-        .invalidate_local_cache_evidence(context.model, prefix_hash);
+    let inventory_invalidated = is_local
+        && context
+            .node
+            .invalidate_local_cache_evidence(context.model, prefix_hash);
     let lease_invalidated = context
         .affinity
         .forget_cache_lease(context.model, prefix_hash);
@@ -397,7 +405,7 @@ fn update_local_cache_evidence(
             prefix_hash,
             inventory_invalidated,
             lease_invalidated,
-            "invalidated cache affinity after authoritative local miss"
+            "invalidated cache affinity after authoritative miss"
         );
     }
 }
@@ -486,9 +494,11 @@ fn record_route_model_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroh::SecretKey;
 
-    async fn local_cache_context(
+    async fn cache_context(
         prefix_hash: u64,
+        target: election::InferenceTarget,
     ) -> (
         mesh::Node,
         AffinityRouter,
@@ -500,7 +510,6 @@ mod tests {
             .await
             .expect("test node");
         let affinity = AffinityRouter::with_config(true, true);
-        let target = election::InferenceTarget::Local(9337);
         let selection = TargetSelection {
             target: target.clone(),
             prefix_hash: Some(prefix_hash),
@@ -517,7 +526,8 @@ mod tests {
     #[tokio::test]
     async fn authoritative_local_miss_invalidates_inventory_and_lease() {
         let prefix_hash = 0xfeed_beef;
-        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
@@ -552,9 +562,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authoritative_remote_miss_invalidates_lease_but_not_local_inventory() {
+        let prefix_hash = 0xfeed_beef;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        let remote = election::InferenceTarget::Remote(SecretKey::from_bytes(&bytes).public());
+        let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
+        let local = election::InferenceTarget::Local(9337);
+        node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        affinity.remember_cache_lease("qwen", prefix_hash, &target);
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(0),
+                ..TokenUsage::default()
+            }),
+            None,
+        );
+
+        assert_eq!(
+            affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
+            None
+        );
+        assert_eq!(
+            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
+                .await,
+            Some(local)
+        );
+    }
+
+    #[tokio::test]
     async fn missing_cache_usage_does_not_refute_positive_evidence() {
         let prefix_hash = 0xfeed_beef;
-        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
@@ -589,9 +641,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timing_without_cache_usage_still_calibrates_local_prefill_cost() {
+        let prefix_hash = 0xfeed_beef;
+        let calibration_probe = prefix_hash + 1;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: None,
+                ..TokenUsage::default()
+            }),
+            Some(CacheCostObservation {
+                queue_delay_micros: 4_000,
+                restore_micros: 8_000,
+                prefill_micros_per_token: Some(250),
+            }),
+        );
+
+        node.record_local_cache_hit("qwen", calibration_probe, 512, 24, 0);
+        let entry = node
+            .cache_affinity_inventory
+            .lock()
+            .unwrap()
+            .probe_local("qwen", calibration_probe)
+            .expect("calibrated local evidence");
+        assert_eq!(entry.prefill_micros_per_token, 250);
+    }
+
+    #[tokio::test]
     async fn local_hit_records_measured_queue_restore_and_prefill_costs() {
         let prefix_hash = 0xfeed_beef;
-        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         let context = DeliveredRouteModelContext {
             node: &node,
             model: "qwen",
