@@ -158,6 +158,82 @@ class AgenticReplayTest(unittest.TestCase):
             "stream failed with server error: cache operation deadline exceeded",
         )
 
+    def test_stream_request_rejects_truncated_stream_without_done(self) -> None:
+        class TruncatedResponse:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+                        b'data: {"choices":[],"usage":{"completion_tokens":1,"prompt_tokens":10}}\n',
+                    ]
+                )
+
+        class TruncatedConnection:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return TruncatedResponse()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(
+            BENCH.http.client, "HTTPConnection", TruncatedConnection
+        ):
+            result = BENCH.stream_request(
+                "request-1",
+                [{"role": "user", "content": "task"}],
+                [],
+                {"session_id": "session-1"},
+                "model",
+                128,
+                10,
+            )
+
+        self.assertEqual(
+            result["error"], "stream ended without terminal [DONE] marker"
+        )
+
+    def test_output_hash_ignores_tool_call_chunking_and_generated_ids(self) -> None:
+        chunked = {}
+        BENCH.merge_tool_call_delta(
+            chunked,
+            {
+                "index": 0,
+                "id": "call-random-a",
+                "type": "function",
+                "function": {"name": "shell", "arguments": '{"command":'},
+            },
+            0,
+        )
+        BENCH.merge_tool_call_delta(
+            chunked,
+            {"index": 0, "function": {"arguments": '"ls"}'}},
+            0,
+        )
+        unchunked = {}
+        BENCH.merge_tool_call_delta(
+            unchunked,
+            {
+                "index": 0,
+                "id": "call-random-b",
+                "type": "function",
+                "function": {"name": "shell", "arguments": '{"command":"ls"}'},
+            },
+            0,
+        )
+
+        self.assertEqual(
+            BENCH.response_content_sha256([], [], chunked),
+            BENCH.response_content_sha256([], [], unchunked),
+        )
+
     def test_checkpoint_replay_reconstructs_full_recorded_prefix(self) -> None:
         trajectory = {
             "session_id": "session-1",
@@ -256,6 +332,120 @@ class AgenticReplayTest(unittest.TestCase):
             all(tool["function"]["parameters"]["additionalProperties"] for tool in tools)
         )
 
+    def test_trajectory_tools_preserve_captured_harness_schemas(self) -> None:
+        captured = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run a command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        self.assertEqual(BENCH.trajectory_tools({"tools": captured}), captured)
+
+    def test_captured_message_preserves_openai_fields_and_tool_calls(self) -> None:
+        recorded = {
+            "role": "assistant",
+            "content": "",
+            "name": "agent",
+            "reasoning_content": "private reasoning",
+            "provider_extension": {"cache_control": "ephemeral"},
+            "tool_calls": [{"id": "call-1", "type": "function"}],
+        }
+
+        self.assertEqual(BENCH.openai_message(recorded), recorded)
+
+    def test_captured_message_decodes_legacy_tool_calls_without_forwarding_alias(
+        self,
+    ) -> None:
+        tool_calls = [{"id": "call-1", "type": "function"}]
+        recorded = {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "private reasoning",
+            "tool_calls_json": json.dumps(tool_calls),
+        }
+
+        self.assertEqual(
+            BENCH.openai_message(recorded),
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "private reasoning",
+                "tool_calls": tool_calls,
+            },
+        )
+
+    def test_captured_tool_call_sizes_the_generated_output_budget(self) -> None:
+        recorded = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "arguments": '{"command":"find . -type f"}',
+                    },
+                }
+            ],
+        }
+
+        self.assertGreater(BENCH.recorded_output_budget(recorded, 2048), 8)
+
+    def test_final_replay_measures_only_the_last_assistant_prefix(self) -> None:
+        trajectory = {
+            "session_id": "session-1",
+            "source_dataset": "buzz-capture",
+            "agent_framework": "buzz",
+            "recorded_model": "model",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "first"},
+                {"role": "tool", "content": "observation", "tool_call_id": "1"},
+                {"role": "assistant", "content": "second"},
+            ],
+        }
+        calls = []
+        original = BENCH.stream_request
+        BENCH.stream_request = lambda *args, **kwargs: calls.append(args) or {
+            "request_id": args[0],
+            "session_id": args[3]["session_id"],
+            "started": 0.0,
+            "first_token_at": 1.0,
+            "completed": 2.0,
+            "ttft_seconds": 1.0,
+            "elapsed_seconds": 2.0,
+            "generation_seconds": 1.0,
+            "completion_tokens": 1,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "content_sha256": "a" * 64,
+        }
+        try:
+            BENCH.run_trajectory_cell(
+                trajectories=[trajectory],
+                model_id="model",
+                concurrency=1,
+                max_output_tokens=8,
+                timeout=10,
+                raw_path=Path(tempfile.gettempdir()) / "agentic-final-test.jsonl",
+                replay_mode="final",
+            )
+        finally:
+            BENCH.stream_request = original
+
+        self.assertEqual([call[0] for call in calls], ["session-1:1"])
+        self.assertEqual(calls[0][3]["checkpoint_stage"], "final")
+
     def test_server_command_keeps_mesh_planning_at_defaults(self) -> None:
         command = BENCH.server_command(Path("/product/mesh-llm"), "model-uri")
 
@@ -351,6 +541,25 @@ class AgenticReplayTest(unittest.TestCase):
                     ]
                 )
 
+    def test_cli_rejects_zero_cache_threshold(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                BENCH.parse_args(
+                    [
+                        "plan",
+                        "--ref",
+                        "rc8=v0.76.0-rc8",
+                        "--ref",
+                        "main=origin/main",
+                        "--model",
+                        "model-uri",
+                        "--trajectories-per-framework",
+                        "4",
+                        "--min-cache-pct",
+                        "0",
+                    ]
+                )
+
     def test_manifest_contract_is_validated_before_builds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
@@ -406,6 +615,43 @@ class AgenticReplayTest(unittest.TestCase):
 
             self.assertIsNone(cohorts["warmup"][0]["recorded_model"])
 
+    def test_imported_manifest_is_copied_hashed_and_summarized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "capture.json"
+            output = root / "artifact"
+            trajectory = {
+                "session_id": "buzz-1",
+                "source_dataset": "buzz-capture",
+                "agent_framework": "buzz",
+                "recorded_model": None,
+                "messages": [
+                    {"role": "user", "content": "task"},
+                    {"role": "assistant", "content": "answer"},
+                ],
+                "tools": [],
+            }
+            source.write_text(
+                json.dumps(
+                    {
+                        "metadata": {"name": "real harness capture", "revision": "r1"},
+                        "cohorts": {"warmup": [trajectory], "1": [trajectory]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            imported = BENCH.import_trajectory_manifest(
+                source, output, ["warmup", "1"]
+            )
+
+            self.assertEqual(imported["kind"], "captured")
+            self.assertEqual(imported["dataset"]["revision"], "r1")
+            self.assertEqual(imported["cohorts"]["1"]["assistant_turns"], 1)
+            self.assertEqual(
+                imported["source_manifest_sha256"], imported["manifest_sha256"]
+            )
+
     def test_warmup_capacity_is_validated_before_builds(self) -> None:
         trajectories = [
             {
@@ -418,6 +664,29 @@ class AgenticReplayTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "1 assistant turns; 14 required"):
             BENCH.validate_warmup_capacity(trajectories, 14)
+
+    def test_measured_cohort_requires_two_worker_waves(self) -> None:
+        with self.assertRaisesRegex(ValueError, "8 required"):
+            BENCH.validate_measured_cohort_capacity(
+                {"4": [{"session_id": str(index)} for index in range(7)]}, [4]
+            )
+
+    def test_required_frameworks_are_checked_in_every_measured_cohort(self) -> None:
+        cohorts = {
+            "1": [
+                {"agent_framework": "buzz"},
+                {"agent_framework": "opencode"},
+            ],
+            "2": [
+                {"agent_framework": "buzz"},
+                {"agent_framework": "goose"},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "concurrency 1.*goose"):
+            BENCH.validate_required_frameworks(
+                cohorts, [1, 2], ["buzz", "opencode", "goose"]
+            )
 
     def test_summarize_requests_computes_stream_windows_and_cache_rate(self) -> None:
         requests = [
@@ -432,6 +701,8 @@ class AgenticReplayTest(unittest.TestCase):
                 "prompt_tokens": 100,
                 "cached_tokens": 50,
                 "requested_output_tokens": 10,
+                "request_id": "request-1",
+                "content_sha256": "a" * 64,
             },
             {
                 "started": 0.0,
@@ -444,6 +715,8 @@ class AgenticReplayTest(unittest.TestCase):
                 "prompt_tokens": 100,
                 "cached_tokens": 100,
                 "requested_output_tokens": 10,
+                "request_id": "request-2",
+                "content_sha256": "b" * 64,
             },
         ]
 
@@ -461,6 +734,214 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertEqual(summary["ttft_p50_seconds"], 1.5)
         self.assertEqual(summary["ttft_p95_seconds"], 2.0)
         self.assertEqual(summary["cache_pct"], 75)
+        self.assertEqual(summary["prompt_tokens_min"], 100)
+        self.assertEqual(summary["prompt_tokens_max"], 100)
+        self.assertEqual(
+            summary["content_sha256_by_request"]["request-1"], "a" * 64
+        )
+
+    def test_acceptance_gates_cover_19k_cache_output_and_ttft(self) -> None:
+        baseline = {
+            "label": "base",
+            "concurrency": 1,
+            "failed_requests": 0,
+            "prompt_tokens_min": 19_100,
+            "prompt_tokens_max": 19_900,
+            "cache_pct": 80.0,
+            "delta_comparable": True,
+            "content_identity_known": True,
+            "ttft_p50_seconds_delta_pct": 0.0,
+        }
+        candidate = {
+            **baseline,
+            "label": "candidate",
+            "cache_pct": 85.0,
+            "ttft_p50_seconds_delta_pct": 3.0,
+        }
+
+        gates = BENCH.evaluate_gates(
+            [baseline, candidate],
+            prompt_token_range=(18_000, 21_000),
+            min_cache_pct=75.0,
+            require_output_match=True,
+            max_ttft_regression_pct=5.0,
+        )
+
+        self.assertTrue(gates["passed"])
+        self.assertTrue(gates["evaluated"])
+        self.assertEqual(len(gates["checks"]), 10)
+
+    def test_acceptance_gate_failure_is_explicit(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [
+                {
+                    "label": "candidate",
+                    "concurrency": 4,
+                    "failed_requests": 1,
+                    "prompt_tokens_min": 17_999,
+                    "prompt_tokens_max": 19_000,
+                    "cache_pct": 20.0,
+                    "delta_comparable": False,
+                    "ttft_p50_seconds_delta_pct": 8.0,
+                }
+            ],
+            prompt_token_range=(18_000, 21_000),
+            min_cache_pct=75.0,
+            require_output_match=True,
+            max_ttft_regression_pct=5.0,
+        )
+
+        self.assertFalse(gates["passed"])
+        self.assertTrue(all(not check["passed"] for check in gates["checks"]))
+
+    def test_ttft_gate_fails_closed_when_delta_is_unavailable(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [
+                {
+                    "label": "candidate",
+                    "concurrency": 1,
+                    "failed_requests": 0,
+                    "ttft_p50_seconds_delta_pct": None,
+                }
+            ],
+            max_ttft_regression_pct=5.0,
+        )
+
+        self.assertFalse(gates["passed"])
+        self.assertEqual(len(gates["checks"]), 2)
+        self.assertIn("observed=unavailable", gates["checks"][1]["detail"])
+
+    def test_acceptance_gate_rejects_failed_measured_requests(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [
+                {
+                    "label": "candidate",
+                    "concurrency": 1,
+                    "failed_requests": 49,
+                    "cache_pct": 100.0,
+                }
+            ],
+            min_cache_pct=75.0,
+        )
+
+        self.assertTrue(gates["evaluated"])
+        self.assertFalse(gates["passed"])
+        self.assertEqual(gates["checks"][0]["name"], "failed-requests:candidate/c1")
+        self.assertFalse(gates["checks"][0]["passed"])
+
+    def test_acceptance_gates_are_not_evaluated_without_configuration(self) -> None:
+        gates = BENCH.evaluate_gates(
+            [{"label": "candidate", "concurrency": 1, "failed_requests": 0}]
+        )
+
+        self.assertFalse(gates["evaluated"])
+        self.assertIsNone(gates["passed"])
+        self.assertEqual(gates["checks"], [])
+
+    def test_resumed_empty_cells_cannot_pass_configured_gates(self) -> None:
+        resumed_results = [
+            {
+                "label": "candidate",
+                "ref": "candidate",
+                "commit": "a" * 40,
+                "pass": 1,
+                "cells": [],
+            }
+        ]
+
+        gates = BENCH.evaluate_gates(
+            BENCH.pooled_rows(resumed_results), min_cache_pct=50.0
+        )
+
+        self.assertTrue(gates["evaluated"])
+        self.assertFalse(gates["passed"])
+        self.assertEqual(
+            gates["checks"],
+            [
+                {
+                    "name": "measured-rows",
+                    "passed": False,
+                    "detail": "observed=0 required>=1",
+                }
+            ],
+        )
+
+    def test_pooled_rows_preserve_legacy_comparability_without_hashes(self) -> None:
+        def successful_cell():
+            return {
+                "concurrency": 1,
+                "trajectories": 2,
+                "requests": 2,
+                "successful_requests": 2,
+                "failed_request_ids": [],
+                "budget_exhausted_requests": 0,
+                "agent_steps_per_second": 1.0,
+                "workload_output_tokens_per_second": 2.0,
+                "decode_tokens_per_second": 3.0,
+                "ttft_p50_seconds": 4.0,
+                "ttft_p95_seconds": 5.0,
+                "ttft_samples": [4.0],
+                "mean_in_flight": 1.0,
+                "concurrency_utilization_pct": 100.0,
+                "cache_pct": 50.0,
+            }
+
+        rows = BENCH.pooled_rows(
+            [
+                {
+                    "label": "base",
+                    "ref": "base",
+                    "commit": "a" * 40,
+                    "cells": [successful_cell()],
+                },
+                {
+                    "label": "candidate",
+                    "ref": "candidate",
+                    "commit": "b" * 40,
+                    "cells": [successful_cell()],
+                },
+            ]
+        )
+
+        self.assertTrue(all(row["delta_comparable"] for row in rows))
+
+    def test_pooled_rows_require_a_hash_for_every_successful_pass(self) -> None:
+        def successful_cell(include_hash: bool):
+            cell = {
+                "concurrency": 1,
+                "trajectories": 1,
+                "requests": 1,
+                "successful_requests": 1,
+                "successful_request_ids": ["session:0"],
+                "content_sha256_by_request": {},
+                "failed_request_ids": [],
+                "budget_exhausted_requests": 0,
+                "agent_steps_per_second": 1.0,
+                "workload_output_tokens_per_second": 2.0,
+                "decode_tokens_per_second": 3.0,
+                "ttft_p50_seconds": 4.0,
+                "ttft_p95_seconds": 5.0,
+                "ttft_samples": [4.0],
+                "mean_in_flight": 1.0,
+                "concurrency_utilization_pct": 100.0,
+                "cache_pct": 50.0,
+            }
+            if include_hash:
+                cell["content_sha256_by_request"] = {"session:0": "a" * 64}
+            return cell
+
+        rows = BENCH.pooled_rows(
+            [
+                {
+                    "label": "base",
+                    "ref": "base",
+                    "commit": "a" * 40,
+                    "cells": [successful_cell(True), successful_cell(False)],
+                }
+            ]
+        )
+
+        self.assertFalse(rows[0]["content_identity_known"])
 
     def test_pooled_rows_suppress_deltas_for_different_failed_requests(self) -> None:
         def failed_cell(request_id):
