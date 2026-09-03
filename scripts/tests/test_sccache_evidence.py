@@ -97,6 +97,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
+            ("ci-windows-runtime-events-smoke-slice.yml", "runtime_events_smoke"): policy,
             ("cache-warm-sccache.yml", "warm"): "false",
             ("hf-download-smoke.yml", "hf_download_smoke"): "true",
             ("native-sdk-artifact.yml", "linux_native_sdk_artifact"): policy,

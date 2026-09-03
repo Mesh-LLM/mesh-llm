@@ -326,7 +326,8 @@ runs:
               matrices: {
                 hosts: [.matrices.hosts[] | select(.platform == "windows")],
                 runtime_products: [.matrices.runtime_products[] | select(.platform == "windows")],
-                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")]
+                platform_checks: [.matrices.platform_checks[] | select(.platform == "windows")],
+                smoke: [.matrices.smoke[] | select(.id == "windows-runtime-events")]
               }
             }
             | .required = ([.matrices[] | length] | add) > 0

@@ -74,6 +74,7 @@ class CiArtifactActionTests(unittest.TestCase):
                         "ci-web-slice.yml",
                         "ci-windows-host-slice.yml",
                         "ci-windows-product-slice.yml",
+                        "ci-windows-runtime-events-smoke-slice.yml",
                         "ci-windows-runtime-slice.yml",
                         "native-sdk-artifact.yml",
                         "static-abi-artifact.yml",
@@ -701,6 +702,7 @@ class CiArtifactActionTests(unittest.TestCase):
 
         expected_callers = {
             "restore-windows-abi-cache": {
+                "ci-windows-runtime-events-smoke-slice.yml": 1,
                 "ci-windows-runtime-slice.yml": 1,
                 "release.yml": 2,
                 "windows-warm-caches.yml": 2,
@@ -755,7 +757,10 @@ class CiArtifactActionTests(unittest.TestCase):
             for workflow_name, block in calls:
                 actual_counts[workflow_name] = actual_counts.get(workflow_name, 0) + 1
                 with self.subTest(action=action_name, workflow=workflow_name):
-                    if workflow_name == "ci-windows-runtime-slice.yml":
+                    if workflow_name in (
+                        "ci-windows-runtime-slice.yml",
+                        "ci-windows-runtime-events-smoke-slice.yml",
+                    ):
                         self.assertIn(policy_value, block)
                     else:
                         self.assertIn(
@@ -2176,8 +2181,8 @@ class CiArtifactActionTests(unittest.TestCase):
                 if "pr_approved_ref:" in block:
                     approved_policy_calls += 1
                     self.assertIn("pr_approved_sha:", block)
-        self.assertEqual(selector_calls, 19)
-        self.assertEqual(approved_policy_calls, 18)
+        self.assertEqual(selector_calls, 20)
+        self.assertEqual(approved_policy_calls, 19)
 
         cases = (
             (

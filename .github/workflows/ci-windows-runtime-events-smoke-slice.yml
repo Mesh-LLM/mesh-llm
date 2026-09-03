@@ -1,0 +1,183 @@
+name: CI Windows Runtime Events Smoke Slice
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable product source revision.
+        required: true
+        type: string
+      original_event_name:
+        description: Original event used for protected runner and cache policy.
+        required: true
+        type: string
+      force_hosted:
+        description: Force GitHub-hosted placement for runner-contract changes.
+        required: false
+        default: false
+        type: boolean
+      smoke_matrix:
+        description: JSON smoke rows from the versioned CI plan.
+        required: true
+        type: string
+      architecture:
+        description: Windows CPU runtime/product architecture to consume.
+        required: false
+        default: amd64
+        type: string
+      timeout_minutes:
+        description: Bounded job timeout.
+        required: false
+        default: 90
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_GHA_ENABLED: "true"
+  LLAMA_STAGE_BACKEND: cpu
+  LLAMA_STAGE_BUILD_DIR: .deps/llama-build/windows/build-stage-abi-cpu
+
+jobs:
+  runner_policy:
+    name: Select Windows runtime-events smoke runner
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'windows-runtime-events') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      runner_windows: ${{ steps.policy.outputs.runner_windows }}
+      allow_depot_remote_cache: ${{ steps.policy.outputs.allow_depot_remote_cache }}
+      allow_native_github_cache: ${{ steps.policy.outputs.allow_native_github_cache }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Select provider for the Windows runtime-events smoke role
+        id: policy
+        uses: ./.github/actions/select-ci-runners
+        with:
+          event_name: ${{ github.event_name }}
+          original_event_name: ${{ inputs.original_event_name }}
+          repository: ${{ github.repository }}
+          head_repository: ${{ github.event.pull_request.head.repo.full_name }}
+          head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.ref }}
+          depot_main_enabled: 'false'
+          depot_pr_enabled: ${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}
+          pr_canary_ref: ${{ vars.DEPOT_PR_CANARY_REF }}
+          pr_approved_ref: ${{ vars.DEPOT_PR_APPROVED_REF }}
+          pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
+          force_hosted: ${{ inputs.force_hosted }}
+
+  runtime_events_smoke:
+    name: Windows runtime-events smoke
+    needs: runner_policy
+    if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'windows-runtime-events') }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_windows }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_windows, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - name: Validate immutable source SHA
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') {
+            throw 'source_sha must be a lowercase 40-character commit SHA'
+          }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-16
+      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - uses: ./.github/actions/resolve-native-toolchain-epoch
+        id: native_toolchain
+      - name: Restore Windows CPU ABI build (warm when native_runtimes already ran this lane)
+        uses: ./.github/actions/restore-windows-abi-cache
+        id: llama_cache
+        with:
+          backend: cpu
+          build_dir: ${{ env.LLAMA_STAGE_BUILD_DIR }}
+          toolchain_epoch: ${{ steps.native_toolchain.outputs.epoch }}
+          allow-native-github-cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Prepare patched llama.cpp ABI checkout
+        run: scripts/prepare-llama.sh pinned
+      - name: Verify cached patched llama.cpp CPU ABI libraries
+        if: ${{ steps.llama_cache.outputs.cache-hit == 'true' }}
+        run: scripts/build-llama.sh --require-existing
+      - name: Build patched llama.cpp CPU ABI libraries
+        if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
+        run: scripts/build-llama.sh
+      - name: Save exact PR-scoped Windows CPU ABI build
+        if: ${{ inputs.original_event_name == 'pull_request' && needs.runner_policy.outputs.allow_native_github_cache == 'true' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+      - name: Test skippy-ffi
+        run: cargo test --locked -p skippy-ffi --lib
+      - name: Test skippy-runtime runtime_events
+        run: cargo test --locked -p skippy-runtime runtime_events --lib
+      - name: Test mesh-llm-host-runtime runtime_event_api
+        run: cargo test --locked -p mesh-llm-host-runtime runtime_event_api --lib
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-product-windows-${{ inputs.architecture }}-cpu
+          path: product-artifact
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ci-runtime-windows-${{ inputs.architecture }}-cpu
+          path: runtime-artifact
+      - name: Extract composed Windows CPU product and raw runtime artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path product-input | Out-Null
+          New-Item -ItemType Directory -Force -Path runtime-input | Out-Null
+
+          $productArchive = Get-ChildItem -Path product-artifact -Recurse -File | Select-Object -First 1
+          if ($null -eq $productArchive) { throw 'no composed Windows CPU product archive was downloaded' }
+          tar -xf $productArchive.FullName -C product-input
+          if ($LASTEXITCODE -ne 0) { throw "failed to extract composed product archive: $($productArchive.FullName)" }
+
+          $runtimeArchive = Get-ChildItem -Path runtime-artifact -Filter '*.tar.gz' -File | Select-Object -First 1
+          if ($null -eq $runtimeArchive) { throw 'no raw Windows CPU runtime archive (*.tar.gz) was downloaded' }
+          tar -xzf $runtimeArchive.FullName -C runtime-input
+          if ($LASTEXITCODE -ne 0) { throw "failed to extract raw runtime archive: $($runtimeArchive.FullName)" }
+      - name: Run Windows runtime-events smoke
+        shell: pwsh
+        run: |
+          pwsh -File scripts/ci-windows-runtime-events-smoke.ps1 `
+            -ProductDir "$(Resolve-Path product-input)" `
+            -RuntimeDir "$(Resolve-Path runtime-input)" `
+            -FixtureDir "$(Resolve-Path crates/mesh-llm-runtime-event-contracts/fixtures/runtime_events_v1)" `
+            -EvidenceDir "$(Join-Path $PWD 'runtime-events-windows-smoke')"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: runtime-events-windows-smoke
+          path: runtime-events-windows-smoke
+          if-no-files-found: error
+          retention-days: 1

@@ -131,7 +131,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-website-lane.yml": 2,
             "ci-linux-lane.yml": 10,
             "ci-macos-lane.yml": 9,
-            "ci-windows-lane.yml": 6,
+            "ci-windows-lane.yml": 7,
         }
         for workflow_name, expected_calls in lane_workflows.items():
             with self.subTest(workflow=workflow_name):
@@ -156,6 +156,7 @@ class CiLaneWorkflowTests(unittest.TestCase):
             "ci-macos-product-slice.yml",
             "ci-windows-runtime-slice.yml",
             "ci-windows-product-slice.yml",
+            "ci-windows-runtime-events-smoke-slice.yml",
             "ci-platform-checks-slice.yml",
             "static-abi-artifact.yml",
             "native-sdk-artifact.yml",
@@ -171,7 +172,10 @@ class CiLaneWorkflowTests(unittest.TestCase):
                 self.assertIn("source_sha:", workflow)
                 checkout_ref = (
                     "ref: ${{ inputs.source_sha }}"
-                    if workflow_name == "ci-windows-runtime-slice.yml"
+                    if workflow_name in (
+                        "ci-windows-runtime-slice.yml",
+                        "ci-windows-runtime-events-smoke-slice.yml",
+                    )
                     else "ref: ${{ inputs.source_sha || github.sha }}"
                 )
                 self.assertIn(
