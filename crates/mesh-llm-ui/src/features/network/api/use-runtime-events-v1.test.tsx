@@ -1,0 +1,483 @@
+// @vitest-environment jsdom
+
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
+import { act, cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import {
+  EVENT_PROJECTED_KEY_ALLOWLIST,
+  KEEPALIVE_FRAME,
+  PER_EVENT_REQUIRED_KEYS,
+  REPLAY_GAP_REASONS,
+  REQUIRED_ENVELOPE_KEYS,
+  RUNTIME_EVENT_NAMES,
+  RuntimeEventCursor,
+  RuntimeEventsV1FrameError,
+  STATE_TOP_LEVEL_KEYS,
+  parseRuntimeEventsV1Frame
+} from '@/features/network/api/runtime-events-v1-sse'
+import {
+  useRuntimeEventsV1,
+  type RuntimeEventsFetch,
+  type RuntimeEventsResponse
+} from '@/features/network/api/use-runtime-events-v1'
+
+// The three Rust-generated fixture files are the normative corpus. They are
+// read straight from the contract crate — never copied into the UI tree —
+// so a server-side wire change fails this suite instead of drifting.
+const FIXTURE_ROOT = path.resolve(process.cwd(), '../mesh-llm-runtime-event-contracts/fixtures/runtime_events_v1')
+
+function loadFixture(name: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path.join(FIXTURE_ROOT, name), 'utf8')) as Record<string, unknown>
+}
+
+const FRAMES_FIXTURE = loadFixture('frames.json')
+const CURSORS_FIXTURE = loadFixture('cursors.json')
+const RECOVERY_FIXTURE = loadFixture('recovery.json')
+
+const INSTANCE = '0195f000-0000-7000-8000-000000000001'
+const OTHER_INSTANCE = '0195f000-0000-7000-8000-0000000000ff'
+const HOOK_RECONNECT_DELAY_MS = 1_000
+
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
+
+// ─── A. shared fixture contract ────────────────────────────────────────────
+
+describe('runtime events v1 wire constants', () => {
+  it('matches the Rust-generated frames fixture exactly', () => {
+    expect([...RUNTIME_EVENT_NAMES]).toEqual(FRAMES_FIXTURE.event_names)
+    expect([...REQUIRED_ENVELOPE_KEYS]).toEqual(FRAMES_FIXTURE.required_envelope_keys)
+    expect([...STATE_TOP_LEVEL_KEYS]).toEqual(FRAMES_FIXTURE.state_top_level_keys)
+    expect([...EVENT_PROJECTED_KEY_ALLOWLIST]).toEqual(FRAMES_FIXTURE.event_projected_key_allowlist)
+    expect([...REPLAY_GAP_REASONS]).toEqual(FRAMES_FIXTURE.replay_gap_reasons)
+    expect(KEEPALIVE_FRAME).toBe(FRAMES_FIXTURE.keepalive_frame)
+    expect(Object.fromEntries(Object.entries(PER_EVENT_REQUIRED_KEYS).map(([k, v]) => [k, [...v]]))).toEqual(
+      FRAMES_FIXTURE.per_event_required_keys
+    )
+  })
+
+  it('mirrors the fixture recovery frame order for every connection shape', () => {
+    const shapes = RECOVERY_FIXTURE.connection_shapes as { shape: string; frame_order?: string[] }[]
+    expect(shapes.find((shape) => shape.shape === 'gap')?.frame_order).toEqual([
+      'runtime_replay_gap',
+      'runtime_state',
+      'runtime_health'
+    ])
+    expect(shapes.find((shape) => shape.shape === 'no_cursor')?.frame_order).toEqual([
+      'runtime_state',
+      'runtime_health'
+    ])
+  })
+})
+
+// ─── B. cursor grammar, fixture-driven ─────────────────────────────────────
+
+describe('RuntimeEventCursor', () => {
+  it('accepts every canonical cursor in the shared fixture', () => {
+    for (const value of CURSORS_FIXTURE.valid as string[]) {
+      const cursor = RuntimeEventCursor.parse(value)
+      expect(cursor.toString()).toBe(value)
+    }
+  })
+
+  it('rejects every noncanonical cursor in the shared fixture', () => {
+    for (const value of CURSORS_FIXTURE.invalid as string[]) {
+      expect(() => RuntimeEventCursor.parse(value)).toThrow(RuntimeEventsV1FrameError)
+      expect(RuntimeEventCursor.tryParse(value)).toBeUndefined()
+    }
+  })
+
+  it('carries the full u64 sequence range without precision loss', () => {
+    expect(RuntimeEventCursor.parse(`rt1:${INSTANCE}:18446744073709551615`).sequence).toBe(18_446_744_073_709_551_615n)
+  })
+})
+
+// ─── C. frame parsing ──────────────────────────────────────────────────────
+
+function envelope(sequence: number, extra: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    cursor: `rt1:${INSTANCE}:${sequence}`,
+    process_instance_id: INSTANCE,
+    sequence,
+    rebuild_generation: 0,
+    ...extra
+  }
+}
+
+function frame(event: string, sequence: number, extra: Record<string, unknown> = {}) {
+  return {
+    event,
+    lastEventId: `rt1:${INSTANCE}:${sequence}`,
+    data: JSON.stringify(envelope(sequence, extra))
+  }
+}
+
+const STATE_BODY = {
+  state: Object.fromEntries(STATE_TOP_LEVEL_KEYS.map((key) => [key, key === 'node' ? {} : []]))
+}
+
+describe('parseRuntimeEventsV1Frame', () => {
+  it('parses each frame kind the stream can emit', () => {
+    expect(parseRuntimeEventsV1Frame(frame('runtime_state', 7, STATE_BODY)).type).toBe('runtime_state')
+    expect(parseRuntimeEventsV1Frame(frame('runtime_health', 8, { health: { rebuild_generation: 0 } })).type).toBe(
+      'runtime_health'
+    )
+    const parsed = parseRuntimeEventsV1Frame(
+      frame('runtime_event', 9, { event: { category: 'model_loading', kind: 'model_load_started' } })
+    )
+    expect(parsed.type).toBe('runtime_event')
+    expect(parsed.envelope.sequence).toBe(9n)
+    expect(parsed.envelope.processInstanceId).toBe(INSTANCE)
+  })
+
+  it('parses a replay gap and its nullable recovery cursors', () => {
+    const parsed = parseRuntimeEventsV1Frame(
+      frame('runtime_replay_gap', 12, {
+        requested_cursor: `rt1:${OTHER_INSTANCE}:3`,
+        reason: 'stale_instance',
+        oldest_available_cursor: `rt1:${INSTANCE}:4`,
+        latest_cursor: `rt1:${INSTANCE}:12`
+      })
+    )
+    if (parsed.type !== 'runtime_replay_gap') throw new Error('expected a replay gap frame')
+    expect(parsed.reason).toBe('stale_instance')
+    expect(parsed.requestedCursor.processInstanceId).toBe(OTHER_INSTANCE)
+    expect(parsed.latestCursor?.sequence).toBe(12n)
+  })
+
+  it('ignores unknown additive fields on the envelope and inside the body', () => {
+    const parsed = parseRuntimeEventsV1Frame(
+      frame('runtime_health', 3, { health: { rebuild_generation: 0, future_counter: 9 }, future_top_level: 'ok' })
+    )
+    expect(parsed.type).toBe('runtime_health')
+    expect((parsed as { health: Record<string, unknown> }).health.future_counter).toBe(9)
+  })
+
+  it('rejects a runtime_event whose projected keys escape the allowlist', () => {
+    expect(() =>
+      parseRuntimeEventsV1Frame(
+        frame('runtime_event', 4, { event: { category: 'request', kind: 'request_started', prompt: 'leaked' } })
+      )
+    ).toThrow(RuntimeEventsV1FrameError)
+  })
+
+  it.each([
+    ['non-JSON data', { event: 'runtime_health', lastEventId: `rt1:${INSTANCE}:1`, data: 'not-json' }],
+    ['an unknown event name', frame('runtime_unknown', 1, { health: {} })],
+    [
+      'a missing version',
+      {
+        event: 'runtime_health',
+        lastEventId: `rt1:${INSTANCE}:1`,
+        data: JSON.stringify({
+          cursor: `rt1:${INSTANCE}:1`,
+          process_instance_id: INSTANCE,
+          sequence: 1,
+          rebuild_generation: 0,
+          health: {}
+        })
+      }
+    ],
+    ['a future schema version', frame('runtime_health', 1, { health: {}, version: 2 })],
+    [
+      'an id that disagrees with the payload cursor',
+      { event: 'runtime_health', lastEventId: `rt1:${INSTANCE}:2`, data: JSON.stringify(envelope(1, { health: {} })) }
+    ],
+    [
+      'a payload instance that disagrees with its cursor',
+      frame('runtime_health', 1, { health: {}, process_instance_id: OTHER_INSTANCE })
+    ],
+    ['a missing rebuild_generation', frame('runtime_health', 1, { health: {}, rebuild_generation: undefined })],
+    ['a missing per-event mandatory key', frame('runtime_health', 1, {})],
+    ['a state frame missing a frozen top-level key', frame('runtime_state', 1, { state: { node: {} } })],
+    [
+      'an unknown replay-gap reason',
+      frame('runtime_replay_gap', 1, { requested_cursor: `rt1:${INSTANCE}:0`, reason: 'because' })
+    ],
+    ['a noncanonical cursor', { event: 'runtime_health', lastEventId: 'rt1:nope:1', data: JSON.stringify({}) }]
+  ])('rejects %s as a malformed mandatory frame', (_label, input) => {
+    expect(() => parseRuntimeEventsV1Frame(input as Parameters<typeof parseRuntimeEventsV1Frame>[0])).toThrow(
+      RuntimeEventsV1FrameError
+    )
+  })
+})
+
+// ─── D. hook behavior ──────────────────────────────────────────────────────
+
+type StreamController = {
+  push: (chunk: string) => Promise<void>
+  close: () => Promise<void>
+}
+
+function sseResponse(): { response: RuntimeEventsResponse; controller: StreamController } {
+  let enqueue: (value: Uint8Array) => void = () => undefined
+  let finish: () => void = () => undefined
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      enqueue = (value) => streamController.enqueue(value)
+      finish = () => streamController.close()
+    }
+  })
+  return {
+    response: { ok: true, status: 200, body, json: () => Promise.resolve({}) },
+    controller: {
+      push: async (chunk) => {
+        enqueue(encoder.encode(chunk))
+        await act(async () => {
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+      },
+      close: async () => {
+        finish()
+        await act(async () => {
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+      }
+    }
+  }
+}
+
+function jsonResponse(body: unknown, status = 200): RuntimeEventsResponse {
+  return { ok: status >= 200 && status < 300, status, body: null, json: () => Promise.resolve(body) }
+}
+
+function statusWithCapability(capability: unknown) {
+  return { runtime: { capabilities: { worker_capable: true, runtime_events: capability } } }
+}
+
+const ADVERTISED = { version: 1, endpoint: '/api/runtime/events/v1', cursor: 'rt1' }
+
+function encodeFrame(event: string, sequence: number, extra: Record<string, unknown> = {}) {
+  return `id: rt1:${INSTANCE}:${sequence}\nevent: ${event}\ndata: ${JSON.stringify(envelope(sequence, extra))}\n\n`
+}
+
+function Probe({ fetchImpl }: { fetchImpl: RuntimeEventsFetch }) {
+  const runtime = useRuntimeEventsV1({ enabled: true, fetchImpl })
+  return (
+    <div>
+      <div data-testid="mode">{runtime.mode}</div>
+      <div data-testid="reason">{runtime.fallbackReason ?? 'none'}</div>
+      <div data-testid="revision">{runtime.revision}</div>
+      <div data-testid="cursor">{runtime.cursor ?? 'none'}</div>
+      <div data-testid="instance">{runtime.processInstanceId ?? 'none'}</div>
+      <div data-testid="rebuild">{runtime.rebuildGeneration ?? 'none'}</div>
+    </div>
+  )
+}
+
+async function settle() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+describe('useRuntimeEventsV1', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  })
+
+  it('connects without a cursor, then reconnects with ?cursor= carrying the newest cursor', async () => {
+    vi.useFakeTimers()
+    const urls: string[] = []
+    const first = sseResponse()
+    const second = sseResponse()
+    const fetchImpl = vi.fn(async (url: string) => {
+      urls.push(url)
+      if (url.includes('/api/status')) return jsonResponse(statusWithCapability(ADVERTISED))
+      return urls.filter((entry) => entry.includes('/v1')).length === 1 ? first.response : second.response
+    }) satisfies RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+
+    expect(urls.some((url) => url.endsWith('/api/runtime/events/v1'))).toBe(true)
+    await first.controller.push(encodeFrame('runtime_state', 5, STATE_BODY))
+    expect(screen.getByTestId('mode')).toHaveTextContent('live')
+    expect(screen.getByTestId('cursor')).toHaveTextContent(`rt1:${INSTANCE}:5`)
+    expect(screen.getByTestId('revision')).toHaveTextContent('1')
+
+    await first.controller.close()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOOK_RECONNECT_DELAY_MS * 2)
+    })
+    expect(urls.at(-1)).toBe(`/api/runtime/events/v1?cursor=rt1%3A${INSTANCE}%3A5`)
+  })
+
+  it('ignores keepalive comment frames without bumping the revision', async () => {
+    const stream = sseResponse()
+    const fetchImpl = (async (url: string) =>
+      url.includes('/api/status')
+        ? jsonResponse(statusWithCapability(ADVERTISED))
+        : stream.response) as RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    await stream.controller.push(KEEPALIVE_FRAME)
+    expect(screen.getByTestId('revision')).toHaveTextContent('0')
+    await stream.controller.push(encodeFrame('runtime_health', 1, { health: {} }))
+    expect(screen.getByTestId('revision')).toHaveTextContent('1')
+  })
+
+  it.each([
+    ['capability_absent', statusWithCapability(undefined)],
+    ['capability_unsupported', statusWithCapability({ version: 2, endpoint: '/api/runtime/events/v2', cursor: 'rt2' })],
+    ['capability_unsupported', statusWithCapability({ version: 1, endpoint: '/api/runtime/events/v1', cursor: 'rt2' })]
+  ])('falls back with %s when the advertised capability does not match v1', async (reason, status) => {
+    const fetchImpl = (async () => jsonResponse(status)) as RuntimeEventsFetch
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    expect(screen.getByTestId('mode')).toHaveTextContent('fallback')
+    expect(screen.getByTestId('reason')).toHaveTextContent(reason)
+  })
+
+  it.each([
+    [404, 'not_found'],
+    [403, 'forbidden']
+  ])('falls back when the stream answers HTTP %i', async (status, reason) => {
+    const fetchImpl = (async (url: string) =>
+      url.includes('/api/status')
+        ? jsonResponse(statusWithCapability(ADVERTISED))
+        : jsonResponse({}, status)) as RuntimeEventsFetch
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    expect(screen.getByTestId('mode')).toHaveTextContent('fallback')
+    expect(screen.getByTestId('reason')).toHaveTextContent(reason)
+  })
+
+  it('falls back when a mandatory frame field is malformed', async () => {
+    const stream = sseResponse()
+    const fetchImpl = (async (url: string) =>
+      url.includes('/api/status')
+        ? jsonResponse(statusWithCapability(ADVERTISED))
+        : stream.response) as RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    await stream.controller.push(`id: rt1:${INSTANCE}:1\nevent: runtime_health\ndata: {"version":1}\n\n`)
+    expect(screen.getByTestId('mode')).toHaveTextContent('fallback')
+    expect(screen.getByTestId('reason')).toHaveTextContent('malformed_frame')
+  })
+
+  it('recovers a stale process instance in the frozen gap order and adopts the new instance', async () => {
+    const stream = sseResponse()
+    const fetchImpl = (async (url: string) =>
+      url.includes('/api/status')
+        ? jsonResponse(statusWithCapability(ADVERTISED))
+        : stream.response) as RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    await stream.controller.push(
+      encodeFrame('runtime_replay_gap', 2, { requested_cursor: `rt1:${OTHER_INSTANCE}:9`, reason: 'stale_instance' }) +
+        encodeFrame('runtime_state', 2, STATE_BODY) +
+        encodeFrame('runtime_health', 2, { health: {} })
+    )
+
+    expect(screen.getByTestId('mode')).toHaveTextContent('live')
+    expect(screen.getByTestId('instance')).toHaveTextContent(INSTANCE)
+    expect(screen.getByTestId('cursor')).toHaveTextContent(`rt1:${INSTANCE}:2`)
+    expect(screen.getByTestId('revision')).toHaveTextContent('3')
+  })
+
+  it('drops its cursor on an evicted gap and adopts the newer rebuild generation', async () => {
+    const stream = sseResponse()
+    const fetchImpl = (async (url: string) =>
+      url.includes('/api/status')
+        ? jsonResponse(statusWithCapability(ADVERTISED))
+        : stream.response) as RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    await stream.controller.push(encodeFrame('runtime_health', 1, { health: {} }))
+    await stream.controller.push(
+      encodeFrame('runtime_replay_gap', 40, {
+        requested_cursor: `rt1:${INSTANCE}:1`,
+        reason: 'evicted',
+        oldest_available_cursor: `rt1:${INSTANCE}:30`,
+        rebuild_generation: 4
+      }) + encodeFrame('runtime_state', 40, { ...STATE_BODY, rebuild_generation: 4 })
+    )
+
+    expect(screen.getByTestId('rebuild')).toHaveTextContent('4')
+    expect(screen.getByTestId('cursor')).toHaveTextContent(`rt1:${INSTANCE}:40`)
+    expect(screen.getByTestId('mode')).toHaveTextContent('live')
+  })
+
+  it('falls back once the reconnect ceiling is exhausted without a single frame', async () => {
+    vi.useFakeTimers()
+    let attempts = 0
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('/api/status')) return jsonResponse(statusWithCapability(ADVERTISED))
+      attempts += 1
+      throw new Error('connection refused')
+    }) as RuntimeEventsFetch
+
+    render(<Probe fetchImpl={fetchImpl} />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+
+    expect(screen.getByTestId('mode')).toHaveTextContent('fallback')
+    expect(screen.getByTestId('reason')).toHaveTextContent('reconnect_exhausted')
+    expect(attempts).toBeGreaterThan(1)
+    const settled = attempts
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(attempts).toBe(settled)
+  })
+
+  it('aborts the in-flight stream on teardown and stops reconnecting', async () => {
+    vi.useFakeTimers()
+    const stream = sseResponse()
+    let streamSignal: AbortSignal | undefined
+    let connects = 0
+    const fetchImpl = (async (url: string, init: { signal: AbortSignal }) => {
+      if (url.includes('/api/status')) return jsonResponse(statusWithCapability(ADVERTISED))
+      connects += 1
+      streamSignal = init.signal
+      return stream.response
+    }) as RuntimeEventsFetch
+
+    const view = render(<Probe fetchImpl={fetchImpl} />)
+    await settle()
+    await stream.controller.push(encodeFrame('runtime_health', 1, { health: {} }))
+    expect(screen.getByTestId('revision')).toHaveTextContent('1')
+    const connectsAtTeardown = connects
+
+    view.unmount()
+    expect(streamSignal?.aborted).toBe(true)
+
+    await stream.controller.close()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOOK_RECONNECT_DELAY_MS * 5)
+    })
+    expect(connects).toBe(connectsAtTeardown)
+  })
+
+  it('never connects while disabled', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(statusWithCapability(ADVERTISED))) satisfies RuntimeEventsFetch
+    function DisabledProbe() {
+      const runtime = useRuntimeEventsV1({ enabled: false, fetchImpl })
+      return <div data-testid="mode">{runtime.mode}</div>
+    }
+    render(<DisabledProbe />)
+    await settle()
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(screen.getByTestId('mode')).toHaveTextContent('probing')
+  })
+})
