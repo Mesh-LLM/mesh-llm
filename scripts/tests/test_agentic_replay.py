@@ -541,6 +541,25 @@ class AgenticReplayTest(unittest.TestCase):
                     ]
                 )
 
+    def test_cli_rejects_zero_cache_threshold(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                BENCH.parse_args(
+                    [
+                        "plan",
+                        "--ref",
+                        "rc8=v0.76.0-rc8",
+                        "--ref",
+                        "main=origin/main",
+                        "--model",
+                        "model-uri",
+                        "--trajectories-per-framework",
+                        "4",
+                        "--min-cache-pct",
+                        "0",
+                    ]
+                )
+
     def test_manifest_contract_is_validated_before_builds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "manifest.json"
@@ -818,6 +837,34 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertFalse(gates["evaluated"])
         self.assertIsNone(gates["passed"])
         self.assertEqual(gates["checks"], [])
+
+    def test_resumed_empty_cells_cannot_pass_configured_gates(self) -> None:
+        resumed_results = [
+            {
+                "label": "candidate",
+                "ref": "candidate",
+                "commit": "a" * 40,
+                "pass": 1,
+                "cells": [],
+            }
+        ]
+
+        gates = BENCH.evaluate_gates(
+            BENCH.pooled_rows(resumed_results), min_cache_pct=50.0
+        )
+
+        self.assertTrue(gates["evaluated"])
+        self.assertFalse(gates["passed"])
+        self.assertEqual(
+            gates["checks"],
+            [
+                {
+                    "name": "measured-rows",
+                    "passed": False,
+                    "detail": "observed=0 required>=1",
+                }
+            ],
+        )
 
     def test_pooled_rows_preserve_legacy_comparability_without_hashes(self) -> None:
         def successful_cell():

@@ -1543,6 +1543,9 @@ def evaluate_gates(
     def record(name: str, passed: bool, detail: str) -> None:
         checks.append({"name": name, "passed": passed, "detail": detail})
 
+    if not rows:
+        record("measured-rows", False, "observed=0 required>=1")
+
     for row in rows:
         cell = f"{row['label']}/c{row['concurrency']}"
         failed_requests = row.get("failed_requests")
@@ -2196,8 +2199,8 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             parse_token_range(args.prompt_token_range)
         except ValueError as error:
             parser.error(str(error))
-    if args.min_cache_pct is not None and not 0 <= args.min_cache_pct <= 100:
-        parser.error("--min-cache-pct must be between 0 and 100")
+    if args.min_cache_pct is not None and not 0 < args.min_cache_pct <= 100:
+        parser.error("--min-cache-pct must be greater than 0 and at most 100")
     if args.max_ttft_regression_pct is not None and args.max_ttft_regression_pct < 0:
         parser.error("--max-ttft-regression-pct cannot be negative")
     if not args.source_dataset:
