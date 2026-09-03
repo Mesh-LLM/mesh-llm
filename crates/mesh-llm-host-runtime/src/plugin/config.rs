@@ -394,7 +394,11 @@ mod tests {
     fn config_override_env_names_owner_totality_is_unchanged() {
         assert_eq!(
             mesh_llm_config::CONFIG_OVERRIDE_ENV_NAMES,
-            &["MESH_LLM_CONFIG", "MESH_LLM_LIFECYCLE_LOG_PARSER"]
+            &[
+                "MESH_LLM_CONFIG",
+                "MESH_LLM_LIFECYCLE_LOG_PARSER",
+                "MESH_LLM_BENCHMARK_TUNE_TRIAL"
+            ]
         );
     }
 

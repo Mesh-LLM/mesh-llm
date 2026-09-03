@@ -21,8 +21,10 @@ pub use authoring::{
     ModelConfigEditor, ModelDefaultsEditor, PluginConfigEditor, built_in_config_schema,
 };
 pub use env_overrides::{
-    CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, LifecycleLogParserSelection, MESH_LLM_CONFIG_ENV,
-    MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, apply_env_overrides, resolve_lifecycle_log_parser_override,
+    CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, LifecycleLogParserSelection,
+    MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
+    apply_env_overrides, benchmark_tune_trial_enabled, resolve_benchmark_tune_trial_gate,
+    resolve_lifecycle_log_parser_override,
 };
 pub use model::*;
 pub use plugin_validation::control_behavior::{
