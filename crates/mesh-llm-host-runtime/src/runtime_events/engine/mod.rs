@@ -53,11 +53,21 @@ impl RuntimeEventEngine {
 
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Arc<Self> {
+        Self::with_capacities(capacity, super::config::SUBSCRIBER_LAG_MAX_FRAMES)
+    }
+
+    /// Full constructor: reservation-table capacity plus an explicit
+    /// subscriber frame-count lag capacity. `with_capacity` delegates here
+    /// using the frozen `SUBSCRIBER_LAG_MAX_FRAMES` value; tests use this
+    /// directly to build a "slow subscriber" scenario reachable in a
+    /// handful of publishes instead of the frozen 1,024.
+    #[must_use]
+    pub fn with_capacities(capacity: usize, subscriber_lag_frames: usize) -> Arc<Self> {
         Arc::new(Self {
             table: ReservationTable::new(capacity),
             wake: WakeList::new(),
             replay: ReplayBuffer::new(),
-            subscribers: SubscriberRegistry::new(),
+            subscribers: SubscriberRegistry::with_capacity(subscriber_lag_frames),
             health: EngineHealth::default(),
             children_by_root: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),

@@ -13,7 +13,7 @@ use crate::api::http::respond_error;
 use crate::api::management_lifecycle::record_response_status;
 use crate::runtime_events::config::KEEPALIVE_INTERVAL;
 use crate::runtime_events::engine::RuntimeEventEngine;
-use crate::runtime_events::subscribers::{SubscribeError, SubscriptionHandle};
+use crate::runtime_events::subscribers::{SubscribeError, SubscriptionHandle, lag_bound_exceeded};
 
 use super::cursor::Cursor;
 use super::frames::{self, KEEPALIVE_FRAME};
@@ -103,6 +103,15 @@ async fn live_loop(
             }
             received = subscription.recv() => match received {
                 Ok(frame) => {
+                    // Frame-count lag is enforced by the broadcast channel
+                    // itself (surfaces as `Lagged` below); age and bytes
+                    // have no channel-native equivalent, so check them
+                    // explicitly against every received frame — first
+                    // limit wins, same disconnect + health-bump contract.
+                    if lag_bound_exceeded(&frame, subscription.backlog_len(), std::time::Instant::now()) {
+                        subscription.record_disconnect(engine.health());
+                        break;
+                    }
                     if !write_frame(stream, frames::event_frame(engine, &frame)).await {
                         break;
                     }
