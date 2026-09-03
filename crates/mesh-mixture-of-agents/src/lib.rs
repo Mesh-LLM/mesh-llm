@@ -27,8 +27,8 @@
 //! Modules:
 //! - [`backend`] — `ModelBackend` trait, `HttpBackend`, `SamplingParams`,
 //!   `ModelEntry`
-//! - [`reducer`] — reducer candidate ordering, hedged ladder
-//! - [`fanout`] — incremental worker gathering with early-exit
+//! - `reducer` — reducer candidate ordering, hedged ladder
+//! - `fanout` — incremental worker gathering with early-exit
 //! - [`arbiter`] — deterministic arbitration + early-exit consensus
 //! - [`normalize`] — 3-tier dirty-output parsing
 //! - [`session`] — canonical transcript + turn classification

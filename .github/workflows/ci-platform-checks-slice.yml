@@ -119,7 +119,7 @@ jobs:
         if: ${{ matrix.check.platform == 'windows' }}
         with:
           python-version: "3.x"
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: ${{ matrix.check.platform == 'windows' }}
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         if: ${{ matrix.check.platform == 'windows' }}
