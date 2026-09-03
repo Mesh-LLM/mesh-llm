@@ -521,6 +521,16 @@ fn embedded_openai_args_from(
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     serving_hooks: &ModelServingHooks,
 ) -> Result<EmbeddedOpenAiArgs> {
+    let activation_width = if config.downstream.is_some() {
+        let descriptor = runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("runtime lock poisoned"))?
+            .output_activation_boundary()
+            .context("stage 0 graph did not expose its output activation boundary")?;
+        descriptor.raw_f32_width("output")?
+    } else {
+        embedded_args.activation_width
+    };
     Ok(EmbeddedOpenAiArgs {
         bind_addr: "127.0.0.1:0"
             .parse()
@@ -554,7 +564,7 @@ fn embedded_openai_args_from(
         native_mtp_draft_model_path: embedded_args.native_mtp_draft_model_path,
         native_mtp_max_tokens: embedded_args.native_mtp_max_tokens,
         native_mtp_min_tokens: embedded_args.native_mtp_min_tokens,
-        activation_width: embedded_args.activation_width,
+        activation_width,
         reply_credit_limit: embedded_args.reply_credit_limit,
         downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
         downstream_wire_condition: benchmark_downstream_wire_condition()?,
@@ -609,6 +619,12 @@ impl Drop for NativeSkippyStartupAudit {
 }
 
 impl SkippyModelHandle {
+    pub(crate) fn output_activation_boundary(
+        &self,
+    ) -> Option<skippy_runtime::ActivationBoundaryDesc> {
+        self.runtime.output_activation_boundary()
+    }
+
     fn resolved_mtp_source(
         native_mtp_enabled: bool,
         native_mtp_draft_model_path: Option<&Path>,
@@ -850,7 +866,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_stage0_runtime_options_with_openai_args(
         mut runtime_options: EmbeddedRuntimeOptions,
-        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         guardrails: SkippyOpenAiGuardrailOptions,
@@ -900,6 +916,14 @@ impl SkippyModelHandle {
                 runtime_config.model_id, runtime_config.model_path
             )
         })?;
+        embedded_args.activation_width = if runtime_config.downstream.is_some() {
+            runtime
+                .output_activation_boundary()
+                .context("stage 0 graph did not expose its output activation boundary")?
+                .raw_f32_width("output")?
+        } else {
+            0
+        };
         let telemetry = Telemetry::new(
             telemetry.metrics_otlp_grpc.clone(),
             telemetry.queue_capacity,
@@ -952,7 +976,7 @@ impl SkippyModelHandle {
 
     pub(crate) fn load_stage0_runtime_options_with_openai_args_and_open_events(
         mut runtime_options: EmbeddedRuntimeOptions,
-        embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
+        mut embedded_args: resolver::ResolvedEmbeddedOpenAiArgs,
         hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
         telemetry: SkippyTelemetryOptions,
         model_open_event_reporter: Option<NativeModelOpenEventReporter>,
@@ -1005,6 +1029,14 @@ impl SkippyModelHandle {
                         runtime_config.model_id, runtime_config.model_path
                     )
                 })?;
+        embedded_args.activation_width = if runtime_config.downstream.is_some() {
+            runtime
+                .output_activation_boundary()
+                .context("stage 0 graph did not expose its output activation boundary")?
+                .raw_f32_width("output")?
+        } else {
+            0
+        };
         let telemetry = Telemetry::new(
             telemetry.metrics_otlp_grpc.clone(),
             telemetry.queue_capacity,
@@ -1228,7 +1260,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         "skippy stage layer range must satisfy layer_start < layer_end"
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let family_policy = family_policy_for_model_path(&options.model_path, Some(&options.model_id));
+    let family_policy = family_policy_for_model_path(&options.model_path);
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),

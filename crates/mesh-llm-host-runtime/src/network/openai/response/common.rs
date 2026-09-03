@@ -1,3 +1,4 @@
+use super::cache_cost::CacheCostObservation;
 use crate::inference::election;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::request_normalize::ResponseAdapter;
@@ -5,6 +6,22 @@ use crate::network::openai::response_quality::{self, ResponseQualityFailure};
 use crate::network::target_health::TargetHealthOutcome;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
+
+/// Detect an OpenAI-shaped error body carried as an SSE `data:` frame.
+///
+/// Embedded backends report mid-stream failures this way: HTTP stays 200 and
+/// the terminal failure is a `{"error": {...}}` JSON frame. Recognizing it
+/// lets stream relays distinguish a failed stream from a completed one in the
+/// operations log instead of silently counting a contentless stream as
+/// delivered.
+pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    value
+        .get("error")
+        .is_some_and(|error| error.is_object() || error.is_string())
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
@@ -19,6 +36,7 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     Delivered {
         status_code: u16,
         usage: Option<TokenUsage>,
+        cache_cost: Option<CacheCostObservation>,
     },
     RetryableTimeout,
     RetryableUnavailable,
@@ -289,6 +307,7 @@ mod tests {
             route_attempt_result_label(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             "delivered"
         );
@@ -322,6 +341,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Success
         );
@@ -329,6 +349,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 503,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Unavailable
         );
@@ -336,6 +357,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 400,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Rejected
         );
@@ -398,6 +420,7 @@ mod tests {
         );
         assert_eq!(parse_token_usage_from_json_body(br#"{"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":1,"total_tokens":0}}"#), None);
     }
+
     #[tokio::test]
     async fn test_is_timeout_error_accepts_concrete_timeout_types_only() {
         let io_timeout = anyhow::Error::from(std::io::Error::new(

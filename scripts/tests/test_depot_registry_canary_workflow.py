@@ -40,7 +40,7 @@ class DepotRegistryCanaryWorkflowTests(unittest.TestCase):
 
     def test_canary_uses_pinned_artifact_actions(self) -> None:
         self.assertIn("actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f", self.workflow)
-        self.assertIn("actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131", self.workflow)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", self.workflow)
 
 
 if __name__ == "__main__":

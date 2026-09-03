@@ -32,7 +32,6 @@ pub(crate) struct PackagePreflightReport {
     pub valid: bool,
     pub model_id: Option<String>,
     pub layer_count: Option<u32>,
-    pub activation_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<PreflightGeneration>,
     pub manifest_sha256: Option<String>,
@@ -201,8 +200,6 @@ struct PackageManifest {
     format: String,
     layer_count: u32,
     #[serde(default)]
-    activation_width: Option<u32>,
-    #[serde(default)]
     generation: Option<PackageGeneration<PackageSpeculativeDecoding>>,
     shared: PackageShared,
     #[serde(default)]
@@ -360,7 +357,6 @@ pub(crate) fn preflight_package(
 
     report.model_id = Some(manifest.model_id.clone());
     report.layer_count = Some(manifest.layer_count);
-    report.activation_width = manifest.activation_width;
     report.generation = manifest.generation.as_ref().map(preflight_generation);
     validate_manifest_header(&manifest, &mut report);
     validate_generation(
@@ -383,7 +379,6 @@ impl PackagePreflightReport {
             valid: true,
             model_id: None,
             layer_count: None,
-            activation_width: None,
             generation: None,
             manifest_sha256: None,
             checked_artifact_count: 0,
@@ -454,21 +449,6 @@ fn validate_manifest_header(manifest: &PackageManifest, report: &mut PackagePref
             Some("model-package.json".to_string()),
             "rebuild the package with a real model coordinate",
         );
-    }
-    match manifest.activation_width {
-        Some(0) => report.error(
-            "invalid_activation_width",
-            "package manifest activation_width must be greater than zero",
-            Some("model-package.json".to_string()),
-            "rebuild the package manifest from the source GGUF metadata",
-        ),
-        Some(_) => {}
-        None => report.error(
-            "missing_activation_width",
-            "package manifest is missing activation_width",
-            Some("model-package.json".to_string()),
-            "rebuild the package manifest with a current skippy-model-package write-package",
-        ),
     }
     if manifest.source_model.path.trim().is_empty() {
         report.error(
@@ -1195,7 +1175,7 @@ mod tests {
     #[test]
     fn preflight_accepts_complete_package_and_reports_stage_parts() {
         let dir = unique_test_dir("valid");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
 
         let report = preflight_package(
             &package,
@@ -1206,7 +1186,6 @@ mod tests {
         );
 
         assert!(report.valid, "{:?}", report.issues);
-        assert_eq!(report.activation_width, Some(4096));
         assert_eq!(report.checked_artifact_count, 5);
         assert_eq!(report.stages.len(), 2);
         assert_eq!(
@@ -1218,27 +1197,9 @@ mod tests {
     }
 
     #[test]
-    fn preflight_rejects_missing_activation_width() {
-        let dir = unique_test_dir("missing-width");
-        let package = write_package_fixture(&dir, false);
-
-        let report = preflight_package(
-            &package,
-            &PackagePreflightOptions {
-                stages: None,
-                verify_sha256: false,
-            },
-        );
-
-        assert!(!report.valid);
-        assert_issue(&report, "missing_activation_width");
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn preflight_reports_missing_shared_embedding_before_split_startup() {
         let dir = unique_test_dir("missing-embeddings");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         fs::remove_file(package.join("shared/embeddings.gguf")).unwrap();
 
         let report = preflight_package(
@@ -1266,7 +1227,7 @@ mod tests {
     #[test]
     fn preflight_detects_artifact_sha_mismatch_when_requested() {
         let dir = unique_test_dir("sha-mismatch");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         fs::write(package.join("layers/layer-001.gguf"), b"corrupt1").unwrap();
 
         let report = preflight_package(
@@ -1308,7 +1269,7 @@ mod tests {
     #[test]
     fn preflight_rejects_stage_count_above_layer_count() {
         let dir = unique_test_dir("too-many-stages");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
 
         let report = preflight_package(
             &package,
@@ -1326,7 +1287,7 @@ mod tests {
     #[test]
     fn preflight_reports_native_mtp_generation_defaults() {
         let dir = unique_test_dir("native-mtp-generation");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1384,7 +1345,7 @@ mod tests {
     #[test]
     fn preflight_accepts_request_local_ngram_cache_composite_strategy() {
         let dir = unique_test_dir("ngram-cache-composite");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1434,7 +1395,7 @@ mod tests {
     #[test]
     fn preflight_rejects_native_mtp_strategy_with_ngram_proposer() {
         let dir = unique_test_dir("native-mtp-strategy-type-mismatch");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1529,7 +1490,7 @@ mod tests {
     #[test]
     fn preflight_rejects_invalid_request_local_suffix_proposer() {
         let dir = unique_test_dir("ngram-suffix-invalid");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1562,7 +1523,7 @@ mod tests {
     #[test]
     fn preflight_rejects_ngram_strategy_with_mismatched_proposer_type() {
         let dir = unique_test_dir("ngram-strategy-type-mismatch");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1594,7 +1555,7 @@ mod tests {
     #[test]
     fn preflight_rejects_shared_ngram_cache_history() {
         let dir = unique_test_dir("ngram-cache-shared-history");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1635,7 +1596,7 @@ mod tests {
     #[test]
     fn preflight_rejects_ngram_cache_window_above_llama_limit() {
         let dir = unique_test_dir("ngram-cache-max-window");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1676,7 +1637,7 @@ mod tests {
     #[test]
     fn preflight_rejects_native_mtp_layer_out_of_range() {
         let dir = unique_test_dir("native-mtp-out-of-range");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1715,7 +1676,7 @@ mod tests {
     #[test]
     fn preflight_rejects_zero_verify_window_pipeline_depth() {
         let dir = unique_test_dir("zero-window-pipeline-depth");
-        let package = write_package_fixture(&dir, true);
+        let package = write_package_fixture(&dir);
         write_generation_to_manifest(
             &package,
             serde_json::json!({
@@ -1761,7 +1722,7 @@ mod tests {
             (MAX_VERIFY_WINDOW_PIPELINE_DEPTH + 1, false),
         ] {
             let dir = unique_test_dir(&format!("window-pipeline-depth-{depth}"));
-            let package = write_package_fixture(&dir, true);
+            let package = write_package_fixture(&dir);
             write_generation_to_manifest(
                 &package,
                 serde_json::json!({
@@ -1810,7 +1771,7 @@ mod tests {
         );
     }
 
-    fn write_package_fixture(root: &Path, include_activation_width: bool) -> PathBuf {
+    fn write_package_fixture(root: &Path) -> PathBuf {
         let package = root.join("package");
         fs::create_dir_all(package.join("shared")).unwrap();
         fs::create_dir_all(package.join("layers")).unwrap();
@@ -1819,7 +1780,7 @@ mod tests {
         write_artifact(&package, "shared/output.gguf", b"output");
         write_artifact(&package, "layers/layer-000.gguf", b"layer0");
         write_artifact(&package, "layers/layer-001.gguf", b"layer1");
-        let mut manifest = serde_json::json!({
+        let manifest = serde_json::json!({
             "schema_version": 1,
             "model_id": "meshllm/test-model-layers",
             "source_model": {
@@ -1839,9 +1800,6 @@ mod tests {
             ],
             "skippy_abi_version": "1.0.0"
         });
-        if include_activation_width {
-            manifest["activation_width"] = serde_json::json!(4096);
-        }
         fs::write(
             package.join("model-package.json"),
             serde_json::to_vec_pretty(&manifest).unwrap(),

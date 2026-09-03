@@ -10,23 +10,25 @@ use skippy_cache::{
     UnifiedRadixCache,
 };
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
-use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
+use skippy_runtime::ModelStateKind;
 
 use super::{
     EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
     ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
-    model_capability::{ModelKvCapability, inspect_model_kv_capability},
+    model_capability::{ModelKvCapability, loaded_model_kv_capability},
     output_tokens::OutputTokenCache,
 };
 
-#[cfg(test)]
-use super::model_capability::{
-    kv_cache_inspection_paths, layer_package_inspection_paths, tensor_name_requires_recurrent_state,
-};
+// Recurrent and hybrid payloads share the native n_ctx cell pool across
+// sequence lanes, so their exact-state catalog must remain deliberately small.
+const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
 
 impl KvStageIntegration {
-    pub fn from_config(config: &StageConfig) -> Result<Option<Self>> {
-        let Some(cache_config) = effective_cache_config(config) else {
+    pub fn from_loaded_model(
+        config: &StageConfig,
+        model_state_kind: Option<ModelStateKind>,
+    ) -> Result<Option<Self>> {
+        let Some(mut cache_config) = effective_cache_config(config) else {
             return Ok(None);
         };
         let mode = match cache_config.mode {
@@ -37,8 +39,7 @@ impl KvStageIntegration {
         if mode == StageKvMode::Disabled {
             return Ok(None);
         }
-        let declared_capability = inferred_model_kv_capability(config);
-        let model_capability = inspect_model_kv_capability(config, declared_capability);
+        let model_capability = loaded_model_kv_capability(model_state_kind);
         if let ModelKvCapability::Unknown(reason) = &model_capability {
             emit_cache_disabled_warning(config, reason);
             return Ok(None);
@@ -55,6 +56,20 @@ impl KvStageIntegration {
                 "resident KV was requested for a recurrent-state model",
             );
             return Ok(None);
+        }
+        if matches!(model_capability, ModelKvCapability::KnownDense)
+            && matches!(payload, StagePrefixCachePayload::KvRecurrent)
+        {
+            emit_cache_disabled_warning(
+                config,
+                "recurrent KV state was requested for a dense model",
+            );
+            return Ok(None);
+        }
+        // FullState is architecture-neutral: the native runtime serializes the
+        // complete session state for both dense and recurrent model families.
+        if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
+            cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
         let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
@@ -133,6 +148,14 @@ impl KvStageIntegration {
             output_tokens: Arc::new(Mutex::new(OutputTokenCache::new(exact_max_entries))),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_config(
+        config: &StageConfig,
+        model_state_kind: ModelStateKind,
+    ) -> Result<Option<Self>> {
+        Self::from_loaded_model(config, Some(model_state_kind))
     }
 }
 
@@ -248,62 +271,6 @@ fn effective_cache_payload(
     }
 }
 
-fn inferred_model_kv_capability(config: &StageConfig) -> Option<ModelKvCapability> {
-    match infer_cache_payload(config) {
-        StagePrefixCachePayload::ResidentKv => Some(ModelKvCapability::KnownDense),
-        StagePrefixCachePayload::KvRecurrent => Some(ModelKvCapability::KnownRecurrent),
-        StagePrefixCachePayload::Disabled | StagePrefixCachePayload::FullState => None,
-    }
-}
-
-fn infer_cache_payload(config: &StageConfig) -> StagePrefixCachePayload {
-    let identity = format!(
-        "{} {}",
-        config.model_id,
-        config.model_path.as_deref().unwrap_or_default()
-    )
-    .to_ascii_lowercase();
-
-    // Prefer the shared family capability table over substring guesses. It
-    // already knows which families are recurrent or hybrid, so a new release
-    // that reuses an existing llama.cpp architecture is classified correctly
-    // without adding another literal here.
-    if let Some(capability) = infer_family_capability(&identity, 0, 0)
-        && let Some(expectation) = STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS
-            .iter()
-            .find(|expectation| expectation.family_id == capability.family_id)
-    {
-        return if expectation.recurrent_or_hybrid {
-            StagePrefixCachePayload::KvRecurrent
-        } else {
-            StagePrefixCachePayload::ResidentKv
-        };
-    }
-
-    if identity.contains("falcon-h1")
-        || identity.contains("qwen3next")
-        || identity.contains("qwen3-next")
-        || identity.contains("kimi-linear")
-        || identity.contains("kimi_linear")
-    {
-        return StagePrefixCachePayload::KvRecurrent;
-    }
-    if identity.contains("llama")
-        || identity.contains("qwen3")
-        || identity.contains("deepseek")
-        || identity.contains("glm4")
-        || identity.contains("glm-4.7")
-        || identity.contains("glm47")
-        || identity.contains("glm4.7")
-        || identity.contains("olmo")
-        || identity.contains("gemma")
-        || identity.contains("minimax")
-    {
-        return StagePrefixCachePayload::ResidentKv;
-    }
-    StagePrefixCachePayload::Disabled
-}
-
 /// Either kill-switch variable resolving to `off` disables the cache, so an
 /// explicit `SKIPPY_KV_CACHE=on` cannot mask `SKIPPY_PREFIX_CACHE=off`.
 fn cache_disabled_by_env(kv_cache: Option<&str>, prefix_cache: Option<&str>) -> bool {
@@ -390,8 +357,6 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode};
 
@@ -464,346 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn recurrent_tensor_names_require_exact_state_cache() {
-        assert!(tensor_name_requires_recurrent_state("blk.0.ssm_a"));
-        assert!(tensor_name_requires_recurrent_state(
-            "blk.0.ssm_conv1d.weight"
-        ));
-        assert!(tensor_name_requires_recurrent_state(
-            "blk.0.time_mix_k.weight"
-        ));
-        assert!(tensor_name_requires_recurrent_state(
-            "blk.0.rwkv_gate.weight"
-        ));
-        assert!(!tensor_name_requires_recurrent_state("blk.0.attn_q.weight"));
-        assert!(!tensor_name_requires_recurrent_state(
-            "blk.0.ffn_down.weight"
-        ));
-    }
-
-    #[test]
-    fn qwen38_identities_infer_recurrent_cache_payload() {
-        // Qwen3.8 loads as the qwen35/qwen35moe recurrent pair. These must not
-        // fall through to ResidentKv, which is the wrong payload shape for a
-        // recurrent family.
-        for model_id in [
-            "unsloth/Qwen3.8-2.4T-A95B-GGUF:UD-Q1_0",
-            "meshllm/Qwen3.8-2.4T-A95B-UD-Q1_0-layers",
-            "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
-            "qwen38moe",
-            "qwen38",
-            // Architecture strings, which is what a stage sees when the model
-            // id is absent.
-            "qwen35moe",
-            "qwen35",
-        ] {
-            assert_eq!(
-                infer_cache_payload(&test_config(model_id)),
-                StagePrefixCachePayload::KvRecurrent,
-                "{model_id} must select KvRecurrent"
-            );
-        }
-    }
-
-    #[test]
-    fn qwen3_parameter_sized_identities_stay_resident_kv() {
-        // `Qwen3-8B` compacts to `qwen38b`: the digit is a parameter count, not
-        // a series number, so it must stay on the non-recurrent Qwen3 path.
-        for model_id in [
-            "Qwen/Qwen3-8B-GGUF:Q4_K_M",
-            "Qwen/Qwen3-5B-GGUF:Q4_K_M",
-            "qwen38b",
-        ] {
-            assert_eq!(
-                infer_cache_payload(&test_config(model_id)),
-                StagePrefixCachePayload::ResidentKv,
-                "{model_id} must stay on ResidentKv"
-            );
-        }
-    }
-
-    #[test]
-    fn layer_package_inspection_uses_representative_layer_file() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("shared")).unwrap();
-        fs::create_dir_all(dir.path().join("layers")).unwrap();
-        fs::write(dir.path().join("shared/metadata.gguf"), b"metadata").unwrap();
-        fs::write(dir.path().join("layers/00000.gguf"), b"layer0").unwrap();
-        fs::write(dir.path().join("layers/00001.gguf"), b"layer1").unwrap();
-        let manifest = serde_json::json!({
-            "layers": [
-                { "layer_index": 0, "path": "layers/00000.gguf" },
-                { "layer_index": 1, "path": "layers/00001.gguf" }
-            ]
-        });
-        fs::write(
-            dir.path().join("model-package.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let mut config = test_config("example/recurrent-package");
-        config.load_mode = LoadMode::LayerPackage;
-        config.model_path = Some(dir.path().to_string_lossy().to_string());
-        config.layer_start = 1;
-        config.layer_end = 2;
-
-        assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap()]
-        );
-    }
-
-    #[test]
-    fn layer_package_inspection_selects_every_in_range_layer_file() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("layers")).unwrap();
-        fs::write(dir.path().join("layers/00000.gguf"), b"layer0").unwrap();
-        fs::write(dir.path().join("layers/00001.gguf"), b"layer1").unwrap();
-        fs::write(dir.path().join("layers/00002.gguf"), b"layer2").unwrap();
-        let manifest = serde_json::json!({
-            "layers": [
-                { "layer_index": 0, "path": "layers/00000.gguf" },
-                { "layer_index": 1, "path": "layers/00001.gguf" },
-                { "layer_index": 2, "path": "layers/00002.gguf" }
-            ]
-        });
-        fs::write(
-            dir.path().join("model-package.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let mut config = test_config("example/hybrid-package");
-        config.load_mode = LoadMode::LayerPackage;
-        config.model_path = Some(dir.path().to_string_lossy().to_string());
-        config.layer_start = 0;
-        config.layer_end = 3;
-
-        // a hybrid stage must probe every layer file, not just the first:
-        // an attention-first stage still carries recurrent tensors later
-        // in the range
-        assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![
-                fs::canonicalize(dir.path().join("layers/00000.gguf")).unwrap(),
-                fs::canonicalize(dir.path().join("layers/00001.gguf")).unwrap(),
-                fs::canonicalize(dir.path().join("layers/00002.gguf")).unwrap(),
-            ]
-        );
-    }
-
-    #[test]
-    fn layer_package_inspection_falls_back_to_shared_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("shared")).unwrap();
-        fs::write(dir.path().join("shared/metadata.gguf"), b"metadata").unwrap();
-        let manifest = serde_json::json!({
-            "layers": [
-                { "layer_index": 0, "path": "layers/missing.gguf" }
-            ]
-        });
-        fs::write(
-            dir.path().join("model-package.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let mut config = test_config("example/recurrent-package");
-        config.load_mode = LoadMode::LayerPackage;
-        config.model_path = Some(dir.path().to_string_lossy().to_string());
-
-        assert_eq!(
-            kv_cache_inspection_paths(&config),
-            vec![fs::canonicalize(dir.path().join("shared/metadata.gguf")).unwrap()]
-        );
-    }
-
-    #[test]
-    fn layer_package_inspection_rejects_parent_directory_escape() {
-        let dir = tempfile::tempdir().unwrap();
-        let package = dir.path().join("package");
-        fs::create_dir_all(&package).unwrap();
-        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "../outside.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn layer_package_inspection_rejects_symlink_outside_local_package() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let package = dir.path().join("package");
-        fs::create_dir_all(package.join("layers")).unwrap();
-        fs::write(dir.path().join("outside.gguf"), b"outside").unwrap();
-        symlink(
-            dir.path().join("outside.gguf"),
-            package.join("layers/00000.gguf"),
-        )
-        .unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn layer_package_inspection_rejects_intermediate_symlink_outside_local_package() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let package = dir.path().join("package");
-        let outside = dir.path().join("outside");
-        fs::create_dir_all(&package).unwrap();
-        fs::create_dir_all(&outside).unwrap();
-        fs::write(outside.join("00000.gguf"), b"outside").unwrap();
-        symlink(&outside, package.join("layers")).unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn layer_package_inspection_accepts_hf_snapshot_blob_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("models--owner--package");
-        let package = repo.join("snapshots/revision");
-        let blob = repo.join("blobs/layer-blob");
-        fs::create_dir_all(package.join("layers")).unwrap();
-        fs::create_dir_all(blob.parent().unwrap()).unwrap();
-        fs::write(&blob, b"layer").unwrap();
-        symlink(
-            "../../../blobs/layer-blob",
-            package.join("layers/00000.gguf"),
-        )
-        .unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            layer_package_inspection_paths(&package, 0, 1),
-            vec![fs::canonicalize(blob).unwrap()]
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn layer_package_inspection_rejects_hf_snapshot_symlink_to_sibling_repo() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("models--owner--package");
-        let sibling_repo = dir.path().join("models--owner--other");
-        let package = repo.join("snapshots/revision");
-        let sibling_blob = sibling_repo.join("blobs/layer-blob");
-        fs::create_dir_all(package.join("layers")).unwrap();
-        fs::create_dir_all(sibling_blob.parent().unwrap()).unwrap();
-        fs::write(&sibling_blob, b"layer").unwrap();
-        symlink(
-            "../../../../models--owner--other/blobs/layer-blob",
-            package.join("layers/00000.gguf"),
-        )
-        .unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn layer_package_inspection_rejects_malformed_hf_repo_root_exception() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let malformed_repo = dir.path().join("models--owner");
-        let package = malformed_repo.join("snapshots/revision");
-        let outside_package = malformed_repo.join("private.gguf");
-        fs::create_dir_all(package.join("layers")).unwrap();
-        fs::write(&outside_package, b"outside package").unwrap();
-        symlink("../../../private.gguf", package.join("layers/00000.gguf")).unwrap();
-        fs::write(
-            package.join("model-package.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "layers": [{ "layer_index": 0, "path": "layers/00000.gguf" }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert!(layer_package_inspection_paths(&package, 0, 1).is_empty());
-    }
-
-    #[test]
-    fn cache_payload_inference_selects_recurrent_and_dense_families() {
-        assert_eq!(
-            infer_cache_payload(&test_config("tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M")),
-            StagePrefixCachePayload::KvRecurrent
-        );
-        assert_eq!(
-            infer_cache_payload(&test_config(
-                "bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF:IQ2_XXS"
-            )),
-            StagePrefixCachePayload::KvRecurrent
-        );
-        assert_eq!(
-            infer_cache_payload(&test_config(
-                "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF:Q4_K_M"
-            )),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            infer_cache_payload(&test_config("unsloth/gemma-4-E4B-it-GGUF:Q4_K_M")),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            infer_cache_payload(&test_config("unsloth/GLM-4.7-Flash-GGUF:Q4_K_M")),
-            StagePrefixCachePayload::ResidentKv
-        );
-        assert_eq!(
-            infer_cache_payload(&test_config("example/unknown-model:Q4_K_M")),
-            StagePrefixCachePayload::Disabled
-        );
-    }
-
-    #[test]
-    fn explicit_cache_payload_overrides_identity_inference() {
+    fn explicit_cache_payload_is_checked_against_loaded_model_capability() {
         assert_eq!(
             effective_cache_payload(
                 StageKvCachePayload::ResidentKv,
@@ -828,28 +454,84 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_model_metadata_disables_explicit_resident_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let corrupt_model = dir.path().join("model.gguf");
-        fs::write(&corrupt_model, b"not a gguf").unwrap();
+    fn loaded_hybrid_state_overrides_a_misleading_dense_model_name() {
+        let config = enabled_auto_config("nvidia/Nemotron-3-Super-120B-A12B-NVFP4-MTPv2");
 
-        let mut config = test_config("tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M");
-        config.model_path = Some(corrupt_model.to_string_lossy().to_string());
-        config.kv_cache = Some(StageKvCacheConfig {
-            mode: StageKvCacheMode::LookupRecord,
-            payload: StageKvCachePayload::ResidentKv,
-            max_entries: 8,
-            max_bytes: 0,
-            min_tokens: 1,
-            shared_prefix_stride_tokens: 1,
-            shared_prefix_record_limit: 1,
-        });
+        let kv = KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Hybrid))
+            .unwrap()
+            .expect("hybrid loaded model should enable the recurrent cache");
 
-        assert!(matches!(
-            inspect_model_kv_capability(&config, inferred_model_kv_capability(&config)),
-            ModelKvCapability::Unknown(_)
-        ));
-        assert!(KvStageIntegration::from_config(&config).unwrap().is_none());
+        assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
+    }
+
+    #[test]
+    fn loaded_dense_state_selects_resident_kv_independent_of_model_name() {
+        let config = enabled_auto_config("future/unknown-architecture-name");
+
+        let kv = KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense))
+            .unwrap()
+            .expect("dense loaded model should enable resident KV");
+
+        assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
+    }
+
+    #[test]
+    fn missing_loaded_descriptor_disables_cache() {
+        let config = enabled_auto_config("Qwen/Qwen3-8B");
+        assert!(
+            KvStageIntegration::from_loaded_model(&config, None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_resident_kv_is_rejected_for_loaded_hybrid_model() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::ResidentKv;
+
+        assert!(
+            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Hybrid))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_recurrent_kv_is_rejected_for_loaded_dense_model() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::KvRecurrent;
+
+        assert!(
+            KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Dense))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_full_state_remains_architecture_neutral() {
+        let mut config = enabled_auto_config("future/model");
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::FullState;
+
+        for state_kind in [ModelStateKind::Dense, ModelStateKind::Recurrent] {
+            let kv = KvStageIntegration::from_loaded_model(&config, Some(state_kind))
+                .unwrap()
+                .expect("full-state caching should support every loaded model state kind");
+            assert_eq!(kv.payload, StagePrefixCachePayload::FullState);
+        }
+    }
+
+    #[test]
+    fn recurrent_cache_cardinality_is_capped_after_load() {
+        let mut config = enabled_auto_config("future/model");
+        config.ctx_size = 65_536;
+        let kv = KvStageIntegration::from_loaded_model(&config, Some(ModelStateKind::Recurrent))
+            .unwrap()
+            .expect("recurrent loaded model should enable exact-state caching");
+
+        assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
+        assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
     }
 
     #[test]
@@ -923,5 +605,19 @@ mod tests {
             downstream: None,
             ..StageConfig::default()
         }
+    }
+
+    fn enabled_auto_config(model_id: &str) -> StageConfig {
+        let mut config = test_config(model_id);
+        config.kv_cache = Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::Auto,
+            max_entries: 512,
+            max_bytes: 0,
+            min_tokens: 1,
+            shared_prefix_stride_tokens: 1,
+            shared_prefix_record_limit: 1,
+        });
+        config
     }
 }

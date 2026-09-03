@@ -17,10 +17,10 @@ mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = 
 mesh-llm-node = { path = "../mesh-llm-node", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
-uniffi = "=0.31.0"
+uniffi = "=0.32.0"
 
 [build-dependencies]
-uniffi = { version = "=0.31.0", features = ["build"] }
+uniffi = { version = "=0.32.0", features = ["build"] }
 
 [dev-dependencies]
 mesh-llm-sdk = { path = "../mesh-llm-sdk", default-features = false, features = ["client", "node", "console"] }

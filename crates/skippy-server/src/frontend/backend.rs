@@ -1443,6 +1443,7 @@ impl StageOpenAiBackend {
         let (permit, session_permit) = self
             .acquire_generation_admission(&ids, &cancellation, admission_work, admission_scheduling)
             .await?;
+        let admission_wait_ms = admit_timer.elapsed_ms();
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
             "llama_stage.openai_phase".to_string(),
@@ -1459,28 +1460,32 @@ impl StageOpenAiBackend {
         let backend = self.clone();
         let hook_runtime = Some(tokio::runtime::Handle::current());
         let worker_context = context.clone();
-        let result = run_blocking_generation_worker(permit, worker_context.clone(), move |token| {
-            let _session_permit = session_permit;
-            let output = backend.generate_text(
-                prompt,
-                max_tokens,
-                prepared_text,
-                stop.as_ref(),
-                sampling,
-                hook_request,
-                hook_runtime,
-                Some(&token),
-                ids,
-                |_| Ok(()),
-            );
-            if worker_context.is_cancelled() {
-                Err(request_cancelled_error())
-            } else {
-                output
-            }
-        })
-        .await
-        .map_err(|error| OpenAiError::backend(format!("generation task failed: {error}")))?;
+        let mut result =
+            run_blocking_generation_worker(permit, worker_context.clone(), move |token| {
+                let _session_permit = session_permit;
+                let output = backend.generate_text(
+                    prompt,
+                    max_tokens,
+                    prepared_text,
+                    stop.as_ref(),
+                    sampling,
+                    hook_request,
+                    hook_runtime,
+                    Some(&token),
+                    ids,
+                    |_| Ok(()),
+                );
+                if worker_context.is_cancelled() {
+                    Err(request_cancelled_error())
+                } else {
+                    output
+                }
+            })
+            .await
+            .map_err(|error| OpenAiError::backend(format!("generation task failed: {error}")))?;
+        if let Ok(output) = &mut result {
+            output.queue_wait_ms = admission_wait_ms;
+        }
         if context.is_cancelled() {
             Err(request_cancelled_error())
         } else {
@@ -1531,6 +1536,7 @@ impl StageOpenAiBackend {
         let (permit, session_permit) = self
             .acquire_generation_admission(&ids, &cancellation, admission_work, admission_scheduling)
             .await?;
+        let admission_wait_ms = admit_timer.elapsed_ms();
         let mut admit_attrs = self.openai_attrs(&ids);
         admit_attrs.insert(
             "llama_stage.openai_phase".to_string(),
@@ -1613,7 +1619,8 @@ impl StageOpenAiBackend {
                 return;
             }
             match result {
-                Ok(output) => {
+                Ok(mut output) => {
+                    output.queue_wait_ms = admission_wait_ms;
                     backend.observe_generation_completed(&output, demand);
                     let finish_reason = if let Some(parser) = chat_stream_parser.as_mut() {
                         match parser.finish(&output.text) {
@@ -1635,7 +1642,10 @@ impl StageOpenAiBackend {
                     };
                     if should_emit_stream_usage(include_usage, &context)
                         && sender
-                            .send_terminal(Ok(GenerationStreamEvent::Usage(output.usage())))
+                            .send_terminal(Ok(GenerationStreamEvent::Usage(
+                                output.usage(),
+                                output.timings(),
+                            )))
                             .is_err()
                     {
                         return;

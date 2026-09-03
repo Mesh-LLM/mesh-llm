@@ -1,11 +1,12 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
-    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
-    MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
-    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque,
-    RuntimeConfig, SamplingConfig, Session, SlicePlan, Status, TensorInfo, TokenSignal,
+    ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper,
+    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
+    TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -94,6 +95,22 @@ unsafe extern "C" {
 
     pub fn skippy_model_llama_model(model: *const Model) -> *const Opaque;
 
+    pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_hybrid(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
+
+    pub fn skippy_model_output_activation_boundary(
+        model: *const Model,
+        out_desc: *mut ActivationBoundaryDesc,
+    ) -> bool;
+
+    pub fn skippy_model_input_activation_boundary(
+        model: *const Model,
+        out_desc: *mut ActivationBoundaryDesc,
+    ) -> bool;
+
     pub fn skippy_session_create(
         model: *mut Model,
         out_session: *mut *mut Session,
@@ -114,6 +131,8 @@ unsafe extern "C" {
     pub fn skippy_session_position(session: *const Session) -> i32;
 
     pub fn skippy_session_batch_size(session: *const Session) -> i32;
+
+    pub fn skippy_session_sequence_id(session: *const Session) -> i32;
 
     pub fn skippy_session_begin_external_decode(
         session: *mut Session,

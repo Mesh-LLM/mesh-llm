@@ -18,7 +18,7 @@ ansi-to-tui = "8"
 anyhow.workspace = true
 arboard = "3"
 chrono = { version = "0.4", features = ["serde"] }
-crossterm = "0.28"
+crossterm = "0.29"
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc9" }
 ratatui = "0.30"
 serde_json.workspace = true

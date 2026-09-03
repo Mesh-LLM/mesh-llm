@@ -61,9 +61,9 @@ macro_rules! impl_affinity_stats_snapshot {
 /// Request-derived hashes used by prefix and sticky routing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoutingKeys {
-    /// Explicit cache/session hint hash, when one was supplied.
+    /// Explicit session hint hash, when one was supplied.
     pub session_hash: Option<u64>,
-    /// Stable prompt/tool scaffold hash, when one was found.
+    /// Explicit cache key or stable prompt/tool scaffold hash.
     pub prefix_hash: Option<u64>,
     /// Hash used for explicit deterministic session routing.
     pub sticky_hash: Option<u64>,
@@ -185,6 +185,7 @@ pub fn extract_session_hint_from_body(body: &Value, keys: &[&str]) -> Option<Str
 /// Compute request routing keys with consumer-selected compatibility policy.
 pub fn routing_keys(
     parsed_body: Option<&Value>,
+    cache_hint_keys: &[&str],
     session_hint_keys: &[&str],
     prefix_fallback_to_first_user: bool,
 ) -> RoutingKeys {
@@ -194,24 +195,14 @@ pub fn routing_keys(
 
     let session_hash = extract_session_hint_from_body(body, session_hint_keys)
         .map(|hint| hash_bytes(hint.as_bytes()));
+    let explicit_cache_hash = extract_session_hint_from_body(body, cache_hint_keys)
+        .map(|hint| hash_bytes(hint.as_bytes()));
     let scaffold_hash = scaffold_prefix_hash_from_body(body, prefix_fallback_to_first_user);
-    let first_user_hash = first_user_hash_from_body(body);
-    // Namespace evidence by an explicit session hint when present. Otherwise
-    // combine scaffold and first-user hashes so unrelated requests with the
-    // same tools cannot claim one another's cache receipt.
-    let prefix_hash = session_hash.or_else(|| {
-        let mut hash = 0u64;
-        let mut found = false;
-        if let Some(scaffold_hash) = scaffold_hash {
-            hash = hash_combine(hash, scaffold_hash);
-            found = true;
-        }
-        if let Some(user_hash) = first_user_hash {
-            hash = hash_combine(hash, user_hash);
-            found = true;
-        }
-        found.then_some(hash)
-    });
+    // Cache evidence follows the reusable prefix, not the conversation. An
+    // explicit cache key is the caller's stronger statement of reuse identity;
+    // otherwise the stable system/tool scaffold identifies work that can be
+    // shared across users and sessions. Session hints remain sticky-only.
+    let prefix_hash = explicit_cache_hash.or(scaffold_hash);
     // Cache locality must not become an implicit sticky policy. Without a
     // caller-provided session hint, stale or absent cache evidence falls back
     // to the normal load-aware target picker.
@@ -521,41 +512,78 @@ mod tests {
     }
 
     #[test]
-    fn routing_key_policies_preserve_host_and_client_differences() {
+    fn routing_key_policies_separate_cache_and_session_hints() {
         let body = parse_body(
             r#"{"prompt_cache_key":"cache","user":"user","messages":[{"role":"user","content":"hello"}]}"#,
         );
         let host = routing_keys(
             Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
+            &["prompt_cache_key"],
+            &["user", "session_id"],
             true,
         );
-        let client = routing_keys(Some(&body), &["user", "session_id"], false);
-
-        assert_ne!(host.session_hash, client.session_hash);
-        assert_eq!(
-            host.session_hash,
-            Some(hash_bytes(b"cache")),
-            "host keeps prompt_cache_key compatibility"
+        let client = routing_keys(
+            Some(&body),
+            &["prompt_cache_key"],
+            &["user", "session_id"],
+            false,
         );
+
+        assert_eq!(host.prefix_hash, Some(hash_bytes(b"cache")));
+        assert_eq!(client.prefix_hash, host.prefix_hash);
+        assert_eq!(host.session_hash, Some(hash_bytes(b"user")));
         assert_eq!(client.session_hash, Some(hash_bytes(b"user")));
+        assert_eq!(host.sticky_hash, host.session_hash);
+        assert_ne!(host.prefix_hash, host.sticky_hash);
 
         let user_only = parse_body(r#"{"messages":[{"role":"user","content":"hello"}]}"#);
         assert!(
             routing_keys(
                 Some(&user_only),
-                &["prompt_cache_key", "user", "session_id"],
+                &["prompt_cache_key"],
+                &["user", "session_id"],
                 true,
             )
             .prefix_hash
             .is_some()
         );
         assert!(
-            routing_keys(Some(&user_only), &["user", "session_id"], false)
-                .prefix_hash
-                .is_some(),
-            "the cache namespace includes the first user turn even when the raw scaffold is empty"
+            routing_keys(
+                Some(&user_only),
+                &["prompt_cache_key"],
+                &["user", "session_id"],
+                false,
+            )
+            .prefix_hash
+            .is_none(),
+            "the client does not invent evidence when no reusable scaffold exists"
         );
+    }
+
+    #[test]
+    fn shared_scaffold_reuses_evidence_across_users_and_tasks() {
+        let first = parse_body(
+            r#"{"user":"session-a","tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"agent"},{"role":"user","content":"task a"}]}"#,
+        );
+        let second = parse_body(
+            r#"{"user":"session-b","tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"agent"},{"role":"user","content":"task b"}]}"#,
+        );
+        let first = routing_keys(
+            Some(&first),
+            &["prompt_cache_key"],
+            &["user", "session_id"],
+            true,
+        );
+        let second = routing_keys(
+            Some(&second),
+            &["prompt_cache_key"],
+            &["user", "session_id"],
+            true,
+        );
+
+        assert_eq!(first.prefix_hash, second.prefix_hash);
+        assert_ne!(first.session_hash, second.session_hash);
+        assert_ne!(first.sticky_hash, second.sticky_hash);
     }
 
     #[test]
@@ -569,7 +597,8 @@ mod tests {
         );
         let keys = routing_keys(
             Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
+            &["prompt_cache_key"],
+            &["user", "session_id"],
             true,
         );
         let affinity = AffinityRouter::with_config(true, true);
@@ -600,7 +629,8 @@ mod tests {
         );
         let keys = routing_keys(
             Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
+            &["prompt_cache_key"],
+            &["user", "session_id"],
             true,
         );
         let affinity = AffinityRouter::with_config(true, true);
@@ -626,12 +656,12 @@ mod tests {
         targets
             .targets
             .insert("qwen".to_string(), vec![first.clone(), second.clone()]);
-        let body = parse_body(
-            r#"{"prompt_cache_key":"session-a","messages":[{"role":"user","content":"task"}]}"#,
-        );
+        let body =
+            parse_body(r#"{"user":"session-a","messages":[{"role":"user","content":"task"}]}"#);
         let keys = routing_keys(
             Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
+            &["prompt_cache_key"],
+            &["user", "session_id"],
             true,
         );
         let affinity = AffinityRouter::with_config(true, true);
@@ -656,7 +686,8 @@ mod tests {
         );
         let keys = routing_keys(
             Some(&body),
-            &["prompt_cache_key", "user", "session_id"],
+            &["prompt_cache_key"],
+            &["user", "session_id"],
             true,
         );
         let affinity = AffinityRouter::with_config(true, true);

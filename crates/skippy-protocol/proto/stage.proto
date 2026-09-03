@@ -4,8 +4,8 @@ package skippy.stage.v1;
 
 // Skippy owns these stage-control, artifact-transfer, and activation frames.
 // Control and artifact streams are carried inside the mesh STREAM_SUBPROTOCOL
-// envelope for skippy-stage/1. Activation transport remains on the
-// skippy-stage/1 QUIC ALPN.
+// envelope for skippy-stage/2. Activation transport remains on the
+// skippy-stage/2 QUIC ALPN.
 
 message StageControlRequest {
   uint32 gen = 1;
@@ -28,9 +28,10 @@ message StageControlRequest {
 
 message StageControlResponse {
   uint32 gen = 1;
+  reserved 3;
+  reserved "stage_status";
   oneof response {
     StageReady stage_ready = 2;
-    StageStatus stage_status = 3;
     LayerInventory layer_inventory = 4;
     PrepareStageAccepted prepare_stage_accepted = 5;
     StagePreparationStatus stage_preparation_status = 6;
@@ -76,9 +77,8 @@ message LoadStage {
   optional string model_path = 11;
   optional StageDevice selected_device = 12;
   string bind_addr = 13;
-  uint32 activation_width = 14;
-  reserved 15;
-  reserved "wire_dtype";
+  reserved 14, 15;
+  reserved "activation_width", "wire_dtype";
   uint32 ctx_size = 16;
   int32 n_gpu_layers = 17;
   string cache_type_k = 18;
@@ -202,6 +202,16 @@ message CoordinatorClaimAccepted {
   optional string error = 3;
 }
 
+message ActivationBoundaryDescriptor {
+  uint32 version = 1;
+  uint32 ggml_type = 2;
+  uint32 layout = 3;
+  uint64 elements_per_token = 4;
+  uint64 bytes_per_token = 5;
+  uint64 required_frame_flags = 6;
+  uint64 required_sidebands = 7;
+}
+
 message StageStatus {
   string topology_id = 1;
   string run_id = 2;
@@ -213,9 +223,8 @@ message StageStatus {
   uint32 layer_end = 8;
   StageRuntimeState state = 9;
   string bind_addr = 10;
-  uint32 activation_width = 11;
-  reserved 12;
-  reserved "wire_dtype";
+  reserved 11, 12;
+  reserved "activation_width", "wire_dtype";
   optional string error = 13;
   uint64 shutdown_generation = 14;
   optional StageDevice selected_device = 15;
@@ -235,6 +244,8 @@ message StageStatus {
   uint64 coordinator_term = 29;
   optional string coordinator_id = 30;
   uint64 lease_until_unix_ms = 31;
+  optional ActivationBoundaryDescriptor input_activation_boundary = 32;
+  optional ActivationBoundaryDescriptor output_activation_boundary = 33;
 }
 
 message StageStatusList {

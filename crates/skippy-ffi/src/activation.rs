@@ -28,7 +28,22 @@ pub struct ActivationDesc {
     pub flags: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivationBoundaryDesc {
+    pub version: u32,
+    pub ggml_type: u32,
+    pub layout: u32,
+    pub reserved: u32,
+    pub elements_per_token: u64,
+    pub bytes_per_token: u64,
+    pub required_frame_flags: u64,
+    pub required_sidebands: u64,
+}
+
+pub const ACTIVATION_FLAG_GEMMA3N_ALTUP: u64 = 1 << 1;
 pub const ACTIVATION_FLAG_INKLING_MTP_EMBD: u64 = 1 << 2;
+pub const ACTIVATION_SIDEBAND_TOKEN_IDS: u64 = 1 << 0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

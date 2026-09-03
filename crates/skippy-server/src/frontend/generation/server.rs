@@ -28,6 +28,7 @@ use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
+use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -141,7 +142,9 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         )
         .context("prewarm OpenAI runtime sessions")?;
     }
-    let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
+    let kv =
+        KvStageIntegration::from_loaded_model(&config, loaded_model_state_kind(Some(&runtime)))?
+            .map(Arc::new);
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
@@ -497,7 +500,11 @@ fn embedded_openai_backend_with_scheduler(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
+    let kv = KvStageIntegration::from_loaded_model(
+        &args.config,
+        loaded_model_state_kind(Some(&args.runtime)),
+    )?
+    .map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,

@@ -411,6 +411,8 @@ pub struct ChatCompletionChunk {
     pub choices: Vec<ChatCompletionChunkChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl ChatCompletionChunk {
@@ -432,6 +434,7 @@ impl ChatCompletionChunk {
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -453,6 +456,7 @@ impl ChatCompletionChunk {
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -478,6 +482,7 @@ impl ChatCompletionChunk {
                 finish_reason: Some(finish_reason),
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -489,6 +494,18 @@ impl ChatCompletionChunk {
             model: model.into(),
             choices: Vec::new(),
             usage: Some(usage),
+            timings: None,
+        }
+    }
+
+    pub fn usage_with_timings(
+        model: impl Into<String>,
+        usage: Usage,
+        timings: Option<BTreeMap<String, Value>>,
+    ) -> Self {
+        Self {
+            timings,
+            ..Self::usage(model, usage)
         }
     }
 }
@@ -517,6 +534,22 @@ pub struct ChatCompletionDelta {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn chat_usage_chunk_serializes_optional_timings() {
+        let chunk = ChatCompletionChunk::usage_with_timings(
+            "model",
+            Usage::new(3, 2),
+            Some(BTreeMap::from([(
+                "cache_restore_ms".to_string(),
+                json!(2.5),
+            )])),
+        );
+
+        let value = serde_json::to_value(chunk).unwrap();
+        assert_eq!(value["usage"]["prompt_tokens"], json!(3));
+        assert_eq!(value["timings"]["cache_restore_ms"], json!(2.5));
+    }
 
     use super::*;
 

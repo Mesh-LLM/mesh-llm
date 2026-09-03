@@ -64,7 +64,7 @@ correctness smoke or from GGUF metadata alone.
 | Falcon | Supported | `Kondara/falcon-7b-instruct-Q4_K_M-GGUF:q4_k_m` | `layer_end=32`, `splits=10,21`, activation width `4544` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted; `ResidentKv` native sequence remap cache smoke passed. |
 | InternLM2 | Supported | `lmstudio-community/internlm2_5-1_8b-chat-GGUF:Q4_K_M` | `layer_end=24`, `splits=8,16`, activation width `2048` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted; `ResidentKv` native sequence remap cache smoke passed. |
 | Phi3 | Supported | `bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M` | `layer_end=32`, `splits=10,21`, activation width `3072` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted; `ResidentKv` native sequence remap cache smoke passed. |
-| PhiMoE | Supported | `bartowski/Phi-3.5-MoE-instruct-GGUF:Q4_K_M` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f32` | `baseline,ngram,ngram-adaptive` | None | Shares the Phi3 graph path; exact state mobility accepted after adding PhiMoE to the runtime-slice ABI allowlist. |
+| PhiMoE | Supported | `bartowski/Phi-3.5-MoE-instruct-GGUF:Q4_K_M` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f32` | `baseline,ngram,ngram-adaptive` | None | Shares the Phi3 graph path; exact state mobility accepted after adding PhiMoE staged-graph support. |
 | OLMo | Supported | `meshllm/olmo-7b-instruct-hf-parity-f16-gguf:F16` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted. |
 | OLMo2 | Supported | `allenai/OLMo-2-1124-7B-Instruct-GGUF:Q4_K_M` | `layer_end=32`, `splits=10,21`, activation width `4096` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted; `ResidentKv` native sequence remap cache smoke passed. |
 | OLMoE | Supported | `bartowski/OLMoE-1B-7B-0924-Instruct-GGUF:Q4_K_M` | `layer_end=16`, `splits=5,10`, activation width `2048` | `f32` | `baseline,ngram,ngram-adaptive` | None | Exact state mobility accepted; `ResidentKv` cache restore and MoE expert-stage smoke passed. |
@@ -220,7 +220,7 @@ these sizes.
 | Granite | 4,096 | Accepted; `ResidentKv` 64-token smoke passed after staged activation rescaling fix |
 | Falcon-H1 | 4,096 | Accepted for `KvRecurrent` cache restore, 663.5x Qwen recurrent state |
 | Phi3 | 6,144 | Accepted; `ResidentKv` 64-token smoke passed, 2645.30x cache-hit speedup |
-| PhiMoE | 8,192 | Accepted; runtime-slice parity passed after PhiMoE ABI allowlist support |
+| PhiMoE | 8,192 | Accepted; runtime-slice parity passed after PhiMoE staged-graph support |
 | Qwen2-MoE | 3,072 | Accepted, 0.25x Qwen |
 | Qwen3-MoE | 2,048 | Accepted, 1.00x Qwen |
 | EXAONE | 5,120 | Accepted; `ResidentKv` 64-token smoke passed, 868.76x cache-hit speedup |

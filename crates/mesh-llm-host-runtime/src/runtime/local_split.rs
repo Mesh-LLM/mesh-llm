@@ -11,7 +11,7 @@ use super::capacity::model_fits_runtime_capacity;
 use super::local::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
     OpenAiGuardrailPolicyHandle, alloc_local_port, mmproj_path_for_model, pinned_stage_device,
-    resolved_model_name, skippy_stage_activation_width,
+    resolved_model_name,
 };
 use super::local_package::{
     SplitParticipant, SplitParticipantExclusion, SplitParticipantSnapshot,
@@ -151,9 +151,13 @@ pub(super) fn startup_runtime_plan(
 }
 
 pub(super) async fn start_runtime_split_model(
-    spec: LocalRuntimeModelStartSpec<'_>,
+    mut spec: LocalRuntimeModelStartSpec<'_>,
     model_ref: &str,
 ) -> Result<SplitRuntimeStart> {
+    // A zero optional override means no explicit budget. Preserve a real zero
+    // from the selected device/node fallback, where it correctly means that no
+    // capacity is allocatable.
+    spec.capacity_budget_bytes = spec.capacity_budget_bytes.filter(|bytes| *bytes > 0);
     let local_source_required = spec.local_source_required;
     skippy::register_local_source_policy(model_ref, spec.runtime_profile, local_source_required);
     // A strict-local standby must index its own file before election so the
@@ -254,6 +258,7 @@ pub(super) async fn start_runtime_split_model(
         projector_path: projector_path.clone(),
         ctx_size,
         compact_meta: &compact_meta,
+        capacity_budget_bytes: spec.capacity_budget_bytes,
         cache_type_k_override: spec.cache_type_k_override,
         cache_type_v_override: spec.cache_type_v_override,
         n_batch_override: spec.n_batch_override,
@@ -298,6 +303,7 @@ pub(super) async fn start_runtime_split_model(
         n_ubatch_override: spec.n_ubatch_override,
         flash_attention_override: spec.flash_attention_override,
         openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
+        capacity_budget_bytes: spec.capacity_budget_bytes,
         pinned_gpu: spec.pinned_gpu.cloned(),
         device_override: spec.device_override.clone(),
         slots,
@@ -358,7 +364,6 @@ async fn prepare_split_runtime_start(
     let kv_bytes_per_token = split_runtime_kv_bytes_per_token(
         &package,
         &compact_meta,
-        model_ref,
         spec.cache_type_k_override,
         spec.cache_type_v_override,
     )?;

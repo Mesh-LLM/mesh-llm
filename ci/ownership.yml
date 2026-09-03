@@ -186,6 +186,7 @@
         "crates/model-package/**",
         "crates/model-ref/**",
         "crates/model-resolver/**",
+        "crates/skippy-model/**",
         "scripts/ci-hf-download-smoke.sh"
       ]
     },
@@ -309,6 +310,7 @@
         "model-package",
         "model-ref",
         "model-resolver",
+        "skippy-model",
         "skippy-quantize"
       ]
     },

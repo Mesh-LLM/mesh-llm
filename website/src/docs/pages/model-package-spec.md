@@ -115,7 +115,7 @@ This example shows the complete schema shape. Values such as checksums and sizes
 | `source_model` | Yes | Provenance for the source GGUF model. |
 | `format` | Yes | Must be `layer-package`. |
 | `layer_count` | Yes | Number of transformer layers. Valid layer indices are `0` through `layer_count - 1`. |
-| `activation_width` | Yes | Hidden-state width used by topology and activation planning. |
+| `activation_width` | Yes | Scalar pre-load estimate for topology diagnostics. It is not an activation-frame contract, and a reviewed family estimate takes precedence. |
 | `shared` | Yes | `metadata`, `embeddings`, and `output` artifact entries. |
 | `layers` | Yes | Exactly one artifact entry for every layer index. |
 | `projectors` | No | Package-level projector artifacts; currently `kind: "mmproj"`. |
@@ -197,7 +197,7 @@ Before starting a stage, a consumer must verify that:
 
 - the file is UTF-8 JSON with `schema_version: 1` and `format: "layer-package"`;
 - the model identity, source identity, and Skippy ABI version are present;
-- `layer_count` and `activation_width` are valid for the requested topology;
+- `layer_count` is valid and `activation_width` is a positive pre-load estimate for the requested topology;
 - layer entries cover every index in `0..layer_count` exactly once;
 - selected paths are safe relative paths and exist in the package;
 - selected file sizes match `artifact_bytes`;

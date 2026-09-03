@@ -10,6 +10,7 @@ pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
 pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
+pub const FEATURE_ACTIVATION_BOUNDARY: u64 = 1 << 29;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

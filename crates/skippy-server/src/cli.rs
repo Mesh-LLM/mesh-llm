@@ -44,8 +44,6 @@ pub struct ServeBinaryArgs {
     #[arg(long)]
     pub bind_addr: Option<SocketAddr>,
     #[arg(long)]
-    pub activation_width: i32,
-    #[arg(long)]
     pub metrics_otlp_grpc: Option<String>,
     #[arg(long, default_value_t = 1024)]
     pub telemetry_queue_capacity: usize,
@@ -269,15 +267,8 @@ mod tests {
 
     #[test]
     fn openai_prefill_policy_defaults_to_adaptive_ramp() {
-        let cli = Cli::try_parse_from([
-            "skippy-server",
-            "serve-binary",
-            "--config",
-            "stage.json",
-            "--activation-width",
-            "2048",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["skippy-server", "serve-binary", "--config", "stage.json"])
+            .unwrap();
 
         let Command::ServeBinary(args) = cli.command else {
             panic!("expected serve-binary command");
@@ -337,8 +328,6 @@ mod tests {
             "serve-binary",
             "--config",
             "stage.json",
-            "--activation-width",
-            "2048",
             "--openai-speculative-config",
             "decode-plan.json",
         ])
