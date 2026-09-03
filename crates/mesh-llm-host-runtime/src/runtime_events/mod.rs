@@ -18,6 +18,7 @@ pub mod replay;
 pub mod reservation;
 mod state;
 pub mod subscribers;
+pub mod telemetry;
 pub mod wake;
 
 #[cfg(test)]

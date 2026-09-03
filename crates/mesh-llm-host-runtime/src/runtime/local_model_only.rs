@@ -121,6 +121,10 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
     apply_runtime_config_options(&mut options, &config);
+    // Task 16: same OTLP-specific runtime-event telemetry consumer as the
+    // mesh-serve path in `run_auto.rs`; a disabled or failed exporter
+    // degrades to a no-op instance and never affects startup.
+    let _runtime_event_telemetry = survey::runtime_events::RuntimeEventTelemetry::start(&config);
 
     let startup_specs = build_startup_model_specs(&options, &config)?;
     anyhow::ensure!(
