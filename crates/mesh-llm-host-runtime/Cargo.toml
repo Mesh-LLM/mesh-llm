@@ -68,7 +68,7 @@ socket2 = { version = "0.6", features = ["all"] }
 anyhow = "1"
 async-trait = "0.1"
 rand = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 dirs = "6.0.0"
 hex = "0.4.3"
 nostr-sdk = { version = "0.45.1", default-features = false }
@@ -80,16 +80,16 @@ reqwest = { version = "0.13", features = ["stream", "json"] }
 flate2 = "1"
 futures-util = "0.3"
 semver = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tar = "0.4"
 ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
 crypto_box = "0.9"
-chacha20poly1305 = "0.10"
-argon2 = "0.5"
+chacha20poly1305 = "0.11"
+argon2 = "0.6"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 rpassword = "7.5"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+keyring = "4.2"
 chrono = { version = "0.4", features = ["serde"] }
 httparse = "1"
 http = "1"

@@ -12,6 +12,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+hex = "0.4"
 anyhow.workspace = true
 dirs = "6"
 flate2 = "1"
