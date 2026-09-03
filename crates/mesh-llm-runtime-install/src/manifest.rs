@@ -36,6 +36,8 @@ pub(crate) fn request_default_manifest_url(mesh_version: &str) -> String {
     }
 }
 
+/// Loads the merged runtime catalog for `options` and returns the manifest
+/// alone. See `load_release_manifest_with_sources` for the discovery rules.
 pub async fn load_release_manifest(
     options: NativeRuntimeManifestOptions,
 ) -> Result<NativeRuntimeReleaseManifest> {
@@ -59,6 +61,8 @@ pub struct NativeRuntimeCatalogSources {
     pub bundle_dirs: Vec<PathBuf>,
 }
 
+/// Like `load_release_manifest_with_sources`, returning only the bundle
+/// directories that were merged in, for callers that resolve bundles by path.
 pub(crate) async fn load_release_manifest_with_bundle_dirs(
     options: NativeRuntimeManifestOptions,
 ) -> Result<(NativeRuntimeReleaseManifest, Vec<PathBuf>)> {
@@ -236,6 +240,10 @@ fn redact_url_userinfo(url: &str) -> String {
     )
 }
 
+/// Picks the remote catalog URL to consult: the explicit option, then the
+/// `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL` override, then the default release
+/// URL when `allow_default_manifest_url` is set. `None` means no remote
+/// catalog is consulted.
 pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<String> {
     options
         .manifest_url
@@ -256,6 +264,12 @@ pub(crate) fn manifest_url(options: &NativeRuntimeManifestOptions) -> Option<Str
         })
 }
 
+/// Appends the runtime described by each bundle directory to `artifacts`.
+///
+/// When no release manifest was loaded, the bundles also supply the release
+/// identity (`mesh_version` and `skippy_abi`). A runtime that is both bundled
+/// and already listed by the manifest is kept once; the resolver still serves
+/// that identity from the bundle directory.
 pub(crate) fn append_bundle_artifacts(
     artifacts: &mut Vec<NativeRuntimeArtifact>,
     mesh_version: &mut String,
@@ -287,6 +301,8 @@ pub(crate) fn append_bundle_artifacts(
     Ok(())
 }
 
+/// Two catalog entries describe the same runtime when their id and release
+/// identity (`mesh_version`, `skippy_abi`) match, whichever source listed them.
 fn same_artifact_identity(left: &NativeRuntimeArtifact, right: &NativeRuntimeArtifact) -> bool {
     left.id == right.id
         && left.mesh_version == right.mesh_version

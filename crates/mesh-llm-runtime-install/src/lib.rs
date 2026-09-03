@@ -676,6 +676,8 @@ mod tests {
         }
     }
 
+    /// Writes a runtime bundle directory for `artifact`: its manifest plus
+    /// placeholder library files.
     fn write_bundle(dir: &Path, artifact: &NativeRuntimeArtifact) {
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         for library in &artifact.libraries {
@@ -688,6 +690,8 @@ mod tests {
         .unwrap();
     }
 
+    /// The Windows CPU runtime as shipped next to the executable: bundled,
+    /// with no download URL.
     fn windows_cpu_bundle_artifact() -> NativeRuntimeArtifact {
         let mut artifact = artifact_with_sha(None);
         artifact.id = "meshllm-native-runtime-windows-x86_64-cpu".to_string();
@@ -702,6 +706,8 @@ mod tests {
         artifact
     }
 
+    /// The Windows CUDA 12 runtime as published in the release catalog:
+    /// download only.
     fn windows_cuda_release_artifact() -> NativeRuntimeArtifact {
         let mut artifact = artifact_with_sha(None);
         artifact.id = "meshllm-native-runtime-windows-x86_64-cuda12".to_string();
@@ -730,6 +736,8 @@ mod tests {
         artifact
     }
 
+    /// Writes a release manifest listing `artifacts` under `dir` and returns
+    /// its path.
     fn release_manifest_file(dir: &Path, artifacts: Vec<NativeRuntimeArtifact>) -> PathBuf {
         let path = dir.join("native-runtimes.json");
         let manifest = NativeRuntimeReleaseManifest {
@@ -741,6 +749,7 @@ mod tests {
         path
     }
 
+    /// Runs the async catalog load to completion on a throwaway runtime.
     fn block_on_load(
         options: NativeRuntimeManifestOptions,
     ) -> anyhow::Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {

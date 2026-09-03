@@ -14,6 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+/// Installs the native runtime selected by `options`: loads the merged
+/// runtime catalog (release manifest plus bundle directories), resolves the
+/// best candidate for this host, then serves it in place from a bundle, from
+/// the cache, or through a verified download.
 pub async fn install_native_runtime(
     options: NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
