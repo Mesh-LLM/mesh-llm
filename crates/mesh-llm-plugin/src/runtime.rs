@@ -5,11 +5,11 @@
 
 use anyhow::{Result, bail};
 use rmcp::model::{
-    CallToolResult, CancelTaskParams, CompleteRequestParams, CompleteResult,
+    CallToolResult, CancelTaskParams, CompleteRequestParams, CompleteResult, EmptyResult,
     GetPromptRequestParams, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResult, ServerInfo, SetLevelRequestParams,
-    SubscribeRequestParams, UnsubscribeRequestParams, UpdateTaskParams,
+    SubscribeRequestParams, TaskAckResult, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -487,7 +487,7 @@ pub trait Plugin: Send {
             "resources/subscribe" => {
                 let params: SubscribeRequestParams = parse_rpc_params(&request)?;
                 match self.subscribe_resource(params, context).await? {
-                    Some(()) => json_response(&()),
+                    Some(()) => json_response(&EmptyResult::from(())),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'resources/subscribe'",
                     )),
@@ -496,7 +496,7 @@ pub trait Plugin: Send {
             "resources/unsubscribe" => {
                 let params: UnsubscribeRequestParams = parse_rpc_params(&request)?;
                 match self.unsubscribe_resource(params, context).await? {
-                    Some(()) => json_response(&()),
+                    Some(()) => json_response(&EmptyResult::from(())),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'resources/unsubscribe'",
                     )),
@@ -532,7 +532,7 @@ pub trait Plugin: Send {
             "tasks/update" => {
                 let params: UpdateTaskParams = parse_rpc_params(&request)?;
                 match self.update_task(params, context).await? {
-                    Some(()) => json_response(&serde_json::json!({})),
+                    Some(()) => json_response(&TaskAckResult::new()),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'tasks/update'",
                     )),
@@ -541,7 +541,7 @@ pub trait Plugin: Send {
             "tasks/cancel" => {
                 let params: CancelTaskParams = parse_rpc_params(&request)?;
                 match self.cancel_task(params, context).await? {
-                    Some(()) => json_response(&serde_json::json!({})),
+                    Some(()) => json_response(&TaskAckResult::new()),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'tasks/cancel'",
                     )),
@@ -1221,6 +1221,73 @@ mod tests {
             correlation_id: String::new(),
             metadata_json: String::new(),
         }
+    }
+
+    fn acknowledgement_plugin() -> SimplePlugin {
+        SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .with_subscribe_resource(|_request, _context| Box::pin(async { Ok(()) }))
+        .with_unsubscribe_resource(|_request, _context| Box::pin(async { Ok(()) }))
+        .with_task_router(
+            crate::TaskRouter::new()
+                .with_update(|_request, _context| Box::pin(async { Ok(()) }))
+                .with_cancel(|_request, _context| Box::pin(async { Ok(()) })),
+        )
+    }
+
+    async fn rpc_result_json(
+        plugin: &mut impl Plugin,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = plugin
+            .handle_rpc(
+                proto::RpcRequest {
+                    method: method.into(),
+                    params_json: params.to_string(),
+                },
+                &mut test_context(),
+            )
+            .await
+            .unwrap();
+        let proto::envelope::Payload::RpcResponse(response) = response else {
+            panic!("expected an RPC response");
+        };
+        serde_json::from_str(&response.result_json).unwrap()
+    }
+
+    #[tokio::test]
+    async fn resource_subscription_acknowledgements_are_empty_objects() {
+        let mut plugin = acknowledgement_plugin();
+
+        for method in ["resources/subscribe", "resources/unsubscribe"] {
+            assert_eq!(
+                rpc_result_json(&mut plugin, method, json!({ "uri": "demo://state" })).await,
+                json!({})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn task_acknowledgements_include_the_complete_result_discriminator() {
+        let mut plugin = acknowledgement_plugin();
+
+        assert_eq!(
+            rpc_result_json(
+                &mut plugin,
+                "tasks/update",
+                json!({ "taskId": "task-1", "inputResponses": {} }),
+            )
+            .await,
+            json!({ "resultType": "complete" })
+        );
+        assert_eq!(
+            rpc_result_json(&mut plugin, "tasks/cancel", json!({ "taskId": "task-1" }),).await,
+            json!({ "resultType": "complete" })
+        );
     }
 
     #[tokio::test]
