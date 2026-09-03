@@ -414,9 +414,9 @@ def reserve_local_port() -> int:
         return probe.getsockname()[1]
 
 
-def build_chat_request_body(prompt: str, max_tokens: int) -> dict[str, Any]:
+def build_chat_request_body(prompt: str, max_tokens: int, model: str) -> dict[str, Any]:
     return {
-        "model": "auto",
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.0,
@@ -425,15 +425,45 @@ def build_chat_request_body(prompt: str, max_tokens: int) -> dict[str, Any]:
     }
 
 
+def first_models_list_id(payload: dict[str, Any]) -> str | None:
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0]
+    if not isinstance(first, dict):
+        return None
+    model_id = first.get("id")
+    return model_id if isinstance(model_id, str) and model_id else None
+
+
+def resolve_ready_model_id(base_url: str, timeout_secs: float) -> str | None:
+    """`--local-model-only` (the mode every trial runs under) has no mesh/
+    routing layer, so the `model: "auto"` alias every OTHER OpenAI-compatible
+    surface in this repo accepts is REJECTED here with `404 model_not_found`
+    -- confirmed against a real running binary (task 21; discovered on the
+    FIRST real end-to-end run of this harness, exactly the kind of edge task
+    19's own problems.md note predicted). The trial must resolve the actual
+    served model id from `/v1/models` and address it explicitly."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/v1/models", timeout=timeout_secs) as response:
+            if response.status != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError):
+        return None
+    return first_models_list_id(payload)
+
+
 def send_streaming_chat_request(
     base_url: str,
     prompt: str,
     max_tokens: int,
     timeout_secs: float,
+    model: str,
     *,
     clock: Callable[[], float] = time.monotonic,
 ) -> StreamParseResult:
-    body = json.dumps(build_chat_request_body(prompt, max_tokens)).encode("utf-8")
+    body = json.dumps(build_chat_request_body(prompt, max_tokens, model)).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/v1/chat/completions",
         data=body,
@@ -509,11 +539,36 @@ def execute_trial(
     `trial_executor` so tests exercise manifest assembly without spawning a
     real process (see the paired test file)."""
     port = reserve_local_port()
-    console_port = reserve_local_port()
     base_url = f"http://127.0.0.1:{port}"
     env = dict(os.environ)
     env[TRIAL_GATE_ENV_NAME] = "1"
     env[TRIAL_ENV_NAME] = resolve_trial_env_value(mode)
+    # `--local-model-only` REJECTS `--headless` at CLI validation
+    # ("--local-model-only never starts a console; remove --headless" --
+    # `validate_local_model_only_options` in
+    # `crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`) and
+    # never starts a console/management API at all ("--local-model-only
+    # does not start owner control or management APIs", same function) --
+    # discovered running this path against a REAL binary for the first
+    # time (task 21; task 19 explicitly never exercised this code path).
+    # `--console`/`--headless` are therefore NEVER passed here: readiness
+    # only ever polls the OpenAI API port (`wait_for_readiness` below), and
+    # a `--console` value would be silently pointless even if accepted.
+    # `--speculative-strategy disabled` is REQUIRED, not optional: without
+    # it, native in-model MTP speculative decoding (baked into some GGUFs,
+    # e.g. the approved Task 8 fixture) crashes every real inference request
+    # with `RuntimeError: llama_decode failed` -- confirmed against a real
+    # running binary (task 21). The native skippy log shows the exact
+    # native cause: `decode: backend sampling requires at most one output
+    # token per sequence (seq_id 0 had 2)`, `llama_decode: failed to
+    # decode, ret = -1`. `--no-draft` does NOT fix this (it only disables
+    # detection of a separate sibling draft-model file, not native
+    # in-model MTP tensors). This is a genuine native llama.cpp/skippy
+    # correctness bug -- fixing it is out of scope for this certification
+    # task; disabling native MTP uniformly on every trial side (current,
+    # event-disabled, baseline) keeps the comparison fair (identical
+    # serving profile on every side) while letting real measurements land
+    # at all.
     argv = [
         str(binary),
         "serve",
@@ -522,9 +577,8 @@ def execute_trial(
         model,
         "--port",
         str(port),
-        "--console",
-        str(console_port),
-        "--headless",
+        "--speculative-strategy",
+        "disabled",
     ]
     prompt = prompt_for_entry(entry)
     setup_started = time.monotonic()
@@ -551,11 +605,29 @@ def execute_trial(
                 shutdown_ms=None,
                 error="readiness timeout",
             )
+        served_model_id = resolve_ready_model_id(base_url, readiness_poll_interval_secs)
+        if served_model_id is None:
+            return TrialResult(
+                scenario=entry.scenario,
+                pair_index=entry.pair_index,
+                status="failed",
+                completion_tokens=None,
+                elapsed_ms=None,
+                decode_tok_s=None,
+                ttft_ms=None,
+                decode_only_tok_s=None,
+                setup_ms=setup_ms,
+                readiness_ms=readiness_ms,
+                shutdown_ms=None,
+                error="/v1/models returned no model id after readiness",
+            )
         with contextlib.suppress(urllib.error.URLError, OSError, TimeoutError):
-            send_streaming_chat_request(base_url, prompt, max_tokens, request_timeout_secs)
+            send_streaming_chat_request(base_url, prompt, max_tokens, request_timeout_secs, served_model_id)
         measured_started = time.monotonic()
         try:
-            parsed = send_streaming_chat_request(base_url, prompt, max_tokens, request_timeout_secs)
+            parsed = send_streaming_chat_request(
+                base_url, prompt, max_tokens, request_timeout_secs, served_model_id
+            )
             elapsed_ms = (time.monotonic() - measured_started) * 1000.0
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             return TrialResult(
@@ -724,6 +796,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         help="Named scenario; repeatable, at least one required.",
     )
+    parser.add_argument(
+        "--attempt",
+        type=int,
+        default=1,
+        help=(
+            "The predefined-retry attempt number (1 or 2) this run represents, recorded "
+            "verbatim into the manifest's `attempt` field for the comparator's "
+            "evaluate_retry_state gate. Defaults to 1 (first attempt). Pass 2 for the ONE "
+            "predefined full-set retry permitted after an adverse first-attempt result and "
+            "after recording/correcting a thermal/load/runtime mismatch -- never invent a "
+            "3rd attempt."
+        ),
+    )
     return parser
 
 
@@ -748,6 +833,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         scenarios=args.scenarios,
         results=results,
         environ=os.environ,
+        attempt=args.attempt,
         generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)

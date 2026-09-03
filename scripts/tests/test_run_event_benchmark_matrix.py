@@ -230,6 +230,34 @@ class DecodeTokSTests(unittest.TestCase):
         self.assertIsNone(harness.compute_decode_tok_s(None, 2000.0))
 
 
+class ModelIdResolutionTests(unittest.TestCase):
+    """`--local-model-only` rejects `model: "auto"` with `404 model_not_found`
+    (no mesh/routing layer to resolve the alias) -- confirmed against a real
+    running binary. `build_chat_request_body` must therefore send the model
+    id resolved from `/v1/models`, never a hardcoded `"auto"`."""
+
+    def test_build_chat_request_body_uses_the_passed_model_not_auto(self):
+        harness = load_module()
+        body = harness.build_chat_request_body("prompt", 16, "local-gguf/sha256-abc")
+        self.assertEqual(body["model"], "local-gguf/sha256-abc")
+        self.assertNotEqual(body["model"], "auto")
+
+    def test_first_models_list_id_extracts_the_first_entry(self):
+        harness = load_module()
+        payload = {"object": "list", "data": [{"id": "local-gguf/sha256-abc", "object": "model"}]}
+        self.assertEqual(harness.first_models_list_id(payload), "local-gguf/sha256-abc")
+
+    def test_first_models_list_id_is_none_on_empty_data(self):
+        harness = load_module()
+        self.assertIsNone(harness.first_models_list_id({"object": "list", "data": []}))
+
+    def test_first_models_list_id_is_none_on_malformed_payload(self):
+        harness = load_module()
+        self.assertIsNone(harness.first_models_list_id({}))
+        self.assertIsNone(harness.first_models_list_id({"data": "not-a-list"}))
+        self.assertIsNone(harness.first_models_list_id({"data": [{"id": ""}]}))
+
+
 class SseStreamParsingTests(unittest.TestCase):
     def test_happy_path_extracts_ttft_and_completion_tokens(self):
         # `parse_sse_stream` calls `clock()` exactly once, at the moment
@@ -347,6 +375,37 @@ class ManifestBuildingTests(unittest.TestCase):
         self.assertEqual(len(manifest["trials"]), 1)
         self.assertEqual(manifest["trials"][0]["status"], "succeeded")
 
+    def test_manifest_records_a_non_default_attempt_number(self):
+        harness = load_module()
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="production",
+            seed=1,
+            pairs_primary=1,
+            pairs_scenario=1,
+            scenarios=["s"],
+            results=[],
+            environ={},
+            attempt=2,
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+        )
+        self.assertEqual(manifest["attempt"], 2)
+
+
+class MainThreadsAttemptIntoManifestTests(unittest.TestCase):
+    """`main()` must forward the parsed `--attempt` value into
+    `build_manifest` -- a source-level check (rather than invoking `main()`,
+    which spawns a REAL trial subprocess by default) mirroring this file's
+    existing source-inspection convention (see `HiddenSelectorWiringTests`)."""
+
+    def test_main_passes_attempt_from_args_to_build_manifest(self):
+        source = SCRIPT.read_text()
+        main_start = source.index("def main(")
+        main_body = source[main_start:]
+        self.assertIn("attempt=args.attempt", main_body)
+
 
 class TrialUnitDefinitionMatchesRustSourceTests(unittest.TestCase):
     def test_trial_and_pair_wording_matches_rust_verbatim(self):
@@ -396,6 +455,41 @@ class HiddenSelectorWiringTests(unittest.TestCase):
         self.assertIn(needle, source)
 
 
+class LocalModelOnlyCliCompatibilityTests(unittest.TestCase):
+    """`--local-model-only` rejects `--headless` at CLI validation
+    (`validate_local_model_only_options` in
+    `crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs`: "never
+    starts a console; remove --headless") and never starts a console/
+    management API at all ("does not start owner control or management
+    APIs", same function) -- so `execute_trial`'s argv must never pass
+    `--console` or `--headless` alongside `--local-model-only`, or every
+    real trial launch fails at startup before readiness is even polled."""
+
+    def test_argv_never_passes_console_or_headless(self):
+        harness = load_module()
+        source = SCRIPT.read_text()
+        argv_start = source.index("argv = [", source.index("def execute_trial"))
+        argv_end = source.index("]", argv_start)
+        argv_block = source[argv_start:argv_end]
+        self.assertNotIn("--console", argv_block)
+        self.assertNotIn("--headless", argv_block)
+        self.assertIn("--local-model-only", argv_block)
+
+    def test_argv_always_disables_native_mtp_speculative_decoding(self):
+        """Confirmed against a real running binary: native in-model MTP
+        crashes every inference request (`llama_decode failed` /
+        `backend sampling requires at most one output token per sequence`)
+        unless `--speculative-strategy disabled` is passed; `--no-draft`
+        does not help (it only covers separate sibling draft-model files)."""
+        harness = load_module()
+        source = SCRIPT.read_text()
+        argv_start = source.index("argv = [", source.index("def execute_trial"))
+        argv_end = source.index("]", argv_start)
+        argv_block = source[argv_start:argv_end]
+        self.assertIn("--speculative-strategy", argv_block)
+        self.assertIn('"disabled"', argv_block)
+
+
 class CliParsingTests(unittest.TestCase):
     def test_help_lists_every_frozen_flag(self):
         harness = load_module()
@@ -438,6 +532,58 @@ class CliParsingTests(unittest.TestCase):
         )
         self.assertEqual(args.mode, "event-disabled")
         self.assertEqual(args.scenarios, ["chat_short"])
+
+    def test_attempt_defaults_to_one(self):
+        harness = load_module()
+        parser = harness.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--binary",
+                "/bin/true",
+                "--model",
+                "m",
+                "--output-dir",
+                "/tmp/out",
+                "--pairs-primary",
+                "1",
+                "--pairs-scenario",
+                "1",
+                "--seed",
+                "1",
+                "--mode",
+                "production",
+                "--scenario",
+                "a",
+            ]
+        )
+        self.assertEqual(args.attempt, 1)
+
+    def test_attempt_accepts_explicit_retry_value(self):
+        harness = load_module()
+        parser = harness.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--binary",
+                "/bin/true",
+                "--model",
+                "m",
+                "--output-dir",
+                "/tmp/out",
+                "--pairs-primary",
+                "1",
+                "--pairs-scenario",
+                "1",
+                "--seed",
+                "1",
+                "--mode",
+                "production",
+                "--scenario",
+                "a",
+                "--attempt",
+                "2",
+            ]
+        )
+        self.assertEqual(args.attempt, 2)
 
     def test_scenario_is_repeatable(self):
         harness = load_module()
