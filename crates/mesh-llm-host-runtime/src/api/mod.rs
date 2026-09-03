@@ -70,10 +70,10 @@ pub(crate) use self::status::classify_runtime_error;
 use self::state::ApiInner;
 use self::status::{
     IntentSummary, LifecycleInstancePayload, LoggingStatusPayload, MeshModelPayload,
-    OpenAiGuardrailsPayload, RuntimeCapabilityFlags, RuntimeLlamaPayload, RuntimeProcessesPayload,
-    RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
-    build_runtime_stage_payloads, build_runtime_status_payload, derive_daemon_state,
-    runtime_stage_state_label,
+    OpenAiGuardrailsPayload, RUNTIME_EVENTS_CAPABILITY, RuntimeCapabilityFlags,
+    RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+    build_runtime_processes_payload, build_runtime_stage_payloads, build_runtime_status_payload,
+    derive_daemon_state, runtime_stage_state_label,
 };
 use crate::mesh;
 use crate::models::append_external_inference_models;
@@ -564,7 +564,7 @@ impl MeshApi {
                 inner.openai_guardrails.clone(),
             )
         };
-        build_runtime_status_payload(
+        let mut payload = build_runtime_status_payload(
             runtime_status.primary_model.as_deref().unwrap_or_default(),
             runtime_status.primary_backend,
             openai_guardrails,
@@ -572,7 +572,12 @@ impl MeshApi {
             runtime_status.llama_ready,
             runtime_status.llama_port,
             runtime_data::runtime_process_payloads(&runtime_status.local_processes),
-        )
+        );
+        payload.capabilities = Some(RuntimeCapabilityFlags {
+            runtime_events: Some(RUNTIME_EVENTS_CAPABILITY),
+            ..RuntimeCapabilityFlags::default()
+        });
+        payload
     }
 
     async fn runtime_processes(&self) -> RuntimeProcessesPayload {
@@ -1075,6 +1080,7 @@ fn derive_capability_flags(
         plugin_ingress,
         accepting_local,
         accepting_remote,
+        runtime_events: Some(RUNTIME_EVENTS_CAPABILITY),
     }
 }
 

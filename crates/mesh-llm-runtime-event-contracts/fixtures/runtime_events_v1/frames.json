@@ -1,0 +1,49 @@
+{
+  "$schema_note": "Rust and TypeScript both consume this file for /api/runtime/events/v1 wire encoding. Consumed by mesh-llm-host-runtime's api::routes::runtime_events::runtime_event_api_tests round-trip test.",
+  "version": 1,
+  "event_names": [
+    "runtime_state",
+    "runtime_event",
+    "runtime_health",
+    "runtime_replay_gap"
+  ],
+  "required_envelope_keys": [
+    "version",
+    "cursor",
+    "process_instance_id",
+    "sequence",
+    "rebuild_generation"
+  ],
+  "per_event_required_keys": {
+    "runtime_state": ["state"],
+    "runtime_event": ["event"],
+    "runtime_health": ["health"],
+    "runtime_replay_gap": ["requested_cursor", "reason"]
+  },
+  "state_top_level_keys": [
+    "node",
+    "models",
+    "stages",
+    "sessions",
+    "requests",
+    "devices",
+    "cache"
+  ],
+  "event_projected_key_allowlist": [
+    "category",
+    "kind",
+    "producer",
+    "severity",
+    "summary",
+    "scope",
+    "state",
+    "progress",
+    "outcome",
+    "reason_code",
+    "duration_ms",
+    "numeric_summaries"
+  ],
+  "replay_gap_reasons": ["stale_instance", "evicted"],
+  "keepalive_frame": ": keepalive\n\n",
+  "frame_grammar": "id: <cursor>\\nevent: <name>\\ndata: <single-line canonical JSON>\\n\\n"
+}
