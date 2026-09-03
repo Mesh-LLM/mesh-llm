@@ -24,6 +24,6 @@ serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4"
 tempfile = "3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
