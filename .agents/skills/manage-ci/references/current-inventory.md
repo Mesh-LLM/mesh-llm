@@ -100,10 +100,13 @@ patch-apply failure it hands the queue to a non-interactive `opencode` agent
 via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification
 battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
-on `llama-canary/patch-queue-fix`. The same repair loop also runs when the
-queue applies but a certification lane fails (`battery` mode). After each agent
-turn the repair script
-itself runs the battery and, on failure, loops certify -> agent fix ->
+on `llama-canary/patch-queue-fix`. The deterministic wrapper writes both
+`third_party/llama.cpp/upstream.txt` and its `LLAMA_CPP_SHA` compatibility
+mirror to the resolved repair target, prepares through the checked-in `pinned`
+selector, and verifies the prepared-upstream stamp before any repair branch is
+published or certified. The same repair loop also runs when the queue applies
+but a certification lane fails (`battery` mode). After each agent turn the
+repair script itself runs the battery and, on failure, loops certify -> agent fix ->
 recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
 succeeds when the wrapper's own battery run passes. Every outcome (battery
 green, queue still broken, battery exhausted) posts a status comment on the
@@ -114,7 +117,8 @@ PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
 the canary job itself remains `contents: read`. Any repair outcome keeps the
 canary run red: the certified fix must be merged from the repair PR before
 trusted main can certify. The upstream pin commit to
-`main` is gated on the battery passing.
+`main` is gated on the battery passing and writes both pin files from the
+validated SHA.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the

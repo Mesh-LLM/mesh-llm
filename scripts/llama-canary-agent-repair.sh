@@ -74,6 +74,8 @@ AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
 MAX_REPAIR_TURNS="${CANARY_REPAIR_MAX_TURNS:-2}"
 BRANCH="llama-canary/patch-queue-fix"
 BATTERY_LOG="$ROOT/.deps/llama-canary-repair-battery.log"
+PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+PIN_MIRROR_FILE="$ROOT/LLAMA_CPP_SHA"
 
 mkdir -p "$ROOT/.deps"
 echo "$UPSTREAM_SHA" > "$ROOT/.deps/llama-canary-target-sha"
@@ -258,6 +260,34 @@ redact_token() {
   sed "s/${CANARY_REPAIR_TOKEN}/***redacted***/g"
 }
 
+write_repair_pins() {
+  # Pin ownership is deterministic wrapper work, never agent work. The repair
+  # branch must select the same upstream that its queue and battery certify.
+  scripts/update-llama-pin.sh "$UPSTREAM_SHA"
+}
+
+verify_repair_pins() {
+  local pin mirror
+  pin="$(tr -d '[:space:]' < "$PIN_FILE")"
+  mirror="$(tr -d '[:space:]' < "$PIN_MIRROR_FILE")"
+  if [[ "$pin" != "$UPSTREAM_SHA" || "$mirror" != "$UPSTREAM_SHA" ]]; then
+    echo "repair pins do not select certified upstream $UPSTREAM_SHA (upstream.txt=$pin, LLAMA_CPP_SHA=$mirror)" >&2
+    return 1
+  fi
+}
+
+prepare_repair_target() {
+  local prepared_upstream
+  write_repair_pins || return 1
+  verify_repair_pins || return 1
+  scripts/prepare-llama.sh pinned || return 1
+  prepared_upstream="$(tr -d '[:space:]' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"
+  if [[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]; then
+    echo "pinned repair prepared upstream $prepared_upstream, expected $UPSTREAM_SHA" >&2
+    return 1
+  fi
+}
+
 publish_repair_branch() {
   # The wrapper — never the agent — owns commit and push. Puts the current
   # working tree (agent's repaired queue) on $BRANCH and records the exact
@@ -418,6 +448,7 @@ run_battery() {
   # arm64 Rust objects unable to link against x86_64 native archives (seen
   # live in run 33140672269). An arm64 sanity check follows the build so a
   # misconfigured toolchain fails loudly instead of as symbol errors.
+  prepare_repair_target || return 1
   arch -arm64 scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 || return 1
   local archive
   archive="${LLAMA_STAGE_BUILD_DIR:-}/src/libllama.a"
@@ -477,6 +508,10 @@ Write your review findings (verification steps, defects found, fixes made or rec
     REVIEW_STATUS=" Post-green agent review ran but produced no report; the certified tree is unchanged."
     return 0
   fi
+  # A review turn may edit the worktree, but it never owns the selected
+  # upstream. Restore and verify both pin files before publishing its result.
+  write_repair_pins || return 1
+  verify_repair_pins || return 1
   # The agent may have committed locally (per its prompt) and/or left work in
   # the working tree; the wrapper owns every push. Publish whatever HEAD is
   # now only when it differs from the certified commit.
@@ -491,12 +526,14 @@ Write your review findings (verification steps, defects found, fixes made or rec
     echo "post-green review made changes; publishing review head $(git rev-parse --short HEAD)"
     git push "$(repair_remote)" "+HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2) \
       || echo "warning: could not push the review commit; the certified tree remains the PR head" >&2
+    # shellcheck disable=SC2016  # backticks are intentional Markdown
     REVIEW_STATUS="$(printf ' Post-green agent review made modifications: PR head is now the review commit `%s` (certified commit `%s` above; review changes re-certify when this PR merges and the next canary runs).' \
       "$(git rev-parse --short HEAD)" "${CERTIFIED_SHA:0:10}")"
   else
     echo "post-green review found nothing to change; certified tree unchanged"
     REVIEW_STATUS=" Post-green agent review found nothing to change; the certified tree stands."
   fi
+  # shellcheck disable=SC2016  # fenced backticks are intentional Markdown
   REVIEW_REPORT_TAIL="$(printf '\n\n<details><summary>Post-green agent review report (tail)</summary>\n\n```\n%s\n```\n\n</details>' \
     "$(tail -n 20 "$ROOT/.deps/llama-canary-review-report.md")")"
   REVIEW_HEAD="$(git rev-parse HEAD)"
@@ -542,9 +579,9 @@ branch %s if listed.' \
     "$UPSTREAM_SHA" "${EXISTING_PR:-none}" "$BRANCH")"
 
   echo "agent repair turn finished; verifying queue applies..."
-  if ! scripts/prepare-llama.sh "$UPSTREAM_SHA"; then
+  if ! prepare_repair_target; then
     publish_work_in_progress
-    pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue still does not apply at upstream %s after the agent repair turn (see the canary run log for the failing patch). The agent work so far is on this branch.' \
+    pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue still does not apply through the checked-in pin at upstream %s after the agent repair turn (see the canary run log for the failing patch). The agent work so far is on this branch.' \
       "$UPSTREAM_SHA")"
     exit 1
   fi
@@ -553,6 +590,12 @@ else
   # step just failed on this runner. Its evidence log (teed to
   # $BATTERY_LOG by the workflow) seeds the first repair turn, so no build
   # or battery run is repeated before the agent gets the failure output.
+  if ! prepare_repair_target; then
+    publish_work_in_progress
+    pr_comment "$(printf '**Repair stuck — needs human assistance.** The battery-mode repair no longer applies through the checked-in pin at upstream %s. The agent work so far is on this branch.' \
+      "$UPSTREAM_SHA")"
+    exit 1
+  fi
   if [[ ! -s "$BATTERY_LOG" ]]; then
     echo "battery mode: no workflow battery evidence at $BATTERY_LOG; running one diagnostic battery attempt..." >&2
     run_battery || true
@@ -590,9 +633,9 @@ while (( attempt < MAX_REPAIR_TURNS )); do
   echo "family battery failed on repair turn $attempt; handing failures to the agent"
   agent_turn "$(repair_followup_prompt "$attempt")"
   echo "agent repair turn $attempt finished; verifying queue applies..."
-  if ! scripts/prepare-llama.sh "$UPSTREAM_SHA"; then
+  if ! prepare_repair_target; then
     publish_work_in_progress
-    pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue regressed or still does not apply at upstream %s after repair turn %s/%s. The agent work is on this branch; see the canary run log for the failing patch.' \
+    pr_comment "$(printf '**Repair stuck — needs human assistance.** The patch queue regressed or still does not apply through the checked-in pin at upstream %s after repair turn %s/%s. The agent work is on this branch; see the canary run log for the failing patch.' \
       "$UPSTREAM_SHA" "$attempt" "$MAX_REPAIR_TURNS")"
     exit 1
   fi
