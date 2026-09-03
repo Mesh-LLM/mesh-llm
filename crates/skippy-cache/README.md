@@ -159,6 +159,19 @@ The intended recurrent/stateful serving path is:
 3. recompute safely on any miss or incompatible payload
 4. record a new exact payload after successful prefill
 
+Serving schedules stage-zero exact-state exports as detached FIFO runtime work.
+The checkpoint command is ordered before any later iteration that can advance
+the session, while the request worker can continue without waiting for export,
+block hashing, or radix insertion. Exported bytes retain their contiguous
+allocation while the blob store indexes them by block, so an unfragmented hit
+is imported without first reconstructing a second full-size buffer.
+
+Prefill-only requests (`max_tokens=0`) retain a synchronous chat-prefix export.
+That fallback must capture the checkpoint before the same scheduler operation
+advances through the remaining suffix; a detached command could only run after
+the named native position had passed. Generation requests use the detached path
+described above.
+
 The OpenAI serving path now uses the same cache policy. A cache-enabled stage
 selects one payload shape:
 
@@ -183,7 +196,7 @@ serving, then extends it in several important ways.
 | `ResidentKv` | dense attention families | KV stays resident in the live runtime. Hot-lane hits borrow the existing prefix instead of paying serialize/restore costs, matching llama-server's slot model while using Skippy's lower-overhead Rust serving path. |
 | `KvRecurrent` | Qwen3Next, Falcon-H1, and other hybrid/recurrent families | Attention KV and recurrent/SSM state move together. llama-server has no equivalent production cache for this exact state shape, so repeated prefixes avoid expensive recurrent-prefix reprocessing. |
 | Activation-frame cache | split serving | A stage can reuse the activation it would have forwarded downstream, so cache hits can remove work from both the local stage and the next stage boundary. |
-| BLAKE3 deduped exact payloads | portable exact-state cache | Large exported states are chunked into content-addressed blocks. Repeated blocks are stored once, making exact payload caching practical under a real capacity cap. |
+| BLAKE3 deduped exact payloads | portable exact-state cache | Large exported states are indexed as content-addressed blocks while retaining contiguous backing for zero-copy restore when possible. Shared blocks are materialized only when their last contiguous owner is evicted, preserving exact physical-capacity accounting. |
 | Package-backed stage cache | giant staged models | A materialized stage can cache only the state for the layer range it owns, without loading or merging a monolithic full GGUF. |
 
 The headline pattern in the benchmark table follows from those methods:
