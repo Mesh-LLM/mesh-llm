@@ -6,15 +6,32 @@
 //! `OutputCommand::Event` channel (`mesh-llm-tui`) is never touched by this
 //! module and never coalesces anything itself.
 //!
-//! Not yet spawned from process startup: `runtime/run_auto.rs` and
-//! `runtime/local_model_only.rs` install the engine (task 9) but attach no
-//! persistent subscriber themselves, matching the plan's existing
-//! precedent that a subscriber attaches only where a consuming task
-//! explicitly wires it (task 13's SSE route subscribes per HTTP
-//! connection, not at startup). Spawning [`run_presentation_subscriber`]
-//! into the shared runtime-mode startup path is left to that wiring task so
-//! `local_model_only.rs`'s documented "zero management subscribers"
-//! invariant is not disturbed by this change.
+//! **Spawned from `runtime/run_auto.rs`**, immediately after
+//! `install_runtime_event_engine(...)`, via [`spawn_presentation_subscriber`]
+//! -- the full `mesh-llm serve --auto` / TUI-visible path. Deliberately NOT
+//! spawned from `runtime/local_model_only.rs`, which keeps its documented,
+//! tested "zero management subscribers" invariant (nothing there calls
+//! `.subscribers()`).
+//!
+//! [`spawn_presentation_subscriber`] is split into a synchronous [`attach`]
+//! step and an async [`drive_presentation_subscriber`] loop specifically so
+//! attachment is observable by the caller with no scheduler race: the
+//! subscription is registered on the engine BEFORE the function returns,
+//! not at some later point inside a freshly spawned task.
+//!
+//! The drive loop also calls [`RuntimeEventEngine::drain`] once per render
+//! tick. This is deliberate and load-bearing, not incidental: nothing else
+//! in the running host calls `drain()` outside test code (verified by grep
+//! across `crates/mesh-llm-host-runtime/src` at the time this was written)
+//! -- a submitted terminal fact sits in the engine's wake list, reserved
+//! but never applied through the reducer or published to any subscriber,
+//! until something drains it. This subscriber is the one always-on,
+//! life-of-process consumer the plan's own "Authority boundaries" table
+//! describes for presentation, so its own tick is the natural place to pump
+//! the engine until a dedicated engine-owned drain loop exists. Draining is
+//! idempotent and safe to call from multiple sites (task 3's `drain()` is a
+//! plain `&self` method over a lock-protected wake list), so this does not
+//! preclude another consumer also draining later.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +45,7 @@ use crate::runtime_events::config::TUI_RENDER_TICK;
 use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::health::EngineHealth;
 use crate::runtime_events::replay::ReplayFrame;
-use crate::runtime_events::subscribers::SubscribeError;
+use crate::runtime_events::subscribers::{SubscribeError, SubscriptionHandle};
 
 use super::coalescer::ProgressCoalescer;
 use super::projection::{fact_projection_event, health_projection_event};
@@ -89,16 +106,26 @@ pub(super) fn flush_tick(
     }
 }
 
-/// Subscribe to `engine` and run the presentation projection loop until its
-/// subscriber registry closes or this subscription is disconnected for
-/// lagging too far behind. A lagged receiver records the disconnect on
-/// engine health and returns -- presentation loss degrades observability
-/// only, it never blocks or fails primary work.
-pub async fn run_presentation_subscriber(
+/// Subscribe to `engine` synchronously. Split out from the async drive loop
+/// so a caller (`spawn_presentation_subscriber`) can prove the subscription
+/// is registered before returning, with no race against the spawned task's
+/// own scheduling.
+pub fn attach(engine: &RuntimeEventEngine) -> Result<SubscriptionHandle, SubscribeError> {
+    engine.subscribers().subscribe()
+}
+
+/// Drive the presentation projection loop for an already-`attach`ed
+/// `subscription` until the engine's subscriber registry closes or this
+/// subscription is disconnected for lagging too far behind. A lagged
+/// receiver records the disconnect on engine health and returns --
+/// presentation loss degrades observability only, it never blocks or fails
+/// primary work. See the module doc for why every tick also calls
+/// `engine.drain()`.
+pub async fn drive_presentation_subscriber(
+    mut subscription: SubscriptionHandle,
     engine: Arc<RuntimeEventEngine>,
     sink: Arc<dyn PresentationSink>,
-) -> Result<(), SubscribeError> {
-    let mut subscription = engine.subscribers().subscribe()?;
+) {
     let coalescer = ProgressCoalescer::new();
     let mut tick = tokio::time::interval(TUI_RENDER_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -109,12 +136,30 @@ pub async fn run_presentation_subscriber(
                     Ok(frame) => route_fact(&coalescer, sink.as_ref(), &frame),
                     Err(RecvError::Lagged(_)) => {
                         subscription.record_disconnect(engine.health());
-                        return Ok(());
+                        return;
                     }
-                    Err(RecvError::Closed) => return Ok(()),
+                    Err(RecvError::Closed) => return,
                 }
             }
-            _ = tick.tick() => flush_tick(&coalescer, engine.health(), sink.as_ref(), Instant::now()),
+            _ = tick.tick() => {
+                engine.drain();
+                flush_tick(&coalescer, engine.health(), sink.as_ref(), Instant::now());
+            }
         }
     }
+}
+
+/// Attach to `engine` synchronously and spawn [`drive_presentation_subscriber`]
+/// as a background task using the real [`EmitEventSink`]. This is the
+/// `run_auto.rs` wiring point; do NOT call it from `local_model_only.rs`
+/// (see the module doc). Returns `Err` only when the engine is already at
+/// its concurrent-subscriber cap.
+pub fn spawn_presentation_subscriber(
+    engine: &Arc<RuntimeEventEngine>,
+) -> Result<tokio::task::JoinHandle<()>, SubscribeError> {
+    let subscription = attach(engine)?;
+    let engine = Arc::clone(engine);
+    Ok(tokio::spawn(async move {
+        drive_presentation_subscriber(subscription, engine, Arc::new(EmitEventSink)).await;
+    }))
 }

@@ -113,6 +113,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        presentation_subscriber,
         startup_specs,
         tunnel_mgr,
         skippy_telemetry,
@@ -330,6 +331,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        presentation_subscriber,
         lan_bootstrap_tasks,
         runtime_models: &mut runtime_state.runtime_models,
         runtime_survey_models: &mut runtime_state.runtime_survey_models,
@@ -371,6 +373,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        presentation_subscriber,
         lan_bootstrap_tasks,
         runtime_models,
         runtime_survey_models,
@@ -394,6 +397,9 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     // Stop the relay-less LAN bootstrap loops (mDNS publisher, reverse-dial,
     // and beacon) so they release their sockets and stop dialing on shutdown.
     lan_bootstrap_tasks.abort();
+    if let Some(handle) = presentation_subscriber {
+        handle.abort();
+    }
 
     shutdown_run_auto_services(
         node,

@@ -20,6 +20,10 @@
 //!   facts and the coalesced health snapshot are reserved (forwarded
 //!   immediately, every single one, never dropped or coalesced) while
 //!   Progress facts coalesce to at most one per operation per render tick.
+//!   `spawn_presentation_subscriber` is called from `runtime/run_auto.rs`
+//!   right after the engine is installed, so this is a live, always-on
+//!   consumer for the life of the process on the mesh-serve/TUI path (never
+//!   on `local_model_only.rs` -- see the `subscriber` module doc).
 //!
 //! Operational logs (JSON/pretty stdout) and the TUI dashboard become
 //! downstream projections of the runtime-event stream this way: both
@@ -36,4 +40,7 @@ mod tests;
 
 pub use coalescer::ProgressCoalescer;
 pub use projection::{fact_projection_event, health_projection_event};
-pub use subscriber::{EmitEventSink, PresentationSink, run_presentation_subscriber};
+pub use subscriber::{
+    EmitEventSink, PresentationSink, attach, drive_presentation_subscriber,
+    spawn_presentation_subscriber,
+};

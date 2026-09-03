@@ -5,6 +5,7 @@ mod coalescing;
 mod parity;
 mod privacy;
 mod reservation;
+mod wiring;
 
 use std::sync::Mutex;
 

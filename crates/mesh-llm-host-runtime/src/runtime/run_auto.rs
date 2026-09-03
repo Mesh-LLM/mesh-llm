@@ -1380,11 +1380,21 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     // Task 9: the runtime-event engine is installed here too (not only for
     // `--local-model-only`) so `LoadOperation`/`UnloadOperation` in
     // `runtime/model_lifecycle/{load,unload}.rs` are live on the mesh path.
-    // No subscriber attaches here -- that is Task 13's route -- so this
-    // start alone does not change observable behavior on this path either.
-    crate::runtime_events::install_runtime_event_engine(
-        crate::runtime_events::engine::RuntimeEventEngine::new(),
-    );
+    // Task 14: the presentation subscriber attaches right here, the full
+    // mesh-serve/TUI path -- deliberately NOT on the `--local-model-only`
+    // path, which keeps its own documented "zero management subscribers"
+    // invariant (see `run_local_model_only`). A capacity-exhausted attach
+    // degrades to no presentation rather than failing startup.
+    let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+    crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    let presentation_subscriber =
+        crate::runtime_events::presentation::spawn_presentation_subscriber(&runtime_event_engine)
+            .inspect_err(|_| {
+                tracing::warn!(
+                    "presentation subscriber attach failed: engine subscriber capacity exhausted"
+                );
+            })
+            .ok();
     super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
@@ -1586,6 +1596,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
+        presentation_subscriber,
         startup_specs: &startup_specs,
         tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,
