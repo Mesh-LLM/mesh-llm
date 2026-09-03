@@ -187,6 +187,22 @@ where
 }
 
 fn validate_plugin_startup(entry: &PluginConfigEntry, index: usize) -> DiagnosticResult {
+    if let Some(raw_url) = entry.url.as_deref() {
+        let url = url::Url::parse(raw_url.trim()).map_err(|_| {
+            validation_diagnostic(
+                &format!("plugin[{index}].url"),
+                format!("plugin[{index}].url must be an absolute http:// or https:// URL"),
+            )
+        })?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(validation_diagnostic(
+                &format!("plugin[{index}].url"),
+                format!(
+                    "plugin[{index}].url must be an absolute http:// or https:// URL; tcp:// plugin control is unsupported because it has no authenticated capability handshake"
+                ),
+            ));
+        }
+    }
     if matches!(entry.startup.connect_timeout_secs, Some(0)) {
         return Err(validation_diagnostic(
             &format!("plugin[{index}].startup.connect_timeout_secs"),
@@ -721,6 +737,81 @@ retention_days = 14
                 .iter()
                 .any(|diagnostic| diagnostic.code == ConfigDiagnosticCode::MisplacedField)
         );
+    }
+
+    #[test]
+    fn plugin_url_rejects_unsupported_remote_control_schemes() {
+        let config: crate::MeshConfig = toml::from_str(
+            r#"
+[[plugin]]
+name = "remote-demo"
+url = "udp://127.0.0.1:9000"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let diagnostic = validate_plugin_entries(&config.plugins)
+            .expect_err("unsupported remote control URL must fail static validation");
+        assert_eq!(
+            diagnostic
+                .path
+                .as_ref()
+                .map(crate::ConfigPath::render)
+                .as_deref(),
+            Some("plugin[0].url")
+        );
+        assert_eq!(
+            diagnostic
+                .canonical_path
+                .as_ref()
+                .map(crate::ConfigPath::render)
+                .as_deref(),
+            Some("plugin.<plugin-name>.url")
+        );
+        assert!(diagnostic.message.contains("tcp://"));
+    }
+
+    #[test]
+    fn plugin_url_accepts_http_payload_urls() {
+        for url in [
+            "http://plugin.example.test/v1",
+            "https://plugin.example.test/v1",
+        ] {
+            let raw = format!("[[plugin]]\nname = \"demo\"\nurl = {url:?}\n");
+            let config: crate::MeshConfig = toml::from_str(&raw).expect("config should parse");
+            validate_plugin_entries(&config.plugins).expect("supported URL should validate");
+        }
+    }
+
+    #[test]
+    fn tcp_plugin_url_static_validation_rejects_every_form_without_leaking_values() {
+        for url in [
+            "tcp://127.0.0.1:9000",
+            "TcP://127.0.0.1:9000",
+            "tcp://localhost:9000",
+            "tcp://192.0.2.1:9000",
+            "tcp://127.0.0.1",
+            "tcp://user:secret@127.0.0.1:9000",
+            "tcp://127.0.0.1:9000/control",
+            "tcp://127.0.0.1:9000?token=secret",
+        ] {
+            let raw = format!("[[plugin]]\nname = \"demo\"\nurl = {url:?}\n");
+            let config: crate::MeshConfig = toml::from_str(&raw).expect("config should parse");
+
+            let diagnostic = validate_plugin_entries(&config.plugins)
+                .expect_err("runtime-invalid TCP control URL must fail static validation");
+
+            assert_eq!(
+                diagnostic
+                    .path
+                    .as_ref()
+                    .map(crate::ConfigPath::render)
+                    .as_deref(),
+                Some("plugin[0].url"),
+                "URL {url:?}"
+            );
+            assert!(!diagnostic.message.contains("secret"), "URL {url:?}");
+        }
     }
 
     #[test]

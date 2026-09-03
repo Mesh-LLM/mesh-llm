@@ -47,11 +47,19 @@ in those skills are hard requirements for this repair, not suggestions.
    repair PR itself. The wrapper separately asks you to write the full PR
    description (key upstream changes, how the patch queue evolved, risks for
    reviewers) — when that turn arrives, write the finished Markdown to the
-   file it names and touch nothing else.
+   file it names and touch nothing else. After the wrapper's own battery run
+   passes, a separate review agent — not you — gets one fresh-context turn
+   to review the certified repair and fix any dropped intent or rebase
+   leftovers it finds; its changes land as their own `review(llama):`
+   commit, and the next canary re-certifies everything after the merge.
 
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
   is only a miss backstop. Never add GitHub Actions model caching.
+- The deterministic wrapper owns the sole upstream selector,
+  `third_party/llama.cpp/upstream.txt`. It writes it to the repair target and
+  validates the queue through `scripts/prepare-llama.sh pinned`; do not edit
+  the pin file yourself.
 - Do not modify files outside `third_party/llama.cpp/patches/` unless the
   Rust ABI mirrors in `crates/` genuinely need to track a patch ABI change
   (bump `PREPARE_SCHEMA`/ABI version together in that case).

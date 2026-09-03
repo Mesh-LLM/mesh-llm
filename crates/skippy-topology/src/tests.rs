@@ -876,6 +876,17 @@ fn infers_known_family_capabilities_from_model_identity() {
     .expect("reviewed llama");
     assert_eq!(llama.family_id, "llama");
     assert_eq!(llama.exact_state_mobility, ExactStateMobility::Accepted);
+    let reviewed_width = llama.activation_width;
+    let mismatched_package_width = infer_family_capability(
+        "/Volumes/External/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        16,
+        reviewed_width * 4,
+    )
+    .expect("reviewed llama with mismatched package estimate");
+    assert_eq!(
+        mismatched_package_width.activation_width, reviewed_width,
+        "package metadata must not replace a reviewed pre-load estimate"
+    );
 
     let laguna = infer_family_capability(
         "poolside/Laguna-S-2.1-GGUF@edd093522473dc7313b0738d8b4116b7f8b9745f/laguna-s-2.1-Q4_K_M.gguf",
@@ -1304,28 +1315,26 @@ fn infers_known_family_capabilities_from_model_identity() {
 }
 
 #[test]
-fn every_stage_runtime_llama_architecture_has_family_inference() {
-    for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
-        let capability = infer_family_capability(expected.llama_architecture, 12, 768)
-            .unwrap_or_else(|| {
-                panic!(
-                    "missing family inference for {}",
-                    expected.llama_architecture
-                )
-            });
-
-        assert_eq!(
-            capability.family_id, expected.family_id,
-            "{}",
+fn stage_runtime_test_catalog_has_unique_architectures() {
+    for (index, expected) in TEST_LLAMA_ARCHITECTURE_CATALOG.iter().enumerate() {
+        assert!(
+            TEST_LLAMA_ARCHITECTURE_CATALOG[index + 1..]
+                .iter()
+                .all(|other| other.llama_architecture != expected.llama_architecture),
+            "duplicate architecture in test-only coverage catalog: {}",
             expected.llama_architecture
         );
-        assert_eq!(
-            !capability.recurrent_ranges.is_empty(),
-            expected.recurrent_or_hybrid,
-            "{}",
-            expected.llama_architecture
-        );
+        assert!(!expected.family_id.is_empty());
     }
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_runtime_family_registry_stays_empty() {
+    assert!(
+        STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS.is_empty(),
+        "production family rows must not regain KV or topology authority"
+    );
 }
 
 #[derive(Debug, Deserialize)]
@@ -1351,7 +1360,7 @@ fn parity_candidate_manifest_covers_stage_runtime_architectures() {
         .map(|candidate| compact_identity(&candidate.llama_model))
         .collect();
 
-    for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
+    for expected in TEST_LLAMA_ARCHITECTURE_CATALOG {
         assert!(
             candidates.contains(&compact_identity(expected.llama_architecture)),
             "missing parity candidate row for {}",
@@ -1557,6 +1566,38 @@ fn qwen35_series_inference_covers_qwen36_release_names() {
             "qwen35 must expose a recurrent range for {identity}"
         );
     }
+}
+
+#[test]
+fn qwen4exp_flash_next_has_its_own_fail_closed_hybrid_policy() {
+    for identity in [
+        "qwen4exp",
+        "qwen4_exp",
+        "Qwen/Qwen3.8-Flash-Next",
+        "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ1_S",
+    ] {
+        let family = infer_family_capability(identity, 48, 2560)
+            .unwrap_or_else(|| panic!("expected qwen4exp capability for {identity}"));
+        assert_eq!(family.family_id, "qwen4exp", "wrong family for {identity}");
+        assert_eq!(family.activation_width, 2560);
+        assert_eq!(
+            family.recurrent_ranges,
+            vec![LayerRange { start: 0, end: 48 }],
+            "QWEN4EXP state ownership stays sticky until per-layer certification"
+        );
+        assert_eq!(
+            family.exact_state_mobility,
+            ExactStateMobility::RejectedTooLarge,
+            "QWEN4EXP must not advertise recurrent/indexer state mobility"
+        );
+        assert_eq!(family.sidebands.len(), 1);
+        assert_eq!(family.sidebands[0].kind, SidebandKind::TokenIds);
+        assert_eq!(family.sidebands[0].first_required_layer, 1);
+    }
+
+    let legacy = infer_family_capability("unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL", 32, 2560)
+        .expect("legacy Qwen3.8 capability");
+    assert_eq!(legacy.family_id, "qwen35");
 }
 
 #[test]

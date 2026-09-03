@@ -34,7 +34,7 @@ pub(crate) use super::routing_rank::{
 };
 
 use super::response::{
-    ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
+    CacheCostObservation, ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, completion_tokens_for_result, request_outcome_for_status,
     request_service_for_target, route_attempt_result_label, route_http_endpoint_attempt,
     route_local_attempt, route_remote_attempt, target_health_outcome_for_attempt,
@@ -51,6 +51,8 @@ const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
 #[path = "transport_route_model.rs"]
 mod route_model;
 pub(crate) use route_model::RouteModelRequestContext;
+#[cfg(test)]
+pub(crate) use route_model::finalize_route_model_result;
 pub use route_model::route_model_request;
 
 /// Response result returned to the ingress boundary. Unlike the historical
@@ -602,11 +604,12 @@ async fn order_mesh_target_hosts(
         prepared.cache_target = match affinity.lookup_cache_lease(name, prefix_hash, &candidates) {
             Some(target) => Some(target),
             None => {
+                let lease_epoch = affinity.cache_lease_epoch();
                 let selected = node
                     .select_cache_target(name, prefix_hash, &candidates)
                     .await;
                 if let Some(target) = selected.as_ref() {
-                    affinity.remember_cache_lease(name, prefix_hash, target);
+                    affinity.remember_cache_lease_if_epoch(name, prefix_hash, target, lease_epoch);
                 }
                 selected
             }
@@ -845,9 +848,29 @@ fn handle_mesh_attempt_result(
     attempt_result: RouteAttemptResult,
 ) -> MeshAttemptDisposition {
     match attempt_result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
+        RouteAttemptResult::Delivered {
+            status_code,
+            usage,
+            cache_cost,
+        } => {
+            let outcome = request_outcome_for_status(
+                status_code,
+                crate::network::metrics::RequestService::Remote,
+            );
+            if let Some(usage) = usage.as_ref() {
+                context.node.record_prompt_shape(
+                    context.effective_model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
             handle_delivered_mesh_attempt(context, status_code);
-            MeshAttemptDisposition::Return(RouteAttemptResult::Delivered { status_code, usage })
+            MeshAttemptDisposition::Return(RouteAttemptResult::Delivered {
+                status_code,
+                usage,
+                cache_cost,
+            })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
@@ -892,6 +915,7 @@ fn terminal_outcome_for_mesh_route_result(
         RouteAttemptResult::Delivered {
             status_code,
             usage: Some(usage),
+            ..
         } if (200..400).contains(&status_code) => {
             crate::logging::TerminalOutcome::CompletedWithUsage { status_code, usage }
         }
@@ -1450,9 +1474,20 @@ pub async fn route_to_target(
         "openai route_to_target result"
     );
     match result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
+        RouteAttemptResult::Delivered {
+            status_code, usage, ..
+        } => {
             let service = request_service_for_target(&target);
-            node.record_routed_request(model, 1, request_outcome_for_status(status_code, service));
+            let outcome = request_outcome_for_status(status_code, service);
+            if let Some(usage) = usage.as_ref() {
+                node.record_prompt_shape(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
+            node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
                 RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
             })
@@ -1538,15 +1573,22 @@ pub async fn route_http_endpoint_request(
         "openai route_http_endpoint_request result"
     );
     match result {
-        RouteAttemptResult::Delivered { status_code, usage } => {
-            node.record_routed_request(
-                model,
-                1,
-                request_outcome_for_status(
-                    status_code,
-                    crate::network::metrics::RequestService::Endpoint,
-                ),
+        RouteAttemptResult::Delivered {
+            status_code, usage, ..
+        } => {
+            let outcome = request_outcome_for_status(
+                status_code,
+                crate::network::metrics::RequestService::Endpoint,
             );
+            if let Some(usage) = usage.as_ref() {
+                node.record_prompt_shape(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    outcome,
+                );
+            }
+            node.record_routed_request(model, 1, outcome);
             usage.map_or(RouteDispatchOutcome::Responded(status_code), |usage| {
                 RouteDispatchOutcome::RespondedWithUsage { status_code, usage }
             })

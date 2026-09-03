@@ -52,7 +52,6 @@ pub struct LayerPackageInfo {
     pub source_model_sha256: String,
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
-    pub activation_width: Option<u32>,
     pub generation: Option<PackageGenerationInfo>,
     pub projectors: Vec<PackageProjectorInfo>,
     pub layers: Vec<LayerPackageLayerInfo>,
@@ -187,8 +186,6 @@ struct PackageManifest {
     source_model: PackageSourceModel,
     format: String,
     layer_count: u32,
-    #[serde(default)]
-    activation_width: Option<u32>,
     #[serde(default)]
     generation: Option<PackageGeneration>,
     shared: PackageShared,
@@ -558,11 +555,6 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let activation_width = match manifest.activation_width {
-        Some(width) => Some(width),
-        None => infer_activation_width_from_layers(&package_dir, &manifest.layers)?,
-    };
-
     Ok(LayerPackageInfo {
         package_dir,
         manifest_sha256,
@@ -584,7 +576,6 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
             .flatten(),
         layer_count: manifest.layer_count,
-        activation_width,
         generation: manifest.generation.map(package_generation_info),
         projectors,
         layers: manifest
@@ -665,54 +656,6 @@ fn package_speculative_strategy_info(
                 max_tokens: policy.max_tokens,
             }),
     }
-}
-
-fn infer_activation_width_from_layers(
-    package_dir: &Path,
-    layers: &[PackageLayer],
-) -> Result<Option<u32>> {
-    let Some(layer) = layers.first() else {
-        return Ok(None);
-    };
-    let layer_path = package_dir.join(safe_relative_manifest_path(&layer.path)?);
-    if !layer_path.is_file() {
-        return Ok(None);
-    }
-    let info = match crate::ModelInfo::open(&layer_path) {
-        Ok(info) => info,
-        Err(_) => return Ok(None),
-    };
-    let count = match info.tensor_count() {
-        Ok(count) => count,
-        Err(_) => return Ok(None),
-    };
-    for i in 0..count {
-        let Ok(tensor) = info.tensor_at(i) else {
-            continue;
-        };
-        if tensor.name.contains("attn_norm.weight") {
-            let width = activation_width_from_tensor_count(
-                &tensor.name,
-                &layer_path,
-                tensor.element_count,
-            )?;
-            return Ok(Some(width));
-        }
-    }
-    Ok(None)
-}
-
-fn activation_width_from_tensor_count(
-    name: &str,
-    layer_path: &Path,
-    element_count: u64,
-) -> Result<u32> {
-    u32::try_from(element_count).with_context(|| {
-        format!(
-            "activation width tensor {name} in {} has {element_count} elements, which exceeds u32::MAX",
-            layer_path.display()
-        )
-    })
 }
 
 pub fn is_hf_package_ref(value: &str) -> bool {
@@ -1334,7 +1277,6 @@ mod tests {
             },
             "format": "layer-package",
             "layer_count": 1,
-            "activation_width": 4096,
             "shared": {
                 "metadata": {
                     "path": "metadata.gguf",
@@ -1573,7 +1515,6 @@ mod tests {
 
         assert_eq!(info.model_id, "model-a");
         assert_eq!(info.layer_count, 1);
-        assert_eq!(info.activation_width, Some(4096));
         assert_eq!(info.source_model_bytes, Some(123));
         assert_eq!(info.projectors.len(), 1);
         assert_eq!(info.projectors[0].kind, "mmproj");
@@ -1724,20 +1665,5 @@ mod tests {
             .to_string();
 
         assert!(error.contains("safe relative"), "{error}");
-    }
-
-    #[test]
-    fn activation_width_inference_rejects_u32_overflow() {
-        let path = Path::new("/package/layers/00000.gguf");
-
-        let error = activation_width_from_tensor_count(
-            "blk.0.attn_norm.weight",
-            path,
-            u64::from(u32::MAX) + 1,
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("exceeds u32::MAX"));
     }
 }

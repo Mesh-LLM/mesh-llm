@@ -1,6 +1,6 @@
 {
   "name": "@mesh-llm/sdk",
-  "version": "0.76.0-rc7",
+  "version": "0.76.0-rc9",
   "description": "Node.js SDK for MeshLLM client and local serving applications",
   "main": "index.js",
   "types": "index.d.ts",
@@ -26,7 +26,7 @@
     "test": "node --test test/*.test.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "os": [
     "darwin",

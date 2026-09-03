@@ -197,6 +197,7 @@ CMAKE_ARGS=(
   -DLLAMA_BUILD_EXAMPLES=OFF
   -DLLAMA_BUILD_SERVER=OFF
   -DLLAMA_BUILD_TESTS=OFF
+  -DLLAMA_STAGE_BUILD_TESTS="${LLAMA_STAGE_BUILD_TESTS:-OFF}"
   -DLLAMA_CURL=OFF
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   # mtmd video shells out to ffmpeg via sheredom/subprocess.h, which calls
@@ -286,13 +287,20 @@ if [[ "$USE_SCCACHE" != "0" && -n "$SCCACHE_BIN" ]]; then
       ;;
   esac
   echo "using sccache for llama.cpp C/C++ compilation: $SCCACHE_BIN"
-elif [[ "$USE_SCCACHE" != "0" ]]; then
-  if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
-    echo "sccache is required but was not found" >&2
-    exit 1
-  fi
-  echo "sccache not found; llama.cpp build will run without compiler caching" >&2
 else
+  if [[ "$USE_SCCACHE" != "0" ]]; then
+    if [[ "${MESH_LLM_REQUIRE_SCCACHE:-0}" == "1" ]]; then
+      echo "sccache is required but was not found" >&2
+      exit 1
+    fi
+    echo "sccache not found; llama.cpp build will run without compiler caching" >&2
+  fi
+  # This script owns the compiler-caching decision, so ggml must not make its
+  # own. With GGML_CCACHE left ON, ggml runs find_program(sccache/ccache), which
+  # searches CMAKE_SYSTEM_PREFIX_PATH rather than just PATH and registers a bare
+  # `sccache` launcher. A sanitized build environment that has such a binary
+  # installed but not on PATH then fails every compile with
+  # "/bin/sh: sccache: command not found".
   CMAKE_ARGS+=(-DGGML_CCACHE=OFF)
 fi
 
@@ -354,7 +362,20 @@ fi
 
 cmake "${CMAKE_ARGS[@]}"
 
-cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)" --target llama llama-common mtmd
+BUILD_TARGETS=(llama llama-common mtmd)
+if [[ "${LLAMA_STAGE_BUILD_TESTS:-OFF}" == "ON" ]]; then
+  BUILD_TARGETS+=(
+    skippy-hardware-application-probe
+    skippy-model-fixture-generator
+    skippy-model-loader-accounting
+  )
+fi
+
+cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)" --target "${BUILD_TARGETS[@]}"
+
+if [[ "${LLAMA_STAGE_BUILD_TESTS:-OFF}" == "ON" ]]; then
+  ctest --test-dir "$LLAMA_BUILD_DIR" --build-config "${CMAKE_BUILD_TYPE:-Release}" --output-on-failure -R '^skippy_'
+fi
 
 printf '%s\n' "$CURRENT_BUILD_STAMP" > "$BUILD_STAMP"
 if ! required_outputs_exist; then

@@ -1,7 +1,7 @@
-From 47fc74f14734a63d413093e768b72b91e0dd0331 Mon Sep 17 00:00:00 2001
+From d4da38d76c7b0eb2f90e811c8b39a49138104cc9 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 26 Aug 2026 14:39:57 +1000
-Subject: [PATCH 20/26] skippy: stage-filter GLM4 MoE graphs
+Subject: [PATCH 20/32] skippy: stage-filter GLM4 MoE graphs
 
 Build filtered GLM4 MoE contexts only across the retained trunk layer range. Feed activation input to mid-model stages and return their boundary tensor without touching the absent output head.
 ---

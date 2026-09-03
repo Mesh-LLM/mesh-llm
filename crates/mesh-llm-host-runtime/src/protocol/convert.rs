@@ -13,11 +13,16 @@ fn skippy_stage_subprotocols(
     artifact_transfer_supported: bool,
     stage_protocol_generation_supported: bool,
     status_list_supported: bool,
+    local_gguf_content_id_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
     let mut features = vec![skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string()];
+    if local_gguf_content_id_supported {
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
+    }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -47,14 +52,30 @@ fn supports_skippy_status_list(subprotocols: &[crate::proto::node::MeshSubprotoc
     )
 }
 
-fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+fn supports_local_gguf_content_id(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     supports_skippy_stage_feature(
         subprotocols,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
-    ) && supports_skippy_stage_feature(
-        subprotocols,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     )
+}
+
+fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+    let required_features = [
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+    ];
+    subprotocols.iter().any(|subprotocol| {
+        subprotocol.name == skippy_protocol::STAGE_SUBPROTOCOL_NAME
+            && subprotocol.major == skippy_protocol::STAGE_SUBPROTOCOL_MAJOR
+            && required_features.iter().all(|required| {
+                subprotocol
+                    .features
+                    .iter()
+                    .any(|feature| feature == required)
+            })
+    })
 }
 
 fn supports_skippy_stage_feature(
@@ -607,6 +628,7 @@ fn local_cache_affinity_to_proto(
                 },
                 restore_micros: entry.restore_micros,
                 queue_delay_micros: entry.queue_delay_micros,
+                prefill_micros_per_token: entry.prefill_micros_per_token,
             })
             .collect(),
     }
@@ -648,8 +670,9 @@ fn proto_cache_affinity_to_local(
                 matched_tokens: entry.matched_tokens,
                 suffix_prefill_tokens: entry.suffix_prefill_tokens,
                 tier: CacheTier::L1,
-                restore_micros: 0,
+                restore_micros: entry.restore_micros,
                 queue_delay_micros: entry.queue_delay_micros,
+                prefill_micros_per_token: entry.prefill_micros_per_token,
             })
         })
         .collect();
@@ -805,6 +828,7 @@ pub(crate) fn local_ann_to_proto_ann(
             ann.artifact_transfer_supported,
             ann.stage_protocol_generation_supported,
             ann.stage_status_list_supported,
+            ann.local_gguf_content_id_supported,
         ),
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         cache_affinity: ann
@@ -1027,6 +1051,7 @@ pub(crate) fn proto_ann_to_local(
         artifact_transfer_supported: supports_skippy_artifact_transfer(&pa.subprotocols),
         stage_protocol_generation_supported: supports_skippy_stage_generation(&pa.subprotocols),
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
+        local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

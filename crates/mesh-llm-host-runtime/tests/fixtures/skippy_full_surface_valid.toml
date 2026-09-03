@@ -28,13 +28,10 @@ shared_record_limit = 3
 payload_mode = "resident-kv"
 
 [defaults.hardware]
-model_runtime = "cuda"
 device = "CUDA0"
 gpu_layers = "auto"
-split_mode = "auto"
 safety_margin_gb = 2.0
 mmap = "auto"
-warmup = "auto"
 
 [defaults.throughput]
 parallel = 2
@@ -44,7 +41,9 @@ threads_batch = 4
 tuning_profile = "balanced"
 
 [defaults.skippy]
-binary_stage_transport = "auto"
+lifecycle_startup_timeout_ms = 900000
+lifecycle_readiness_interval_ms = 2000
+lifecycle_health_interval_ms = 30000
 
 [defaults.speculative]
 mode = "auto"

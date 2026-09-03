@@ -44,6 +44,12 @@ skippy-quantize-standalone-release-build backend="cpu":
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static scripts/build-llama.sh
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static just with-lld cargo build --release --locked -p skippy-quantize --no-default-features
 
+# Build and execute the opt-in private native Skippy application probes.
+[unix]
+skippy-native-tests backend="cpu":
+    scripts/prepare-llama.sh pinned
+    LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_TESTS=ON scripts/build-llama.sh
+
 # Generate a reproducible benchmark corpus for skippy bench tooling.
 bench-corpus tier="smoke" *ARGS="":
     scripts/generate-bench-corpus.py "{{ tier }}" {{ ARGS }}
@@ -60,6 +66,11 @@ spec-bench target draft *ARGS:
 # Smoke a standalone skippy OpenAI frontend stage.
 skippy-openai-smoke *ARGS:
     just with-lld scripts/skippy-openai-smoke.sh {{ ARGS }}
+
+# Build the OpenAI benchmark server against an explicitly selected native ABI.
+# Nightly runners provide LLAMA_STAGE_BUILD_DIR from their pre-baked image.
+competitive-benchmark-build:
+    just with-lld cargo build --release --locked -p skippy-server
 
 # Run the skippy benchmark/debug telemetry collector.
 metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build

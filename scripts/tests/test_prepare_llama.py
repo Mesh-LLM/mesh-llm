@@ -119,6 +119,52 @@ class PrepareLlamaTests(unittest.TestCase):
             )
             self.assertNotEqual(partial_clone.returncode, 0)
 
+    def test_duplicate_patch_sequence_is_rejected_before_application(self) -> None:
+        """Patch queues must remain uniquely and contiguously numbered."""
+        with tempfile.TemporaryDirectory(prefix="mesh-llm-prepare-sequence-") as temp_dir:
+            root = Path(temp_dir)
+            upstream = root / "upstream"
+            workdir = root / "workdir"
+            patch_dir = root / "patches"
+            pin_file = root / "upstream.txt"
+
+            self.run_git(root, "init", "--initial-branch=master", str(upstream))
+            self.run_git(upstream, "config", "user.name", "Test Author")
+            self.run_git(upstream, "config", "user.email", "test@example.com")
+            (upstream / "sample.txt").write_text("base\n", encoding="utf-8")
+            self.run_git(upstream, "add", "sample.txt")
+            self.run_git(upstream, "commit", "-m", "base")
+            self.run_git(root, "clone", str(upstream), str(workdir))
+            pin_file.write_text(
+                f"{self.run_git(upstream, 'rev-parse', 'HEAD', capture_output=True).stdout.strip()}\n",
+                encoding="utf-8",
+            )
+            patch_dir.mkdir()
+            (patch_dir / "0001-first.patch").write_text("first\n", encoding="utf-8")
+            (patch_dir / "0001-second.patch").write_text("second\n", encoding="utf-8")
+
+            env = os.environ | {
+                "LLAMA_UPSTREAM_URL": str(upstream),
+                "LLAMA_WORKDIR": str(workdir),
+                "LLAMA_PIN_FILE": str(pin_file),
+                "LLAMA_PATCH_DIR": str(patch_dir),
+                "LLAMA_GIT_MAX_ATTEMPTS": "1",
+            }
+            result = subprocess.run(
+                [str(PREPARE_LLAMA), "pinned"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "invalid llama patch sequence: expected 0002, found 0001",
+                result.stderr,
+            )
+
     def test_patch_application_has_deterministic_commit_identity(self) -> None:
         """Equivalent clean preparations produce one reusable patched SHA."""
         with tempfile.TemporaryDirectory(prefix="mesh-llm-prepare-identity-") as temp_dir:
@@ -200,7 +246,7 @@ class PrepareLlamaTests(unittest.TestCase):
                     (workdir / ".mesh-llm-prepare-schema")
                     .read_text(encoding="utf-8")
                     .strip(),
-                    "2",
+                    "3",
                 )
                 self.assertFalse(hook_marker.exists())
 

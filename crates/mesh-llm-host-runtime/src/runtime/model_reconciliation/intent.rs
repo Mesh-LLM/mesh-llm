@@ -104,6 +104,7 @@ pub(crate) enum ModelIntent {
     Load {
         intent_id: Option<String>,
         spec: String,
+        config_model_id: Option<String>,
         profile: String,
         source: IntentSource,
         /// If Some, caller awaits synchronous result via this channel.

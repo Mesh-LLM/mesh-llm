@@ -20,16 +20,22 @@ use crate::validation_support::{
     validation_diagnostic,
 };
 
+mod topology;
+pub(crate) use topology::model_topology_diagnostics;
+
 pub(crate) fn validate_duplicate_model_entries(
     models: &[ModelConfigEntry],
+    defaults: Option<&ModelConfigDefaults>,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
     for i in 0..models.len() {
         for j in (i + 1)..models.len() {
-            if models[i].model == models[j].model
-                && models[i].derived_profile() == models[j].derived_profile()
-            {
-                let profile_i = models[i].derived_profile();
+            let public_identity_i = models[i].model.trim();
+            let public_identity_j = models[j].model.trim();
+            let first_profile = effective_model_profile(&models[i], defaults);
+            let second_profile = effective_model_profile(&models[j], defaults);
+            if models[i].model == models[j].model && first_profile == second_profile {
+                let profile_i = first_profile.clone();
                 let profile_clause = if profile_i.is_empty() {
                     " and default profile".to_string()
                 } else {
@@ -42,9 +48,61 @@ pub(crate) fn validate_duplicate_model_entries(
                         models[i].model,
                     ),
                 ));
+            } else if !public_identity_i.is_empty() && public_identity_i == public_identity_j {
+                diagnostics.push(validation_diagnostic(
+                    "models",
+                    format!(
+                        "duplicate public served identity: models[{i}] and models[{j}] both publish \"{public_identity_i}\""
+                    ),
+                ));
+            }
+
+            let first_name = effective_served_model_name(&models[i], defaults);
+            let second_name = effective_served_model_name(&models[j], defaults);
+            if first_name == second_name
+                && !(models[i].model == models[j].model && first_profile == second_profile)
+            {
+                diagnostics.push(validation_diagnostic(
+                    "models",
+                    format!(
+                        "duplicate served model identity: models[{i}] and models[{j}] both resolve to {first_name:?}"
+                    ),
+                ));
             }
         }
     }
+}
+
+fn effective_served_model_name(
+    model: &ModelConfigEntry,
+    defaults: Option<&ModelConfigDefaults>,
+) -> String {
+    let base_name = model
+        .advanced
+        .as_ref()
+        .and_then(|advanced| advanced.server.as_ref())
+        .and_then(|server| server.alias.as_deref())
+        .or_else(|| {
+            defaults
+                .and_then(|value| value.advanced.as_ref())
+                .and_then(|advanced| advanced.server.as_ref())
+                .and_then(|server| server.alias.as_deref())
+        })
+        .unwrap_or(&model.model)
+        .trim();
+    let profile = effective_model_profile(model, defaults);
+    if profile.is_empty() {
+        base_name.to_string()
+    } else {
+        format!("{base_name}#{profile}")
+    }
+}
+
+fn effective_model_profile(
+    model: &ModelConfigEntry,
+    defaults: Option<&ModelConfigDefaults>,
+) -> String {
+    model.with_profile_defaults(defaults).derived_profile()
 }
 
 pub(crate) fn collect_legacy_draft_model_path_warnings(
@@ -367,6 +425,11 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
         config.stage_model_path.as_deref(),
         &format!("{base_path}.stage_model_path"),
     )?;
+    validate_optional_enum(
+        config.source_policy.as_deref(),
+        &["fallback", "local-required"],
+        &format!("{base_path}.source_policy"),
+    )?;
     if config.openai_frontend_mode.is_some() {
         return Err(validation_diagnostic(
             &format!("{base_path}.openai_frontend_mode"),
@@ -648,6 +711,14 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
             }
         }
     }
+    validate_request_sampling_defaults(config, base_path)?;
+    validate_request_chat_defaults(config, base_path)
+}
+
+fn validate_request_sampling_defaults(
+    config: &RequestDefaultsConfig,
+    base_path: &str,
+) -> DiagnosticResult {
     validate_non_negative_f64(config.temperature, &format!("{base_path}.temperature"))?;
     validate_probability(config.top_p, &format!("{base_path}.top_p"))?;
     if let Some(top_k) = config.top_k
@@ -660,7 +731,14 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     }
     validate_probability(config.min_p, &format!("{base_path}.min_p"))?;
     validate_probability(config.typical_p, &format!("{base_path}.typical_p"))?;
-    validate_non_negative_f64(config.top_nsigma, &format!("{base_path}.top_nsigma"))?;
+    if let Some(value) = config.top_nsigma
+        && (!value.is_finite() || value < -1.0)
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.top_nsigma"),
+            format!("{base_path}.top_nsigma must be finite and greater than or equal to -1"),
+        ));
+    }
     validate_non_negative_f64(
         config.dynatemp_range,
         &format!("{base_path}.dynatemp_range"),
@@ -689,6 +767,57 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         config.frequency_penalty,
         &format!("{base_path}.frequency_penalty"),
     )?;
+    if let Some(dry) = &config.dry {
+        let multiplier_path = format!("{base_path}.dry.multiplier");
+        if dry.multiplier.is_some_and(|value| !value.is_finite()) {
+            return Err(validation_diagnostic(
+                &multiplier_path,
+                format!("{multiplier_path} must be finite"),
+            ));
+        }
+        validate_non_negative_f64(dry.multiplier, &multiplier_path)?;
+
+        let base_value_path = format!("{base_path}.dry.base");
+        if dry.base.is_some_and(|value| !value.is_finite()) {
+            return Err(validation_diagnostic(
+                &base_value_path,
+                format!("{base_value_path} must be finite"),
+            ));
+        }
+        validate_positive_f64(dry.base, &base_value_path)?;
+        if dry.allowed_length.is_some_and(|value| value < 0) {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.dry.allowed_length"),
+                format!("{base_path}.dry.allowed_length must be greater than or equal to 0"),
+            ));
+        }
+        if dry.penalty_last_n.is_some_and(|value| value < -1) {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.dry.penalty_last_n"),
+                format!("{base_path}.dry.penalty_last_n must be greater than or equal to -1"),
+            ));
+        }
+        if let Some(breakers) = &dry.sequence_breakers {
+            if breakers.iter().any(String::is_empty) {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.dry.sequence_breakers"),
+                    format!("{base_path}.dry.sequence_breakers must not contain empty values"),
+                ));
+            }
+            if breakers.len() > 8 || breakers.iter().any(|value| value.len() >= 16) {
+                return Err(validation_diagnostic(
+                    &format!("{base_path}.dry.sequence_breakers"),
+                    format!(
+                        "{base_path}.dry.sequence_breakers supports at most 8 values shorter than 16 bytes"
+                    ),
+                ));
+            }
+        }
+    }
+    if let Some(xtc) = &config.xtc {
+        validate_probability(xtc.probability, &format!("{base_path}.xtc.probability"))?;
+        validate_probability(xtc.threshold, &format!("{base_path}.xtc.threshold"))?;
+    }
     if let Some(mode) = &config.mirostat_mode {
         match mode {
             IntegerOrString::Integer(value) if *value == 1 || *value == 2 => {}
@@ -715,6 +844,42 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     )?;
     if let Some(samplers) = &config.samplers {
         validate_string_list(samplers, &format!("{base_path}.samplers"))?;
+        if samplers.len() > 16 {
+            return Err(validation_diagnostic(
+                &format!("{base_path}.samplers"),
+                format!("{base_path}.samplers supports at most 16 entries"),
+            ));
+        }
+        for sampler in samplers {
+            validate_allowed(
+                sampler,
+                &[
+                    "penalties",
+                    "dry",
+                    "top_n_sigma",
+                    "top_k",
+                    "typical_p",
+                    "typ_p",
+                    "top_p",
+                    "min_p",
+                    "xtc",
+                    "temperature",
+                    "temp",
+                ],
+                &format!("{base_path}.samplers"),
+            )?;
+        }
+    }
+    if let Some(sequence) = &config.sampler_sequence
+        && let Some(invalid) = sequence.chars().find(|value| {
+            !value.is_whitespace()
+                && !matches!(value, 'e' | 'd' | 's' | 'k' | 'y' | 'p' | 'm' | 'x' | 't')
+        })
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.sampler_sequence"),
+            format!("{base_path}.sampler_sequence contains unsupported sampler code {invalid:?}"),
+        ));
     }
     if config.backend_sampling.is_some() {
         return Err(validation_diagnostic(
@@ -722,6 +887,13 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
             format!("{base_path}.backend_sampling is documented-rejected and must not be set"),
         ));
     }
+    Ok(())
+}
+
+fn validate_request_chat_defaults(
+    config: &RequestDefaultsConfig,
+    base_path: &str,
+) -> DiagnosticResult {
     validate_optional_enum(
         config.reasoning_format.as_deref(),
         &["auto", "none", "deepseek", "deepseek-legacy", "hidden"],
@@ -751,16 +923,54 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         config.chat_template_file.as_deref(),
         &format!("{base_path}.chat_template_file"),
     )?;
-    if config.grammar.is_some() {
+    if config.chat_template.is_some() && config.chat_template_file.is_some() {
         return Err(validation_diagnostic(
-            &format!("{base_path}.grammar"),
-            format!("{base_path}.grammar is documented-rejected and must not be set"),
+            base_path,
+            format!(
+                "{base_path}.chat_template and {base_path}.chat_template_file cannot both be set"
+            ),
         ));
     }
-    if config.json_schema.is_some() {
+    if config
+        .chat_template_kwargs
+        .as_ref()
+        .is_some_and(|value| !value.is_table())
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.chat_template_kwargs"),
+            format!("{base_path}.chat_template_kwargs must be a table"),
+        ));
+    }
+    if config
+        .prefill_assistant
+        .as_ref()
+        .is_some_and(|value| !value.is_str() && !value.is_table())
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.prefill_assistant"),
+            format!("{base_path}.prefill_assistant must be a string or table"),
+        ));
+    }
+    if config.grammar.as_ref().is_some_and(|value| !value.is_str()) {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.grammar"),
+            format!("{base_path}.grammar must be a string"),
+        ));
+    }
+    if config
+        .json_schema
+        .as_ref()
+        .is_some_and(|value| !value.is_table())
+    {
         return Err(validation_diagnostic(
             &format!("{base_path}.json_schema"),
-            format!("{base_path}.json_schema is documented-rejected and must not be set"),
+            format!("{base_path}.json_schema must be a table"),
+        ));
+    }
+    if config.grammar.is_some() && config.json_schema.is_some() {
+        return Err(validation_diagnostic(
+            base_path,
+            format!("{base_path}.grammar and {base_path}.json_schema cannot both be set"),
         ));
     }
     if config.logprobs.is_some() {
@@ -838,6 +1048,40 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Diagnostic
             ),
         ));
     }
+    if config.image_marker.is_some() {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.image_marker"),
+            format!(
+                "{base_path}.image_marker is not supported because mtmd removed custom image markers; use {base_path}.media_marker"
+            ),
+        ));
+    }
+    if config.media_marker.as_deref().is_some_and(str::is_empty) {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.media_marker"),
+            format!("{base_path}.media_marker must not be empty"),
+        ));
+    }
+    validate_optional_u32_range(
+        config.batch_max_tokens,
+        &format!("{base_path}.batch_max_tokens"),
+        1,
+        i32::MAX as u32,
+    )?;
+    if let Some(policy) = config.glm_dsa_policy.as_deref()
+        && !matches!(policy, "auto" | "v1")
+    {
+        return Err(validation_diagnostic(
+            &format!("{base_path}.glm_dsa_policy"),
+            format!("{base_path}.glm_dsa_policy must be \"auto\" or \"v1\""),
+        ));
+    }
+    validate_optional_u32_range(
+        config.generation_signal_window,
+        &format!("{base_path}.generation_signal_window"),
+        1,
+        4096,
+    )?;
     if config.embeddings.is_some() {
         return Err(validation_diagnostic(
             &format!("{base_path}.embeddings"),
@@ -923,7 +1167,7 @@ fn validate_advanced(config: &AdvancedConfig, base_path: &str) -> DiagnosticResu
 mod tests {
     use super::*;
     use crate::diagnostic::legacy_validation_error_text;
-    use crate::{MeshConfig, validate_config, validate_config_diagnostics};
+    use crate::{DrySamplingConfig, MeshConfig, validate_config, validate_config_diagnostics};
 
     #[test]
     fn speculative_strategy_allows_package_declared_names() {
@@ -1047,6 +1291,179 @@ model = "my-model"
     }
 
     #[test]
+    fn duplicate_public_served_identity_is_rejected() {
+        let public_identity = "Qwen/Qwen3-8B-GGUF:Q4_K_M";
+        let config: MeshConfig = toml::from_str(&format!(
+            r#"
+[[models]]
+model = "{public_identity}"
+ctx_size = 4096
+
+[[models]]
+model = "{public_identity}"
+ctx_size = 8192
+"#,
+        ))
+        .expect("config should parse before validation");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+
+        assert!(
+            !text.contains("duplicate model entry"),
+            "fixture must not trigger the existing model/profile duplicate check: {text}"
+        );
+        assert!(
+            text.contains("duplicate public served identity"),
+            "expected public identity collision, got: {text}"
+        );
+        assert!(text.contains("models[0]"), "missing first row: {text}");
+        assert!(text.contains("models[1]"), "missing second row: {text}");
+        assert!(
+            text.contains(public_identity),
+            "missing colliding public identity: {text}"
+        );
+    }
+
+    #[test]
+    fn load_behavior_changes_produce_distinct_effective_profiles() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.hardware]
+repack = true
+
+[[models]]
+model = "same-model"
+
+[[models]]
+model = "same-model"
+[models.hardware]
+repack = false
+"#,
+        )
+        .expect("config parses");
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+
+        assert!(
+            !text.contains("duplicate model entry"),
+            "different effective load behavior must create distinct profiles: {text}"
+        );
+    }
+
+    #[test]
+    fn duplicate_explicit_served_aliases_are_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "canonical/first"
+[models.advanced.server]
+alias = "public-model"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+        assert!(text.contains("public-model"), "{text}");
+    }
+
+    #[test]
+    fn duplicate_inherited_served_aliases_are_rejected() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.advanced.server]
+alias = "default-public-model"
+
+[[models]]
+model = "canonical/first"
+
+[[models]]
+model = "canonical/second"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+        assert!(text.contains("default-public-model"), "{text}");
+    }
+
+    #[test]
+    fn served_alias_collisions_compare_trimmed_names() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "canonical/first"
+[models.advanced.server]
+alias = " public-model "
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+    }
+
+    #[test]
+    fn served_alias_collisions_include_defaults_merged_profiles() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.model_fit]
+ctx_size = 8192
+
+[[models]]
+model = "canonical/first"
+[models.model_fit]
+ctx_size = 8192
+[models.advanced.server]
+alias = "public-model"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+        assert!(text.contains("duplicate served model identity"), "{text}");
+    }
+
+    #[test]
+    fn model_alias_override_avoids_inherited_alias_collision() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[defaults.advanced.server]
+alias = "default-public-model"
+
+[[models]]
+model = "canonical/first"
+
+[[models]]
+model = "canonical/second"
+[models.advanced.server]
+alias = "second-public-model"
+"#,
+        )
+        .expect("config should parse before validation");
+
+        validate_config(&config).expect("effective served identities are distinct");
+    }
+
+    #[test]
     fn draft_model_rejects_bare_path_without_colon() {
         let config = MeshConfig {
             defaults: Some(ModelConfigDefaults {
@@ -1111,6 +1528,62 @@ model = "my-model"
             !text.contains("must be a model identifier"),
             "expected no identifier error for valid identifier, got: {text}"
         );
+    }
+
+    #[test]
+    fn speculative_hf_sources_reject_parent_directory_components() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_hf_repo: Some(" ../outside/draft".to_string()),
+                    draft_hf_file: Some(" ../draft.gguf".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
+    }
+
+    #[test]
+    fn speculative_hf_sources_trim_whitespace_before_rejecting_absolute_paths() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_hf_repo: Some(" /absolute/draft".to_string()),
+                    draft_hf_file: Some(" /draft.gguf".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
+    }
+
+    #[test]
+    fn draft_model_identifier_rejects_parent_directory_components() {
+        let config = MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                speculative: Some(SpeculativeConfig {
+                    draft_model: Some("../outside/draft:Q4_K_M".to_string()),
+                    ..SpeculativeConfig::default()
+                }),
+                ..ModelConfigDefaults::default()
+            }),
+            ..MeshConfig::default()
+        };
+
+        let diagnostics = validate_config_diagnostics(&config);
+        let text = legacy_validation_error_text(&diagnostics);
+        assert!(text.contains("must not contain absolute or parent-directory path components"));
     }
 
     #[test]
@@ -1244,7 +1717,7 @@ draft_model_path = "C:/models/draft.gguf"
     }
 
     #[test]
-    fn same_model_with_different_profiles_is_allowed() {
+    fn different_models_with_different_profiles_are_allowed() {
         let config: MeshConfig = toml::from_str(
             r#"
 defaults.runtime = "metal"
@@ -1254,7 +1727,7 @@ model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
 ctx_size = 4096
 
 [[models]]
-model = "Qwen/Qwen3-8B-GGUF:Q4_K_M"
+model = "Qwen/Qwen3-14B-GGUF:Q4_K_M"
 ctx_size = 8192
 "#,
         )
@@ -1264,7 +1737,11 @@ ctx_size = 8192
         let text = legacy_validation_error_text(&diagnostics);
         assert!(
             !text.contains("duplicate model entry"),
-            "expected no duplicate error for different derived profiles, got: {text}"
+            "expected distinct model/profile rows to avoid model duplicate errors, got: {text}"
+        );
+        assert!(
+            !text.contains("duplicate public served identity"),
+            "expected distinct model/profile rows to avoid identity collisions, got: {text}"
         );
     }
 
@@ -1325,5 +1802,71 @@ ngram_max_proposal_tokens = 16
 
         let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
         assert!(text.contains("ngram_min must be at least 3"), "{text}");
+    }
+
+    #[test]
+    fn dry_sequence_breakers_accept_whitespace_delimiters_but_reject_empty_values() {
+        let accepted: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.request_defaults.dry]
+sequence_breakers = ["\n", " ", ":"]
+"#,
+        )
+        .expect("DRY sequence breakers should parse");
+        validate_config(&accepted).expect("whitespace delimiters should remain executable");
+
+        let rejected: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[defaults.request_defaults.dry]
+sequence_breakers = [""]
+"#,
+        )
+        .expect("empty DRY sequence breaker should parse before validation");
+        let text = legacy_validation_error_text(&validate_config_diagnostics(&rejected));
+        assert!(text.contains("must not contain empty values"), "{text}");
+    }
+
+    #[test]
+    fn dry_multiplier_and_base_reject_non_finite_values() {
+        for (field, dry) in [
+            (
+                "multiplier",
+                DrySamplingConfig {
+                    multiplier: Some(f64::NAN),
+                    ..DrySamplingConfig::default()
+                },
+            ),
+            (
+                "base",
+                DrySamplingConfig {
+                    base: Some(f64::INFINITY),
+                    ..DrySamplingConfig::default()
+                },
+            ),
+        ] {
+            let config = MeshConfig {
+                defaults: Some(ModelConfigDefaults {
+                    request_defaults: Some(RequestDefaultsConfig {
+                        dry: Some(dry),
+                        ..RequestDefaultsConfig::default()
+                    }),
+                    ..ModelConfigDefaults::default()
+                }),
+                ..MeshConfig::default()
+            };
+            let text = legacy_validation_error_text(&validate_config_diagnostics(&config));
+            assert!(
+                text.contains(&format!("defaults.request_defaults.dry.{field}")),
+                "missing DRY {field} path: {text}"
+            );
+            assert!(
+                text.contains("must be finite"),
+                "missing finite diagnostic: {text}"
+            );
+        }
     }
 }

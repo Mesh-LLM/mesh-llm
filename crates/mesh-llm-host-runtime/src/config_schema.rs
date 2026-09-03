@@ -3,10 +3,10 @@ use mesh_llm_config::{
     ConfigAliasPolicy, ConfigApplyMode, ConfigConditionOperator, ConfigConditionValue,
     ConfigConditionalDisable, ConfigConflictRule, ConfigConstraint, ConfigControlAvailability,
     ConfigControlAvailabilitySource, ConfigControlBehavior, ConfigControlCondition,
-    ConfigControlSurface, ConfigDisabledWritePolicy, ConfigNumericControl, ConfigOptionsSource,
-    ConfigPath, ConfigPresentationMetadata, ConfigRestartScope, ConfigSchema, ConfigSettingOwner,
-    ConfigSettingSchema, ConfigSupportState, ConfigTextFormat, ConfigValueSchema, ConfigVisibility,
-    built_in_config_schema,
+    ConfigControlSurface, ConfigDisabledWritePolicy, ConfigNumericControl,
+    ConfigObjectPropertySchema, ConfigOptionsSource, ConfigPath, ConfigPresentationMetadata,
+    ConfigRestartScope, ConfigSchema, ConfigSettingOwner, ConfigSettingSchema, ConfigSupportState,
+    ConfigTextFormat, ConfigValueSchema, ConfigVisibility, built_in_config_schema,
 };
 use mesh_llm_plugin_manager::{
     InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginConstraint,
@@ -454,7 +454,18 @@ fn plugin_value_schema_from_installed(schema: &InstalledPluginValueSchema) -> Co
                     .unwrap_or(ConfigValueSchema::String),
             ),
         },
-        InstalledPluginValueKind::Object => ConfigValueSchema::Object,
+        InstalledPluginValueKind::Object => ConfigValueSchema::Object {
+            properties: schema
+                .object_properties
+                .iter()
+                .map(|property| ConfigObjectPropertySchema {
+                    name: property.key.clone(),
+                    label: property.key.clone(),
+                    required: property.required,
+                    value_schema: plugin_value_schema_from_installed(&property.value_schema),
+                })
+                .collect(),
+        },
     }
 }
 

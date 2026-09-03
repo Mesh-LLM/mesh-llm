@@ -164,9 +164,20 @@ fn multimodal_stage_config(
         n_gpu_layers: fixture.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: layer_start != 0 || layer_end != fixture.layer_end,
         selected_device: None,
         kv_cache: None,
@@ -175,6 +186,7 @@ fn multimodal_stage_config(
         bind_addr: bind_addr.to_string(),
         upstream: None,
         downstream: None,
+        ..StageConfig::default()
     }
 }
 
@@ -188,7 +200,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         crate::telemetry::TelemetryLevel::Off,
     );
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())?;
     Ok(StageOpenAiBackend {
         runtime,
         telemetry,
@@ -203,9 +215,11 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         adaptive_speculative_window: false,
         ngram_max: 0,
         speculative: SpeculativeDecodeConfig::default(),
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_admission_timeout: std::time::Duration::from_secs(10),
+        generation_service_estimator: Arc::new(crate::frontend::GenerationServiceEstimator::new(1)),
         generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
@@ -217,6 +231,13 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
 }
 
 fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompletionRequest> {
+    multimodal_chat_request_with_max_tokens(fixture, fixture.max_tokens)
+}
+
+fn multimodal_chat_request_with_max_tokens(
+    fixture: &MultimodalSmokeFixture,
+    max_tokens: u32,
+) -> Result<ChatCompletionRequest> {
     let image = fs::read(&fixture.image_path)
         .with_context(|| format!("read smoke image {}", fixture.image_path.display()))?;
     let mime_type = match fixture
@@ -241,13 +262,31 @@ fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompl
                     {"type": "image_url", "image_url": {"url": format!("data:{mime_type};base64,{encoded}")}}
                 ]
             }],
-            "max_tokens": fixture.max_tokens,
+            "max_tokens": max_tokens,
             "temperature": 0.0
         }))
         .context("build multimodal smoke request")
 }
 
-fn assert_nonempty_chat_response(response: ChatCompletionResponse) {
+fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
+    serde_json::from_value(json!({
+        "model": "mm-smoke",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image briefly."},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64,aGVsbG8="
+                }}
+            ]
+        }],
+        "max_tokens": 1,
+        "temperature": 0.0
+    }))
+    .expect("malformed multimodal request should deserialize")
+}
+
+fn assert_nonempty_chat_response(response: &ChatCompletionResponse) {
     let content = response
         .choices
         .first()
@@ -298,7 +337,86 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
         .chat_completion(multimodal_chat_request(&fixture)?)
         .await?;
 
-    assert_nonempty_chat_response(response);
+    assert_nonempty_chat_response(&response);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_multimodal_local_prefill_failure_releases_lane_when_fixture_is_set() -> Result<()> {
+    let Some(fixture) = multimodal_smoke_fixture()? else {
+        return Ok(());
+    };
+    let config = multimodal_stage_config(
+        &fixture,
+        "stage-0",
+        0,
+        0,
+        fixture.layer_end,
+        available_loopback_addr()?,
+    );
+    let backend = local_openai_backend(config)?;
+
+    for attempt in 0..2 {
+        let result = backend
+            .chat_completion(malformed_multimodal_chat_request())
+            .await;
+        assert!(
+            result.is_err(),
+            "malformed media prefill attempt {attempt} unexpectedly succeeded"
+        );
+
+        let stats = backend
+            .runtime
+            .lock()
+            .expect("runtime mutex poisoned")
+            .session_stats();
+        assert_eq!(
+            stats.active_sessions, 0,
+            "failed multimodal prefill attempt {attempt} leaked an active lane: {stats:?}"
+        );
+        assert_eq!(
+            stats.tracked_token_counts, 0,
+            "failed multimodal prefill attempt {attempt} leaked session bookkeeping: {stats:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_multimodal_length_limit_then_next_image_uses_clean_lane_when_fixture_is_set()
+-> Result<()> {
+    let Some(fixture) = multimodal_smoke_fixture()? else {
+        return Ok(());
+    };
+    let mut config = multimodal_stage_config(
+        &fixture,
+        "stage-0",
+        0,
+        0,
+        fixture.layer_end,
+        available_loopback_addr()?,
+    );
+    config.lane_count = 2;
+    let backend = local_openai_backend(config)?;
+    backend
+        .runtime
+        .lock()
+        .expect("runtime mutex poisoned")
+        .prewarm_idle_sessions(2)?;
+
+    let limited = backend
+        .chat_completion(multimodal_chat_request_with_max_tokens(&fixture, 1)?)
+        .await?;
+    assert_eq!(
+        limited.choices[0].finish_reason,
+        Some(FinishReason::Length),
+        "one-token multimodal generation should finish by length"
+    );
+
+    let next = backend
+        .chat_completion(multimodal_chat_request(&fixture)?)
+        .await?;
+    assert_nonempty_chat_response(&next);
     Ok(())
 }
 
@@ -338,7 +456,6 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             config: stage1_config,
             topology: None,
             bind_addr: stage1_addr,
-            activation_width: fixture.activation_width,
             metrics_otlp_grpc: None,
             telemetry_queue_capacity: 1,
             telemetry_level: crate::telemetry::TelemetryLevel::Off,
@@ -348,6 +465,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             downstream_connect_timeout_secs: 5,
             native_mtp_enabled: true,
+            continuous_batching: true,
             openai: None,
         });
     let ready = connect_endpoint_ready(&stage1_addr.to_string(), 120);
@@ -371,7 +489,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     let runtime = load_runtime(&stage0_config)?.context("load stage-0 smoke runtime")?;
     let ctx_size = usize::try_from(stage0_config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler =
-        IterationScheduler::new(runtime.clone(), &stage0_config, 1, telemetry.clone())?;
+        IterationScheduler::new(runtime.clone(), &stage0_config, 1, true, telemetry.clone())?;
     let backend = StageOpenAiBackend {
         runtime,
         telemetry,
@@ -405,9 +523,11 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             effective_strategy: "native-mtp".to_string(),
             ..SpeculativeDecodeConfig::default()
         },
-        generation_limit: Arc::new(Semaphore::new(1)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_admission_timeout: std::time::Duration::from_secs(10),
+        generation_service_estimator: Arc::new(crate::frontend::GenerationServiceEstimator::new(1)),
         generation_session_locks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
@@ -421,7 +541,8 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         .await;
     stage1_handle.shutdown().await?;
 
-    assert_nonempty_chat_response(response?);
+    let response = response?;
+    assert_nonempty_chat_response(&response);
     Ok(())
 }
 

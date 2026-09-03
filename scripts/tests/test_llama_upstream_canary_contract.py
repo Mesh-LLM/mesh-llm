@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
+UPDATE_PIN = ROOT / "scripts" / "update-llama-pin.sh"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
 BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
@@ -61,6 +63,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
         family_plan = _step_block(workflow, "Plan and verify family certification cache")
         self.assertIn("python3 scripts/plan-family-battery.py", family_plan)
+        self.assertIn('--cadence "${{ steps.sha.outputs.cadence }}"', family_plan)
         self.assertIn("--check-cache", family_plan)
         self.assertIn('--cache-root "$HF_CACHE"', family_plan)
         self.assertIn('--github-output "$GITHUB_OUTPUT"', family_plan)
@@ -99,10 +102,17 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         capture = _step_block(workflow, "Capture upstream SHAs")
         self.assertIn('"$FORCE_CERTIFY" == "true"', capture)
         self.assertIn('echo "certify=true"', capture)
+        self.assertIn('echo "cadence=manual-full"', capture)
+        self.assertIn('echo "cadence=llama-bump"', capture)
+        self.assertIn('"$GITHUB_EVENT_NAME" == "schedule"', capture)
+        self.assertIn('echo "cadence=nightly"', capture)
 
         forced_report = _step_block(workflow, "Report forced certification result")
-        self.assertIn("steps.sha.outputs.changed == 'false'", forced_report)
-        self.assertIn("steps.sha.outputs.certify == 'true'", forced_report)
+        self.assertIn("steps.sha.outputs.cadence == 'manual-full'", forced_report)
+
+        nightly_report = _step_block(workflow, "Report nightly family result")
+        self.assertIn("steps.sha.outputs.cadence == 'nightly'", nightly_report)
+        self.assertIn("steps.family_plan.outputs.family_count", nightly_report)
 
     def test_persistent_runner_executes_only_trusted_main_with_read_access(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -117,6 +127,69 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("permissions:\n      contents: write", update_job)
         self.assertIn("trusted_queue_sha", update_job)
 
+    def test_update_job_writes_the_single_upstream_pin(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        update_step = _step_block(workflow, "Commit validated upstream pin to main")
+        self.assertIn('scripts/update-llama-pin.sh "$VALIDATED_SHA"', update_step)
+        self.assertIn(
+            "git add third_party/llama.cpp/upstream.txt",
+            update_step,
+        )
+        self.assertNotIn("LLAMA_CPP_SHA", update_step)
+
+    def test_update_pin_script_writes_pin_and_rejects_invalid_sha(self) -> None:
+        updater = UPDATE_PIN.read_text(encoding="utf-8")
+        self.assertNotIn("LLAMA_CPP_SHA", updater)
+        self.assertNotIn("LLAMA_PIN_MIRROR_FILE", updater)
+        target = "a" * 40
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            pin = temp / "upstream.txt"
+            env = {
+                **os.environ,
+                "LLAMA_PIN_FILE": str(pin),
+            }
+            result = subprocess.run(
+                [str(UPDATE_PIN), target],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(target + "\n", pin.read_text(encoding="utf-8"))
+
+            invalid = subprocess.run(
+                [str(UPDATE_PIN), "not-a-sha"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(1, invalid.returncode)
+            self.assertIn("refusing to write a non-40-hex", invalid.stderr)
+            self.assertEqual(target + "\n", pin.read_text(encoding="utf-8"))
+
+            prepared_target = "b" * 40
+            workdir = temp / "llama.cpp"
+            workdir.mkdir()
+            (workdir / ".mesh-llm-upstream-sha").write_text(
+                prepared_target + "\n", encoding="utf-8"
+            )
+            prepared_env = {**env, "LLAMA_WORKDIR": str(workdir)}
+            prepared = subprocess.run(
+                [str(UPDATE_PIN)],
+                cwd=ROOT,
+                env=prepared_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, prepared.returncode, prepared.stderr)
+            self.assertEqual(prepared_target + "\n", pin.read_text(encoding="utf-8"))
+
     def test_repair_loop_is_wired_for_both_failure_modes(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         queue_repair = _step_block(workflow, "Agent repair loop (patch-queue failure)")
@@ -128,6 +201,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         battery_repair = _step_block(workflow, "Agent repair loop (battery failure)")
         self.assertIn("steps.prepare.outcome == 'success'", battery_repair)
         self.assertIn("steps.battery.outcome == 'failure'", battery_repair)
+        self.assertIn("steps.sha.outputs.cadence != 'nightly'", battery_repair)
         self.assertIn("scripts/llama-canary-agent-repair.sh battery", battery_repair)
         self.assertIn("continue-on-error: true", battery_repair)
 
@@ -136,6 +210,9 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         fail_step = _step_block(workflow, "Fail when the canary needs human attention")
         self.assertIn("steps.repair_queue.outcome", fail_step)
         self.assertIn("steps.repair_battery.outcome", fail_step)
+        self.assertIn("CANARY_CADENCE:", fail_step)
+        self.assertIn('[[ "$CANARY_CADENCE" == "nightly" ]]', fail_step)
+        self.assertIn("repair agent was intentionally not invoked", fail_step)
         self.assertIn("exit 1", fail_step)
 
         # The battery lane itself no longer hard-fails the job before the
@@ -163,6 +240,22 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         # repair turn reuses it instead of re-running the battery.
         self.assertIn("tee .deps/llama-canary-repair-battery.log", battery)
 
+    def test_post_green_agent_review_is_wired_and_opt_out(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        # After a certified repair, the wrapper runs one fresh-context review
+        # turn that may modify the repair (a separate review(llama): commit).
+        # Both repair steps pass the opt-out var with the same vars-pattern
+        # as CANARY_AGENT_MODEL, defaulting to enabled.
+        for repair_step in (
+            _step_block(workflow, "Agent repair loop (patch-queue failure)"),
+            _step_block(workflow, "Agent repair loop (battery failure)"),
+        ):
+            self.assertIn("CANARY_AGENT_REVIEW:", repair_step)
+            self.assertIn(
+                "CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}",
+                repair_step,
+            )
+
     def test_family_results_have_typed_failure_outcomes(self) -> None:
         certify = FAMILY_CERTIFY.read_text(encoding="utf-8")
         classifier = FAMILY_OUTCOME.read_text(encoding="utf-8")
@@ -185,7 +278,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             ("timeout", "stage 1 binary server did not become ready\n"),
             (
                 "unsupported",
-                "Unsupported: runtime-slice execution is not supported for this model architecture yet\n",
+                "Unsupported: stage graph did not expose a stable output activation boundary\n",
             ),
             ("model-invalid", "missing tensor blk.5.ssm_in.weight\n"),
             ("mismatch", "authoritative token mismatch\n"),
@@ -447,6 +540,58 @@ class SkippyFamilyBatteryTests(unittest.TestCase):
         result = self._dry_run("--skip-build")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("cargo build -p skippy-correctness", result.stdout)
+
+    def test_mmproj_smoke_lane_runs_only_for_families_with_a_projector(self) -> None:
+        result = self._dry_run("--skip-build")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("mmproj", result.stdout)
+
+        model = self._model()
+        model["mmproj_artifact"] = {
+            "repo": "org/model",
+            "revision": "a" * 40,
+            "files": ["mmproj-model-f16.gguf"],
+            "file_integrity": {
+                "mmproj-model-f16.gguf": {"size_bytes": 1, "blob_id": "b" * 64}
+            },
+            "selector": "f16",
+        }
+        with_mmproj = self._dry_run("--skip-build", models=[model])
+        self.assertEqual(0, with_mmproj.returncode, with_mmproj.stderr)
+        smokes = [
+            line
+            for line in with_mmproj.stdout.splitlines()
+            if line.startswith("env SKIPPY_MM_MODEL=")
+        ]
+        self.assertEqual(1, len(smokes))
+        self.assertIn("SKIPPY_MM_PROJECTOR=", smokes[0])
+        self.assertIn("frontend::tests::multimodal", smokes[0])
+        self.assertIn("--test-threads=1", smokes[0])
+        self.assertIn("family battery complete: 1/1", with_mmproj.stdout)
+
+    def test_mmproj_failure_is_accounted_separately_from_core_certification(self) -> None:
+        script = BATTERY.read_text(encoding="utf-8")
+        smoke_body = script.split("run_mmproj_smoke() {", 1)[1].split(
+            "\n}\n\nrun_resolved_manifest()", 1
+        )[0]
+
+        self.assertIn("MM_SMOKE_FAILURE_COUNT=0", script)
+        self.assertIn(
+            "MM_SMOKE_FAILURE_COUNT=$((MM_SMOKE_FAILURE_COUNT + 1))",
+            smoke_body,
+        )
+        self.assertNotIn("CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))", smoke_body)
+
+    def test_mmproj_smoke_image_fixture_is_deterministic(self) -> None:
+        fixture = (
+            ROOT / "ci" / "llama-canary" / "fixtures" / "multimodal-smoke.png"
+        )
+        self.assertTrue(fixture.is_file())
+        digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        self.assertEqual(
+            "308ff69210df5efdcc7c79abd65f68f7ed8545f469222e0a3c7f774d074a5034",
+            digest,
+        )
 
     def test_preflight_pins_snapshot_and_limits_speculative_corpus_to_mtp(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

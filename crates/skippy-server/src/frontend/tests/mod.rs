@@ -4,7 +4,8 @@ pub(super) use super::{
     admission::GenerationTokenBudget,
     iteration_scheduler::IterationScheduler,
     prefill::{
-        PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs, PrefillChunkSchedule,
+        EmbeddedPrefillDrain, PrefillChunkObservation, PrefillChunkPolicy, PrefillChunkPolicyArgs,
+        PrefillChunkSchedule,
     },
 };
 pub(super) use crate::binary_transport::WireCondition;
@@ -47,6 +48,7 @@ pub(super) use std::{
 pub(super) use tokio::sync::Semaphore;
 
 mod chat_stream_deltas;
+mod draft_runtime;
 mod generation;
 mod guardrails;
 mod multimodal;

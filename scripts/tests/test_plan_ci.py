@@ -272,9 +272,9 @@ class PlanCiTests(unittest.TestCase):
         self.assertTrue(plan["signals"]["rust_changed"])
         self.assertTrue(plan["signals"]["backend_changed"])
 
-    def test_cli_surface_signal_requires_public_website_docs(self) -> None:
+    def test_cli_surface_change_selects_inventory_validation(self) -> None:
         payload = fixture("runtime.json")
-        payload["changed_files"] = ["crates/mesh-llm-cli/src/parser.rs"]
+        payload["changed_files"] = ["crates/mesh-llm-cli/src/parser/commands.rs"]
         payload["workspace_packages"] = [
             {"name": "mesh-llm-cli", "path": "crates/mesh-llm-cli"}
         ]
@@ -283,6 +283,8 @@ class PlanCiTests(unittest.TestCase):
         plan = PLANNER.build_plan(payload, root=ROOT)
 
         self.assertEqual(plan["domains"], ["cli", "rust"])
+        self.assertIn("quality", plan["required_slices"])
+        self.assertNotIn("web", plan["required_slices"])
         self.assertTrue(plan["signals"]["cli_surface_changed"])
         self.assertFalse(plan["signals"]["website_docs_changed"])
 

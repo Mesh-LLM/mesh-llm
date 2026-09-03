@@ -8,6 +8,8 @@ use crate::frontend::LinearProposalIngressConfig;
 use crate::frontend::OpenAiGuardrailsConfig;
 use crate::frontend::OpenAiGuardrailsStatus;
 use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::generation::GenerationConcurrencyController;
+use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
@@ -22,9 +24,11 @@ use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{
     SpeculativeDecodeConfig, load_standalone_speculative_config, standalone_ngram_proposal_limit,
 };
+use crate::http::bind_serve_listener;
 use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::load_runtime;
+use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -55,8 +59,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
-use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use std::time::Duration;
 
 pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let config = load_json::<StageConfig>(&args.config)
@@ -75,9 +78,25 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
-    if args.generation_concurrency == 0 {
+    if args.generation_concurrency == Some(0) {
         bail!("--generation-concurrency must be greater than zero");
     }
+    if args.generation_admission_timeout_secs == 0 {
+        bail!("--generation-admission-timeout-secs must be greater than zero");
+    }
+    let generation_concurrency = args
+        .generation_concurrency
+        .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
+    let adaptive_generation_min_concurrency = resolve_adaptive_generation_min_concurrency(
+        args.adaptive_generation_concurrency,
+        args.adaptive_generation_min_concurrency,
+        generation_concurrency,
+        "--adaptive-generation-min-concurrency",
+    )?;
+    let generation_queue_capacity = args
+        .generation_queue_capacity
+        .unwrap_or_else(|| super::default_generation_queue_capacity(generation_concurrency));
+    let generation_admission_timeout = Duration::from_secs(args.generation_admission_timeout_secs);
     let speculative = load_standalone_speculative_config(args.speculative_config.as_ref())?;
 
     let runtime = load_runtime(&config)?.ok_or_else(|| {
@@ -99,28 +118,39 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         config.clone(),
         args.telemetry_level,
     );
-    telemetry.emit("stage.openai_server_start", lifecycle_attrs(&config));
+    let mut server_start_attrs = lifecycle_attrs(&config);
+    insert_generation_admission_config_attrs(
+        &mut server_start_attrs,
+        generation_concurrency,
+        adaptive_generation_min_concurrency,
+        generation_queue_capacity,
+        args.generation_admission_timeout_secs,
+    );
+    telemetry.emit("stage.openai_server_start", server_start_attrs);
     if matches!(&mode, OpenAiBackendMode::LocalRuntime) {
         ensure_generation_concurrency_fits_lanes(
-            args.generation_concurrency,
+            generation_concurrency,
             config.lane_count,
             "--generation-concurrency",
         )?;
         prewarm_generation_sessions(
             &runtime,
-            args.generation_concurrency,
+            generation_concurrency,
             &telemetry,
             &config,
             "stage.openai_runtime_prewarm",
         )
         .context("prewarm OpenAI runtime sessions")?;
     }
-    let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
+    let kv =
+        KvStageIntegration::from_loaded_model(&config, loaded_model_state_kind(Some(&runtime)))?
+            .map(Arc::new);
     let ctx_size = usize::try_from(config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = IterationScheduler::new(
         runtime.clone(),
         &config,
-        args.generation_concurrency,
+        generation_concurrency,
+        true,
         telemetry.clone(),
     )?;
     let tokenizer = TokenizerCapability::from_stage_zero(&config, runtime.clone())
@@ -139,9 +169,18 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         adaptive_speculative_window: false,
         ngram_max: standalone_ngram_proposal_limit(&speculative),
         speculative,
-        generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
+        generation_limit: Arc::new(match adaptive_generation_min_concurrency {
+            Some(initial_limit) => {
+                GenerationConcurrencyController::adaptive(generation_concurrency, initial_limit)
+            }
+            None => GenerationConcurrencyController::fixed(generation_concurrency),
+        }),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: args.generation_concurrency,
+        generation_queue_limit: generation_queue_capacity,
+        generation_admission_timeout,
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
@@ -155,11 +194,16 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let app: Router = instrumented_openai_router(backend, tokenizer, telemetry.clone());
 
     println!(
-        "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={}",
-        args.bind_addr, model_id, mode_label, args.generation_concurrency,
+        "skippy-server listening: openai={} model_id={} backend={} generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+        args.bind_addr,
+        model_id,
+        mode_label,
+        generation_concurrency,
+        generation_queue_capacity,
+        args.generation_admission_timeout_secs,
     );
 
-    let listener = TcpListener::bind(args.bind_addr).await?;
+    let listener = bind_serve_listener(args.bind_addr)?;
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -172,12 +216,17 @@ pub struct EmbeddedOpenAiArgs {
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
     pub generation_concurrency: usize,
+    pub continuous_batching: bool,
+    pub adaptive_generation_min_concurrency: Option<usize>,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
     pub prefill_adaptive_start: usize,
     pub prefill_adaptive_step: usize,
     pub prefill_adaptive_max: usize,
+    pub prefill_adaptive_target_ms: f64,
     pub draft_model_path: Option<PathBuf>,
     pub speculative_window: usize,
     pub adaptive_speculative_window: bool,
@@ -212,9 +261,29 @@ pub struct EmbeddedOpenAiRequestDefaults {
     pub min_p: Option<f32>,
     pub repeat_penalty: Option<f32>,
     pub repeat_last_n: Option<i32>,
+    pub typical_p: Option<f32>,
+    pub top_nsigma: Option<f32>,
+    pub dynatemp_range: Option<f32>,
+    pub dynatemp_exponent: Option<f32>,
+    pub dry: Option<skippy_runtime::DrySamplingConfig>,
+    pub xtc: Option<skippy_runtime::XtcSamplingConfig>,
+    pub mirostat_mode: Option<i32>,
+    pub mirostat_entropy: Option<f32>,
+    pub mirostat_learning_rate: Option<f32>,
+    pub samplers: Option<Vec<String>>,
+    pub sampler_sequence: Option<String>,
+    pub ignore_eos: Option<bool>,
     pub reasoning_format: Option<EmbeddedReasoningFormat>,
     pub reasoning_enabled: Option<EmbeddedReasoningEnabled>,
     pub reasoning_budget: Option<EmbeddedReasoningBudget>,
+    pub chat_template: Option<String>,
+    pub jinja: Option<bool>,
+    pub chat_template_kwargs: Option<Value>,
+    pub skip_chat_parsing: Option<bool>,
+    pub prefill_assistant: Option<Value>,
+    pub system_prompt: Option<String>,
+    pub grammar: Option<Value>,
+    pub json_schema: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,11 +341,15 @@ async fn serve_embedded_openai_with_shutdown_and_scheduler(
     let binding = embedded_openai_router_with_scheduler(args, iteration_scheduler)?;
 
     println!(
-        "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={}",
-        bind_addr, binding.model_id, binding.generation_concurrency,
+        "skippy-server listening: openai={} model_id={} backend=embedded-stage0 generation_concurrency={} generation_queue_capacity={} generation_admission_timeout_secs={}",
+        bind_addr,
+        binding.model_id,
+        binding.generation_concurrency,
+        binding.generation_queue_capacity,
+        binding.generation_admission_timeout_secs,
     );
 
-    let listener = TcpListener::bind(bind_addr).await?;
+    let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, binding.router)
         .with_graceful_shutdown(shutdown)
         .await?;
@@ -287,12 +360,16 @@ pub struct EmbeddedOpenAiRouter {
     pub router: Router,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
 }
 
 pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
 }
 
@@ -314,6 +391,8 @@ fn embedded_openai_router_with_scheduler(
         router,
         model_id: binding.model_id,
         generation_concurrency: binding.generation_concurrency,
+        generation_queue_capacity: binding.generation_queue_capacity,
+        generation_admission_timeout_secs: binding.generation_admission_timeout_secs,
     })
 }
 
@@ -330,6 +409,9 @@ fn embedded_openai_backend_with_scheduler(
     }
     if args.generation_concurrency == 0 {
         bail!("--openai-generation-concurrency must be greater than zero");
+    }
+    if args.generation_admission_timeout_secs == 0 {
+        bail!("--openai-generation-admission-timeout-secs must be greater than zero");
     }
     ensure_generation_concurrency_fits_lanes(
         args.generation_concurrency,
@@ -358,12 +440,14 @@ fn embedded_openai_backend_with_scheduler(
         &args.runtime,
         &args.config,
         args.draft_n_gpu_layers,
+        &args.speculative,
     )?;
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,
         args.draft_n_gpu_layers,
         args.speculative_window,
+        &args.speculative,
     )?;
     let model_id = ModelId::new(
         args.model_id
@@ -388,6 +472,7 @@ fn embedded_openai_backend_with_scheduler(
             adaptive_start: args.prefill_adaptive_start,
             adaptive_step: args.prefill_adaptive_step,
             adaptive_max: args.prefill_adaptive_max,
+            adaptive_target_ms: args.prefill_adaptive_target_ms,
             schedule_arg: "--openai-prefill-chunk-schedule",
             policy_arg: "--openai-prefill-chunk-policy",
         })?,
@@ -397,8 +482,16 @@ fn embedded_openai_backend_with_scheduler(
         lane_pool,
         prediction_returns: args.prediction_returns.clone(),
     };
+    let mut server_start_attrs = lifecycle_attrs(&args.config);
+    insert_generation_admission_config_attrs(
+        &mut server_start_attrs,
+        args.generation_concurrency,
+        args.adaptive_generation_min_concurrency,
+        args.generation_queue_capacity,
+        args.generation_admission_timeout_secs,
+    );
     args.telemetry
-        .emit("stage.openai_server_start", lifecycle_attrs(&args.config));
+        .emit("stage.openai_server_start", server_start_attrs);
     prewarm_generation_sessions(
         &args.runtime,
         args.generation_concurrency,
@@ -407,7 +500,11 @@ fn embedded_openai_backend_with_scheduler(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
+    let kv = KvStageIntegration::from_loaded_model(
+        &args.config,
+        loaded_model_state_kind(Some(&args.runtime)),
+    )?
+    .map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -415,6 +512,7 @@ fn embedded_openai_backend_with_scheduler(
             args.runtime.clone(),
             &args.config,
             args.generation_concurrency,
+            args.continuous_batching,
             args.telemetry.clone(),
         )?,
     };
@@ -432,9 +530,19 @@ fn embedded_openai_backend_with_scheduler(
         adaptive_speculative_window: args.adaptive_speculative_window,
         ngram_max: standalone_ngram_proposal_limit(&args.speculative),
         speculative: args.speculative,
-        generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
+        generation_limit: Arc::new(match args.adaptive_generation_min_concurrency {
+            Some(initial_limit) => GenerationConcurrencyController::adaptive(
+                args.generation_concurrency,
+                initial_limit,
+            ),
+            None => GenerationConcurrencyController::fixed(args.generation_concurrency),
+        }),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
-        generation_queue_limit: args.generation_concurrency,
+        generation_queue_limit: args.generation_queue_capacity,
+        generation_admission_timeout: Duration::from_secs(args.generation_admission_timeout_secs),
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            args.generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
         generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
@@ -458,6 +566,8 @@ fn embedded_openai_backend_with_scheduler(
         backend,
         model_id,
         generation_concurrency: args.generation_concurrency,
+        generation_queue_capacity: args.generation_queue_capacity,
+        generation_admission_timeout_secs: args.generation_admission_timeout_secs,
         openai_guardrails,
     })
 }
@@ -471,6 +581,59 @@ fn validate_generation_receipt_topology(
         bail!("generation receipts are supported only for local single-stage execution");
     }
     Ok(())
+}
+
+pub(crate) fn resolve_adaptive_generation_min_concurrency(
+    enabled: bool,
+    configured_minimum: Option<usize>,
+    hard_limit: usize,
+    minimum_arg: &str,
+) -> Result<Option<usize>> {
+    if !enabled {
+        if configured_minimum.is_some() {
+            bail!("{minimum_arg} requires adaptive generation concurrency to be enabled");
+        }
+        return Ok(None);
+    }
+    let minimum = configured_minimum.unwrap_or(1);
+    if minimum == 0 {
+        bail!("{minimum_arg} must be greater than zero");
+    }
+    if minimum > hard_limit {
+        bail!("{minimum_arg} ({minimum}) exceeds generation concurrency ({hard_limit})");
+    }
+    Ok(Some(minimum))
+}
+
+fn insert_generation_admission_config_attrs(
+    attrs: &mut BTreeMap<String, Value>,
+    generation_concurrency: usize,
+    adaptive_generation_min_concurrency: Option<usize>,
+    generation_queue_capacity: usize,
+    generation_admission_timeout_secs: u64,
+) {
+    attrs.insert(
+        "llama_stage.generation_concurrency".to_string(),
+        json!(generation_concurrency),
+    );
+    attrs.insert(
+        "llama_stage.adaptive_generation_concurrency".to_string(),
+        json!(adaptive_generation_min_concurrency.is_some()),
+    );
+    if let Some(minimum) = adaptive_generation_min_concurrency {
+        attrs.insert(
+            "llama_stage.adaptive_generation_min_concurrency".to_string(),
+            json!(minimum),
+        );
+    }
+    attrs.insert(
+        "llama_stage.generation_queue_capacity".to_string(),
+        json!(generation_queue_capacity),
+    );
+    attrs.insert(
+        "llama_stage.generation_admission_timeout_secs".to_string(),
+        json!(generation_admission_timeout_secs),
+    );
 }
 
 pub(in crate::frontend) fn instrumented_openai_router(
@@ -516,7 +679,9 @@ pub(in crate::frontend) async fn openai_http_telemetry(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_generation_receipt_topology;
+    use super::{
+        resolve_adaptive_generation_min_concurrency, validate_generation_receipt_topology,
+    };
 
     #[test]
     fn generation_receipts_require_local_single_stage_topology() {
@@ -525,5 +690,25 @@ mod tests {
         assert!(validate_generation_receipt_topology(true, true, false).is_err());
         assert!(validate_generation_receipt_topology(true, false, true).is_err());
         assert!(validate_generation_receipt_topology(true, true, true).is_err());
+    }
+
+    #[test]
+    fn adaptive_generation_minimum_is_explicit_and_bounded() {
+        assert_eq!(
+            resolve_adaptive_generation_min_concurrency(true, None, 8, "--minimum")
+                .expect("default minimum"),
+            Some(1)
+        );
+        assert_eq!(
+            resolve_adaptive_generation_min_concurrency(false, None, 8, "--minimum")
+                .expect("fixed mode"),
+            None
+        );
+        assert!(
+            resolve_adaptive_generation_min_concurrency(false, Some(2), 8, "--minimum").is_err()
+        );
+        assert!(
+            resolve_adaptive_generation_min_concurrency(true, Some(9), 8, "--minimum").is_err()
+        );
     }
 }

@@ -398,6 +398,16 @@ export type ConfigurationRuntimeControlStateEntry = {
   write_policy: ConfigurationDisabledWritePolicy
   options?: readonly ConfigurationRuntimeControlOption[]
 }
+export type ConfigurationSettingObjectProperty = {
+  readonly label: string
+  readonly name: string
+  readonly required: boolean
+  readonly value_schema: ConfigurationSettingValueSchema
+}
+export type ConfigurationSettingObjectSchema = {
+  readonly kind: 'object'
+  readonly properties?: readonly ConfigurationSettingObjectProperty[]
+}
 export type ConfigurationSettingValueSchema =
   | { kind: 'boolean' }
   | { kind: 'integer' }
@@ -406,10 +416,10 @@ export type ConfigurationSettingValueSchema =
   | { kind: 'path' }
   | { kind: 'url' }
   | { kind: 'socket_addr' }
-  | { kind: 'enum'; values: string[] }
-  | { kind: 'one_of'; variants: ConfigurationSettingValueSchema[] }
+  | { kind: 'enum'; values: readonly string[] }
+  | { kind: 'one_of'; variants: readonly ConfigurationSettingValueSchema[] }
   | { kind: 'array'; items: ConfigurationSettingValueSchema }
-  | { kind: 'object' }
+  | ConfigurationSettingObjectSchema
 export type ConfigurationDefaultsControl =
   | {
       kind: 'choice'

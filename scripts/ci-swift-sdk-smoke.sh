@@ -1,13 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 6 ]; then
-    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift>" >&2
+SKIP_BUILD=0
+if [[ "$#" -eq 7 ]]; then
+    if [[ "$7" != "--skip-build" ]]; then
+        echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift> [--skip-build]" >&2
+        exit 1
+    fi
+    SKIP_BUILD=1
+elif [[ "$#" -ne 6 ]]; then
+    echo "Usage: $0 <mesh-llm-binary> <bin-dir> <model-path> <xcframework-zip> <host-only|full> <generated-mesh_ffi.swift> [--skip-build]" >&2
     exit 1
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+# Pull requests execute the protected default-branch workflow definition. Until
+# the workflow change that removes Swift's unused setup-node pnpm cache reaches
+# main, its post-job hook still requires the computed store directory to exist.
+# Creating the empty directory keeps that legacy cleanup hook from turning a
+# successful Swift smoke into a failure; current workflows do not install pnpm
+# for this job, so the guard becomes a no-op after the workflow update lands.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && command -v pnpm >/dev/null 2>&1; then
+    LEGACY_PNPM_STORE="$(pnpm store path --silent)"
+    if [[ -z "$LEGACY_PNPM_STORE" ]]; then
+        echo "pnpm returned an empty store path" >&2
+        exit 1
+    fi
+    mkdir -p "$LEGACY_PNPM_STORE"
+fi
+
 SWIFT_INPUT_ARCHIVE="$4"
 SWIFT_INPUT_MODE="$5"
 SWIFT_INPUT_BINDING="$6"
@@ -21,7 +44,11 @@ install -m 0644 "$SWIFT_INPUT_BINDING" "$SWIFT_TRACKED_BINDING"
 cmp "$SWIFT_INPUT_BINDING" "$SWIFT_TRACKED_BINDING"
 
 scripts/check-sdk-contract.sh
-scripts/package-sdk-console-assets.sh --sdk swift
+if [[ "$SKIP_BUILD" == "1" ]]; then
+    scripts/package-sdk-console-assets.sh --sdk swift --skip-build
+else
+    scripts/package-sdk-console-assets.sh --sdk swift
+fi
 scripts/verify-sdk-console-assets.sh --sdk swift
 
 scripts/verify-swift-release-artifact.sh \

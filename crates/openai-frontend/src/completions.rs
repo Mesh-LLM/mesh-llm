@@ -205,6 +205,19 @@ mod tests {
         let value = serde_json::to_value(response).unwrap();
         assert_eq!(value["timings"]["draft_n"], json!(2));
     }
+
+    #[test]
+    fn completion_usage_chunk_serializes_optional_timings() {
+        let chunk = CompletionChunk::usage_with_timings(
+            "model",
+            Usage::new(3, 2),
+            Some(BTreeMap::from([("queue_wait_ms".to_string(), json!(1.5))])),
+        );
+
+        let value = serde_json::to_value(chunk).unwrap();
+        assert_eq!(value["usage"]["prompt_tokens"], json!(3));
+        assert_eq!(value["timings"]["queue_wait_ms"], json!(1.5));
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -224,6 +237,8 @@ pub struct CompletionChunk {
     pub choices: Vec<CompletionChunkChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl CompletionChunk {
@@ -240,6 +255,7 @@ impl CompletionChunk {
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -260,6 +276,7 @@ impl CompletionChunk {
                 finish_reason: Some(finish_reason),
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -271,6 +288,18 @@ impl CompletionChunk {
             model: model.into(),
             choices: Vec::new(),
             usage: Some(usage),
+            timings: None,
+        }
+    }
+
+    pub fn usage_with_timings(
+        model: impl Into<String>,
+        usage: Usage,
+        timings: Option<BTreeMap<String, Value>>,
+    ) -> Self {
+        Self {
+            timings,
+            ..Self::usage(model, usage)
         }
     }
 }

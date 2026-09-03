@@ -70,6 +70,7 @@ struct SplitMembershipWait<'a> {
     node: &'a mesh::Node,
     model_name: &'a str,
     model_ref: &'a str,
+    local_source_required: bool,
     deadline: tokio::time::Instant,
     barrier: SplitMembershipSettleBarrier,
     last_logged_signature: SplitMembershipSignature,
@@ -80,12 +81,14 @@ impl<'a> SplitMembershipWait<'a> {
         node: &'a mesh::Node,
         model_name: &'a str,
         model_ref: &'a str,
+        local_source_required: bool,
         timeout: Duration,
     ) -> Self {
         Self {
             node,
             model_name,
             model_ref,
+            local_source_required,
             deadline: tokio::time::Instant::now() + membership_settle_timeout(timeout),
             barrier: SplitMembershipSettleBarrier::default(),
             last_logged_signature: Vec::new(),
@@ -94,9 +97,13 @@ impl<'a> SplitMembershipWait<'a> {
 
     async fn run(mut self) -> Result<SplitParticipantSnapshot> {
         loop {
-            let snapshot =
-                collect_split_participant_membership(self.node, self.model_name, self.model_ref)
-                    .await;
+            let snapshot = collect_split_participant_membership(
+                self.node,
+                self.model_name,
+                self.model_ref,
+                self.local_source_required,
+            )
+            .await;
             let signature = split_membership_signature(&snapshot.participants);
             self.log_membership_change(&snapshot, &signature);
             let now = tokio::time::Instant::now();
@@ -143,8 +150,13 @@ impl<'a> SplitMembershipWait<'a> {
     /// dead nodes into the elected topology. Re-collect at the deadline so the
     /// final membership reflects peers that are still present.
     async fn finish_at_timeout(self) -> Result<SplitParticipantSnapshot> {
-        let snapshot =
-            collect_split_participant_membership(self.node, self.model_name, self.model_ref).await;
+        let snapshot = collect_split_participant_membership(
+            self.node,
+            self.model_name,
+            self.model_ref,
+            self.local_source_required,
+        )
+        .await;
         ensure_split_participant_timeout_has_quorum(
             self.model_ref,
             &snapshot.participants,
@@ -164,8 +176,10 @@ struct SplitEligibilityWait<'a> {
     node: &'a mesh::Node,
     model_name: &'a str,
     model_ref: &'a str,
+    runtime_profile: &'a str,
     package: &'a skippy::SkippyPackageIdentity,
     local_vram_override: Option<u64>,
+    local_source_required: bool,
     expected_node_ids: Vec<String>,
     deadline: tokio::time::Instant,
 }
@@ -191,8 +205,10 @@ impl<'a> SplitEligibilityWait<'a> {
             self.node,
             self.model_name,
             self.model_ref,
+            self.runtime_profile,
             self.package,
             self.local_vram_override,
+            self.local_source_required,
         )
         .await
     }
@@ -242,30 +258,39 @@ pub(super) async fn wait_for_split_membership(
     node: &mesh::Node,
     model_name: &str,
     model_ref: &str,
+    local_source_required: bool,
     timeout: Duration,
 ) -> Result<SplitParticipantSnapshot> {
-    SplitMembershipWait::new(node, model_name, model_ref, timeout)
+    SplitMembershipWait::new(node, model_name, model_ref, local_source_required, timeout)
         .run()
         .await
 }
 
+pub(super) struct SplitParticipantWaitRequest<'a> {
+    pub(super) node: &'a mesh::Node,
+    pub(super) model_name: &'a str,
+    pub(super) model_ref: &'a str,
+    pub(super) runtime_profile: &'a str,
+    pub(super) package: &'a skippy::SkippyPackageIdentity,
+    pub(super) local_vram_override: Option<u64>,
+    pub(super) expected_membership: &'a [SplitParticipant],
+    pub(super) local_source_required: bool,
+    pub(super) timeout: Duration,
+}
+
 pub(super) async fn wait_for_split_participants(
-    node: &mesh::Node,
-    model_name: &str,
-    model_ref: &str,
-    package: &skippy::SkippyPackageIdentity,
-    local_vram_override: Option<u64>,
-    expected_membership: &[SplitParticipant],
-    timeout: Duration,
+    request: SplitParticipantWaitRequest<'_>,
 ) -> Result<SplitParticipantSnapshot> {
     SplitEligibilityWait {
-        node,
-        model_name,
-        model_ref,
-        package,
-        local_vram_override,
-        expected_node_ids: split_membership_node_ids(expected_membership),
-        deadline: tokio::time::Instant::now() + timeout,
+        node: request.node,
+        model_name: request.model_name,
+        model_ref: request.model_ref,
+        runtime_profile: request.runtime_profile,
+        package: request.package,
+        local_vram_override: request.local_vram_override,
+        local_source_required: request.local_source_required,
+        expected_node_ids: split_membership_node_ids(request.expected_membership),
+        deadline: tokio::time::Instant::now() + request.timeout,
     }
     .run()
     .await

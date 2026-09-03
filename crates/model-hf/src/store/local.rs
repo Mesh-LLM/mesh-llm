@@ -116,6 +116,7 @@ pub fn huggingface_snapshot_path(
 }
 
 pub fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
+    let _ = crate::configure_hf_tls_provider();
     let cache_root = cache_root.to_path_buf();
     let scan = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -335,7 +336,7 @@ pub fn gguf_metadata_cache_path(path: &Path) -> Option<PathBuf> {
         )
     };
     let digest = Sha256::digest(key.as_bytes());
-    Some(model_metadata_cache_dir().join(format!("{digest:x}.json")))
+    Some(model_metadata_cache_dir().join(format!("{}.json", hex::encode(digest))))
 }
 
 pub fn direct_hf_cache_root_gguf_paths(root: &Path) -> Vec<PathBuf> {
@@ -665,7 +666,7 @@ fn synthetic_local_gguf_model_ref(path: &Path) -> String {
     hasher.update(b"\0");
     hasher.update(len.to_le_bytes());
     hasher.update(modified.to_le_bytes());
-    let digest = format!("{:x}", hasher.finalize());
+    let digest = hex::encode(hasher.finalize());
     format_model_ref(&format!("local-gguf/sha256-{}", &digest[..16]), None, None)
 }
 

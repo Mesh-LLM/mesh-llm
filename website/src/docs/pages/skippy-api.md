@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **13 headers** and **74 exported functions**.
+Current generated surface: **13 headers** and **79 exported functions**.
 
 ## Quick navigation
 
@@ -76,8 +76,9 @@ Current generated surface: **13 headers** and **74 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-runtime-h"><code>runtime.h</code><span>19 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-runtime-h"><code>runtime.h</code><span>23 functions</span></a>
       <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-runtime-config-default"><code>skippy_runtime_config_default</code></a>
         <a href="#skippy-fn-skippy-model-open"><code>skippy_model_open</code></a>
         <a href="#skippy-fn-skippy-model-open-with-events"><code>skippy_model_open_with_events</code></a>
         <a href="#skippy-fn-skippy-model-attach-mtp-draft-model"><code>skippy_model_attach_mtp_draft_model</code></a>
@@ -85,11 +86,14 @@ Current generated surface: **13 headers** and **74 exported functions**.
         <a href="#skippy-fn-skippy-model-open-from-parts-with-events"><code>skippy_model_open_from_parts_with_events</code></a>
         <a href="#skippy-fn-skippy-model-free"><code>skippy_model_free</code></a>
         <a href="#skippy-fn-skippy-model-llama-model"><code>skippy_model_llama_model</code></a>
+        <a href="#skippy-fn-skippy-model-output-activation-boundary"><code>skippy_model_output_activation_boundary</code></a>
+        <a href="#skippy-fn-skippy-model-input-activation-boundary"><code>skippy_model_input_activation_boundary</code></a>
         <a href="#skippy-fn-skippy-session-create"><code>skippy_session_create</code></a>
         <a href="#skippy-fn-skippy-session-create-from-resident-prefix"><code>skippy_session_create_from_resident_prefix</code></a>
         <a href="#skippy-fn-skippy-session-llama-context"><code>skippy_session_llama_context</code></a>
         <a href="#skippy-fn-skippy-session-position"><code>skippy_session_position</code></a>
         <a href="#skippy-fn-skippy-session-batch-size"><code>skippy_session_batch_size</code></a>
+        <a href="#skippy-fn-skippy-session-sequence-id"><code>skippy_session_sequence_id</code></a>
         <a href="#skippy-fn-skippy-session-begin-external-decode"><code>skippy_session_begin_external_decode</code></a>
         <a href="#skippy-fn-skippy-session-end-external-decode"><code>skippy_session_end_external_decode</code></a>
         <a href="#skippy-fn-skippy-session-set-position"><code>skippy_session_set_position</code></a>
@@ -117,7 +121,7 @@ Current generated surface: **13 headers** and **74 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>13 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>14 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-export-state"><code>skippy_export_state</code></a>
         <a href="#skippy-fn-skippy-import-state"><code>skippy_import_state</code></a>
@@ -131,6 +135,7 @@ Current generated surface: **13 headers** and **74 exported functions**.
         <a href="#skippy-fn-skippy-import-kv-page"><code>skippy_import_kv_page</code></a>
         <a href="#skippy-fn-skippy-session-save-prefix"><code>skippy_session_save_prefix</code></a>
         <a href="#skippy-fn-skippy-session-restore-prefix"><code>skippy_session_restore_prefix</code></a>
+        <a href="#skippy-fn-skippy-session-memory-used-cells"><code>skippy_session_memory_used_cells</code></a>
         <a href="#skippy-fn-skippy-session-drop-sequence"><code>skippy_session_drop_sequence</code></a>
       </div>
     </section>
@@ -325,7 +330,7 @@ LLAMA_API enum skippy_status skippy_decode_step_sampled_mtp(
 <a id="skippy-fn-skippy-iteration-batch-sampled"></a>
 #### `skippy_iteration_batch_sampled`
 
-Executes mixed prefill chunks and decode tokens in one model iteration. Requests may have different token counts. Outputs are request-major and each activation frame contains the complete token span for its request. GLM-DSA inputs in one iteration must use the same sideband width and stream count.
+Executes mixed prefill chunks and decode tokens in one model iteration. Requests may have different token counts. Activation outputs are request-major. Sampled outputs are compact and explicitly map back to the request indexes whose final rows requested logits. GLM-DSA inputs in one iteration must use the same sideband width and stream count.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_iteration_batch_sampled(
@@ -335,8 +340,10 @@ LLAMA_API enum skippy_status skippy_iteration_batch_sampled(
         void * const * output_payloads,
         const size_t * output_payload_capacities,
         size_t * out_output_payload_bytes,
+        size_t * out_sampled_request_indexes,
         llama_token * out_predicted_tokens,
-        size_t predicted_token_capacity,
+        size_t sampled_output_capacity,
+        size_t * out_sampled_output_count,
         struct skippy_error ** out_error);
 ```
 
@@ -624,7 +631,7 @@ LLAMA_API enum skippy_status skippy_slice_plan_free(
 <a id="skippy-fn-skippy-slice-plan-add-layer-range"></a>
 #### `skippy_slice_plan_add_layer_range`
 
-Adds a stage layer range and its embedding/output ownership to a plan.
+Adds a stage layer range and its shared-tensor ownership to a plan.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
@@ -634,6 +641,7 @@ LLAMA_API enum skippy_status skippy_slice_plan_add_layer_range(
         int32_t layer_end,
         bool include_embeddings,
         bool include_output,
+        bool include_per_layer_token_embd,
         struct skippy_error ** out_error);
 ```
 
@@ -668,6 +676,16 @@ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
 
 <a id="skippy-header-runtime-h"></a>
 ### `runtime.h`
+
+<a id="skippy-fn-skippy-runtime-config-default"></a>
+#### `skippy_runtime_config_default`
+
+Returns a C-safe runtime configuration with all derived-default controls set to auto.
+
+```cpp
+LLAMA_API struct skippy_runtime_config skippy_runtime_config_default(
+        void);
+```
 
 <a id="skippy-fn-skippy-model-open"></a>
 #### `skippy_model_open`
@@ -759,6 +777,28 @@ LLAMA_API const struct llama_model * skippy_model_llama_model(
          const struct skippy_model * model);
 ```
 
+<a id="skippy-fn-skippy-model-output-activation-boundary"></a>
+#### `skippy_model_output_activation_boundary`
+
+Reads the configured stage graph's observed output boundary descriptor.
+
+```cpp
+LLAMA_API bool skippy_model_output_activation_boundary(
+         const struct skippy_model * model,
+        struct skippy_activation_boundary_desc * out_desc);
+```
+
+<a id="skippy-fn-skippy-model-input-activation-boundary"></a>
+#### `skippy_model_input_activation_boundary`
+
+Reads the configured stage graph's observed input boundary descriptor.
+
+```cpp
+LLAMA_API bool skippy_model_input_activation_boundary(
+         const struct skippy_model * model,
+        struct skippy_activation_boundary_desc * out_desc);
+```
+
 <a id="skippy-fn-skippy-session-create"></a>
 #### `skippy_session_create`
 
@@ -813,6 +853,16 @@ Returns the native batch width currently configured for the session.
 
 ```cpp
 LLAMA_API int32_t skippy_session_batch_size(
+         const struct skippy_session * session);
+```
+
+<a id="skippy-fn-skippy-session-sequence-id"></a>
+#### `skippy_session_sequence_id`
+
+Returns the llama.cpp sequence ID claimed by the session.
+
+```cpp
+LLAMA_API int32_t skippy_session_sequence_id(
          const struct skippy_session * session);
 ```
 
@@ -940,7 +990,7 @@ LLAMA_API enum skippy_status skippy_session_signal_window(
 Creates a request-local n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_create(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_create(
          uint16_t ngram_min,
         uint16_t ngram_max,
         struct skippy_ngram_cache ** out_cache,
@@ -953,7 +1003,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_create(
 Releases an n-gram proposal cache.
 
 ```cpp
-LLAMA_API void skippy_ngram_cache_free(
+SKIPPY_COMMON_API void skippy_ngram_cache_free(
         struct skippy_ngram_cache * cache);
 ```
 
@@ -963,7 +1013,7 @@ LLAMA_API void skippy_ngram_cache_free(
 Replaces committed history in an n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_reset(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_reset(
          struct skippy_ngram_cache * cache,
         const llama_token * token_ids,
         size_t token_count,
@@ -976,7 +1026,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_reset(
 Appends newly committed tokens to an n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_append(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_append(
          struct skippy_ngram_cache * cache,
         const llama_token * token_ids,
         size_t token_count,
@@ -989,7 +1039,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_append(
 Drafts tokens from committed history plus an optional provisional prefix.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_draft(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_draft(
          struct skippy_ngram_cache * cache,
         const llama_token * continuation_prefix,
         size_t continuation_prefix_count,
@@ -1179,6 +1229,18 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
         struct skippy_error ** out_error);
 ```
 
+<a id="skippy-fn-skippy-session-memory-used-cells"></a>
+#### `skippy_session_memory_used_cells`
+
+Reports physically occupied cells in the session's unified KV cache.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_memory_used_cells(
+         struct skippy_session * session,
+        uint64_t * out_used_cells,
+        struct skippy_error ** out_error);
+```
+
 <a id="skippy-fn-skippy-session-drop-sequence"></a>
 #### `skippy_session_drop_sequence`
 
@@ -1257,7 +1319,7 @@ LLAMA_API const struct llama_model * skippy_model_native_model(
 Renders OpenAI-style JSON messages through the model chat template.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+SKIPPY_COMMON_API enum skippy_status skippy_apply_chat_template_json(
          struct skippy_model * model,
         const char * messages_json,
         const char * tools_json,
@@ -1268,6 +1330,11 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
         bool parallel_tool_calls,
         const char * reasoning_format,
         const char * chat_template_kwargs,
+        const char * chat_template,
+        bool use_jinja,
+        const char * grammar,
+        const char * json_schema,
+        bool skip_chat_parsing,
         char * output_text,
         size_t output_text_capacity,
         size_t * out_text_bytes,
@@ -1283,7 +1350,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
 Parses generated chat text and template metadata into an OpenAI message.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_parse_chat_response_json(
+SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
          const char * generated_text,
         const char * metadata_json,
         bool is_partial,
@@ -1300,14 +1367,14 @@ LLAMA_API enum skippy_status skippy_parse_chat_response_json(
 
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
-- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 41`
+- `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 48`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
-- `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`
-- `sampling.h`: `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`
+- `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
+- `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
 - `speculative_decoding.h`: `skippy_ngram_cache`, `skippy_native_mtp_draft`, `SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS = 8`
 - `state.h`: `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`

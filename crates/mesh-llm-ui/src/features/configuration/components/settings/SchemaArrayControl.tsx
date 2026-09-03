@@ -1,5 +1,7 @@
 import { cn } from '@/lib/cn'
+import { SchemaObjectArrayControl } from '@/features/configuration/components/settings/SchemaObjectArrayControl'
 import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
+import { objectArrayItemSchema } from '@/features/configuration/lib/schema-object-array'
 
 function arrayItems(value: string) {
   return value
@@ -8,14 +10,11 @@ function arrayItems(value: string) {
     .filter(Boolean)
 }
 
-export function SchemaArrayControl({
-  ariaDescribedBy,
-  disabled = false,
-  invalid = false,
-  onChange,
-  setting,
-  value
-}: SchemaSettingControlProps) {
+export function SchemaArrayControl(props: SchemaSettingControlProps) {
+  const itemSchema = objectArrayItemSchema(props.setting.valueSchema)
+  if (itemSchema) return <SchemaObjectArrayControl {...props} itemSchema={itemSchema} />
+
+  const { ariaDescribedBy, disabled = false, invalid = false, onChange, setting, value } = props
   const items = arrayItems(value)
 
   return (

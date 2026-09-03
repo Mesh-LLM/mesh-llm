@@ -4,8 +4,8 @@ package skippy.stage.v1;
 
 // Skippy owns these stage-control, artifact-transfer, and activation frames.
 // Control and artifact streams are carried inside the mesh STREAM_SUBPROTOCOL
-// envelope for skippy-stage/1. Activation transport remains on the
-// skippy-stage/1 QUIC ALPN.
+// envelope for skippy-stage/2. Activation transport remains on the
+// skippy-stage/2 QUIC ALPN.
 
 message StageControlRequest {
   uint32 gen = 1;
@@ -19,14 +19,19 @@ message StageControlRequest {
     CancelPrepareStage cancel_prepare_stage = 8;
     StageStatusUpdate stage_status_update = 9;
     ClaimCoordinator claim_coordinator = 10;
+    // A distinct oneof arm makes strict local loads fail closed on older
+    // decoders: they see no recognized command rather than interpreting the
+    // frame as a fallback-capable LoadStage.
+    LoadStage load_local_stage = 11;
   }
 }
 
 message StageControlResponse {
   uint32 gen = 1;
+  reserved 3;
+  reserved "stage_status";
   oneof response {
     StageReady stage_ready = 2;
-    StageStatus stage_status = 3;
     LayerInventory layer_inventory = 4;
     PrepareStageAccepted prepare_stage_accepted = 5;
     StagePreparationStatus stage_preparation_status = 6;
@@ -72,9 +77,8 @@ message LoadStage {
   optional string model_path = 11;
   optional StageDevice selected_device = 12;
   string bind_addr = 13;
-  uint32 activation_width = 14;
-  reserved 15;
-  reserved "wire_dtype";
+  reserved 14, 15;
+  reserved "activation_width", "wire_dtype";
   uint32 ctx_size = 16;
   int32 n_gpu_layers = 17;
   string cache_type_k = 18;
@@ -95,6 +99,32 @@ message LoadStage {
   optional bool native_mtp_enabled = 33;
   optional bool mmap = 34;
   optional bool mlock = 35;
+  optional bool projector_use_gpu = 36;
+  optional string media_marker = 37;
+  optional uint32 image_min_tokens = 38;
+  optional uint32 image_max_tokens = 39;
+  optional uint32 batch_max_tokens = 40;
+  StageGlmDsaPolicy glm_dsa_policy = 41;
+  optional uint32 generation_signal_window = 42;
+  optional StageLoadRuntimeSettings runtime_settings = 43;
+  optional bool continuous_batching = 44;
+  optional string source_model_sha256 = 45;
+  SourceResolutionPolicy source_resolution_policy = 46;
+  optional string runtime_profile = 47;
+}
+
+message StageLoadRuntimeSettings {
+  optional bool repack = 1;
+  optional bool op_offload = 2;
+  optional bool no_host_buffer = 3;
+  optional bool check_tensors = 4;
+  optional bool direct_io = 5;
+  optional uint32 main_gpu = 6;
+  optional int32 split_mode = 7;
+  optional bool kv_offload = 8;
+  optional bool kv_unified = 9;
+  optional bool swa_full = 10;
+  optional uint32 cache_idle_slots = 11;
 }
 
 message StopStage {
@@ -115,6 +145,9 @@ message GetLayerInventory {
   string model_id = 1;
   string package_ref = 2;
   string manifest_sha256 = 3;
+  optional string expected_source_model_sha256 = 5;
+  SourceResolutionPolicy source_resolution_policy = 6;
+  optional string runtime_profile = 7;
 }
 
 message PrepareStage {
@@ -169,6 +202,16 @@ message CoordinatorClaimAccepted {
   optional string error = 3;
 }
 
+message ActivationBoundaryDescriptor {
+  uint32 version = 1;
+  uint32 ggml_type = 2;
+  uint32 layout = 3;
+  uint64 elements_per_token = 4;
+  uint64 bytes_per_token = 5;
+  uint64 required_frame_flags = 6;
+  uint64 required_sidebands = 7;
+}
+
 message StageStatus {
   string topology_id = 1;
   string run_id = 2;
@@ -180,9 +223,8 @@ message StageStatus {
   uint32 layer_end = 8;
   StageRuntimeState state = 9;
   string bind_addr = 10;
-  uint32 activation_width = 11;
-  reserved 12;
-  reserved "wire_dtype";
+  reserved 11, 12;
+  reserved "activation_width", "wire_dtype";
   optional string error = 13;
   uint64 shutdown_generation = 14;
   optional StageDevice selected_device = 15;
@@ -202,6 +244,8 @@ message StageStatus {
   uint64 coordinator_term = 29;
   optional string coordinator_id = 30;
   uint64 lease_until_unix_ms = 31;
+  optional ActivationBoundaryDescriptor input_activation_boundary = 32;
+  optional ActivationBoundaryDescriptor output_activation_boundary = 33;
 }
 
 message StageStatusList {
@@ -220,6 +264,13 @@ message LayerInventory {
   optional string source_model_path = 9;
   optional uint64 source_model_bytes = 10;
   SourceModelKind source_model_kind = 11;
+  optional string source_model_sha256 = 13;
+  optional bool content_addressed_local_source = 14;
+}
+
+enum SourceResolutionPolicy {
+  SOURCE_RESOLUTION_POLICY_FALLBACK = 0;
+  SOURCE_RESOLUTION_POLICY_LOCAL_REQUIRED = 1;
 }
 
 message LayerRange {
@@ -261,6 +312,11 @@ enum StageFlashAttnType {
   STAGE_FLASH_ATTN_TYPE_AUTO = 1;
   STAGE_FLASH_ATTN_TYPE_DISABLED = 2;
   STAGE_FLASH_ATTN_TYPE_ENABLED = 3;
+}
+
+enum StageGlmDsaPolicy {
+  STAGE_GLM_DSA_POLICY_AUTO = 0;
+  STAGE_GLM_DSA_POLICY_V1 = 1;
 }
 
 message StagePeer {

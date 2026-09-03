@@ -23,7 +23,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -44,7 +45,7 @@ use crate::system::{autoupdate, benchmark, hardware};
 use anyhow::Result;
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -752,6 +753,68 @@ pub(super) async fn start_run_auto_node_and_plugins(
     Ok((node, channels, plugin_manager))
 }
 
+pub(super) fn register_pre_accept_local_source_policies(
+    config: &plugin::MeshConfig,
+    startup_specs: &[StartupModelSpec],
+) {
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_deref());
+    for model in &config.models {
+        let mut model_ids = BTreeSet::from([model.model.clone()]);
+        let configured_path = model
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .or(default_model_path);
+        if let Some(path) = configured_path {
+            let path = PathBuf::from(path);
+            model_ids.insert(path.to_string_lossy().into_owned());
+            if path.is_absolute() {
+                let canonical = path.canonicalize().unwrap_or(path);
+                model_ids.insert(models::model_ref_for_path(&canonical));
+            }
+        }
+        let required = super::startup_models::skippy_local_source_required(
+            model.skippy.as_ref(),
+            default_skippy,
+        );
+        let runtime_profile = model
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        for model_id in model_ids {
+            skippy::register_local_source_policy(&model_id, &runtime_profile, required);
+        }
+    }
+    for spec in startup_specs {
+        let mut model_ids = BTreeSet::new();
+        if let Some(declared_ref) = spec.declared_ref.as_deref() {
+            model_ids.insert(declared_ref.to_string());
+        }
+        model_ids.insert(spec.model_ref.to_string_lossy().into_owned());
+        if spec.model_ref.is_absolute() {
+            let canonical = spec
+                .model_ref
+                .canonicalize()
+                .unwrap_or_else(|_| spec.model_ref.clone());
+            model_ids.insert(models::model_ref_for_path(&canonical));
+        }
+        for model_id in model_ids {
+            skippy::register_local_source_policy(
+                &model_id,
+                &spec.profile,
+                spec.local_source_required,
+            );
+        }
+    }
+}
+
 pub(super) fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
     if options.disable_iroh_relays {
         mesh::RelayPolicy::ExplicitlyDisabled
@@ -1125,6 +1188,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
+    let primary_device_override =
+        primary_startup_model.and_then(|model| startup_device_override(model.gpu_id.as_deref()));
     let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
     let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
@@ -1135,6 +1200,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_model_ref = primary_startup_model
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
+    let primary_config_model_id =
+        primary_startup_model.and_then(|model| model.config_model_id.clone());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
     let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
     let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -1149,6 +1216,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        config_model_id: primary_config_model_id,
         readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())
@@ -1159,6 +1227,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
+        device_override: primary_device_override,
         runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,
@@ -1166,6 +1235,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        local_source_required: primary_startup_model
+            .is_some_and(|model| model.local_source_required),
         split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
@@ -1306,6 +1377,11 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Stage-control starts accepting before eager model resolution. Register
+    // every spelling that can become the model's runtime identity now so a
+    // legacy/profile-unaware request cannot bypass local-required policy in
+    // that window. False entries deliberately clear stale in-process policy.
+    register_pre_accept_local_source_policies(&config, &startup_specs);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(

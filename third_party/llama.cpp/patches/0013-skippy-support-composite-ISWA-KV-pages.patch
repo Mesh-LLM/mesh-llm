@@ -1,7 +1,7 @@
-From 72212711e2228e7bdc0174516ff59f3b08083e48 Mon Sep 17 00:00:00 2001
+From 1a4705add2cb65474e4735920db980892a6e4f11 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 13 Aug 2026 22:32:25 +1000
-Subject: [PATCH 13/26] skippy: support composite ISWA KV pages
+Subject: [PATCH 13/32] skippy: support composite ISWA KV pages
 
 ---
  include/skippy/common.h                       |   2 +-

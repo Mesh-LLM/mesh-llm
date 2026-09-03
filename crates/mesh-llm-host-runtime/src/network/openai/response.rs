@@ -1,3 +1,4 @@
+mod cache_cost;
 mod cancellation;
 mod common;
 mod dispatch;
@@ -11,6 +12,7 @@ mod routing;
 mod send;
 mod stream_translation;
 
+pub(super) use cache_cost::CacheCostObservation;
 pub(super) use common::{
     ResponseRetryPolicy, RouteAttemptLoggingContext, RouteAttemptResult,
     attempt_outcome_for_result, completion_tokens_for_result, parse_token_usage_from_json_body,

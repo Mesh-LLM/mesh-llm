@@ -158,7 +158,7 @@ fn synthetic_local_gguf_ref_for_test(path: &Path) -> String {
     hasher.update(b"\0");
     hasher.update(len.to_le_bytes());
     hasher.update(modified.to_le_bytes());
-    let digest = format!("{:x}", hasher.finalize());
+    let digest = hex::encode(hasher.finalize());
     format!("local-gguf/sha256-{}", &digest[..16])
 }
 
@@ -305,6 +305,42 @@ fn mmproj_url_does_not_expand_to_full_remote_catalog_download() {
         )
         .is_none()
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn direct_mmproj_url_materializes_only_the_projector_file() {
+    let url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf";
+    let cache = tempfile::tempdir().unwrap();
+    let downloaded = cache.path().join("mmproj-BF16.gguf");
+    std::fs::write(&downloaded, b"mmproj").unwrap();
+    let _catalog_guard = crate::models::remote_catalog::set_catalog_entries_for_test(vec![
+        remote_catalog_entry_with_mmproj(
+            "Qwen3.5-0.8B-Q4_K_M",
+            "Qwen3.5-0.8B-Vision-Q4_K_M",
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
+        ),
+    ]);
+    let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new(|repo, revision| {
+        assert_eq!(repo, "unsloth/Qwen3.5-0.8B-GGUF");
+        assert_eq!(revision, "main");
+        Some(vec![("mmproj-BF16.gguf".to_string(), Some(6))])
+    }));
+    let _download_guard = catalog::set_download_hf_assets_label_override(
+        url.to_string(),
+        Arc::new({
+            let downloaded = downloaded.clone();
+            move |_| Ok(vec![downloaded.clone()])
+        }),
+    );
+
+    let materialized = download_direct_ref_with_progress(url, false)
+        .await
+        .expect("projector URL should download directly");
+
+    assert_eq!(materialized, downloaded);
 }
 
 #[test]

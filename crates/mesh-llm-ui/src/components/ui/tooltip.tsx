@@ -2,15 +2,10 @@ import * as RadixTooltip from '@radix-ui/react-tooltip'
 import { useSyncExternalStore } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 
-// eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
 export const TooltipProvider = RadixTooltip.Provider
-// eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
 export const TooltipRoot = RadixTooltip.Root
-// eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
 export const TooltipTrigger = RadixTooltip.Trigger
-// eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
 export const TooltipPortal = RadixTooltip.Portal
-// eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
 export const TooltipArrow = RadixTooltip.Arrow
 
 export function TooltipContent({

@@ -11,8 +11,8 @@ use model_ref::split_gguf_shard_info;
 use serde::Deserialize;
 use serde_json::Value;
 use skippy_runtime::{
-    ActivationFrame, GGML_TYPE_F16, MtpSource, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode,
-    StageModel, StageSession,
+    ActivationFrame, GGML_TYPE_F16, IterationBatchPhase, IterationBatchRequest, MtpSource,
+    RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel, StageSession,
     package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
     redirect_native_logs_to_file,
 };
@@ -79,6 +79,196 @@ pub(crate) fn activation_handoff_matches_full_model(spec: FamilySpec) -> Result<
     run_correctness_chain(&layout, spec, splits)
 }
 
+pub(crate) fn graph_boundary_contract_matches_stage_roles(spec: FamilySpec) -> Result<()> {
+    prepare_native_logs()?;
+    let case = ResolvedCase::resolve_boundary_contract(spec)?;
+    let layout = case.layout()?;
+    if case.row.is_package_only() {
+        bail!(
+            "{} / {} requires a full-model artifact for graph boundary role coverage",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    let (first_cut, second_cut) = split_layers_for(case.row, layout.layer_count)?;
+    if first_cut >= second_cut {
+        bail!("graph boundary role coverage requires two ordered split layers");
+    }
+    let n_gpu_layers = case_n_gpu_layers(case.row);
+    let first_shape = StageShape {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: first_cut,
+        include_embeddings: true,
+        include_output: false,
+    };
+    let middle_shape = StageShape {
+        stage_index: 1,
+        layer_start: first_cut,
+        layer_end: second_cut,
+        include_embeddings: false,
+        include_output: false,
+    };
+    let final_shape = StageShape {
+        stage_index: 2,
+        layer_start: second_cut,
+        layer_end: layout.layer_count,
+        // Layer packages include token embeddings on the final stage for tied
+        // output weights. A downstream consumer must still expose its input
+        // boundary when those tensors happen to be present.
+        include_embeddings: true,
+        include_output: true,
+    };
+    let first = open_stage_model(
+        &stage_path(&layout, spec, first_shape)?,
+        first_shape,
+        n_gpu_layers,
+    )?;
+    let middle = open_stage_model(
+        &stage_path(&layout, spec, middle_shape)?,
+        middle_shape,
+        n_gpu_layers,
+    )?;
+    let final_stage = open_stage_model(
+        &stage_path(&layout, spec, final_shape)?,
+        final_shape,
+        n_gpu_layers,
+    )?;
+
+    if first.input_activation_boundary().is_some() {
+        bail!("first stage unexpectedly exposed an input activation boundary");
+    }
+    if final_stage.output_activation_boundary().is_some() {
+        bail!("final stage unexpectedly exposed an output activation boundary");
+    }
+    let first_output =
+        required_graph_boundary(first.output_activation_boundary(), "first stage output")?;
+    let middle_input =
+        required_graph_boundary(middle.input_activation_boundary(), "middle stage input")?;
+    let middle_output =
+        required_graph_boundary(middle.output_activation_boundary(), "middle stage output")?;
+    let final_input =
+        required_graph_boundary(final_stage.input_activation_boundary(), "final stage input")?;
+
+    for (edge, boundary) in [
+        ("first stage output", first_output),
+        ("middle stage input", middle_input),
+        ("middle stage output", middle_output),
+        ("final stage input", final_input),
+    ] {
+        boundary.raw_f32_width(edge)?;
+        if boundary.bytes_per_token
+            != boundary.elements_per_token * std::mem::size_of::<f32>() as u64
+        {
+            bail!("{edge} did not report its exact native F32 bytes per token");
+        }
+    }
+    if first_output != middle_input {
+        bail!(
+            "first-to-middle graph boundary contracts do not match: producer {first_output:?}, consumer {middle_input:?}"
+        );
+    }
+    if middle_output != final_input {
+        bail!(
+            "middle-to-final graph boundary contracts do not match: producer {middle_output:?}, consumer {final_input:?}"
+        );
+    }
+
+    let (expected_required_frame_flags, expected_required_sidebands) = match spec.family {
+        "gemma3n" => (
+            skippy_runtime::ACTIVATION_FLAG_GEMMA3N_ALTUP,
+            skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS,
+        ),
+        "qwen4exp" => (0, skippy_runtime::ACTIVATION_SIDEBAND_TOKEN_IDS),
+        _ => (0, 0),
+    };
+    for (edge, boundary) in [
+        ("first stage output", first_output),
+        ("middle stage input", middle_input),
+        ("middle stage output", middle_output),
+        ("final stage input", final_input),
+    ] {
+        if boundary.required_frame_flags != expected_required_frame_flags {
+            bail!(
+                "{edge} required frame flags {:#x}, expected {expected_required_frame_flags:#x}",
+                boundary.required_frame_flags
+            );
+        }
+        if boundary.required_sidebands != expected_required_sidebands {
+            bail!(
+                "{edge} required sidebands {:#x}, expected {expected_required_sidebands:#x}",
+                boundary.required_sidebands
+            );
+        }
+    }
+
+    let tokens = first.tokenize(case_prompt(case.row), true)?;
+    let mut first_session = first.create_session()?;
+    let first_frame = first_session.prefill_chunk_frame(&tokens, None, 0)?;
+    assert_frame_matches_graph_boundary(
+        "first stage output",
+        &first_frame,
+        first_output,
+        tokens.len(),
+    )?;
+    if first.output_activation_boundary() != Some(first_output) {
+        bail!("first stage graph boundary changed after prefill execution");
+    }
+    let mut middle_session = middle.create_session()?;
+    let middle_frame = middle_session.prefill_chunk_frame(&tokens, Some(&first_frame), 0)?;
+    assert_frame_matches_graph_boundary(
+        "middle stage output",
+        &middle_frame,
+        middle_output,
+        tokens.len(),
+    )?;
+    let mut final_session = final_stage.create_session()?;
+    let final_frame = final_session.prefill_chunk_frame(&tokens, Some(&middle_frame), 0)?;
+    if !final_frame.payload.is_empty() || final_frame.desc.payload_bytes != 0 {
+        bail!("final stage unexpectedly emitted an activation frame");
+    }
+    Ok(())
+}
+
+fn assert_frame_matches_graph_boundary(
+    edge: &str,
+    frame: &ActivationFrame,
+    boundary: skippy_runtime::ActivationBoundaryDesc,
+    expected_token_count: usize,
+) -> Result<()> {
+    if frame.desc.token_count as usize != expected_token_count {
+        bail!(
+            "{edge} emitted {} tokens, expected {expected_token_count}",
+            frame.desc.token_count
+        );
+    }
+    let expected_payload_bytes = boundary.payload_bytes(edge, frame.desc.token_count)?;
+    if frame.desc.payload_bytes != expected_payload_bytes
+        || frame.payload.len() as u64 != expected_payload_bytes
+    {
+        bail!(
+            "{edge} emitted {} descriptor bytes and {} payload bytes, expected {expected_payload_bytes}",
+            frame.desc.payload_bytes,
+            frame.payload.len()
+        );
+    }
+    if frame.desc.flags != boundary.required_frame_flags {
+        bail!(
+            "{edge} frame flags {:#x} do not match boundary flags {:#x}",
+            frame.desc.flags,
+            boundary.required_frame_flags
+        );
+    }
+    Ok(())
+}
+
+fn required_graph_boundary(
+    boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    edge: &str,
+) -> Result<skippy_runtime::ActivationBoundaryDesc> {
+    boundary.with_context(|| format!("{edge} did not expose a graph boundary descriptor"))
+}
+
 pub(crate) fn cache_state_restore_matches_recompute(spec: FamilySpec) -> Result<()> {
     prepare_native_logs()?;
     let Some(case) = resolve_case_for_ignored_test(spec)? else {
@@ -92,6 +282,239 @@ pub(crate) fn cache_state_restore_matches_recompute(spec: FamilySpec) -> Result<
         StateKind::ResidentKv
     };
     run_stage_state_restore(&layout, spec, stage_start, stage_end, state_kind)
+}
+
+pub(crate) fn mixed_iteration_matches_serial(spec: FamilySpec) -> Result<()> {
+    prepare_native_logs()?;
+    let Some(case) = resolve_case_for_ignored_test(spec)? else {
+        return Ok(());
+    };
+    let layout = case.layout()?;
+    if case.row.is_package_only() {
+        eprintln!(
+            "skipping mixed-iteration parity for package-only {} / {}",
+            spec.llama_model, spec.family
+        );
+        return Ok(());
+    }
+    let (split_layer, _) = split_layers_for(case.row, layout.layer_count)?;
+    run_mixed_iteration_split(&layout, spec, split_layer)
+}
+
+fn run_mixed_iteration_split(
+    layout: &TestLayout,
+    spec: FamilySpec,
+    split_layer: u32,
+) -> Result<()> {
+    let n_gpu_layers = case_n_gpu_layers(manifest_row(spec)?);
+    let stage0_shape = StageShape {
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: split_layer,
+        include_embeddings: true,
+        include_output: false,
+    };
+    let stage1_shape = StageShape {
+        stage_index: 1,
+        layer_start: split_layer,
+        layer_end: layout.layer_count,
+        include_embeddings: false,
+        include_output: true,
+    };
+    let stage0 = open_stage_model(
+        &stage_path(layout, spec, stage0_shape)?,
+        stage0_shape,
+        n_gpu_layers,
+    )?;
+    let stage1 = open_stage_model(
+        &stage_path(layout, spec, stage1_shape)?,
+        stage1_shape,
+        n_gpu_layers,
+    )?;
+    let tokens = stage0.tokenize(case_prompt(manifest_row(spec)?), true)?;
+    if tokens.len() < 3 {
+        bail!(
+            "{} / {} mixed-iteration prompt produced fewer than three tokens",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    let prefix = &tokens[..2];
+    let long_prefill = &tokens[..tokens.len().min(6)];
+    let short_prefill = &tokens[..3];
+
+    let mut mixed_stage0 = [
+        stage0.create_session()?,
+        stage0.create_session()?,
+        stage0.create_session()?,
+    ];
+    let mut mixed_stage1 = [
+        stage1.create_session()?,
+        stage1.create_session()?,
+        stage1.create_session()?,
+    ];
+    let mut serial_stage0 = [
+        stage0.create_session()?,
+        stage0.create_session()?,
+        stage0.create_session()?,
+    ];
+    let mut serial_stage1 = [
+        stage1.create_session()?,
+        stage1.create_session()?,
+        stage1.create_session()?,
+    ];
+
+    let mixed_prefix_frame = mixed_stage0[0].prefill_chunk_frame(prefix, None, 0)?;
+    let (mixed_decode_token, _) =
+        mixed_stage1[0].prefill_chunk_frame_sampled(prefix, None, Some(&mixed_prefix_frame), 0)?;
+    let serial_prefix_frame = serial_stage0[0].prefill_chunk_frame(prefix, None, 0)?;
+    let (serial_decode_token, _) = serial_stage1[0].prefill_chunk_frame_sampled(
+        prefix,
+        None,
+        Some(&serial_prefix_frame),
+        0,
+    )?;
+    if mixed_decode_token != serial_decode_token {
+        bail!(
+            "{} / {} mixed-iteration setup token {mixed_decode_token} did not match serial {serial_decode_token}",
+            spec.llama_model,
+            spec.family
+        );
+    }
+
+    let decode_tokens = [mixed_decode_token];
+    let mixed_stage0_output = {
+        let [decode, long, short] = &mut mixed_stage0;
+        let mut requests = [
+            IterationBatchRequest {
+                session: decode,
+                token_ids: &decode_tokens,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            },
+            IterationBatchRequest {
+                session: long,
+                token_ids: long_prefill,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: false,
+                phase: IterationBatchPhase::Prefill,
+            },
+            IterationBatchRequest {
+                session: short,
+                token_ids: short_prefill,
+                positions: &[],
+                sampling: None,
+                input: None,
+                sample_last: true,
+                phase: IterationBatchPhase::Prefill,
+            },
+        ];
+        StageSession::iteration_batch_sampled(&mut requests)?
+    };
+    if !mixed_stage0_output.samples.is_empty() {
+        bail!(
+            "{} / {} intermediate stage unexpectedly sampled tokens",
+            spec.llama_model,
+            spec.family
+        );
+    }
+
+    let (_, serial_decode_frame) =
+        serial_stage0[0].decode_step_frame(serial_decode_token, None, 0)?;
+    let serial_long_frame = serial_stage0[1].prefill_chunk_frame(long_prefill, None, 0)?;
+    let serial_short_frame = serial_stage0[2].prefill_chunk_frame(short_prefill, None, 0)?;
+    let serial_frames = [serial_decode_frame, serial_long_frame, serial_short_frame];
+    for (request_index, (mixed, serial)) in mixed_stage0_output
+        .request_outputs
+        .iter()
+        .zip(&serial_frames)
+        .enumerate()
+    {
+        if !activation_frames_match(mixed, serial) {
+            bail!(
+                "{} / {} mixed intermediate activation for request {request_index} did not match serial",
+                spec.llama_model,
+                spec.family
+            );
+        }
+    }
+
+    let mixed_stage1_output = {
+        let [decode, long, short] = &mut mixed_stage1;
+        let mut requests = [
+            IterationBatchRequest {
+                session: decode,
+                token_ids: &decode_tokens,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[0]),
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            },
+            IterationBatchRequest {
+                session: long,
+                token_ids: long_prefill,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[1]),
+                sample_last: false,
+                phase: IterationBatchPhase::Prefill,
+            },
+            IterationBatchRequest {
+                session: short,
+                token_ids: short_prefill,
+                positions: &[],
+                sampling: None,
+                input: Some(&mixed_stage0_output.request_outputs[2]),
+                sample_last: true,
+                phase: IterationBatchPhase::Prefill,
+            },
+        ];
+        StageSession::iteration_batch_sampled(&mut requests)?
+    };
+    let (serial_decode_prediction, _) = serial_stage1[0].decode_step_frame_sampled(
+        serial_decode_token,
+        None,
+        Some(&serial_frames[0]),
+        0,
+    )?;
+    serial_stage1[1].prefill_chunk_frame(long_prefill, Some(&serial_frames[1]), 0)?;
+    let (serial_short_prediction, _) = serial_stage1[2].prefill_chunk_frame_sampled(
+        short_prefill,
+        None,
+        Some(&serial_frames[2]),
+        0,
+    )?;
+    let mixed_samples = mixed_stage1_output
+        .samples
+        .iter()
+        .map(|sample| (sample.request_index, sample.predicted_token))
+        .collect::<Vec<_>>();
+    let expected_samples = vec![(0, serial_decode_prediction), (2, serial_short_prediction)];
+    if mixed_samples != expected_samples {
+        bail!(
+            "{} / {} mixed samples {mixed_samples:?} did not match serial {expected_samples:?}",
+            spec.llama_model,
+            spec.family
+        );
+    }
+    for index in 0..3 {
+        if mixed_stage0[index].token_count() != serial_stage0[index].token_count()
+            || mixed_stage1[index].token_count() != serial_stage1[index].token_count()
+        {
+            bail!(
+                "{} / {} mixed request {index} advanced session state differently from serial",
+                spec.llama_model,
+                spec.family
+            );
+        }
+    }
+    Ok(())
 }
 
 fn resolve_case_for_ignored_test(spec: FamilySpec) -> Result<Option<ResolvedCase>> {
@@ -292,6 +715,25 @@ struct StagePath {
 impl ResolvedCase {
     fn resolve(spec: FamilySpec) -> Result<Self> {
         assert_manifest_row_complete(spec)?;
+        Self::resolve_artifact(spec)
+    }
+
+    fn resolve_boundary_contract(spec: FamilySpec) -> Result<Self> {
+        let row = manifest_row(spec)?;
+        if row.repo.trim().is_empty() {
+            bail!("{} / {} is missing repo", row.llama_model, row.family);
+        }
+        if row.include()?.files().is_empty() {
+            bail!(
+                "{} / {} is missing include files",
+                row.llama_model,
+                row.family
+            );
+        }
+        Self::resolve_artifact(spec)
+    }
+
+    fn resolve_artifact(spec: FamilySpec) -> Result<Self> {
         let row = manifest_row(spec)?;
         download_if_requested(row)?;
         let artifact = if row.include()?.is_package_manifest_only() {
@@ -988,11 +1430,13 @@ fn activation_frames_match(source: &ActivationFrame, restored: &ActivationFrame)
 
     source
         .payload
-        .chunks_exact(4)
-        .zip(restored.payload.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(restored.payload.as_chunks::<4>().0.iter())
         .all(|(lhs, rhs)| {
-            let lhs = f32::from_le_bytes(lhs.try_into().expect("chunks_exact"));
-            let rhs = f32::from_le_bytes(rhs.try_into().expect("chunks_exact"));
+            let lhs = f32::from_le_bytes(*lhs);
+            let rhs = f32::from_le_bytes(*rhs);
             if lhs.to_bits() == rhs.to_bits() {
                 return true;
             }
@@ -1090,16 +1534,32 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             n_gpu_layers,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_runtime::SplitMode::Auto,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
             load_mode: path.load_mode,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             include_embeddings: shape.include_embeddings,
             include_output: shape.include_output,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: path.filter_tensors_on_load,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
         },
     )
     .with_context(|| {

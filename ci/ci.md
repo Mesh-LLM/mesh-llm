@@ -25,14 +25,35 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `ci.yml` | `workflow_call` only | Inert compatibility for the former main ingress filename |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
-| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. `scripts/plan-family-battery.py` validates the versioned `ci/llama-canary/family-certified.json` policy and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one all-family shard, builds the certification binaries once, then runs the full supported-family battery. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports, and runs a one-token MTP speculative-corpus smoke. Only GGUFs with a complete native MTP/NextN tensor head across all shards run `llama-spec-bench`; every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families and sweep cuts are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`; patch-apply failures and certification-lane failures route through the agent repair loop (`scripts/llama-canary-agent-repair.sh`), which produces a repair PR on `llama-canary/patch-queue-fix` for human review — the canary run stays red until that PR merges. After a successful changed-pin battery, a separate GitHub-hosted write-only job commits on the exact certified `main` SHA and fails safely if `main` advanced. Runner reads its pre-warmed HF cache over NFS (`HF_CACHE` + `HF_HUB_OFFLINE=1` in the runner `.env`; no `flock` on NFS, so the runner never downloads) |
+| `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
+| `nightly-kv-coverage.yml` | daily schedule, dispatch | Trusted-`main`, read-only, GitHub-hosted expansion of deterministic radix lease/eviction and blob-ownership state machines. Seed/step budgets and the exact source SHA are uploaded; no secrets or privileged runner are used. |
+| `nightly-competitive-benchmark.yml` | daily schedule, trusted-main dispatch | Opt-in CUDA scheduler benchmark on the persistent Linux `white` runner. The fixed `[self-hosted, Linux, X64, cuda]` selector is backed by a fail-closed `RUNNER_NAME=white` check; manual dispatch is accepted only from the canonical repository's `main`, and checkout is independently pinned to trusted `main`. It builds the current `skippy-server`, consumes only pre-baked model/tokenizer/native/llama-benchy inputs named by `MESH_NIGHTLY_COMPETITIVE_*` repository variables, uses the explicitly configured pre-baked `MESH_NIGHTLY_COMPETITIVE_HF_CLI` when history is enabled, compares raw llama.cpp and fixed Mesh plus staged adaptive Mesh and capacity-matched, capability-detected vLLM/SGLang arms, uploads partial evidence for 30 days, and reports promotion candidates without mutating `main`. |
+| `llama-upstream-canary.yml` | daily schedule, dispatch | Trusted default-branch llama.cpp bump certification on the self-hosted `family-certify` runner. It never runs as ordinary push or PR CI. `scripts/plan-family-battery.py` validates the versioned `ci/llama-canary/family-certified.json` policy and every file's exact immutable cache blob identity and byte size before native compilation. Each target/draft artifact must have at least one metadata-bearing GGUF shard; every shard that carries architecture dimensions must match the declared runtime range and activation width, including Qwen4's `hyper_connection.count * embedding_length` boundary. Optional `mmproj_artifact` rows pin a projector GGUF sidecar (exact blob identity, exempt from trunk-dimension checks), and each family that pins one runs an additional multimodal smoke lane after its core lanes: the real-projector + deterministic-image harness in `crates/skippy-server/src/frontend/tests/multimodal.rs` (local monolithic and split stages) via `SKIPPY_MM_*`, reconciled against the plan like every other lane. It emits deterministic bounded matrix shards and records the plan with evidence. The current single-runner workflow consumes one all-family shard, builds the certification binaries once, then runs the full supported-family battery. Before any lane starts, the battery verifies shard/tensor scans, declared runtime/MTP layer counts, model bytes, disk headroom and certification ports, and runs a one-token MTP speculative-corpus smoke. Only GGUFs with a complete native MTP/NextN tensor head across all shards run `llama-spec-bench`; every certified profile must retain strict `single-step`, `chain`, and `state-handoff` parity. Single-step and chain exercise the sole shipping raw-f32 activation wire and any mismatch is a hard failure. Planned families, sweep cuts, and multimodal smokes are reconciled exactly against executed lanes and recorded results. Declared per-model or model-size-derived startup deadlines, complete-certification wall-clock limits and typed lane outcomes are recorded, and immutable plans/model manifests/preflight evidence/certification logs upload even on failure. Manual dispatch can force this certification when the upstream SHA is unchanged. Persistent-runner execution is always a read-only checkout of trusted `main`; patch-apply failures and certification-lane failures route through the agent repair loop (`scripts/llama-canary-agent-repair.sh`), which produces a repair PR on `llama-canary/patch-queue-fix` for human review — the canary run stays red until that PR merges. After a successful changed-pin battery, a separate GitHub-hosted write-only job commits on the exact certified `main` SHA and fails safely if `main` advanced. Runner reads its pre-warmed HF cache over NFS (`HF_CACHE` + `HF_HUB_OFFLINE=1` in the runner `.env`; no `flock` on NFS, so the runner never downloads) |
+
+The canary repair wrapper owns the target-pin transition: it writes the sole
+upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through the
+checked-in `pinned` selector, and
+verifies the prepared-upstream stamp before publishing or certifying a repair
+branch. The hosted changed-pin job uses the same updater.
+
+Scheduled coverage details: an unchanged-pin llama canary uses the bounded
+`nightly` cadence (Qwen3 dense, Falcon-H1, Qwen3Next, and Mamba). Changed pins
+use `llama-bump`, and a forced dispatch uses `manual-full`; those latter two
+retain the complete 33-family certification described in the table. The
+competitive benchmark can optionally download exact-cohort history from
+`MESH_PERFORMANCE_HISTORY_DATASET`, validate the checked-in schema, report
+regression candidates, and append one immutable run shard using
+`MESH_PERFORMANCE_HISTORY_HF_TOKEN`. Performance thresholds are report-only
+during baseline collection.
 
 Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested
 reusable workflow. GitHub therefore exposes five focused PR-associated runs
 with direct job and step drill-down. Each has a stable `PR / <lane>` result.
-The entries receive no repository secrets, cannot select Depot or publish
-trusted-main caches, and independently cancel superseded synchronizations.
+The entries receive no repository secrets and independently cancel superseded
+synchronizations. Eligible same-repository executor jobs may select Depot
+through protected runner policy while the bounded repository gate is active;
+forks and control-plane jobs remain hosted.
 The protected planner action extracts only `ci/ownership.yml` and
 `ci/slices.yml` from the validated immutable PR source SHA into a unique
 runner-temp directory. The source ownership and slice catalogs must match the
@@ -237,9 +258,9 @@ runtime, composition and smoke dependency chain inside one run, so native
 runtime producers are not duplicated.
 
 - `ci-quality-slice.yml` — action/packaging/consistency contracts, format,
-  bounded Clippy batches and CLI documentation synchronization.
-- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, and
-  public website build.
+  bounded Clippy batches and generated CLI inventory freshness.
+- `ci-web-slice.yml` — console lint/type/test, console Playwright E2E, public
+  website build, and CLI explorer browser validation.
 - `ci-ui-artifact-slice.yml` — one immutable console `dist` producer.
 - `static-abi-artifact.yml` — one verified portable static llama ABI producer
   that exports the exact toolchain epoch recorded in its artifact.
@@ -271,15 +292,20 @@ runtime producers are not duplicated.
   ROCm and Vulkan products remain package-verified until eligible inference
   runners are registered.
 - `ci-linux-sdk-slice.yml` and `ci-macos-sdk-slice.yml` — platform-local
-  Rust, Kotlin and Swift consumers. Swift production starts from the plan and
-  Kotlin production from the shared static ABI; only smoke consumers wait for
-  the matching product lane.
+  Rust, Kotlin and Swift consumers. Each smoke downloads the matching
+  platform lane's immutable UI artifact before packaging SDK resources;
+  Rust's smoke also uses the exact main-seeded Cargo/target cache. Swift
+  production starts from the plan and Kotlin production from the shared
+  static ABI; only smoke consumers wait for the matching product lane.
 - `ci-runner-contract-slice.yml` — plan/provider/PR cache-boundary checks and
   trusted-main runner-image contracts.
 
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
+The Swift SDK smoke consumes the lane's immutable UI distribution with
+`--skip-build`; it does not install Node or pnpm and owns no package-manager
+cache.
 
 ## Fan-out and timing controls
 
@@ -366,16 +392,16 @@ from being duplicated into every composed product artifact.
 ## Provider and cache policy
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
-Fork pull requests use GitHub-hosted runners. Same-repository PRs normally do
-too, but an exact maintainer-approved merge ref and head SHA may use Depot under
-the time-bounded cache-risk exception in `ci/DEPOT_PR_RISK_EXCEPTION.md`. The
+Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
+use Depot while the repository-wide gate and time-bounded cache-risk exception
+in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
 other exception is uncredentialed CUDA smoke on the approved ephemeral
 `gpu-nvidia` scale set described above. PRs use the same protected reusable
 lanes and receive no repository secrets. On routine trusted-`main` pushes,
 Linux roles may use Depot only when `DEPOT_RUNNERS_ENABLED` is exactly `true`;
 macOS, Windows, credential-bearing smokes and other hardware-qualified work
-retain explicit approved placement. The separate exact same-repository PR
-exception may also select eligible build/test rows on Depot macOS 15 and
+retain explicit approved placement. The same-repository PR exception may also
+select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
 
@@ -392,8 +418,8 @@ ordinary executor rows, not that every check or job is hosted by Depot.
 
 The central selector normally makes the Depot cache namespace inert by emitting
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. During
-the bounded exception, the exact approved PR revision and eligible trusted-main
-Depot jobs emit `allow_native_github_cache=true`, enabling intentional
+the bounded exception, eligible same-repository PR and trusted-main Depot jobs
+emit `allow_native_github_cache=true`, enabling intentional
 cross-branch reuse through Depot's repository-wide Actions-cache proxy. Direct
 Depot build-tool remote cache remains disabled. This is a conscious iteration-
 speed tradeoff and the shared cache is treated as attacker-controlled input,
@@ -420,13 +446,11 @@ replace the global PR gate. Maintainers must not set it until the external
 isolation protocol proves the actual Depot/WebDAV and Actions-cache authority
 boundary.
 
-The ordinary PR selector also requires the independent global gate plus exact
-`DEPOT_PR_APPROVED_REF` and `DEPOT_PR_APPROVED_SHA` values. The SHA binding
-invalidates approval after every push, forks and CI-policy changes remain
-hosted, and the source-enforced exception expires on 2026-09-14 UTC. GitHub's
-`all_external_contributors` approval policy covers external contributors, not
-same-repository collaborator branches; the exact ref/SHA values are therefore
-the protected same-repository maintainer approval control.
+The ordinary PR selector requires the independent global gate. Forks and
+CI-policy changes remain hosted, and the source-enforced exception expires on
+2026-09-14 UTC. GitHub's `all_external_contributors` approval policy covers
+external contributors, not same-repository collaborator branches; the global
+gate and checked-in expiry are therefore the maintainer approval control.
 
 The Quality slice also contains a separate, additive authority-sentinel
 selector. It reads `DEPOT_PR_SENTINEL_REF` (not `DEPOT_PR_CANARY_REF`) and
@@ -499,6 +523,7 @@ The implemented policy uses that isolation selectively:
 | macOS Metal unit ABI and Windows native ABI | Exact PR-scoped cache on miss | Same-PR reruns avoid the native rebuild; no restore prefixes cross an ABI boundary |
 | Console pnpm store | None -- `ui_quality`, `ui_e2e`, and `ui_artifact` all point `store-dir` at the runner image's baked pnpm store instead of an Actions cache | Every run installs warm from the image; no cache to publish, restore, or race |
 | Website npm store | None -- the `website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
+| SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
 
 Outside the bounded exception, a Depot-selected run emits
@@ -512,11 +537,11 @@ main/release/manual paths retain the existing cache behavior. This is a
 checked-in consumer policy, not proof that a Depot runner has no ambient
 Depot/WebDAV authority.
 
-For an exactly approved exception run, `allow_native_github_cache=true` enables
-those guarded cache consumers on both the selected PR and eligible trusted-main
-Depot jobs. Depot's lack of branch isolation means the cache can cross the PR,
-main, and other-PR trust boundaries. That accepted risk, including the exact
-sentinel evidence and rollback procedure, is documented in
+For an eligible exception run, `allow_native_github_cache=true` enables those
+guarded cache consumers on both selected PR and eligible trusted-main Depot
+jobs. Depot's lack of branch isolation means the cache can cross the PR, main,
+and other-PR trust boundaries. That accepted risk, including the exact sentinel
+evidence and rollback procedure, is documented in
 `ci/DEPOT_PR_RISK_EXCEPTION.md`; the exact-SHA canary, metrics, and hosted
 rollback evidence are recorded in `.omo/specs/depot-pr-rollout-evidence.md`.
 
@@ -535,7 +560,7 @@ an optimization: native stamps/manifests/checksums are verified, and every job
 must still regenerate successfully after a miss.
 
 Permanent Depot PR execution is not yet approved. The bounded exception permits
-only an exact same-repository ref/SHA through 2026-09-14 UTC. A protected
+eligible same-repository PR jobs through 2026-09-14 UTC. A protected
 runner-group check, no-secret/no-direct-token execution, provider-isolation
 redesign, and a new successful non-secret sentinel remain prerequisites for
 removing that deadline. Do not change Depot settings or runner groups in a

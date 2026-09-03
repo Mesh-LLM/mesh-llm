@@ -5,7 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::inventory::{inventory_source_candidates, resolve_inventory_source};
+use super::inventory::{
+    inventory_source_candidates, prepare_stage_source, resolve_inventory_source,
+};
 use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
 use tokio::sync::{Mutex as TokioMutex, oneshot};
@@ -67,6 +69,7 @@ fn load_request() -> StageLoadRequest {
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
         backend: "skippy".to_string(),
         package_ref: "pkg-a".to_string(),
         manifest_sha256: "sha256".to_string(),
@@ -76,7 +79,16 @@ fn load_request() -> StageLoadRequest {
         layer_end: 12,
         model_path: Some("/models/model.gguf".to_string()),
         source_model_bytes: Some(64 * 1024 * 1024 * 1024),
+        source_model_sha256: None,
+        local_source_required: false,
         projector_path: Some("/models/mmproj.gguf".to_string()),
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: Some(StageDevice {
             backend_device: "CUDA0".to_string(),
             stable_id: Some("GPU-123".to_string()),
@@ -84,9 +96,9 @@ fn load_request() -> StageLoadRequest {
             vram_bytes: Some(24_000_000_000),
         }),
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: 4096,
         ctx_size: 8192,
         lane_count: 3,
+        continuous_batching: true,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -95,6 +107,19 @@ fn load_request() -> StageLoadRequest {
         cache_type_k: "f16".to_string(),
         cache_type_v: "q8_0".to_string(),
         flash_attn_type: FlashAttentionType::Enabled,
+        runtime_settings: StageLoadRuntimeSettings {
+            repack: true,
+            op_offload: Some(false),
+            no_host_buffer: true,
+            check_tensors: true,
+            direct_io: true,
+            main_gpu: Some(2),
+            split_mode: skippy_protocol::SplitMode::Row,
+            kv_offload: Some(false),
+            kv_unified: Some(true),
+            swa_full: Some(false),
+            cache_idle_slots: Some(3),
+        },
         native_mtp_enabled: true,
         shutdown_generation: 7,
         coordinator_term: 0,
@@ -139,17 +164,33 @@ fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
 }
 
 fn write_metadata_only_gguf(path: &std::path::Path, layer_count: u32) {
+    write_metadata_only_gguf_with_context(path, layer_count, 4096);
+}
+
+fn write_metadata_only_gguf_with_context(
+    path: &std::path::Path,
+    layer_count: u32,
+    context_length: u32,
+) {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"GGUF");
     bytes.extend_from_slice(&3u32.to_le_bytes());
     bytes.extend_from_slice(&0i64.to_le_bytes());
-    bytes.extend_from_slice(&2i64.to_le_bytes());
+    bytes.extend_from_slice(&4i64.to_le_bytes());
     push_gguf_string(&mut bytes, "general.architecture");
     bytes.extend_from_slice(&8u32.to_le_bytes());
     push_gguf_string(&mut bytes, "deepseek4");
     push_gguf_string(&mut bytes, "deepseek4.block_count");
     bytes.extend_from_slice(&4u32.to_le_bytes());
     bytes.extend_from_slice(&layer_count.to_le_bytes());
+    for (key, value) in [
+        ("deepseek4.embedding_length", 2048u32),
+        ("deepseek4.context_length", context_length),
+    ] {
+        push_gguf_string(&mut bytes, key);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
     fs::write(path, bytes).unwrap();
 }
 
@@ -241,6 +282,23 @@ fn stage_config_preserves_backend_neutral_load_fields() {
     let config = stage_config(&request, None, None).unwrap();
 
     assert_stage_config_core_fields(&config);
+    assert_eq!(config.repack, request.runtime_settings.repack);
+    assert_eq!(config.op_offload, request.runtime_settings.op_offload);
+    assert_eq!(
+        config.no_host_buffer,
+        request.runtime_settings.no_host_buffer
+    );
+    assert_eq!(config.check_tensors, request.runtime_settings.check_tensors);
+    assert_eq!(config.direct_io, request.runtime_settings.direct_io);
+    assert_eq!(config.main_gpu, request.runtime_settings.main_gpu);
+    assert_eq!(config.split_mode, request.runtime_settings.split_mode);
+    assert_eq!(config.kv_offload, request.runtime_settings.kv_offload);
+    assert_eq!(config.kv_unified, request.runtime_settings.kv_unified);
+    assert_eq!(config.swa_full, request.runtime_settings.swa_full);
+    assert_eq!(
+        config.cache_idle_slots,
+        request.runtime_settings.cache_idle_slots
+    );
 }
 
 fn assert_stage_config_core_fields(config: &StageConfig) {
@@ -475,8 +533,11 @@ async fn prepare_stage_records_background_source_availability() {
         let inventory = state
             .inventory(StageInventoryRequest {
                 model_id: load.model_id.clone(),
+                runtime_profile: load.runtime_profile.clone(),
                 package_ref: load.package_ref.clone(),
                 manifest_sha256: load.manifest_sha256.clone(),
+                expected_source_model_sha256: None,
+                local_source_required: false,
             })
             .await;
         if let Some(status) = inventory
@@ -526,8 +587,11 @@ async fn prepare_layer_package_stays_downloading_while_peer_prefetch_is_pending(
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
     let status = inventory
@@ -568,8 +632,11 @@ async fn prepare_layer_package_fails_only_after_peer_prefetch_and_local_resoluti
         let inventory = state
             .inventory(StageInventoryRequest {
                 model_id: load.model_id.clone(),
+                runtime_profile: load.runtime_profile.clone(),
                 package_ref: load.package_ref.clone(),
                 manifest_sha256: load.manifest_sha256.clone(),
+                expected_source_model_sha256: None,
+                local_source_required: false,
             })
             .await;
         if let Some(status) = inventory
@@ -634,8 +701,11 @@ async fn cancel_prepare_persists_cancelled_status_and_blocks_late_prefetch_resul
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
     let status = inventory
@@ -704,8 +774,11 @@ async fn prepare_preserves_equal_or_newer_cancelled_status() {
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
     let stored = inventory
@@ -755,8 +828,11 @@ async fn status_update_upserts_preparation_status_and_rejects_stale_generation()
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
     let status = inventory
@@ -779,8 +855,11 @@ async fn status_update_upserts_preparation_status_and_rejects_stale_generation()
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
     let status = inventory
@@ -804,8 +883,11 @@ async fn inventory_retains_failed_prepare_status() {
     let inventory = state
         .inventory(StageInventoryRequest {
             model_id: load.model_id.clone(),
+            runtime_profile: load.runtime_profile.clone(),
             package_ref: load.package_ref.clone(),
             manifest_sha256: load.manifest_sha256.clone(),
+            expected_source_model_sha256: None,
+            local_source_required: false,
         })
         .await;
 
@@ -822,8 +904,11 @@ async fn inventory_retains_failed_prepare_status() {
 fn inventory_source_candidates_prefer_explicit_gguf_ref() {
     let request = StageInventoryRequest {
         model_id: "catalog-model".to_string(),
+        runtime_profile: Some(String::new()),
         package_ref: "gguf:///tmp/source-model.gguf".to_string(),
         manifest_sha256: "sha256".to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: false,
     };
 
     let candidates = inventory_source_candidates(&request);
@@ -853,8 +938,11 @@ fn inventory_source_resolves_metadata_only_first_shard() {
 
     let inventory = resolve_inventory_source(&StageInventoryRequest {
         model_id: "local-gguf/deepseek-v4-flash".to_string(),
+        runtime_profile: Some(String::new()),
         package_ref: format!("gguf://{}", first.display()),
         manifest_sha256: "manifest".to_string(),
+        expected_source_model_sha256: None,
+        local_source_required: false,
     })
     .expect("metadata-only first shard should still advertise inventory");
 
@@ -866,6 +954,117 @@ fn inventory_source_resolves_metadata_only_first_shard() {
             .path
             .ends_with("DeepSeek-V4-Flash-00001-of-00003.gguf")
     );
+}
+
+#[tokio::test]
+async fn content_addressed_inventory_proves_local_bytes_without_leaking_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("worker-local-name.gguf");
+    write_metadata_only_gguf(&path, 61);
+    let package =
+        super::super::synthetic_content_addressed_gguf_package("logical-model", &path).unwrap();
+    let request = StageInventoryRequest {
+        model_id: "logical-model".to_string(),
+        runtime_profile: Some("strict-profile".to_string()),
+        package_ref: package.package_ref.clone(),
+        manifest_sha256: package.manifest_sha256.clone(),
+        expected_source_model_sha256: Some(package.source_model_sha256.clone()),
+        local_source_required: true,
+    };
+
+    let inventory = StageControlState::default()
+        .inventory(request.clone())
+        .await;
+
+    assert_eq!(inventory.layer_count, 61);
+    assert_eq!(inventory.source_model_path, None);
+    assert_eq!(
+        inventory.source_model_sha256.as_deref(),
+        Some(package.source_model_sha256.as_str())
+    );
+    assert_eq!(inventory.content_addressed_local_source, Some(true));
+    assert_eq!(inventory.available_ranges.len(), 1);
+
+    std::thread::sleep(Duration::from_millis(50));
+    write_metadata_only_gguf(&path, 62);
+    let tampered = StageControlState::default().inventory(request).await;
+    assert_eq!(tampered.content_addressed_local_source, Some(false));
+    assert_eq!(tampered.source_model_sha256, None);
+    assert!(tampered.available_ranges.is_empty());
+}
+
+#[tokio::test]
+async fn local_required_prepare_never_falls_back_to_supplied_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("otherwise-resolvable.gguf");
+    write_metadata_only_gguf(&path, 61);
+    let mut load = load_request();
+    load.model_path = Some(path.to_string_lossy().into_owned());
+    load.package_ref = format!("local-gguf://sha256/{}", "c".repeat(64));
+    load.manifest_sha256 = "d".repeat(64);
+    load.source_model_sha256 = Some("c".repeat(64));
+    load.local_source_required = true;
+    load.load_mode = LoadMode::RuntimeSlice;
+
+    let error = prepare_stage_source(&load).await.unwrap_err().to_string();
+
+    assert!(error.contains("is not registered"), "{error}");
+}
+
+#[test]
+fn local_required_load_reverifies_content_after_inventory() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("load-source.gguf");
+    // Keep this content identity distinct from the inventory verification
+    // fixture so both tests remain valid under default parallel execution.
+    write_metadata_only_gguf_with_context(&path, 61, 8192);
+    let package =
+        super::super::synthetic_content_addressed_gguf_package("load-verification-model", &path)
+            .unwrap();
+    let mut load = load_request();
+    load.model_id = "load-verification-model".to_string();
+    load.runtime_profile = Some("strict".to_string());
+    load.package_ref = package.package_ref;
+    load.manifest_sha256 = package.manifest_sha256;
+    load.source_model_sha256 = Some(package.source_model_sha256);
+    load.local_source_required = true;
+    load.load_mode = LoadMode::RuntimeSlice;
+
+    assert!(super::super::apply_verified_local_source(&mut load).unwrap());
+    let canonical_path = path.canonicalize().unwrap();
+    assert_eq!(load.model_path.as_deref(), canonical_path.to_str());
+
+    std::thread::sleep(Duration::from_millis(50));
+    write_metadata_only_gguf_with_context(&path, 62, 8192);
+    let error = super::super::apply_verified_local_source(&mut load)
+        .expect_err("replaced source must fail the load-time verification")
+        .to_string();
+    assert!(
+        error.contains("no registered local GGUF matches"),
+        "{error}"
+    );
+}
+
+#[test]
+fn local_required_profile_rejects_legacy_request_without_raising_fallback_profile() {
+    let model_id = format!("mixed-profile-model-{}", std::process::id());
+    super::super::register_local_source_policy(&model_id, "strict", true);
+    super::super::register_local_source_policy(&model_id, "fallback", false);
+
+    let mut legacy = load_request();
+    legacy.model_id = model_id.clone();
+    legacy.runtime_profile = None;
+    legacy.local_source_required = false;
+    let error = super::super::apply_verified_local_source(&mut legacy)
+        .expect_err("profile-less legacy request must fail closed")
+        .to_string();
+    assert!(error.contains("content-addressed RuntimeSlice"), "{error}");
+
+    let mut fallback = load_request();
+    fallback.model_id = model_id;
+    fallback.runtime_profile = Some("fallback".to_string());
+    fallback.local_source_required = false;
+    assert!(!super::super::apply_verified_local_source(&mut fallback).unwrap());
 }
 
 #[test]

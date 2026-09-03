@@ -1,3 +1,4 @@
+use super::cache_cost::parse_cache_cost_from_json_body;
 use super::common::{
     ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
     retryable_quality_result,
@@ -122,6 +123,7 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     Ok(RouteAttemptResult::Delivered {
         status_code,
         usage: None,
+        cache_cost: None,
     })
 }
 
@@ -149,6 +151,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
                 return Ok(result);
             }
             let usage = parse_token_usage_from_json_body(body);
+            let cache_cost = parse_cache_cost_from_json_body(body);
             // Reads may include bytes beyond the declared HTTP body. Only the
             // declared response is client-visible and capturable.
             tcp_stream.write_all(&buffered[..body_end]).await?;
@@ -157,6 +160,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             return Ok(RouteAttemptResult::Delivered {
                 status_code: probe.status_code,
                 usage,
+                cache_cost,
             });
         }
     }
@@ -170,6 +174,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     Ok(RouteAttemptResult::Delivered {
         status_code: probe.status_code,
         usage: None,
+        cache_cost: None,
     })
 }
 

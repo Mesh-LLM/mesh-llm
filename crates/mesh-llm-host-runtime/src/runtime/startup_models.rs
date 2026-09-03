@@ -19,6 +19,11 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+mod local_required;
+
+use local_required::resolve_local_required_startup_model;
+pub(super) use local_required::validate_local_required_source;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 
 pub(super) struct StartupMeshCreationState {
@@ -29,16 +34,25 @@ pub(super) struct StartupMeshCreationState {
 pub(super) struct StartupModelSpec {
     pub(super) model_ref: PathBuf,
     pub(super) declared_ref: Option<String>,
+    pub(super) config_model_id: Option<String>,
     pub(super) mmproj_ref: Option<PathBuf>,
     pub(super) ctx_size: Option<u32>,
     pub(super) gpu_id: Option<String>,
-    pub(super) config_owned: bool,
+    /// Whether `gpu_id` came from an explicit non-auto CLI `--device`.
+    pub(super) cli_device_override: bool,
+    /// Whether pinned startup preflight must resolve this model's GPU selector.
+    ///
+    /// Config-owned models opt in. An explicit CLI `--model` also opts in
+    /// when its ref exactly and uniquely matches a configured model. Ad-hoc
+    /// model refs and GGUF paths remain outside per-model config ownership.
+    pub(super) resolve_pinned_gpu: bool,
     pub(super) parallel: Option<usize>,
     pub(super) cache_type_k: Option<String>,
     pub(super) cache_type_v: Option<String>,
     pub(super) n_batch: Option<u32>,
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
+    pub(super) local_source_required: bool,
     pub(super) profile: String,
 }
 
@@ -60,6 +74,7 @@ impl StartupPinnedGpuTarget {
 #[derive(Clone, Debug)]
 pub(super) struct StartupModelPlan {
     pub(super) declared_ref: String,
+    pub(super) config_model_id: Option<String>,
     pub(super) resolved_path: PathBuf,
     pub(super) mmproj_path: Option<PathBuf>,
     pub(super) ctx_size: Option<u32>,
@@ -71,6 +86,7 @@ pub(super) struct StartupModelPlan {
     pub(super) n_batch: Option<u32>,
     pub(super) n_ubatch: Option<u32>,
     pub(super) flash_attention: FlashAttentionType,
+    pub(super) local_source_required: bool,
     pub(super) profile: String,
 }
 
@@ -99,7 +115,7 @@ pub(super) fn resolve_owner_passphrase(path: &Path) -> Result<Option<Zeroizing<S
 
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
         let prompt = format!("Enter owner keystore passphrase for {}: ", path.display());
-        let passphrase = rpassword::prompt_password_stderr(&prompt)?;
+        let passphrase = rpassword::prompt_password(&prompt)?;
         return Ok(Some(Zeroizing::new(passphrase)));
     }
 
@@ -441,7 +457,11 @@ pub(super) async fn prepare_runtime_startup(
     // management, OpenAI, plugin, and control surfaces.
     let requested_model_names = startup_specs
         .iter()
-        .map(|spec| spec.model_ref.to_string_lossy().into_owned())
+        .map(|spec| {
+            spec.declared_ref
+                .clone()
+                .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned())
+        })
         .collect();
     Ok(Some(PreparedRuntimeStartup {
         startup_specs,
@@ -456,7 +476,7 @@ pub(super) async fn resolve_eager_startup_models(
     startup_specs: &[StartupModelSpec],
 ) -> Result<Vec<StartupModelPlan>> {
     let mut startup_models = resolve_startup_models(startup_specs, options.split).await?;
-    preflight_config_owned_startup_models(
+    preflight_pinned_startup_models(
         config,
         startup_specs,
         &mut startup_models,
@@ -495,6 +515,8 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
             "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
             "--gguf" => options.gguf.push(next_test_arg(&mut iter, arg).into()),
+            "--mmproj" => options.mmproj = Some(next_test_arg(&mut iter, arg).into()),
+            "--device" => options.device = Some(next_test_arg(&mut iter, arg).to_string()),
             "--ctx-size" => {
                 options.ctx_size = Some(
                     next_test_arg(&mut iter, arg)
@@ -611,6 +633,157 @@ fn is_plain_model_alias(candidate: &str) -> bool {
         && !candidate.contains('@')
 }
 
+fn effective_startup_model_config(
+    model_ref: &str,
+    model: Option<&plugin::ModelConfigEntry>,
+    defaults: Option<&plugin::ModelConfigDefaults>,
+) -> plugin::ModelConfigEntry {
+    let profile_entry = model
+        .cloned()
+        .unwrap_or_else(|| plugin::ModelConfigEntry {
+            model: model_ref.to_string(),
+            ..plugin::ModelConfigEntry::default()
+        })
+        .with_profile_defaults(defaults);
+    let default_fit = defaults.and_then(|value| value.model_fit.as_ref());
+    let default_hardware = defaults.and_then(|value| value.hardware.as_ref());
+    let default_throughput = defaults.and_then(|value| value.throughput.as_ref());
+    let default_multimodal = defaults.and_then(|value| value.multimodal.as_ref());
+    plugin::ModelConfigEntry {
+        model: model_ref.to_string(),
+        mmproj: model
+            .and_then(|value| value.mmproj.clone())
+            .or_else(|| default_multimodal.and_then(|value| value.mmproj.clone()))
+            .or_else(|| default_hardware.and_then(|value| value.mmproj.clone())),
+        ctx_size: model
+            .and_then(|value| value.ctx_size)
+            .or_else(|| default_fit.and_then(|value| value.ctx_size)),
+        gpu_id: model
+            .and_then(|value| value.gpu_id.clone())
+            .or_else(|| default_hardware.and_then(|value| value.device.clone())),
+        parallel: model
+            .and_then(|value| value.parallel)
+            .or_else(|| default_throughput.and_then(|value| value.parallel)),
+        cache_type_k: model
+            .and_then(|value| value.cache_type_k.clone())
+            .or_else(|| default_fit.and_then(|value| value.cache_type_k.clone())),
+        cache_type_v: model
+            .and_then(|value| value.cache_type_v.clone())
+            .or_else(|| default_fit.and_then(|value| value.cache_type_v.clone())),
+        batch: model
+            .and_then(|value| value.batch)
+            .or_else(|| default_fit.and_then(|value| value.batch)),
+        ubatch: model
+            .and_then(|value| value.ubatch)
+            .or_else(|| default_fit.and_then(|value| value.ubatch)),
+        flash_attention: model
+            .and_then(|value| value.flash_attention)
+            .or_else(|| default_fit.and_then(|value| value.flash_attention)),
+        model_fit: profile_entry.model_fit,
+        hardware: profile_entry.hardware,
+        throughput: profile_entry.throughput,
+        skippy: profile_entry.skippy,
+        ..plugin::ModelConfigEntry::default()
+    }
+}
+
+fn configured_server_alias(
+    model: &plugin::ModelConfigEntry,
+    defaults: Option<&plugin::ModelConfigDefaults>,
+) -> Option<String> {
+    model
+        .advanced
+        .as_ref()
+        .and_then(|advanced| advanced.server.as_ref())
+        .and_then(|server| server.alias.as_deref())
+        .or_else(|| {
+            defaults
+                .and_then(|value| value.advanced.as_ref())
+                .and_then(|advanced| advanced.server.as_ref())
+                .and_then(|server| server.alias.as_deref())
+        })
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(str::to_string)
+}
+
+/// Return the effective persisted device selector for one configured model.
+fn configured_model_gpu_id(
+    config: &plugin::MeshConfig,
+    model: &plugin::ModelConfigEntry,
+) -> Option<String> {
+    model
+        .hardware
+        .as_ref()
+        .and_then(|hardware| hardware.device.clone())
+        .or_else(|| model.gpu_id.clone())
+        .or_else(|| configured_default_gpu_id(config))
+}
+
+/// Return the global device selector inherited by ad-hoc startup models.
+fn configured_default_gpu_id(config: &plugin::MeshConfig) -> Option<String> {
+    config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.device.clone())
+}
+
+/// Match only an exact CLI `--model` ref.
+///
+/// The CLI has no profile selector, so duplicate refs are ambiguous. GGUF
+/// paths and aliases do not participate in per-model config matching.
+fn matching_config_model<'a>(
+    config: &'a plugin::MeshConfig,
+    model_ref: &Path,
+) -> Result<Option<&'a plugin::ModelConfigEntry>> {
+    let Some(model_ref) = model_ref.to_str() else {
+        return Ok(None);
+    };
+    let mut matches = config
+        .models
+        .iter()
+        .filter(|model| model.model == model_ref);
+    let Some(first) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "CLI --model '{}' matches multiple configured model entries; select a unique configured model ref",
+            model_ref
+        );
+    }
+    Ok(Some(first))
+}
+
+/// Apply CLI device precedence without treating `--device auto` as a pin.
+fn effective_startup_gpu_id(options: &RuntimeOptions, persisted: Option<&str>) -> Option<String> {
+    options
+        .device
+        .as_deref()
+        .map(str::trim)
+        .filter(|device| !device.is_empty() && !device.eq_ignore_ascii_case("auto"))
+        .map(str::to_string)
+        .or_else(|| persisted.map(str::to_string))
+}
+
+fn has_explicit_startup_device(options: &RuntimeOptions) -> bool {
+    options.device.as_deref().is_some_and(|device| {
+        let device = device.trim();
+        !device.is_empty() && !device.eq_ignore_ascii_case("auto")
+    })
+}
+
+pub(super) fn skippy_local_source_required(
+    model_skippy: Option<&plugin::SkippyConfig>,
+    default_skippy: Option<&plugin::SkippyConfig>,
+) -> bool {
+    model_skippy
+        .and_then(|skippy| skippy.source_policy.as_deref())
+        .or_else(|| default_skippy.and_then(|skippy| skippy.source_policy.as_deref()))
+        == Some("local-required")
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -620,7 +793,12 @@ pub(super) fn build_startup_model_specs(
     }
 
     let mut specs = Vec::new();
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
     if cli_has_explicit_models(options) {
+        let defaults = config.defaults.as_ref();
         // `--gguf <path> --model <alias>` names the local file rather than
         // requesting a second model: bind the alias to the GGUF so we never
         // try to resolve it against the Hugging Face hub or the catalog.
@@ -629,20 +807,34 @@ pub(super) fn build_startup_model_specs(
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
+            let effective = effective_startup_model_config(&alias, None, defaults);
+            let local_source_required =
+                skippy_local_source_required(effective.skippy.as_ref(), None);
+            if local_source_required {
+                validate_local_required_source(path, &alias)?;
+            }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: Some(alias),
-                mmproj_ref: options.mmproj.clone(),
-                ctx_size: options.ctx_size,
-                gpu_id: None,
-                config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                config_model_id: None,
+                mmproj_ref: options
+                    .mmproj
+                    .clone()
+                    .or_else(|| effective.mmproj.as_ref().map(PathBuf::from)),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective_startup_gpu_id(options, effective.gpu_id.as_deref()),
+                cli_device_override: has_explicit_startup_device(options),
+                resolve_pinned_gpu: false,
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
+                profile: effective.derived_profile(),
             });
             return Ok(specs);
         }
@@ -651,37 +843,67 @@ pub(super) fn build_startup_model_specs(
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
+            let effective =
+                effective_startup_model_config(&path.display().to_string(), None, defaults);
+            let local_source_required =
+                skippy_local_source_required(effective.skippy.as_ref(), None);
+            if local_source_required {
+                validate_local_required_source(path, path.to_str().unwrap_or("local model"))?;
+            }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 declared_ref: None,
-                mmproj_ref: None,
-                ctx_size: options.ctx_size,
-                gpu_id: None,
-                config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                config_model_id: None,
+                mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective_startup_gpu_id(options, effective.gpu_id.as_deref()),
+                cli_device_override: has_explicit_startup_device(options),
+                resolve_pinned_gpu: false,
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
+                profile: effective.derived_profile(),
             });
         }
         for model in &options.model {
+            let matching_config = matching_config_model(config, model)?;
+            let effective =
+                effective_startup_model_config(&model.display().to_string(), None, defaults);
+            let local_source_required = skippy_local_source_required(
+                matching_config.and_then(|model| model.skippy.as_ref()),
+                default_skippy,
+            );
+            if local_source_required {
+                validate_local_required_source(model, model.to_str().unwrap_or("local model"))?;
+            }
+            let persisted_gpu_id = matching_config
+                .and_then(|model| configured_model_gpu_id(config, model))
+                .or_else(|| configured_default_gpu_id(config));
             specs.push(StartupModelSpec {
                 model_ref: model.clone(),
                 declared_ref: None,
-                mmproj_ref: None,
-                ctx_size: options.ctx_size,
-                gpu_id: None,
-                config_owned: false,
-                parallel: None,
-                cache_type_k: None,
-                cache_type_v: None,
-                n_batch: None,
-                n_ubatch: None,
-                flash_attention: FlashAttentionType::Auto,
-                profile: String::new(),
+                config_model_id: None,
+                mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+                ctx_size: options.ctx_size.or(effective.ctx_size),
+                gpu_id: effective_startup_gpu_id(options, persisted_gpu_id.as_deref()),
+                cli_device_override: has_explicit_startup_device(options),
+                resolve_pinned_gpu: matching_config.is_some(),
+                parallel: effective.parallel,
+                cache_type_k: effective.cache_type_k.clone(),
+                cache_type_v: effective.cache_type_v.clone(),
+                n_batch: effective.batch,
+                n_ubatch: effective.ubatch,
+                flash_attention: effective
+                    .flash_attention
+                    .unwrap_or(FlashAttentionType::Auto),
+                local_source_required,
+                profile: effective.derived_profile(),
             });
         }
         if let Some(mmproj) = &options.mmproj
@@ -704,52 +926,66 @@ pub(super) fn build_startup_model_specs(
     }
 
     for model in &config.models {
+        let effective =
+            effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
+        let local_source_required =
+            skippy_local_source_required(model.skippy.as_ref(), default_skippy);
         let configured_model_path = model
             .hardware
             .as_ref()
             .and_then(|hardware| hardware.model_path.as_ref())
             .or(default_model_path);
-        let (model_ref, declared_ref) = if let Some(configured_path) = configured_model_path {
-            let path = PathBuf::from(configured_path);
-            if !path.is_absolute() {
-                anyhow::bail!(
-                    "configured hardware.model_path for {} must be absolute: {}",
-                    model.model,
-                    path.display()
-                );
-            }
-            let metadata = std::fs::symlink_metadata(&path).with_context(|| {
-                format!(
-                    "configured hardware.model_path for {} is unavailable: {}",
-                    model.model,
-                    path.display()
-                )
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                anyhow::bail!(
-                    "configured hardware.model_path for {} must be a non-symlink file: {}",
-                    model.model,
-                    path.display()
-                );
-            }
-            (path, Some(model.model.clone()))
-        } else {
-            (PathBuf::from(model.model.clone()), None)
-        };
+        let alias = configured_server_alias(model, config.defaults.as_ref());
+        let (model_ref, fallback_declared_ref) =
+            if let Some(configured_path) = configured_model_path {
+                let path = PathBuf::from(configured_path);
+                if !path.is_absolute() {
+                    anyhow::bail!(
+                        "configured hardware.model_path for {} must be absolute: {}",
+                        model.model,
+                        path.display()
+                    );
+                }
+                let metadata = std::fs::symlink_metadata(&path).with_context(|| {
+                    format!(
+                        "configured hardware.model_path for {} is unavailable: {}",
+                        model.model,
+                        path.display()
+                    )
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    anyhow::bail!(
+                        "configured hardware.model_path for {} must be a non-symlink file: {}",
+                        model.model,
+                        path.display()
+                    );
+                }
+                (path, Some(model.model.clone()))
+            } else {
+                (PathBuf::from(model.model.clone()), None)
+            };
+        if local_source_required {
+            validate_local_required_source(&model_ref, &model.model)?;
+        }
         specs.push(StartupModelSpec {
             model_ref,
-            declared_ref,
-            mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
-            ctx_size: options.ctx_size.or(model.ctx_size),
-            gpu_id: model.gpu_id.clone(),
-            config_owned: true,
-            parallel: model.parallel,
-            cache_type_k: model.cache_type_k.clone(),
-            cache_type_v: model.cache_type_v.clone(),
-            n_batch: model.batch,
-            n_ubatch: model.ubatch,
-            flash_attention: model.flash_attention.unwrap_or(FlashAttentionType::Auto),
-            profile: model.derived_profile(),
+            declared_ref: alias.or(fallback_declared_ref),
+            config_model_id: Some(model.model.clone()),
+            mmproj_ref: effective.mmproj.as_ref().map(PathBuf::from),
+            ctx_size: options.ctx_size.or(effective.ctx_size),
+            gpu_id: effective_startup_gpu_id(options, effective.gpu_id.as_deref()),
+            cli_device_override: has_explicit_startup_device(options),
+            resolve_pinned_gpu: true,
+            parallel: effective.parallel,
+            cache_type_k: effective.cache_type_k.clone(),
+            cache_type_v: effective.cache_type_v.clone(),
+            n_batch: effective.batch,
+            n_ubatch: effective.ubatch,
+            flash_attention: effective
+                .flash_attention
+                .unwrap_or(FlashAttentionType::Auto),
+            local_source_required,
+            profile: effective.derived_profile(),
         });
     }
     Ok(specs)
@@ -784,6 +1020,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
         plans.push(StartupModelPlan {
             declared_ref,
+            config_model_id: spec.config_model_id.clone(),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
@@ -795,6 +1032,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
+            local_source_required: spec.local_source_required,
             profile: spec.profile.clone(),
         });
     }
@@ -823,9 +1061,14 @@ async fn resolve_startup_models_with_package_discovery(
 ) -> Result<Vec<StartupModelPlan>> {
     let mut plans = Vec::with_capacity(specs.len());
     for spec in specs {
+        if spec.local_source_required {
+            plans.push(resolve_local_required_startup_model(spec)?);
+            continue;
+        }
         let requested_ref = spec
-            .declared_ref
+            .config_model_id
             .clone()
+            .or_else(|| spec.declared_ref.clone())
             .unwrap_or_else(|| spec.model_ref.to_string_lossy().into_owned());
 
         // Check the remote catalog for a pre-split layer package before
@@ -872,6 +1115,7 @@ async fn resolve_startup_models_with_package_discovery(
         };
         plans.push(StartupModelPlan {
             declared_ref,
+            config_model_id: spec.config_model_id.clone(),
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
@@ -883,6 +1127,7 @@ async fn resolve_startup_models_with_package_discovery(
             n_batch: spec.n_batch,
             n_ubatch: spec.n_ubatch,
             flash_attention: spec.flash_attention,
+            local_source_required: false,
             profile: spec.profile.clone(),
         });
     }
@@ -933,14 +1178,16 @@ pub(super) fn resolve_split_layer_package(model_query: &str, model_path: &Path) 
     models::remote_catalog::find_huggingface_layer_package(model_query)
 }
 
-pub(super) fn preflight_config_owned_startup_models(
+pub(super) fn preflight_pinned_startup_models(
     config: &plugin::MeshConfig,
     specs: &[StartupModelSpec],
     plans: &mut [StartupModelPlan],
     binary_flavor: Option<backend::BinaryFlavor>,
     backend_probe: Option<&backend::BinaryBackendDeviceProbe>,
 ) -> Result<()> {
-    if config.gpu.assignment != plugin::GpuAssignment::Pinned {
+    if config.gpu.assignment != plugin::GpuAssignment::Pinned
+        && plans.iter().all(|plan| plan.gpu_id.is_none())
+    {
         return Ok(());
     }
 
@@ -949,13 +1196,7 @@ pub(super) fn preflight_config_owned_startup_models(
         .or(binary_flavor);
     let mut survey = hardware::query(pinned_startup_preflight_metrics());
     apply_backend_devices_for_flavor(&mut survey.gpus, binary_flavor);
-    preflight_config_owned_startup_models_with_gpus(
-        config,
-        specs,
-        plans,
-        &survey.gpus,
-        backend_probe,
-    )
+    preflight_pinned_startup_models_with_gpus(config, specs, plans, &survey.gpus, backend_probe)
 }
 
 pub(super) fn apply_backend_devices_for_flavor(
@@ -987,35 +1228,39 @@ pub(super) fn pinned_startup_preflight_metrics() -> &'static [hardware::Metric] 
     ]
 }
 
-pub(super) fn preflight_config_owned_startup_models_with_gpus(
+pub(super) fn preflight_pinned_startup_models_with_gpus(
     config: &plugin::MeshConfig,
     specs: &[StartupModelSpec],
     plans: &mut [StartupModelPlan],
     gpus: &[hardware::GpuFacts],
     backend_probe: Option<&backend::BinaryBackendDeviceProbe>,
 ) -> Result<()> {
-    if config.gpu.assignment != plugin::GpuAssignment::Pinned {
-        return Ok(());
-    }
-
     anyhow::ensure!(
         specs.len() == plans.len(),
         "startup model preflight received mismatched specs/plans"
     );
 
     for (spec, plan) in specs.iter().zip(plans.iter_mut()) {
-        if !spec.config_owned {
+        let must_resolve_device =
+            spec.resolve_pinned_gpu && config.gpu.assignment == plugin::GpuAssignment::Pinned;
+        if !must_resolve_device && plan.gpu_id.is_none() {
+            continue;
+        }
+        if is_cpu_startup_device(plan.gpu_id.as_deref()) {
             continue;
         }
 
-        let resolved_gpu = hardware::resolve_pinned_gpu_strict(plan.gpu_id.as_deref(), gpus)
-            .map_err(anyhow::Error::new)
-            .with_context(|| {
-                format!(
-                    "startup model '{}' failed pinned GPU preflight",
-                    plan.declared_ref
-                )
-            })?;
+        let resolved_gpu = resolve_requested_startup_device(
+            plan.gpu_id.as_deref(),
+            gpus,
+            spec.cli_device_override,
+        )
+        .with_context(|| {
+            format!(
+                "startup model '{}' failed pinned GPU preflight",
+                plan.declared_ref
+            )
+        })?;
 
         let stable_id = resolved_gpu.stable_id.clone().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1068,6 +1313,72 @@ pub(super) fn preflight_config_owned_startup_models_with_gpus(
     }
 
     Ok(())
+}
+
+/// Resolve a stable GPU ID or a concrete backend device name.
+fn resolve_requested_startup_device<'a>(
+    requested_device: Option<&str>,
+    gpus: &'a [hardware::GpuFacts],
+    allow_backend_device_name: bool,
+) -> Result<&'a hardware::GpuFacts> {
+    match hardware::resolve_pinned_gpu_strict(requested_device, gpus) {
+        Ok(gpu) => Ok(gpu),
+        Err(hardware::PinnedGpuResolverError::NonPinnableConfiguredId {
+            configured_id, ..
+        }) if allow_backend_device_name => {
+            resolve_startup_backend_device_by_name(&configured_id, gpus)
+        }
+        Err(err) => Err(anyhow::Error::new(err)),
+    }
+}
+
+fn is_cpu_startup_device(requested_device: Option<&str>) -> bool {
+    requested_device.is_some_and(|device| device.trim().eq_ignore_ascii_case("CPU"))
+}
+
+/// Preserve CPU for the runtime resolver while bypassing GPU-only preflight.
+pub(super) fn startup_device_override(requested_device: Option<&str>) -> Option<String> {
+    requested_device
+        .filter(|device| is_cpu_startup_device(Some(device)))
+        .map(|_| "CPU".to_string())
+}
+
+fn resolve_startup_backend_device_by_name<'a>(
+    requested_device: &str,
+    gpus: &'a [hardware::GpuFacts],
+) -> Result<&'a hardware::GpuFacts> {
+    let matches: Vec<&hardware::GpuFacts> = gpus
+        .iter()
+        .filter(|gpu| {
+            gpu.backend_device.as_deref().is_some_and(|backend_device| {
+                backend::backend_device_names_match(backend_device, requested_device)
+            })
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [gpu] => Ok(gpu),
+        [] => anyhow::bail!(
+            "requested device '{requested_device}' did not match any detected GPU backend device. Available devices: {}",
+            display_available_backend_devices(gpus)
+        ),
+        _ => anyhow::bail!(
+            "requested device '{requested_device}' matched multiple detected GPU backend devices. Available devices: {}",
+            display_available_backend_devices(gpus)
+        ),
+    }
+}
+
+fn display_available_backend_devices(gpus: &[hardware::GpuFacts]) -> String {
+    let names: Vec<&str> = gpus
+        .iter()
+        .filter_map(|gpu| gpu.backend_device.as_deref())
+        .collect();
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(", ")
+    }
 }
 
 #[cfg_attr(

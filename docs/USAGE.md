@@ -3,7 +3,7 @@
 Use this operational reference for installation details, setup, service mode,
 model storage, and runtime control.
 
-For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md).
+For command-by-command CLI usage, model resolution rules, and JSON automation examples, see [CLI.md](./CLI.md). For the field-by-field `config.toml` reference, see the [canonical configuration reference](https://meshllm.cloud/docs/pages/config-reference/).
 
 ## Installation details
 
@@ -147,6 +147,118 @@ mesh-llm serve --gguf ~/my-models/qwen3.5-4b.gguf --mmproj ~/my-models/mmproj-BF
 Use the persisted TOML for future starts or reloads. It does not rewrite active
 sessions in place, and request payload values still win over any request
 defaults from the file.
+
+### Split a pre-copied local GGUF across nodes
+
+Use `source_policy = "local-required"` when every split-serving node already
+has the same GGUF bytes and the runtime must never fetch or copy the model. Use
+the same logical `model` value on every node; `hardware.model_path` is
+node-local and may be a different absolute path on each host.
+
+Node A can use `/etc/mesh-llm/node-a.toml`:
+
+```toml
+[[models]]
+model = "orca-70b-q4-k-m"
+
+[models.hardware]
+model_path = "/srv/models/orca/orca-70b-q4-k-m.gguf"
+
+[models.skippy]
+source_policy = "local-required"
+```
+
+Node B can use the same logical model with its own path in
+`/etc/mesh-llm/node-b.toml`:
+
+```toml
+[[models]]
+model = "orca-70b-q4-k-m"
+
+[models.hardware]
+model_path = "/mnt/fast-storage/llms/orca-70b-q4-k-m.gguf"
+
+[models.skippy]
+source_policy = "local-required"
+```
+
+Start the private mesh on node A, then use its invite token on node B:
+
+```bash
+# node A
+mesh-llm serve --config /etc/mesh-llm/node-a.toml --split
+
+# node B
+mesh-llm serve --config /etc/mesh-llm/node-b.toml --split --join <token>
+```
+
+For a split GGUF set, point `model_path` at the first shard on each node. Every
+numbered shard must be present beside it and use the standard GGUF shard
+naming. The directory may still differ per node:
+
+```toml
+[models.hardware]
+model_path = "/srv/models/orca/orca-70b-q4-k-m-00001-of-00004.gguf"
+```
+
+The CLI naming form is also supported. Put the policy in a small config file:
+
+```toml
+# /etc/mesh-llm/strict-local.toml
+[defaults.skippy]
+source_policy = "local-required"
+```
+
+Then give every node the same plain alias and its own local source path:
+
+```bash
+# node A
+mesh-llm serve --config /etc/mesh-llm/strict-local.toml \
+  --gguf /srv/models/orca/orca-70b-q4-k-m.gguf \
+  --model orca-70b-q4-k-m --split
+
+# node B
+mesh-llm serve --config /etc/mesh-llm/strict-local.toml \
+  --gguf /mnt/fast-storage/llms/orca-70b-q4-k-m.gguf \
+  --model orca-70b-q4-k-m --split --join <token>
+```
+
+Strict local-source behavior has these operator-visible invariants:
+
+- A source must be an absolute, regular, non-symlink local GGUF path. A
+  sharded source must start at `-00001-of-000NN.gguf`; every shard is part of
+  the identity. Direct GGUFs are supported, but `hf://` layer packages are not
+  valid strict-local sources.
+- A plain GGUF is identified by its SHA-256. For a sharded set, mesh-llm hashes
+  every shard and derives an order-sensitive aggregate SHA-256 from the shard
+  ordinal, size, and digest. The resulting `local-gguf://sha256/...` identity
+  and synthetic manifest contain no absolute path or filename.
+- The first strict content-addressed verification of a source snapshot hashes
+  every source byte and never consults the persistent digest sidecar. Within
+  one process, later inventory/load checks may reuse that verified identity
+  only while file size, modification time, inode change time, device, and
+  inode remain unchanged; otherwise they rehash.
+  The persistent cache at `~/.mesh-llm/cache/hashes` (or
+  `MESH_LLM_HASH_CACHE_DIR`) remains limited to legacy path-local identities in
+  `fallback` mode. The registered path is only a node-local locator.
+- Strict inventory and load never consult the model catalog or Hugging Face
+  and never use peer artifact transfer. A missing file, incomplete shard set,
+  or SHA-256 mismatch excludes that node or fails startup instead of fetching
+  replacement bytes.
+- Treat the configured GGUF set as immutable for the lifetime of a strict
+  topology. mesh-llm verifies its identity during inventory and immediately
+  before load, but the native runtime subsequently opens the operator-owned
+  path; this mode is not a sandbox against another local process replacing the
+  file in that final interval.
+- Nodes must advertise local-GGUF content-ID support before they can enter a
+  strict split topology. Older nodes, where the additive capability is absent,
+  are excluded before coordinator election and revalidated again before
+  package inventory. They may remain in the mesh for compatible work, but
+  cannot host this strict-local split.
+- Omitting `source_policy`, or setting it to `"fallback"`, preserves the
+  existing resolver and mixed-version behavior, including catalog, Hugging
+  Face, and peer artifact transfer where eligible. A model-level policy
+  overrides `[defaults.skippy]`; leaving it unset inherits the default.
 
 ## Request logging
 
@@ -446,6 +558,7 @@ priority               = "normal"  # scheduler priority hint (integer or string)
 
 # --- Skippy staged serving -----------------------------------------------
 [defaults.skippy]
+source_policy                   = "fallback" # default; use local-required only for pre-copied GGUFs
 binary_stage_transport          = "auto"    # auto on off
 prefill_chunking                = "fixed"   # fixed schedule none
 prefill_chunk_size              = 512       # tokens per prefill chunk
@@ -562,12 +675,16 @@ reasoning_budget  = "auto"   # integer token budget, or "auto"
 # --- Multimodal ----------------------------------------------------------
 [defaults.multimodal]
 mmproj           = "default-mmproj-f16.gguf"  # vision projector path or HF ref
+# mmproj_url     = "https://huggingface.co/org/repo/resolve/main/mmproj.gguf"
 mmproj_offload   = "auto"                     # bool or "auto"
-image_min_tokens = 0
+image_min_tokens = 1
 image_max_tokens = 4096
+media_marker = "<__media__>"
+batch_max_tokens = 1024
+glm_dsa_policy = "auto"                       # "auto" or "v1"
+generation_signal_window = 16
 
 # Schema-reserved (accepted, not yet wired):
-#   mmproj_url  — projector URL source
 #   embeddings, reranking, pooling, vocoder
 
 # --- Advanced server (operational — reject most in model config) ---------
@@ -634,6 +751,7 @@ threads             = 16
 threads_batch       = 8
 
 [models.skippy]
+source_policy          = "fallback" # or "local-required" for identical pre-copied GGUFs
 prefill_chunking       = "schedule"
 prefill_chunk_size     = 256
 prefill_chunk_schedule = "128,256,512,1024"
@@ -835,9 +953,17 @@ Config precedence:
   frontend boundary. Explicit request values win, and those defaults never
   become `StageConfig`, runtime load structs, protobuf payloads, or lower-layer
   runtime settings.
-- Explicit `--model` or `--gguf` ignores configured `[[models]]`.
+- Explicit `--model` or `--gguf` ignores configured `[[models]]` for model
+  selection and tuning. An exact, unique `--model` ref may still inherit its
+  configured pinned GPU selector. Unmatched `--model` refs and `--gguf` paths
+  carry no configured model identity but may inherit only
+  `defaults.hardware.device`.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
+- Explicit `--device` overrides the inherited device selector. Stable GPU IDs
+  and backend names such as `CUDA0` resolve before native startup, including
+  under automatic assignment. `--device CPU` selects CPU without requiring a
+  GPU inventory, while `--device auto` keeps the inherited selector.
 - Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the
   server-side mesh guardrail mode for hosted Skippy startup models and later
   runtime-loaded models.

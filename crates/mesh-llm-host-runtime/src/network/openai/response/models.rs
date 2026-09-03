@@ -219,6 +219,7 @@ fn runtime_context_lengths_for_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     fn hf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
         mesh::ServedModelDescriptor {
@@ -368,6 +369,41 @@ mod tests {
 
         assert_eq!(body["data"][0]["id"], "smollm2-a");
         assert_eq!(body["data"][0]["display_name"], "smollm2-a");
+    }
+
+    #[tokio::test]
+    async fn models_http_boundary_advertises_configured_served_alias() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("models response listener");
+        let address = listener.local_addr().expect("listener address");
+        let client = tokio::spawn(async move {
+            let mut stream = tokio::net::TcpStream::connect(address)
+                .await
+                .expect("models response connection");
+            let mut response = Vec::new();
+            stream
+                .read_to_end(&mut response)
+                .await
+                .expect("models response");
+            String::from_utf8(response).expect("utf-8 response")
+        });
+        let (stream, _) = listener.accept().await.expect("models client");
+        let alias = "public-model".to_string();
+
+        send_models_list_with_descriptors(
+            stream.into(),
+            std::slice::from_ref(&alias),
+            &[local_gguf_descriptor(&alias)],
+            &[],
+        )
+        .await
+        .expect("models response succeeds");
+
+        let response = client.await.expect("models client task");
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP body");
+        let body: serde_json::Value = serde_json::from_str(body).expect("models JSON");
+        assert_eq!(body["data"][0]["id"], alias);
     }
 
     #[test]

@@ -31,9 +31,9 @@ pub const CONTEXT_BUDGET_MAX_TOKENS: u32 = u32::MAX;
 ///
 /// When the configured context window is smaller than this value, the
 /// request is silently clamped to whatever remaining budget exists
-/// rather than rejected — see [`GenerationTokenLimit::resolve`].
+/// rather than rejected — see `GenerationTokenLimit::resolve`.
 pub const DEFAULT_EMBEDDED_MAX_TOKENS: u32 = 4096;
-pub(in crate::frontend) const GENERATION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(10);
+pub(in crate::frontend) const GENERATION_TOKEN_BUDGET_TIMEOUT: Duration = Duration::from_secs(10);
 pub(in crate::frontend) const GENERATION_RETRY_AFTER_SECS: u64 = 1;
 pub(in crate::frontend) const MAX_EXACT_REPLAY_TOKENS: usize = 8;
 
@@ -239,6 +239,8 @@ pub(in crate::frontend) struct GenerationCacheStats {
         Option<crate::frontend::speculative::OpenAiSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
+    pub(in crate::frontend) queue_wait_ms: f64,
+    pub(in crate::frontend) restore_ms: f64,
 }
 
 impl Default for GenerationCacheStats {
@@ -255,6 +257,8 @@ impl Default for GenerationCacheStats {
             speculative_stats: None,
             prompt_ms: 0.0,
             predicted_ms: 0.0,
+            queue_wait_ms: 0.0,
+            restore_ms: 0.0,
         }
     }
 }

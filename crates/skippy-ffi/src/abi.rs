@@ -10,6 +10,7 @@ pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
 pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
+pub const FEATURE_ACTIVATION_BOUNDARY: u64 = 1 << 29;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -256,7 +257,24 @@ pub struct RuntimeConfig {
     pub glm_dsa_direct_sparse_decode_max_top_k: i32,
     pub glm_dsa_dense_sparse_mask_max_bytes: u64,
     pub glm_dsa_compact_flash_min_kv: i32,
+    pub kv_offload: i32,
+    pub kv_unified: i32,
+    pub swa_full: i32,
+    pub op_offload: i32,
+    pub no_host_buffer: bool,
+    pub check_tensors: bool,
+    pub use_direct_io: bool,
+    pub has_main_gpu_override: bool,
+    pub main_gpu: i32,
+    pub split_mode: i32,
 }
+
+/// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.
+pub const TRISTATE_AUTO: i32 = -1;
+/// Sentinel for `RuntimeConfig` tri-state fields: force false.
+pub const TRISTATE_FALSE: i32 = 0;
+/// Sentinel for `RuntimeConfig` tri-state fields: force true.
+pub const TRISTATE_TRUE: i32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

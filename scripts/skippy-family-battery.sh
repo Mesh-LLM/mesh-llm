@@ -158,7 +158,7 @@ fi
 mkdir -p "$MODEL_SCAN_DIR" "$PREFLIGHT_DIR" "$CERT_DIR"
 : > "$RESULTS_JSONL"
 printf 'family\tmodel_id\tsource_revision\tmodel_path\tmtp_layers\n' > "$MTP_CORPUS_TSV"
-printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs\n' > "$RESOLVED_MANIFEST"
+printf 'family|repo|source_revision|file|selector|sweep_period|layer_end|notes|target_path|draft_repo|draft_revision|draft_file|draft_path|native_mtp|model_size_bytes|mtp_layers|activation_width|startup_timeout_secs|mmproj_repo|mmproj_revision|mmproj_file|mmproj_path\n' > "$RESOLVED_MANIFEST"
 
 prepare_policy_plan() {
   local plan_args=(
@@ -224,6 +224,9 @@ fi
 FAILURES=()
 TOTAL=0
 EXPECTED_TOTAL=0
+MM_SMOKE_TOTAL=0
+EXPECTED_MM_SMOKE_TOTAL=0
+MM_SMOKE_FAILURE_COUNT=0
 EXPECTED_FAMILY_COUNT=0
 CERT_FAILURE_COUNT=0
 PREFLIGHT_FAILURE_COUNT=0
@@ -597,7 +600,7 @@ preflight_manifest() {
     return 1
   fi
 
-  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy; do
+  while IFS='|' read -r family profile repo source_revision file selector sweep_period layer_end activation_width notes draft_repo draft_revision draft_file expected_model_bytes startup_timeout_override expected_mtp_layers lane_csv speculative_policy mmproj_repo mmproj_revision mmproj_file; do
     if [[ "$profile" != "full" ]]; then
       echo "the local monolithic battery cannot execute profile $profile for $family" >&2
       exit 1
@@ -692,9 +695,25 @@ preflight_manifest() {
 
     local startup_timeout
     startup_timeout="${startup_timeout_override:-$(startup_timeout_for_bytes "$MODEL_SIZE_BYTES")}"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    local mmproj_path=""
+    if [[ -n "$mmproj_repo" ]]; then
+      if (( DRY_RUN == 0 )); then
+        if ! resolved="$(resolve_pinned_model "$mmproj_repo" "$mmproj_file" "$mmproj_revision")"; then
+          echo "failed to resolve and pin mmproj $mmproj_repo/$mmproj_file" >&2
+          FAILURES+=("$family(mmproj-pin)")
+          PREFLIGHT_FAILURE_COUNT=$((PREFLIGHT_FAILURE_COUNT + 1))
+          record_preflight_outcome "model-preflight" "$family" "$model_id" "fail" "harness" "failed to resolve immutable mmproj snapshot for $mmproj_repo/$mmproj_file"
+          continue
+        fi
+        IFS='|' read -r mmproj_path _ <<< "$resolved"
+      else
+        mmproj_path="<hf-cache>/$mmproj_repo/$mmproj_file"
+      fi
+    fi
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$family" "$repo" "$source_revision" "$file" "$selector" "$sweep_period" "$layer_end" "$notes" "$target" \
       "$draft_repo" "$draft_revision" "$draft_file" "$draft" "$MODEL_HAS_MTP" "$MODEL_SIZE_BYTES" "$MODEL_MTP_LAYERS" "$activation_width" "$startup_timeout" \
+      "$mmproj_repo" "$mmproj_revision" "$mmproj_file" "$mmproj_path" \
       >> "$RESOLVED_MANIFEST"
     if (( DRY_RUN == 0 )); then
       record_preflight_outcome "model-preflight" "$family" "$model_id" "pass" "pass" "resolved immutable snapshot $source_revision; tensor scan complete"
@@ -728,7 +747,10 @@ preflight_manifest() {
           (.resources.startup_timeout_secs // ""),
           .execution.mtp_layers,
           (.certification_lanes | join(",")),
-          .execution.speculative_policy
+          .execution.speculative_policy,
+          (.mmproj_artifact.repo // ""),
+          (.mmproj_artifact.revision // ""),
+          (.mmproj_artifact.files[0] // "")
         ]
       | join("|")
     ' "$plan"
@@ -804,9 +826,57 @@ planned_certification_count() {
   printf '%s\n' "$planned"
 }
 
+# Multimodal smoke lane: exercise the real projector + image prefill path
+# through the skippy-server frontend (local monolithic and split stages) using
+# the env-gated real-model harness in
+# crates/skippy-server/src/frontend/tests/multimodal.rs. Runs once per family
+# that pins an mmproj artifact, after its core certification lanes.
+run_mmproj_smoke() {
+  local family="$1" target="$2" mmproj="$3" model_id="$4" startup_timeout="$5" activation_width="$6" layer_end="$7"
+  local smoke_run_id smoke_run_dir exit_code log_path smoke_timeout
+  smoke_timeout="$(cert_timeout_for_startup "$startup_timeout")"
+  smoke_run_id="$(printf '%03d-%s-mmproj' "$TOTAL" "$(slugify "$family")")"
+  smoke_run_dir="$CERT_DIR/$smoke_run_id"
+  mkdir -p "$smoke_run_dir"
+  log_path="$smoke_run_dir/mmproj-smoke.log"
+  echo "==> family-certify mmproj smoke: family=$family model=$(basename "$target") mmproj=$(basename "$mmproj")"
+  MM_SMOKE_TOTAL=$((MM_SMOKE_TOTAL + 1))
+  if (( DRY_RUN == 1 )); then
+    echo "env SKIPPY_MM_MODEL='$target' SKIPPY_MM_PROJECTOR='$mmproj' SKIPPY_MM_IMAGE='$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png' SKIPPY_MM_ACTIVATION_WIDTH='$activation_width' SKIPPY_MM_SPLIT_LAYER='$(( layer_end / 2 ))' cargo test --manifest-path '$ROOT/Cargo.toml' -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1"
+    return 0
+  fi
+  exit_code=0
+  "$ROOT/scripts/run-command-with-timeout.py" \
+    --seconds "$smoke_timeout" \
+    --label "mmproj smoke $family" \
+    -- env \
+      SKIPPY_MM_MODEL="$target" \
+      SKIPPY_MM_PROJECTOR="$mmproj" \
+      SKIPPY_MM_IMAGE="$ROOT/ci/llama-canary/fixtures/multimodal-smoke.png" \
+      SKIPPY_MM_ACTIVATION_WIDTH="$activation_width" \
+      SKIPPY_MM_CTX_SIZE=2048 \
+      SKIPPY_MM_MAX_TOKENS=16 \
+      SKIPPY_MM_N_GPU_LAYERS=999 \
+      SKIPPY_MM_SPLIT_LAYER="$(( layer_end / 2 ))" \
+      LLAMA_STAGE_BACKEND=metal \
+      cargo test --manifest-path "$ROOT/Cargo.toml" -p skippy-server --lib frontend::tests::multimodal -- --nocapture --test-threads=1 \
+      >"$log_path" 2>&1 || exit_code=$?
+  if (( exit_code != 0 )); then
+    echo "mmproj smoke failed for $family; log: $log_path" >&2
+    FAILURES+=("$family@mmproj")
+    MM_SMOKE_FAILURE_COUNT=$((MM_SMOKE_FAILURE_COUNT + 1))
+  fi
+  jq -n \
+    --arg family "$family" \
+    --arg model_id "$model_id" \
+    --argjson exit_code "$exit_code" \
+    '{family:$family,model_id:$model_id,mmproj_smoke:true,exit_code:$exit_code,outcomes:[{name:"mmproj-smoke",status:(if $exit_code == 0 then "pass" else "fail" end),outcome:(if $exit_code == 0 then "pass" else "fail" end),exit_code:$exit_code,note:"real projector + image prefill through skippy-server frontend (local + split)"}]}' \
+    >> "$RESULTS_JSONL"
+}
+
 run_resolved_manifest() {
   local resolved_manifest="$1"
-  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout; do
+  while IFS='|' read -r family repo source_revision file selector sweep_period layer_end _notes target draft_repo draft_revision draft_file draft native_mtp model_size_bytes _mtp_layers activation_width startup_timeout mmproj_repo mmproj_revision mmproj_file mmproj_path; do
     [[ "$family" == "family" ]] && continue
     local model_id="$repo:$selector"
 
@@ -828,6 +898,10 @@ run_resolved_manifest() {
         done
       done
     fi
+
+    if [[ -n "$mmproj_repo" ]]; then
+      run_mmproj_smoke "$family" "$target" "$mmproj_path" "$model_id" "$startup_timeout" "$activation_width" "$layer_end"
+    fi
   done < "$resolved_manifest"
 }
 
@@ -836,10 +910,16 @@ if ! preflight_manifest "$POLICY_PLAN_COPY"; then
   echo "family battery preflight failed; no certification lane was started" >&2
 elif (( PREFLIGHT_ONLY == 0 )); then
   EXPECTED_TOTAL="$(planned_certification_count "$RESOLVED_MANIFEST")"
+  EXPECTED_MM_SMOKE_TOTAL="$(tail -n +2 "$RESOLVED_MANIFEST" | awk -F'|' '$19 != "" { count += 1 } END { print count + 0 }')"
   run_resolved_manifest "$RESOLVED_MANIFEST"
   if (( TOTAL != EXPECTED_TOTAL )); then
     echo "executed $TOTAL certifications but validated plan requires $EXPECTED_TOTAL" >&2
     FAILURES+=("battery(planned-vs-executed)")
+    CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
+  fi
+  if (( MM_SMOKE_TOTAL != EXPECTED_MM_SMOKE_TOTAL )); then
+    echo "executed $MM_SMOKE_TOTAL mmproj smokes but validated plan requires $EXPECTED_MM_SMOKE_TOTAL" >&2
+    FAILURES+=("battery(mmproj-planned-vs-executed)")
     CERT_FAILURE_COUNT=$((CERT_FAILURE_COUNT + 1))
   fi
   if (( DRY_RUN == 0 )); then
@@ -869,6 +949,7 @@ if (( DRY_RUN == 0 )); then
     fi
     echo "- Certifications: $TOTAL"
     echo "- Planned certifications: $EXPECTED_TOTAL"
+    echo "- Multimodal smokes: $MM_SMOKE_TOTAL (planned: $EXPECTED_MM_SMOKE_TOTAL; failures: $MM_SMOKE_FAILURE_COUNT)"
     echo "- MTP models: $(( $(wc -l < "$MTP_CORPUS_TSV") - 1 ))"
     echo "- Preflight failures: $PREFLIGHT_FAILURE_COUNT"
     echo "- Startup timeout policy: min ${STARTUP_TIMEOUT_MIN_SECS}s + ${STARTUP_TIMEOUT_PER_GIB_SECS}s/GiB, capped at ${STARTUP_TIMEOUT_MAX_SECS}s"

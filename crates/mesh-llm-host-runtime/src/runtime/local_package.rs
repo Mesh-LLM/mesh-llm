@@ -64,14 +64,12 @@ pub(super) async fn split_runtime_compact_meta(
 pub(super) fn split_runtime_kv_bytes_per_token(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
-    model_ref: &str,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> Result<u64> {
     let kv_cache_quant = split_effective_kv_cache_quant(
         package,
         compact_meta,
-        model_ref,
         cache_type_k_override,
         cache_type_v_override,
     );
@@ -89,13 +87,24 @@ pub(super) fn split_runtime_kv_bytes_per_token(
 pub(super) fn split_effective_kv_cache_quant(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
-    model_ref: &str,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> models::gguf::GgufKvCacheQuant {
-    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes);
-    let family_default =
-        skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref)).default_kv_cache_type;
+    // Guard the size-tiered default against the model's quantised-KV
+    // compatibility (Flash Attention / block alignment) so planning budgets for
+    // the same cache the stage load can actually allocate. The family default
+    // gets the same metadata guard: a family that defaults to quantised K/V
+    // (Inkling -> q4_0) must fall back to f16 when the actual GGUF metadata
+    // cannot load it, or planning and load both select an unloadable cache.
+    // Explicit overrides below are never guarded — an override that cannot
+    // load must fail loudly.
+    let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
+        .guarded_for_model(Some(compact_meta));
+    let family_default = skippy::family_policy_for_compact_meta(compact_meta)
+        .default_kv_cache_type
+        .and_then(|default| models::gguf::GgufKvCacheQuant::from_llama_args(default, default))
+        .map(|quant| compact_meta.compatible_default_kv_cache_quant(quant))
+        .map(|quant| quant.k.as_llama_arg());
 
     // Explicit user overrides win, then the family default, then model size.
     let effective_k = cache_type_k_override
@@ -112,18 +121,31 @@ pub(super) fn split_effective_kv_cache_quant(
 pub(super) async fn resolve_split_runtime_package(
     model_path: &Path,
     model_ref: &str,
+    local_source_required: bool,
 ) -> Result<skippy::SkippyPackageIdentity> {
     let model_path_str = model_path.to_string_lossy().to_string();
     if skippy::is_layer_package_ref(&model_path_str) {
+        anyhow::ensure!(
+            !local_source_required,
+            "skippy.source_policy = \"local-required\" supports direct local GGUF files, not layer package references"
+        );
         Ok(tokio::task::spawn_blocking(move || {
             skippy::identity_from_layer_package(&model_path_str)
         })
         .await
         .context("join identify skippy layer package task")??)
     } else {
-        Ok(skippy::synthetic_direct_gguf_package(
-            model_ref, model_path,
-        )?)
+        let model_ref = model_ref.to_string();
+        let model_path = model_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            if local_source_required {
+                skippy::synthetic_content_addressed_gguf_package(&model_ref, &model_path)
+            } else {
+                skippy::synthetic_direct_gguf_package(&model_ref, &model_path)
+            }
+        })
+        .await
+        .context("join identify direct GGUF task")?
     }
 }
 
@@ -170,6 +192,7 @@ pub(super) enum SplitParticipantExclusionReason {
     ArtifactTransferUnavailable,
     StageInventoryEmpty,
     PackageManifestMismatch,
+    UnverifiedLocalSource,
     MissingModelSource,
 }
 
@@ -184,6 +207,7 @@ impl SplitParticipantExclusionReason {
             Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
             Self::StageInventoryEmpty => "stage_inventory_empty",
             Self::PackageManifestMismatch => "package_manifest_mismatch",
+            Self::UnverifiedLocalSource => "unverified_local_source",
             Self::MissingModelSource => "missing_model_source",
         }
     }
@@ -211,6 +235,9 @@ impl SplitParticipantExclusionReason {
             }
             Self::PackageManifestMismatch => {
                 "Refresh stale layer packages so this peer advertises the requested package manifest."
+            }
+            Self::UnverifiedLocalSource => {
+                "Pre-copy the identical GGUF to this peer, configure the same logical model, and restart it so the content is indexed."
             }
             Self::MissingModelSource => {
                 "Start the peer with a resolvable package source or wait for stage inventory to prove the package is available."
@@ -314,7 +341,8 @@ impl SplitParticipantPackageSignal {
         artifact_transfer_supported: bool,
     ) -> bool {
         self.missing_artifact_bytes == 0
-            || artifact_transfer_supported
+            || (!skippy::is_content_addressed_gguf_ref(&package.package_ref)
+                && artifact_transfer_supported)
             || package_ref_has_independent_prepare_source(&package.package_ref)
     }
 }
@@ -405,10 +433,11 @@ fn split_participant_blocker(
 }
 
 pub(super) const fn split_participant_exclusion_reason_order()
--> [SplitParticipantExclusionReason; 9] {
+-> [SplitParticipantExclusionReason; 10] {
     [
         SplitParticipantExclusionReason::StageControlUnreachable,
         SplitParticipantExclusionReason::PackageManifestMismatch,
+        SplitParticipantExclusionReason::UnverifiedLocalSource,
         SplitParticipantExclusionReason::ArtifactTransferUnavailable,
         SplitParticipantExclusionReason::StageInventoryEmpty,
         SplitParticipantExclusionReason::MissingModelSource,
@@ -430,6 +459,7 @@ pub(super) async fn collect_split_participant_membership(
     node: &mesh::Node,
     model_name: &str,
     model_ref: &str,
+    local_source_required: bool,
 ) -> SplitParticipantSnapshot {
     let mut participants = vec![SplitParticipant::new(
         node.id(),
@@ -438,7 +468,12 @@ pub(super) async fn collect_split_participant_membership(
     )];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
-        if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
+        if let Some(reason) = split_peer_preflight_exclusion_reason(
+            &peer,
+            model_name,
+            model_ref,
+            local_source_required,
+        ) {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason,
@@ -464,8 +499,10 @@ pub(super) async fn collect_split_participants(
     node: &mesh::Node,
     model_name: &str,
     model_ref: &str,
+    runtime_profile: &str,
     package: &skippy::SkippyPackageIdentity,
     local_vram_override: Option<u64>,
+    local_source_required: bool,
 ) -> SplitParticipantSnapshot {
     let mut participants = vec![SplitParticipant::local_package(
         node.id(),
@@ -475,7 +512,12 @@ pub(super) async fn collect_split_participants(
     )];
     let mut excluded = Vec::new();
     for peer in node.peers().await {
-        if let Some(reason) = split_peer_preflight_exclusion_reason(&peer, model_name, model_ref) {
+        if let Some(reason) = split_peer_preflight_exclusion_reason(
+            &peer,
+            model_name,
+            model_ref,
+            local_source_required,
+        ) {
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason,
@@ -488,8 +530,10 @@ pub(super) async fn collect_split_participants(
             node,
             peer.id,
             model_ref,
+            runtime_profile,
             package,
             artifact_transfer_allowed,
+            local_source_required,
         )
         .await
         {
@@ -529,6 +573,7 @@ pub(super) fn split_peer_preflight_exclusion_reason(
     peer: &mesh::PeerInfo,
     model_name: &str,
     model_ref: &str,
+    local_source_required: bool,
 ) -> Option<SplitParticipantExclusionReason> {
     if let Some(reason) = split_peer_stage_host_exclusion_reason(peer) {
         return Some(reason);
@@ -538,6 +583,9 @@ pub(super) fn split_peer_preflight_exclusion_reason(
     }
     if !peer.stage_protocol_generation_supported {
         return Some(SplitParticipantExclusionReason::StageProtocolGeneration);
+    }
+    if local_source_required && !peer.local_gguf_content_id_supported {
+        return Some(SplitParticipantExclusionReason::UnverifiedLocalSource);
     }
     None
 }
@@ -582,13 +630,18 @@ pub(super) async fn split_peer_package_signal(
     node: &mesh::Node,
     peer_id: iroh::EndpointId,
     model_ref: &str,
+    runtime_profile: &str,
     package: &skippy::SkippyPackageIdentity,
     artifact_transfer_supported: bool,
+    local_source_required: bool,
 ) -> std::result::Result<SplitParticipantPackageSignal, SplitParticipantExclusionReason> {
     let request = skippy::StageInventoryRequest {
         model_id: model_ref.to_string(),
+        runtime_profile: Some(runtime_profile.to_string()),
         package_ref: package.package_ref.clone(),
         manifest_sha256: package.manifest_sha256.clone(),
+        expected_source_model_sha256: Some(package.source_model_sha256.clone()),
+        local_source_required,
     };
     let result = node
         .send_stage_control(peer_id, skippy::StageControlRequest::Inventory(request))
@@ -599,16 +652,31 @@ pub(super) async fn split_peer_package_signal(
     let skippy::StageControlResponse::Inventory(inventory) = response else {
         return Err(SplitParticipantExclusionReason::StageControlUnreachable);
     };
-    split_inventory_package_signal_result(&inventory, package, artifact_transfer_supported)
+    split_inventory_package_signal_result(
+        &inventory,
+        model_ref,
+        package,
+        artifact_transfer_supported,
+        local_source_required,
+    )
 }
 
 pub(super) fn split_inventory_package_signal_result(
     inventory: &skippy::StageLayerInventory,
+    model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
     artifact_transfer_supported: bool,
+    local_source_required: bool,
 ) -> std::result::Result<SplitParticipantPackageSignal, SplitParticipantExclusionReason> {
-    if split_inventory_manifest_mismatch(inventory, package) {
+    if split_inventory_identity_mismatch(inventory, model_ref, package) {
         return Err(SplitParticipantExclusionReason::PackageManifestMismatch);
+    }
+    if local_source_required
+        && (inventory.content_addressed_local_source != Some(true)
+            || inventory.source_model_sha256.as_deref()
+                != Some(package.source_model_sha256.as_str()))
+    {
+        return Err(SplitParticipantExclusionReason::UnverifiedLocalSource);
     }
     if split_inventory_has_no_stage_surface(inventory) {
         return Err(SplitParticipantExclusionReason::StageInventoryEmpty);
@@ -623,11 +691,13 @@ pub(super) fn split_inventory_package_signal_result(
     Err(SplitParticipantExclusionReason::MissingModelSource)
 }
 
-pub(super) fn split_inventory_manifest_mismatch(
+pub(super) fn split_inventory_identity_mismatch(
     inventory: &skippy::StageLayerInventory,
+    model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
 ) -> bool {
-    inventory.package_ref != package.package_ref
+    inventory.model_id != model_ref
+        || inventory.package_ref != package.package_ref
         || inventory.manifest_sha256 != package.manifest_sha256
 }
 
@@ -759,7 +829,7 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update([u8::from(participant.5)]);
         hasher.update(participant.6.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
@@ -772,7 +842,7 @@ pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
         hasher.update(stage.layer_end.to_le_bytes());
         hasher.update(stage.parameter_bytes.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_node_labels(nodes: &[iroh::EndpointId]) -> Vec<String> {

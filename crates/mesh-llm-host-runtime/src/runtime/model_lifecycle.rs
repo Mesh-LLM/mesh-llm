@@ -52,7 +52,7 @@ mod load;
 pub(crate) mod reconciliation;
 mod unload;
 
-pub(crate) use load::run_auto_load_runtime_model;
+pub(crate) use load::{normalize_runtime_model_request_for_config, run_auto_load_runtime_model};
 pub(crate) use unload::{run_auto_handle_runtime_exit, run_auto_unload_runtime_model};
 
 // Re-export reconciliation module's public API for callers in parent scope

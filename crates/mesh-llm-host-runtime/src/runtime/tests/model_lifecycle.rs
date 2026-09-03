@@ -29,7 +29,7 @@ fn reconciliation_target_with_required_bytes(
             eligible_node_count: 1,
             missing_capacity_node_count: 0,
             excluded_client_node_count: 0,
-            split_capable: false,
+            split_capable: Some(false),
         },
     }
 }
@@ -56,6 +56,7 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
     let profile = "low-ctx".to_string();
     let task = tokio::spawn(run_model_target_reconciliation_action(
         control_tx,
+        "org/large-model".to_string(),
         "/models/large.gguf".to_string(),
         Some("Small".to_string()),
         profile.clone(),
@@ -76,10 +77,12 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
     match control_rx.recv().await {
         Some(api::RuntimeControlRequest::Load {
             spec,
+            config_model_id,
             profile,
             resp,
         }) => {
             assert_eq!(spec, "/models/large.gguf");
+            assert_eq!(config_model_id.as_deref(), Some("org/large-model"));
             assert_eq!(profile, "low-ctx");
             resp.send(Ok(api::RuntimeLoadResponse {
                 model_ref: spec,

@@ -19,7 +19,7 @@ pub(super) use standalone::{propose_configured_ngram_tokens, standalone_ngram_pr
 use suffix::{SUFFIX_MIN_SEED_LEN, SuffixNgramProposer};
 
 /// Resolved speculative decoding plan for a served model.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpeculativeDecodeConfig {
     pub requested_strategy: String,
@@ -28,6 +28,22 @@ pub struct SpeculativeDecodeConfig {
     pub ngram: Option<NgramProposalConfig>,
     pub extension: Option<NgramExtensionConfig>,
     pub verify_window: VerifyWindowConfig,
+    #[serde(default)]
+    pub draft_acceptance_threshold: f64,
+    #[serde(default)]
+    pub draft_split_probability: f64,
+    #[serde(default)]
+    pub draft_device: Option<String>,
+    #[serde(default)]
+    pub draft_threads: Option<usize>,
+    #[serde(default = "default_draft_cache_type")]
+    pub draft_cache_type_k: String,
+    #[serde(default = "default_draft_cache_type")]
+    pub draft_cache_type_v: String,
+}
+
+fn default_draft_cache_type() -> String {
+    "f16".to_string()
 }
 
 /// Native multi-token-prediction draft settings.
@@ -114,6 +130,12 @@ impl Default for SpeculativeDecodeConfig {
                 max_tokens: 4,
                 pipeline_depth: 1,
             },
+            draft_acceptance_threshold: 0.0,
+            draft_split_probability: 0.0,
+            draft_device: None,
+            draft_threads: None,
+            draft_cache_type_k: default_draft_cache_type(),
+            draft_cache_type_v: default_draft_cache_type(),
         }
     }
 }
@@ -173,6 +195,13 @@ impl SpeculativeDecodeConfig {
                 "verify window requires 0 < min_tokens <= max_tokens and 0 < pipeline_depth <= {MAX_VERIFY_WINDOW_PIPELINE_DEPTH}"
             );
         }
+        if !(0.0..=1.0).contains(&self.draft_acceptance_threshold)
+            || !(0.0..=1.0).contains(&self.draft_split_probability)
+        {
+            bail!("draft acceptance threshold and split probability must be within 0.0..=1.0");
+        }
+        skippy_runtime::parse_cache_type(&self.draft_cache_type_k)?;
+        skippy_runtime::parse_cache_type(&self.draft_cache_type_v)?;
         Ok(())
     }
 
@@ -205,6 +234,191 @@ pub(super) fn load_standalone_speculative_config(
 #[cfg(test)]
 mod standalone_speculative_config_tests {
     use super::*;
+
+    #[test]
+    fn speculative_frontend_plan_accepts_draft_probability_controls() {
+        let config: SpeculativeDecodeConfig = serde_json::from_value(json!({
+            "requested_strategy": "auto",
+            "effective_strategy": "draft-model",
+            "native_mtp": {
+                "enabled": false,
+                "max_draft_tokens": 4,
+                "min_draft_tokens": 1,
+                "reject_cooldown_tokens": 0,
+                "suppress_cooldown_drafts": false,
+                "suppress_cooldown_draft_limit": 0
+            },
+            "ngram": null,
+            "extension": null,
+            "verify_window": {
+                "min_tokens": 1,
+                "max_tokens": 4,
+                "pipeline_depth": 1
+            },
+            "draft_acceptance_threshold": 0.7,
+            "draft_split_probability": 0.8
+        }))
+        .expect("frontend speculative plan must accept probability controls");
+
+        let rendered = serde_json::to_value(config).expect("serialize speculative plan");
+        assert_eq!(rendered["draft_acceptance_threshold"], json!(0.7));
+        assert_eq!(rendered["draft_split_probability"], json!(0.8));
+    }
+
+    #[test]
+    fn acceptance_threshold_rejects_a_low_acceptance_window() {
+        let decision = classify_verify_window_with_threshold(
+            &[10, 20, 30, 40],
+            &[10, 99, 30, 40],
+            0,
+            16,
+            0.5,
+            |_| Ok(false),
+        )
+        .expect("classify verify window");
+
+        assert_eq!(decision.kind, VerifyWindowDecisionKind::EarlyReject);
+        assert_eq!(decision.accepted_before_reject, 0);
+        assert_eq!(decision.commit_count, 1);
+        assert!(decision.rejected());
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_accepted_stop() {
+        let decision = classify_verify_window_with_threshold(
+            &[10, 20, 30],
+            &[10, 99, 99],
+            0,
+            16,
+            1.0,
+            |token| Ok(token == 10),
+        )
+        .expect("classify accepted stop");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::AcceptedStop,
+                accepted_before_reject: 1,
+                commit_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_early_reject_stop() {
+        let decision =
+            classify_verify_window_with_threshold(&[10, 20, 30], &[10, 99, 30], 0, 2, 1.0, |_| {
+                Ok(false)
+            })
+            .expect("classify early reject stop");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn short_reply_classifies_as_early_reject_at_its_final_row() {
+        // A stateful sampler stops verification at the first mismatched row,
+        // so the runtime legally returns fewer predictions than the draft:
+        // the matched prefix plus the correction.
+        let decision = classify_verify_window(&[10, 20, 30, 40], &[10, 99], 0, 16, |_| Ok(false))
+            .expect("classify short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn short_reply_rejecting_the_first_row_commits_only_the_correction() {
+        let decision = classify_verify_window(&[10, 20, 30], &[99], 0, 16, |_| Ok(false))
+            .expect("classify first-row short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 0,
+                commit_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn short_reply_correction_hitting_eog_stops_the_request() {
+        let decision =
+            classify_verify_window(&[10, 20, 30, 40], &[10, 77], 0, 16, |token| Ok(token == 77))
+                .expect("classify short reply with eog correction");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyRejectStop,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn fully_matched_short_reply_commits_its_verified_prefix() {
+        let decision = classify_verify_window(&[10, 20, 30], &[10, 20], 0, 16, |_| Ok(false))
+            .expect("classify fully-matched short reply");
+
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 2,
+                commit_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_reply_for_a_nonempty_draft_is_an_error() {
+        let error = classify_verify_window(&[10, 20], &[], 0, 16, |_| Ok(false))
+            .expect_err("empty reply must error");
+        assert!(error.to_string().contains("returned no tokens"));
+    }
+
+    #[test]
+    fn acceptance_threshold_accepts_exact_boundary_and_empty_window() {
+        assert!(acceptance_threshold_met(2, 4, 0.5));
+        assert!(acceptance_threshold_met(0, 0, 1.0));
+        assert!(!acceptance_threshold_met(1, 4, 0.5));
+    }
+
+    #[test]
+    fn acceptance_threshold_preserves_a_full_accept() {
+        let decision =
+            classify_verify_window_with_threshold(&[10, 20, 30], &[10, 20, 30], 0, 16, 1.0, |_| {
+                Ok(false)
+            })
+            .expect("classify full acceptance");
+
+        assert_eq!(decision.kind, VerifyWindowDecisionKind::FullAccept);
+        assert_eq!(decision.accepted_before_reject, 3);
+        assert_eq!(decision.commit_count, 3);
+    }
+
+    #[test]
+    fn split_probability_changes_the_verified_draft_length() {
+        assert_eq!(split_draft_len(8, 0.0, 7), 8);
+        assert_eq!(split_draft_len(8, 1.0, 7), 1);
+    }
 
     #[test]
     fn standalone_speculative_config_rejects_invalid_composite_plan() {
@@ -916,13 +1130,19 @@ pub(super) fn classify_verify_window<F>(
 where
     F: FnMut(i32) -> OpenAiResult<bool>,
 {
-    if predicted_tokens.len() < draft_tokens.len() {
+    if predicted_tokens.is_empty() && !draft_tokens.is_empty() {
         return Err(OpenAiError::backend(format!(
-            "verify window returned too few tokens: got {} expected {}",
-            predicted_tokens.len(),
+            "verify window returned no tokens for {} draft tokens",
             draft_tokens.len()
         )));
     }
+    // A reply shorter than the draft is the runtime's sampler guard, not an
+    // error: with a stateful sampler (grammar, penalties, RNG) verification
+    // stops at the first mismatched row so the sampler never absorbs tokens
+    // from the rejected suffix. Every returned token is authoritative — the
+    // matched prefix plus the correction row — so a short reply classifies
+    // exactly like a full reply whose mismatch sits at its final row.
+    let short_reply = predicted_tokens.len() < draft_tokens.len();
 
     let mut accepted_before_reject = 0usize;
     let mut commit_count = 0usize;
@@ -958,11 +1178,91 @@ where
         });
     }
 
+    if short_reply {
+        // The runtime only truncates at a mismatched row, so the loop above
+        // normally returns from its reject arm first. If every returned row
+        // matched anyway, the committed prefix is still all verified accepts;
+        // the unverified draft tail is simply dropped and re-proposed.
+        return Ok(VerifyWindowDecision {
+            kind: VerifyWindowDecisionKind::EarlyReject,
+            accepted_before_reject,
+            commit_count,
+        });
+    }
+
     Ok(VerifyWindowDecision {
         kind: VerifyWindowDecisionKind::FullAccept,
         accepted_before_reject,
         commit_count,
     })
+}
+
+pub(super) fn classify_verify_window_with_threshold<F>(
+    draft_tokens: &[i32],
+    predicted_tokens: &[i32],
+    generated_len: usize,
+    max_new_tokens: usize,
+    acceptance_threshold: f64,
+    token_is_eog: F,
+) -> OpenAiResult<VerifyWindowDecision>
+where
+    F: FnMut(i32) -> OpenAiResult<bool>,
+{
+    let decision = classify_verify_window(
+        draft_tokens,
+        predicted_tokens,
+        generated_len,
+        max_new_tokens,
+        token_is_eog,
+    )?;
+    if acceptance_threshold_met(
+        decision.accepted_before_reject,
+        draft_tokens.len(),
+        acceptance_threshold,
+    ) {
+        return Ok(decision);
+    }
+    if matches!(
+        decision.kind,
+        VerifyWindowDecisionKind::AcceptedStop | VerifyWindowDecisionKind::EarlyRejectStop
+    ) {
+        return Ok(decision);
+    }
+    Ok(VerifyWindowDecision {
+        kind: VerifyWindowDecisionKind::EarlyReject,
+        accepted_before_reject: 0,
+        commit_count: 1,
+    })
+}
+
+pub(super) fn acceptance_threshold_met(
+    accepted_tokens: usize,
+    proposed_tokens: usize,
+    threshold: f64,
+) -> bool {
+    proposed_tokens == 0
+        || threshold <= 0.0
+        || accepted_tokens == proposed_tokens
+        || accepted_tokens as f64 / proposed_tokens as f64 >= threshold
+}
+
+pub(super) fn split_draft_len(token_count: usize, probability: f64, seed: usize) -> usize {
+    if token_count <= 1 || probability <= 0.0 {
+        return token_count;
+    }
+    if probability >= 1.0 {
+        return 1;
+    }
+    for index in 1..token_count {
+        let mixed = (seed as u64)
+            .wrapping_add(index as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let sample = (mixed >> 11) as f64 / ((1_u64 << 53) as f64);
+        if sample < probability {
+            return index;
+        }
+    }
+    token_count
 }
 
 pub(super) fn verify_checkpoint_no_longer_needed(

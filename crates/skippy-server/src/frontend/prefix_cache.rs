@@ -12,6 +12,7 @@ use crate::frontend::generation::MAX_EXACT_REPLAY_TOKENS;
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::sampling_cache_key::{sampling_replay_safe, sampling_semantic_fingerprint};
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
 use crate::frontend::wire_messages::DecodeMessageArgs;
@@ -28,8 +29,6 @@ use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
 use serde_json::Value;
 use serde_json::json;
-use sha2::Digest;
-use sha2::Sha256;
 use skippy_protocol::MessageBase;
 use skippy_protocol::SCHEMA_VERSION;
 use skippy_protocol::StageConfig;
@@ -102,7 +101,7 @@ fn estimated_activation_bytes(token_count: usize, activation_width: i32) -> usiz
 }
 
 pub(super) fn request_allows_exact_replay(request: &EmbeddedStageZeroGeneration<'_>) -> bool {
-    request.draft.is_none() && request.sampling.temperature <= 0.0
+    request.draft.is_none() && sampling_replay_safe(request.sampling)
 }
 
 fn exact_replay_cache_key(
@@ -110,36 +109,35 @@ fn exact_replay_cache_key(
     sampling: &SamplingConfig,
     chat_sampling_metadata: Option<&str>,
 ) -> String {
-    use std::fmt::Write as _;
+    let fingerprint = sampling_semantic_fingerprint(sampling, chat_sampling_metadata);
+    format!("{}:replay:v2:{fingerprint}", identity.page_id)
+}
 
-    let mut digest = Sha256::new();
-    digest.update(b"skippy-exact-replay-v1");
-    digest.update(identity.page_id.as_bytes());
-    digest.update([u8::from(sampling.enabled)]);
-    digest.update(sampling.seed.to_le_bytes());
-    digest.update(sampling.temperature.to_bits().to_le_bytes());
-    digest.update(sampling.top_p.to_bits().to_le_bytes());
-    digest.update(sampling.top_k.to_le_bytes());
-    digest.update(sampling.min_p.to_bits().to_le_bytes());
-    digest.update(sampling.presence_penalty.to_bits().to_le_bytes());
-    digest.update(sampling.frequency_penalty.to_bits().to_le_bytes());
-    digest.update(sampling.repeat_penalty.to_bits().to_le_bytes());
-    digest.update(sampling.penalty_last_n.to_le_bytes());
-    for bias in &sampling.logit_bias {
-        digest.update(b"logit-bias");
-        digest.update(bias.token_id.to_le_bytes());
-        digest.update(bias.bias.to_bits().to_le_bytes());
+fn record_replay_safe_first_token(
+    kv: &KvStageIntegration,
+    identity: &crate::kv_integration::PrefillKvIdentity,
+    predicted: i32,
+    sampling: &SamplingConfig,
+    chat_sampling_metadata: Option<&str>,
+) -> bool {
+    if !sampling_replay_safe(sampling) {
+        return false;
     }
-    if let Some(metadata) = chat_sampling_metadata {
-        digest.update(b"chat-sampling-metadata");
-        digest.update(metadata.as_bytes());
+    let cache_key = exact_replay_cache_key(identity, sampling, chat_sampling_metadata);
+    kv.record_cached_first_token_with_key(&cache_key, identity, predicted)
+}
+
+fn lookup_replay_safe_first_token(
+    kv: &KvStageIntegration,
+    identity: &crate::kv_integration::PrefillKvIdentity,
+    sampling: &SamplingConfig,
+    chat_sampling_metadata: Option<&str>,
+) -> Option<i32> {
+    if !sampling_replay_safe(sampling) {
+        return None;
     }
-    let digest = digest.finalize();
-    let mut suffix = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(&mut suffix, "{byte:02x}");
-    }
-    format!("{}:replay:{suffix}", identity.page_id)
+    let cache_key = exact_replay_cache_key(identity, sampling, chat_sampling_metadata);
+    kv.lookup_cached_first_token_with_key(&cache_key)
 }
 
 pub(super) fn stage0_prefill_record_identities(
@@ -514,13 +512,6 @@ impl StageOpenAiBackend {
                             .try_into()
                             .unwrap_or(usize::MAX)
                             .min(scheduler_token_ids.len());
-                        if token_count == scheduler_token_ids.len() {
-                            let _ = scheduler_kv.record_exact_state(
-                                runtime,
-                                &scheduler_session_id,
-                                identity,
-                            );
-                        }
                         scheduler_kv
                             .record_resident_prefix(
                                 runtime,
@@ -533,7 +524,14 @@ impl StageOpenAiBackend {
                     .collect::<OpenAiResult<Vec<_>>>()
             },
         )?;
-        let mut recorded_any = false;
+        let exact_record_queued = kv.payload_is_exact_state()
+            && self.enqueue_exact_state_record_at_tokens(
+                session_id,
+                ids,
+                token_ids.to_vec(),
+                "embedded_full_prefill_state",
+            );
+        let mut recorded_any = exact_record_queued;
         for record in records.into_iter().flatten() {
             recorded_any = true;
             let mut attrs = self.openai_attrs(ids);
@@ -584,6 +582,8 @@ impl StageOpenAiBackend {
         ids: &OpenAiGenerationIds,
         token_ids: &[i32],
         predicted: i32,
+        sampling: &SamplingConfig,
+        chat_sampling_metadata: Option<&str>,
     ) -> OpenAiResult<bool> {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
@@ -595,7 +595,15 @@ impl StageOpenAiBackend {
         let identity = kv.prefill_identity(&self.config, &base, 0, token_ids);
         let recorded_state =
             self.record_embedded_stage0_full_prefill(session_id, ids, token_ids)?;
-        let recorded_token = kv.record_cached_first_token(&identity, predicted);
+        // The state is still useful for ordinary prefix restoration, but a
+        // token sampled with an RNG-dependent request is never reusable.
+        let recorded_token = record_replay_safe_first_token(
+            kv,
+            &identity,
+            predicted,
+            sampling,
+            chat_sampling_metadata,
+        );
         let mut attrs = self.openai_attrs(ids);
         attrs.insert(
             "skippy.kv.decision".to_string(),
@@ -814,7 +822,12 @@ impl StageOpenAiBackend {
         let timer = PhaseTimer::start();
         let base = self.local_kv_message_base(session_key, request.ids);
         let identity = kv.prefill_identity(request.config, &base, 0, request.prompt_token_ids);
-        let Some(predicted) = kv.lookup_cached_first_token(&identity) else {
+        let Some(predicted) = lookup_replay_safe_first_token(
+            kv,
+            &identity,
+            request.sampling,
+            request.chat_sampling_metadata,
+        ) else {
             return Ok(None);
         };
         let Some(restore) = self.try_restore_embedded_split_prefill(
@@ -1153,6 +1166,8 @@ impl StageOpenAiBackend {
             request.ids,
             request.prompt_token_ids,
             downstream_reply.predicted,
+            request.sampling,
+            request.chat_sampling_metadata,
         )?;
         Ok(Some(EmbeddedFusedFirstDecode {
             predicted: downstream_reply.predicted,
@@ -1256,5 +1271,198 @@ mod tests {
     fn exact_replay_rejects_a_shorter_restored_checkpoint() {
         assert!(exact_replay_restore_is_partial(44_466, 44_467));
         assert!(!exact_replay_restore_is_partial(44_467, 44_467));
+    }
+
+    #[test]
+    fn exact_replay_key_includes_ignore_eos_sampling_control() {
+        let identity = crate::kv_integration::PrefillKvIdentity {
+            identity: crate::kv_proto::PageIdentity {
+                token_count: 4,
+                ..Default::default()
+            },
+            page_id: "page".to_string(),
+            namespace: "stage".to_string(),
+            token_ids: vec![1, 2, 3, 4],
+        };
+        let baseline = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ignore_eos: false,
+            ..Default::default()
+        };
+        let ignore_eos = SamplingConfig {
+            ignore_eos: true,
+            ..baseline.clone()
+        };
+
+        assert_ne!(baseline, ignore_eos);
+        assert_ne!(
+            exact_replay_cache_key(&identity, &baseline, None),
+            exact_replay_cache_key(&identity, &ignore_eos, None),
+            "different greedy sampling semantics must not collide"
+        );
+    }
+
+    #[test]
+    fn first_token_cache_is_partitioned_and_skips_stochastic_requests() {
+        let config = StageConfig {
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            ctx_size: 256,
+            lane_count: 1,
+            kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                mode: skippy_protocol::StageKvCacheMode::LookupRecord,
+                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
+                max_entries: 8,
+                max_bytes: 0,
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 1,
+                shared_prefix_record_limit: 1,
+            }),
+            ..Default::default()
+        };
+        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+            .unwrap()
+            .expect("resident cache");
+        let identity = crate::kv_integration::PrefillKvIdentity {
+            identity: crate::kv_proto::PageIdentity {
+                token_count: 4,
+                ..Default::default()
+            },
+            page_id: "page".to_string(),
+            namespace: "stage".to_string(),
+            token_ids: vec![1, 2, 3, 4],
+        };
+        let first_sampling = SamplingConfig {
+            enabled: true,
+            seed: 1,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let second_sampling = SamplingConfig {
+            ignore_eos: true,
+            ..first_sampling.clone()
+        };
+        let stochastic_sampling = SamplingConfig {
+            temperature: 0.8,
+            ..first_sampling.clone()
+        };
+        let first_key = exact_replay_cache_key(&identity, &first_sampling, None);
+        let second_key = exact_replay_cache_key(&identity, &second_sampling, None);
+        assert_ne!(
+            first_key, second_key,
+            "sampling controls must partition sampled first-token outputs"
+        );
+
+        assert!(sampling_replay_safe(&SamplingConfig::default()));
+        assert!(sampling_replay_safe(&first_sampling));
+        assert!(!sampling_replay_safe(&stochastic_sampling));
+        assert!(cache.record_cached_first_token_with_key(&first_key, &identity, 123));
+        assert_eq!(
+            cache.lookup_cached_first_token_with_key(&first_key),
+            Some(123),
+            "the same deterministic sampling semantics should reuse the token"
+        );
+        assert_eq!(
+            cache.lookup_cached_first_token_with_key(&second_key),
+            None,
+            "different sampling semantics must not reuse the token"
+        );
+        assert_eq!(
+            cache.lookup_cached_first_token_with_key(&exact_replay_cache_key(
+                &identity,
+                &stochastic_sampling,
+                None,
+            )),
+            None,
+            "stochastic requests must not reuse a deterministic first token"
+        );
+    }
+
+    #[test]
+    fn first_token_record_and_lookup_reject_rng_backed_zero_temperature_chains() {
+        let config = StageConfig {
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            ctx_size: 256,
+            lane_count: 1,
+            kv_cache: Some(skippy_protocol::StageKvCacheConfig {
+                mode: skippy_protocol::StageKvCacheMode::LookupRecord,
+                payload: skippy_protocol::StageKvCachePayload::ResidentKv,
+                max_entries: 8,
+                max_bytes: 0,
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 1,
+                shared_prefix_record_limit: 1,
+            }),
+            ..Default::default()
+        };
+        let cache = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+            .unwrap()
+            .expect("resident cache");
+        let identity = crate::kv_integration::PrefillKvIdentity {
+            identity: crate::kv_proto::PageIdentity {
+                token_count: 4,
+                ..Default::default()
+            },
+            page_id: "page".to_string(),
+            namespace: "stage".to_string(),
+            token_ids: vec![1, 2, 3, 4],
+        };
+        let greedy = SamplingConfig {
+            enabled: true,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let unsafe_configs = [
+            SamplingConfig {
+                mirostat_mode: 1,
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                samplers: vec!["top_k".to_string(), "top_p".to_string()],
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                xtc: skippy_runtime::XtcSamplingConfig {
+                    probability: 0.5,
+                    ..greedy.xtc.clone()
+                },
+                ..greedy.clone()
+            },
+            SamplingConfig {
+                dynatemp_range: 0.5,
+                ..greedy
+            },
+        ];
+
+        for (index, sampling) in unsafe_configs.iter().enumerate() {
+            let raw_key = exact_replay_cache_key(&identity, sampling, None);
+            assert!(!record_replay_safe_first_token(
+                &cache,
+                &identity,
+                100 + index as i32,
+                sampling,
+                None,
+            ));
+            assert_eq!(
+                cache.lookup_cached_first_token_with_key(&raw_key),
+                None,
+                "an RNG-backed token must not be recorded"
+            );
+
+            assert!(cache.record_cached_first_token_with_key(
+                &raw_key,
+                &identity,
+                200 + index as i32,
+            ));
+            assert_eq!(
+                lookup_replay_safe_first_token(&cache, &identity, sampling, None),
+                None,
+                "an RNG-backed request must not look up even a pre-existing token"
+            );
+        }
     }
 }

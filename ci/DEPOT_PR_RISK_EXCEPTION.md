@@ -4,14 +4,14 @@ Status: **accepted, bounded exception**
 
 - Decision date: 2026-08-14
 - Automatic expiry: 2026-09-14 00:00 UTC
-- Scope: same-repository `pull_request` merge refs only
+- Scope: eligible same-repository `pull_request` merge refs only
 - Objective: reduce CI iteration time while Depot and GitHub finish stronger
   cache-authority controls
 
 ## Decision
 
 MeshLLM knowingly accepts repository-wide, cross-branch Depot Actions-cache
-authority for individually approved same-repository pull requests during this
+authority for eligible same-repository pull requests during this
 exception window. This is a deliberate speed-versus-isolation decision, not a
 claim that Depot currently provides branch or pull-request cache isolation.
 
@@ -58,7 +58,7 @@ The result is evidence of shared authority, not a successful isolation test.
 
 ## Risks we are accepting
 
-An approved same-repository PR can:
+Any eligible same-repository PR can:
 
 - read non-secret cache data written by trusted main or another PR;
 - publish a cache entry that a later trusted-main job may restore;
@@ -88,17 +88,11 @@ The protected runner policy implements an explicit equivalent for this
 exception. Depot is selected only when all of the following are true:
 
 1. `DEPOT_PR_RUNNERS_ENABLED` is exactly `true`.
-2. `DEPOT_PR_APPROVED_REF` exactly equals the current
-   `refs/pull/<number>/merge` ref.
-3. `DEPOT_PR_APPROVED_SHA` exactly equals the lowercase 40-character PR head
-   SHA.
-4. The head and base repositories are both exactly `Mesh-LLM/mesh-llm`.
-5. The protected default-branch reusable workflow owns runner selection.
-6. The planner has not forced hosted execution for CI/workflow/policy changes.
-7. The checked-in expiry has not been reached.
+2. The head and base repositories are both exactly `Mesh-LLM/mesh-llm`.
+3. The protected default-branch reusable workflow owns runner selection.
+4. The planner has not forced hosted execution for CI/workflow/policy changes.
+5. The checked-in expiry has not been reached.
 
-A new push changes the head SHA and automatically returns the PR to
-GitHub-hosted runners until a maintainer reviews and updates the approval SHA.
 Forks always remain GitHub-hosted. The audit still rejects direct Depot cache
 tokens, WebDAV/sccache authority, registry credentials, Docker registry auth,
 and URL userinfo before checkout.
@@ -106,7 +100,7 @@ and URL userinfo before checkout.
 ## Cross-branch cache behavior
 
 While the exception is active, the central policy enables the GitHub Actions
-cache API for the exact approved Depot PR and for eligible trusted-main Depot
+cache API for eligible Depot PRs and eligible trusted-main Depot
 jobs. Depot maps those requests to its repository-wide namespace, allowing the
 intended cross-branch reuse. The separate direct Depot build-tool remote-cache
 flag remains disabled.
@@ -117,19 +111,16 @@ correctness.
 
 ## Operation and rollback
 
-To approve one reviewed PR revision, a maintainer with repository-variable
-authority sets the global gate to `true`, the approved merge ref, and the exact
-head SHA. The approved SHA must be refreshed after every push. Remove the two
-approval values after the run or when the PR closes.
+To activate the bounded exception, a maintainer with repository-variable
+authority sets `DEPOT_PR_RUNNERS_ENABLED=true`. This selects every eligible
+same-repository PR until rollback or expiry.
 
-Immediate rollback is any one of:
+Immediate rollback deletes `DEPOT_PR_CANARY_REF` and deletes or sets
+`DEPOT_PR_RUNNERS_ENABLED=false`.
 
-- delete or set `DEPOT_PR_RUNNERS_ENABLED=false`;
-- delete `DEPOT_PR_APPROVED_REF`;
-- delete `DEPOT_PR_APPROVED_SHA`.
-
-The same workflow graph then selects GitHub-hosted runners. No source, matrix,
-artifact, command, or required-summary change is needed.
+With both selectors disabled, the same workflow graph selects GitHub-hosted
+runners. No source, matrix, artifact, command, or required-summary change is
+needed.
 
 The selector fails hosted at the start of 2026-09-14 UTC. Extending the window
 requires a reviewed source change to the expiry and this decision record; a

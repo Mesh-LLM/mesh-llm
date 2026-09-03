@@ -154,6 +154,7 @@ pub struct PeerAnnouncement {
     pub(crate) artifact_transfer_supported: bool,
     pub(crate) stage_protocol_generation_supported: bool,
     pub(crate) stage_status_list_supported: bool,
+    pub(crate) local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
@@ -255,6 +256,7 @@ pub struct PeerInfo {
     pub artifact_transfer_supported: bool,
     pub stage_protocol_generation_supported: bool,
     pub stage_status_list_supported: bool,
+    pub local_gguf_content_id_supported: bool,
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     pub(crate) cache_affinity:
         Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
@@ -345,6 +347,7 @@ impl PeerInfo {
             artifact_transfer_supported: ann.artifact_transfer_supported,
             stage_protocol_generation_supported: ann.stage_protocol_generation_supported,
             stage_status_list_supported: ann.stage_status_list_supported,
+            local_gguf_content_id_supported: ann.local_gguf_content_id_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,
@@ -775,31 +778,54 @@ impl Node {
         result
     }
 
-    /// Find a host for a specific model, using hash-based selection for load distribution.
-    /// When multiple hosts serve the same model, picks one based on our node ID hash.
-    /// All host IDs serving a model, with hash-preferred host first.
-    /// Used for retry: if the first host fails, try the next.
+    /// All host IDs serving a model, with a healthy hash-preferred host first.
+    /// Paused peers are excluded; deprioritized peers remain spillover capacity.
     pub async fn hosts_for_model(&self, model: &str) -> Vec<EndpointId> {
         let state = self.state.lock().await;
-        let mut hosts: Vec<EndpointId> = state
+        let mut hosts: Vec<(EndpointId, bool)> = state
             .peers
             .values()
             .filter(|p| p.is_admitted())
             .filter(|p| p.routes_http_model(model))
-            .map(|p| p.id)
+            .filter_map(|p| {
+                use crate::proto::node::InferenceAdmissionState;
+                match p.inference_admission_state {
+                    Some(
+                        InferenceAdmissionState::RemotePaused | InferenceAdmissionState::AllPaused,
+                    ) => None,
+                    Some(InferenceAdmissionState::AcceptingDeprioritized) => Some((p.id, true)),
+                    _ => Some((p.id, false)),
+                }
+            })
             .collect();
-        hosts.sort();
-        // Put the hash-preferred host first so normal path tries it first
-        if !hosts.is_empty() {
-            let my_id = self.endpoint.id();
-            let id_bytes = my_id.as_bytes();
-            let hash = id_bytes
-                .iter()
-                .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
-            let idx = (hash as usize) % hosts.len();
-            hosts.rotate_left(idx);
+        hosts.sort_by_key(|(id, _)| *id);
+        let mut healthy = Vec::new();
+        let mut deprioritized = Vec::new();
+        for (id, is_deprioritized) in hosts {
+            if is_deprioritized {
+                deprioritized.push(id);
+            } else {
+                healthy.push(id);
+            }
         }
-        hosts
+        // Rendezvous-order each health class independently. This keeps one
+        // origin sticky to one replica for KV reuse, spreads different origins,
+        // and when a replica becomes busy removes only that replica from the
+        // healthy ordering instead of rotating every remaining peer.
+        let origin = self.endpoint.id();
+        let affinity_score = |peer: &EndpointId| {
+            origin
+                .as_bytes()
+                .iter()
+                .chain(peer.as_bytes())
+                .fold(0xcbf29ce484222325u64, |hash, &byte| {
+                    hash.wrapping_mul(0x100000001b3) ^ u64::from(byte)
+                })
+        };
+        healthy.sort_by_key(|peer| std::cmp::Reverse(affinity_score(peer)));
+        deprioritized.sort_by_key(|peer| std::cmp::Reverse(affinity_score(peer)));
+        healthy.extend(deprioritized);
+        healthy
     }
 
     /// Find ANY host in the mesh (fallback when no model match).

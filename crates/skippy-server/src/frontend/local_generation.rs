@@ -1,6 +1,8 @@
+mod cache_deadline;
 mod decode_step;
 mod linear_decode;
 mod native_mtp_decode;
+mod resident_prefill;
 #[cfg(test)]
 mod tests;
 mod token_generation;

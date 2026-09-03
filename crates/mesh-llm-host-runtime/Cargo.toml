@@ -26,37 +26,37 @@ workspace = true
 [dependencies]
 bytes = "1"
 mesh-llm-build-info.workspace = true
-mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.76.0-rc7"  }
-mesh-llm-config = { path = "../mesh-llm-config", version = "0.76.0-rc7"  }
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc7"  }
-mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.76.0-rc7"  }
-mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.0-rc7"  }
-mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.0-rc7"  }
-mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.0-rc7", features = ["host-io"]  }
-mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0-rc7"  }
-mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.76.0-rc7" }
-mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.0-rc7"  }
-mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.76.0-rc7"  }
-mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.0-rc7"  }
-mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.0-rc7"  }
-mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.0-rc7", features = ["skippy-devices"]  }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc7"  }
-mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.76.0-rc7", default-features = false  }
-mesh-llm-node = { path = "../mesh-llm-node", version = "0.76.0-rc7"  }
-mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.76.0-rc7"  }
-mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc7", features = ["host-io"]  }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc7"  }
-model-hf = { path = "../model-hf", version = "0.76.0-rc7"  }
-model-package = { path = "../model-package", version = "0.76.0-rc7"  }
-model-ref = { path = "../model-ref", version = "0.76.0-rc7"  }
-model-resolver = { path = "../model-resolver", version = "0.76.0-rc7"  }
-openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc7"  }
-skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc7"  }
-skippy-coordinator = { path = "../skippy-coordinator", version = "0.76.0-rc7"  }
-skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc7"  }
-skippy-ffi = { path = "../skippy-ffi", version = "0.76.0-rc7", default-features = false }
-skippy-server = { path = "../skippy-server", version = "0.76.0-rc7"  }
-skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc7"  }
+mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.76.0-rc9"  }
+mesh-llm-config = { path = "../mesh-llm-config", version = "0.76.0-rc9"  }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc9"  }
+mesh-llm-log-store = { path = "../mesh-llm-log-store", version = "0.76.0-rc9"  }
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.0-rc9"  }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.0-rc9"  }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.0-rc9", features = ["host-io"]  }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0-rc9"  }
+mesh-native-serving-plugin-host = { path = "../mesh-native-serving-plugin-host", version = "0.76.0-rc9" }
+mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.0-rc9"  }
+mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.76.0-rc9"  }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.0-rc9"  }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.0-rc9"  }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.0-rc9", features = ["skippy-devices"]  }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc9"  }
+mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.76.0-rc9", default-features = false  }
+mesh-llm-node = { path = "../mesh-llm-node", version = "0.76.0-rc9"  }
+mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.76.0-rc9"  }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc9", features = ["host-io"]  }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc9"  }
+model-hf = { path = "../model-hf", version = "0.76.0-rc9"  }
+model-package = { path = "../model-package", version = "0.76.0-rc9"  }
+model-ref = { path = "../model-ref", version = "0.76.0-rc9"  }
+model-resolver = { path = "../model-resolver", version = "0.76.0-rc9"  }
+openai-frontend = { path = "../openai-frontend", version = "0.76.0-rc9"  }
+skippy-protocol = { path = "../skippy-protocol", version = "0.76.0-rc9"  }
+skippy-coordinator = { path = "../skippy-coordinator", version = "0.76.0-rc9"  }
+skippy-runtime = { path = "../skippy-runtime", version = "0.76.0-rc9"  }
+skippy-ffi = { path = "../skippy-ffi", version = "0.76.0-rc9", default-features = false }
+skippy-server = { path = "../skippy-server", version = "0.76.0-rc9"  }
+skippy-topology = { path = "../skippy-topology", version = "0.76.0-rc9"  }
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
@@ -68,46 +68,46 @@ socket2 = { version = "0.6", features = ["all"] }
 anyhow = "1"
 async-trait = "0.1"
 rand = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 dirs = "6.0.0"
 hex = "0.4.3"
 nostr-sdk = { version = "0.45.1", default-features = false }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["metrics"] }
-opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["metrics", "http-proto", "reqwest-blocking-client"] }
 rustls = "0.23.36"
-reqwest = { version = "0.12", features = ["stream", "json"] }
+reqwest = { version = "0.13", features = ["stream", "json"] }
 flate2 = "1"
 futures-util = "0.3"
 semver = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tar = "0.4"
-ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
 crypto_box = "0.9"
-chacha20poly1305 = "0.10"
-argon2 = "0.5"
+chacha20poly1305 = "0.11"
+argon2 = "0.6"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
-rpassword = "5"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+rpassword = "7.5"
+keyring = "4.2"
 chrono = { version = "0.4", features = ["serde"] }
 httparse = "1"
 http = "1"
 http-body-util = "0.1"
 tokio-stream = "0.1"
-crossterm = "0.28"
+crossterm = "0.29"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2.183"
-mdns-sd = "0.19"
+mdns-sd = "0.21"
 regex-lite = "0.1"
-rmcp = { version = "1.8", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
+rmcp = { version = "3", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 axum = "0.8"
 schemars = "1"
 prost = "0.14"
-toml = "0.9"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+toml = "1.1"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = false, features = ["blocking"] }
 tabwriter = "1"
 tempfile = "3"
@@ -121,8 +121,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-serial_test = "3"
-mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc7"  }
+serial_test = "4"
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["metrics", "testing"] }
+mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.76.0-rc9"  }
 # Used by the gated-relay regression test to spawn an in-process iroh-relay
 # with AccessConfig::Restricted, then build a real iroh::Endpoint from our
 # relay_map_from_urls output and verify --relay-auth tokens reach the relay

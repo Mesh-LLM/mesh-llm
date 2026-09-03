@@ -166,6 +166,8 @@ pub(crate) async fn bridge_quic_to_local_stream(
     local: crate::plugin::LocalStream,
 ) -> Result<()> {
     match local {
+        #[cfg(test)]
+        crate::plugin::LocalStream::Tcp(stream) => copy_quic_to_local_write(recv, stream).await,
         #[cfg(unix)]
         crate::plugin::LocalStream::Unix(stream) => copy_quic_to_local_write(recv, stream).await,
         #[cfg(windows)]
@@ -184,6 +186,8 @@ pub(crate) async fn bridge_local_stream_to_quic(
     send: SendStream,
 ) -> Result<()> {
     match local {
+        #[cfg(test)]
+        crate::plugin::LocalStream::Tcp(stream) => copy_local_read_to_quic(stream, send).await,
         #[cfg(unix)]
         crate::plugin::LocalStream::Unix(stream) => copy_local_read_to_quic(stream, send).await,
         #[cfg(windows)]
@@ -203,6 +207,10 @@ pub(crate) async fn bridge_local_stream_bidirectional(
     recv: RecvStream,
 ) -> Result<()> {
     match local {
+        #[cfg(test)]
+        crate::plugin::LocalStream::Tcp(stream) => {
+            bridge_stream_bidirectional(stream, send, recv).await
+        }
         #[cfg(unix)]
         crate::plugin::LocalStream::Unix(stream) => {
             bridge_stream_bidirectional(stream, send, recv).await

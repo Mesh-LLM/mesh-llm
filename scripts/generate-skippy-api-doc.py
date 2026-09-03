@@ -74,7 +74,9 @@ def parse_header(path: Path) -> Header:
         raise ValueError(f"missing @brief for {path}")
 
     functions: list[Function] = []
-    function_pattern = re.compile(r"LLAMA_API\s+.*?;", re.DOTALL)
+    function_pattern = re.compile(
+        r"(?:LLAMA_API|SKIPPY_COMMON_API)\s+.*?;", re.DOTALL
+    )
     for match in function_pattern.finditer(text):
         declaration = normalize_declaration(match.group(0))
         name_match = re.search(r"\b(skippy_[a-zA-Z0-9_]+)\s*\(", declaration)

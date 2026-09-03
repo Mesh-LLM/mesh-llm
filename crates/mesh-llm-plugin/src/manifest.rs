@@ -1512,8 +1512,8 @@ mod tests {
                     .handle(|request, _context| Box::pin(async move {
                         Ok(crate::get_prompt_result(vec![
                             rmcp::model::PromptMessage::new(
-                                rmcp::model::PromptMessageRole::User,
-                                rmcp::model::PromptMessageContent::text(request.name),
+                                rmcp::model::Role::User,
+                                rmcp::model::ContentBlock::text(request.name),
                             ),
                         ]))
                     })),

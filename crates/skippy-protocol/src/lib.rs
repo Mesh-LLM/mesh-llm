@@ -19,9 +19,9 @@ mod messages;
 mod validation;
 
 pub use config::{
-    ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, LoadMode,
-    PeerConfig, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig, StageKvCacheMode,
-    StageKvCachePayload, StageTopology, StageTopologyEntry,
+    ActivationDType, ActivationDescriptor, ActivationLayout, FlashAttentionType, GlmDsaPolicy,
+    LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice, StageIdentity, StageKvCacheConfig,
+    StageKvCacheMode, StageKvCachePayload, StageTopology, StageTopologyEntry,
 };
 pub use messages::{
     AckMessage, DecodeTokenMessage, ErrorMessage, FinalPrefillChunkMessage, MessageBase,
@@ -32,8 +32,9 @@ pub use validation::{
     MAX_STAGE_FRAME_BYTES, MAX_VERIFY_WINDOW_PIPELINE_DEPTH, SCHEMA_VERSION, STAGE_ALPN_V2,
     STAGE_PROTOCOL_GENERATION, STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL,
     STAGE_STREAM_TRANSPORT, STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL, STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
     validate_stage_control_request, validate_stage_control_response, validate_stage_transport_open,
@@ -43,16 +44,33 @@ pub use validation::{
 mod tests {
     use prost::Message as _;
 
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct LegacyStageControlRequest {
+        #[prost(uint32, tag = "1")]
+        r#gen: u32,
+        #[prost(bytes = "vec", tag = "2")]
+        requester_id: Vec<u8>,
+        #[prost(oneof = "LegacyStageCommand", tags = "3")]
+        command: Option<LegacyStageCommand>,
+    }
+
+    #[derive(Clone, PartialEq, prost::Oneof)]
+    enum LegacyStageCommand {
+        #[prost(message, tag = "3")]
+        LoadStage(super::proto::stage::LoadStage),
+    }
+
     use super::proto::stage::{
         CancelPrepareStage, GetLayerInventory, GetStageStatus, LayerInventory, LayerRange,
-        LoadStage, PrepareStage, PrepareStageAccepted, SourceModelKind,
+        LoadStage, PrepareStage, PrepareStageAccepted, SourceModelKind, SourceResolutionPolicy,
         StageArtifactTransferRequest, StageArtifactTransferResponse, StageControlRequest,
-        StageControlResponse, StagePreparationState, StagePreparationStatus, StageReady,
-        StageRuntimeState, StageStatus, StageStatusAck, StageStatusList, StageStatusUpdate,
-        StageTransportOpen, StopStage, stage_control_request, stage_control_response,
+        StageControlResponse, StageLoadMode, StagePreparationState, StagePreparationStatus,
+        StageReady, StageRuntimeState, StageStatus, StageStatusAck, StageStatusList,
+        StageStatusUpdate, StageTransportOpen, StopStage, stage_control_request,
+        stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
         StageFrameError, validate_stage_artifact_transfer_request,
         validate_stage_artifact_transfer_response, validate_stage_control_request,
         validate_stage_control_response, validate_stage_transport_open,
@@ -61,7 +79,7 @@ mod tests {
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V5,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V7,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }
@@ -91,8 +109,10 @@ mod tests {
                 manifest_sha256: "a5".repeat(32),
                 stage_id: "stage-0".to_string(),
                 layer_end: 16,
-                activation_width: 4096,
                 projector_path: Some("/models/mmproj.gguf".to_string()),
+                source_model_sha256: Some("b6".repeat(32)),
+                source_resolution_policy: SourceResolutionPolicy::Fallback as i32,
+                runtime_profile: Some("strict-profile".to_string()),
                 ..Default::default()
             })),
             ..frame.clone()
@@ -101,6 +121,15 @@ mod tests {
         match decoded.command {
             Some(stage_control_request::Command::LoadStage(load)) => {
                 assert_eq!(load.projector_path.as_deref(), Some("/models/mmproj.gguf"));
+                assert_eq!(
+                    load.source_model_sha256.as_deref(),
+                    Some("b6".repeat(32).as_str())
+                );
+                assert_eq!(
+                    load.source_resolution_policy,
+                    SourceResolutionPolicy::Fallback as i32
+                );
+                assert_eq!(load.runtime_profile.as_deref(), Some("strict-profile"));
             }
             other => panic!("expected LoadStage, got {other:?}"),
         }
@@ -123,11 +152,118 @@ mod tests {
                     model_id: "qwen".to_string(),
                     package_ref: "hf://repo/model".to_string(),
                     manifest_sha256: "a5".repeat(32),
+                    expected_source_model_sha256: Some("b6".repeat(32)),
+                    source_resolution_policy: SourceResolutionPolicy::LocalRequired as i32,
+                    runtime_profile: Some("strict-profile".to_string()),
                 },
             )),
             ..frame.clone()
         };
         validate_stage_control_request(&inventory).unwrap();
+
+        let mut unknown_source_policy = load.clone();
+        let Some(stage_control_request::Command::LoadStage(load_stage)) =
+            unknown_source_policy.command.as_mut()
+        else {
+            unreachable!("load fixture must contain LoadStage");
+        };
+        load_stage.source_resolution_policy = 99;
+        assert!(matches!(
+            validate_stage_control_request(&unknown_source_policy),
+            Err(StageFrameError::InvalidSourceResolutionPolicy { got: 99 })
+        ));
+
+        let mut strict_load_stage = match load.command.clone() {
+            Some(stage_control_request::Command::LoadStage(load)) => load,
+            _ => unreachable!("load fixture must contain LoadStage"),
+        };
+        strict_load_stage.package_ref = format!("local-gguf://sha256/{}", "b6".repeat(32));
+        strict_load_stage.load_mode = StageLoadMode::RuntimeSlice as i32;
+        let legacy_content_ref_load = StageControlRequest {
+            command: Some(stage_control_request::Command::LoadStage(
+                strict_load_stage.clone(),
+            )),
+            ..frame.clone()
+        };
+        assert!(matches!(
+            validate_stage_control_request(&legacy_content_ref_load),
+            Err(StageFrameError::LocalSourceCommandRequired)
+        ));
+        strict_load_stage.source_resolution_policy = SourceResolutionPolicy::LocalRequired as i32;
+        let legacy_strict_load = StageControlRequest {
+            command: Some(stage_control_request::Command::LoadStage(
+                strict_load_stage.clone(),
+            )),
+            ..frame.clone()
+        };
+        assert!(matches!(
+            validate_stage_control_request(&legacy_strict_load),
+            Err(StageFrameError::LocalSourceCommandRequired)
+        ));
+        let strict_load = StageControlRequest {
+            command: Some(stage_control_request::Command::LoadLocalStage(
+                strict_load_stage.clone(),
+            )),
+            ..frame.clone()
+        };
+        validate_stage_control_request(&strict_load).unwrap();
+        let mut malformed_reference = strict_load.clone();
+        let Some(stage_control_request::Command::LoadLocalStage(load)) =
+            malformed_reference.command.as_mut()
+        else {
+            unreachable!("strict fixture must contain LoadLocalStage")
+        };
+        load.package_ref = "local-gguf://sha256/not-a-digest".to_string();
+        assert!(matches!(
+            validate_stage_control_request(&malformed_reference),
+            Err(StageFrameError::InvalidLocalSourceReference)
+        ));
+        let mut mismatched_reference = strict_load.clone();
+        let Some(stage_control_request::Command::LoadLocalStage(load)) =
+            mismatched_reference.command.as_mut()
+        else {
+            unreachable!("strict fixture must contain LoadLocalStage")
+        };
+        load.package_ref = format!("local-gguf://sha256/{}", "c7".repeat(32));
+        assert!(matches!(
+            validate_stage_control_request(&mismatched_reference),
+            Err(StageFrameError::InvalidLocalSourceReference)
+        ));
+        for invalid_mode in [
+            StageLoadMode::Unspecified as i32,
+            StageLoadMode::LayerPackage as i32,
+            StageLoadMode::ArtifactSlice as i32,
+            99,
+        ] {
+            let mut invalid = strict_load.clone();
+            let Some(stage_control_request::Command::LoadLocalStage(load)) =
+                invalid.command.as_mut()
+            else {
+                unreachable!("strict fixture must contain LoadLocalStage")
+            };
+            load.load_mode = invalid_mode;
+            assert!(matches!(
+                validate_stage_control_request(&invalid),
+                Err(StageFrameError::InvalidLocalSourceLoadMode { got }) if got == invalid_mode
+            ));
+        }
+
+        let legacy_decoded =
+            LegacyStageControlRequest::decode(strict_load.encode_to_vec().as_slice()).unwrap();
+        assert!(legacy_decoded.command.is_none());
+
+        let mut fallback_strict_load = strict_load_stage;
+        fallback_strict_load.source_resolution_policy = SourceResolutionPolicy::Fallback as i32;
+        let fallback_strict = StageControlRequest {
+            command: Some(stage_control_request::Command::LoadLocalStage(
+                fallback_strict_load,
+            )),
+            ..frame.clone()
+        };
+        assert!(matches!(
+            validate_stage_control_request(&fallback_strict),
+            Err(StageFrameError::LocalSourcePolicyRequired)
+        ));
 
         let prepare = StageControlRequest {
             command: Some(stage_control_request::Command::PrepareStage(PrepareStage {
@@ -148,6 +284,38 @@ mod tests {
             ..frame.clone()
         };
         validate_stage_control_request(&prepare).unwrap();
+
+        let mut legacy_content_ref_prepare = prepare.clone();
+        let Some(stage_control_request::Command::PrepareStage(legacy_prepare_payload)) =
+            legacy_content_ref_prepare.command.as_mut()
+        else {
+            unreachable!("prepare fixture must contain PrepareStage")
+        };
+        legacy_prepare_payload
+            .load_stage
+            .as_mut()
+            .expect("prepare load")
+            .package_ref = format!("local-gguf://sha256/{}", "b6".repeat(32));
+        assert!(matches!(
+            validate_stage_control_request(&legacy_content_ref_prepare),
+            Err(StageFrameError::LocalSourceCommandRequired)
+        ));
+
+        let mut strict_prepare = prepare;
+        let Some(stage_control_request::Command::PrepareStage(prepare)) =
+            strict_prepare.command.as_mut()
+        else {
+            unreachable!("prepare fixture must contain PrepareStage")
+        };
+        prepare
+            .load_stage
+            .as_mut()
+            .expect("prepare load")
+            .source_resolution_policy = SourceResolutionPolicy::LocalRequired as i32;
+        assert!(matches!(
+            validate_stage_control_request(&strict_prepare),
+            Err(StageFrameError::LocalSourceCommandRequired)
+        ));
 
         let status_update = StageControlRequest {
             command: Some(stage_control_request::Command::StageStatusUpdate(
@@ -197,10 +365,13 @@ mod tests {
             Err(StageFrameError::MissingStageControlCommand)
         ));
 
-        let wrong_gen = StageControlRequest { r#gen: 1, ..frame };
+        let wrong_gen = StageControlRequest {
+            r#gen: STAGE_PROTOCOL_GENERATION - 1,
+            ..frame
+        };
         assert!(matches!(
             validate_stage_control_request(&wrong_gen),
-            Err(StageFrameError::BadGeneration { got: 1 })
+            Err(StageFrameError::BadGeneration { got: 6 })
         ));
     }
 
@@ -221,7 +392,6 @@ mod tests {
                     layer_end: 16,
                     state: StageRuntimeState::Ready as i32,
                     bind_addr: "127.0.0.1:0".to_string(),
-                    activation_width: 4096,
                     shutdown_generation: 7,
                     ctx_size: 8192,
                     lane_count: 2,
@@ -255,6 +425,8 @@ mod tests {
                     source_model_path: Some("/model.gguf".to_string()),
                     source_model_bytes: Some(1024),
                     source_model_kind: SourceModelKind::PlainGguf as i32,
+                    source_model_sha256: Some("b6".repeat(32)),
+                    content_addressed_local_source: Some(true),
                     ready_ranges: vec![LayerRange {
                         layer_start: 0,
                         layer_end: 8,
@@ -317,7 +489,6 @@ mod tests {
                         layer_end: 16,
                         state: StageRuntimeState::Ready as i32,
                         bind_addr: "127.0.0.1:51234".to_string(),
-                        activation_width: 4096,
                         shutdown_generation: 7,
                         ctx_size: 8192,
                         lane_count: 2,

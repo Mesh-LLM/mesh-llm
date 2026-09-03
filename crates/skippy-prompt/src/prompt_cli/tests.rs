@@ -136,11 +136,24 @@ mod speculative_tests {
     }
 
     #[test]
-    fn classify_verify_window_requires_complete_predictions() {
-        let err = classify_verify_window(&[10, 11, 12], &[10, 11], 0, 16, |_| Ok(false)).unwrap_err();
+    fn classify_verify_window_accepts_a_sampler_guarded_short_reply() {
+        // With a stateful sampler the runtime stops at the first mismatched
+        // row and returns a short reply; every returned token is
+        // authoritative, so it classifies as an early reject at its final row.
+        let decision =
+            classify_verify_window(&[10, 11, 12, 13], &[10, 42], 0, 16, |_| Ok(false)).unwrap();
+        assert_eq!(
+            decision,
+            VerifyWindowDecision {
+                kind: VerifyWindowDecisionKind::EarlyReject,
+                accepted_before_reject: 1,
+                commit_count: 2,
+            }
+        );
+
+        let err = classify_verify_window(&[10, 11, 12], &[], 0, 16, |_| Ok(false)).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("verify window returned too few tokens"),
+            err.to_string().contains("returned no tokens"),
             "{err:#}"
         );
     }

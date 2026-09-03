@@ -1,7 +1,7 @@
-From 6e46e5b23da9ac0b07c5e37faf68f71f5fd7906b Mon Sep 17 00:00:00 2001
+From 2e513f89259a7d0a2c6b07416f0e04b83ea90c92 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 22 Aug 2026 14:29:39 +1000
-Subject: [PATCH 17/26] skippy: fix verify history accounting for
+Subject: [PATCH 17/32] skippy: fix verify history accounting for
  activation-input stages
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

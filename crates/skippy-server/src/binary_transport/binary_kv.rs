@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn binary_full_prefill_uses_one_radix_path_per_request() {
         let config = prefix_cache_test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident prefix cache enabled");
         let message = prefill_message();

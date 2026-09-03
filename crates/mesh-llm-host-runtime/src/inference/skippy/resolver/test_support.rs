@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 use crate::inference::skippy::SkippyPackageIdentity;
@@ -26,7 +26,19 @@ pub(super) fn temp_model_file() -> NamedTempFile {
     temp_model_file_with_tensor_names(&[], None)
 }
 
+pub(super) fn temp_model_file_with_architecture(architecture: &str) -> NamedTempFile {
+    temp_model_file_with_architecture_and_tensor_names(architecture, &[], None)
+}
+
 pub(super) fn temp_model_file_with_tensor_names(
+    tensor_names: &[&str],
+    nextn_predict_layers: Option<u32>,
+) -> NamedTempFile {
+    temp_model_file_with_architecture_and_tensor_names("llama", tensor_names, nextn_predict_layers)
+}
+
+fn temp_model_file_with_architecture_and_tensor_names(
+    architecture: &str,
     tensor_names: &[&str],
     nextn_predict_layers: Option<u32>,
 ) -> NamedTempFile {
@@ -36,7 +48,7 @@ pub(super) fn temp_model_file_with_tensor_names(
     bytes.extend_from_slice(&2u32.to_le_bytes());
     bytes.extend_from_slice(&(tensor_names.len() as i64).to_le_bytes());
     bytes.extend_from_slice(&(8 + i64::from(nextn_predict_layers.is_some())).to_le_bytes());
-    push_string_kv(&mut bytes, "general.architecture", "llama");
+    push_string_kv(&mut bytes, "general.architecture", architecture);
     push_string_kv(&mut bytes, "tokenizer.ggml.model", "gpt2");
     push_u32_kv(&mut bytes, "llama.context_length", 8192);
     push_u32_kv(&mut bytes, "llama.embedding_length", 4096);
@@ -61,6 +73,10 @@ pub(super) fn temp_model_file_with_tensor_names(
 
 pub(super) fn parse_config(toml: &str) -> MeshConfig {
     toml::from_str(toml).expect("config should parse")
+}
+
+pub(super) fn toml_path(path: &Path) -> String {
+    toml::Value::String(path.to_string_lossy().into_owned()).to_string()
 }
 
 pub(super) fn fake_package_identity(layer_count: u32) -> SkippyPackageIdentity {

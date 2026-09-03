@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "machine": "Studio54 Apple M1 Ultra",
+  "model": {
+    "file": "Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+    "sha256": "167183aecc0735359970e977c21a88c7d69112be06aa5d2df27c0d2a23662805",
+    "suppressed_token_ids": [248046]
+  },
+  "base_commit": "4229aafd5180efc010c0b3cf2baaa808d86cde52",
+  "candidate_commit": "f28a73ac3992a0bf87e3af270716f42ffbebc81c",
+  "base_server_sha256": "b579b1b95491c412602dd621654a3a41390f04f50facb001c4c22a80da90238f",
+  "candidate_server_sha256": "ec124a1af445168a13a33cead20254b78b84be35ee8779b7d6d11a184cd972aa",
+  "fixed_output": true,
+  "runs": [
+    {"trace":"representative","pass":"forward","arm":"base","completion_tokens":640,"makespan_ms":4338.960,"completion_tokens_per_second":147.500785,"p50_ttft_ms":419.533,"p95_ttft_ms":1178.697,"p50_inter_chunk_ms":0.244,"p95_inter_chunk_ms":229.747,"iterations":127,"mixed_iterations":0,"prefill_only_iterations":23,"decode_only_iterations":104,"mean_batch_tokens":36.047244,"mean_token_occupancy":0.035202},
+    {"trace":"representative","pass":"forward","arm":"candidate","completion_tokens":640,"makespan_ms":4370.029,"completion_tokens_per_second":146.452122,"p50_ttft_ms":527.408,"p95_ttft_ms":1277.793,"p50_inter_chunk_ms":27.997,"p95_inter_chunk_ms":173.914,"iterations":127,"mixed_iterations":0,"prefill_only_iterations":23,"decode_only_iterations":104,"mean_batch_tokens":36.047244,"mean_token_occupancy":0.035202},
+    {"trace":"representative","pass":"reverse","arm":"candidate","completion_tokens":640,"makespan_ms":4371.006,"completion_tokens_per_second":146.419388,"p50_ttft_ms":415.439,"p95_ttft_ms":1370.814,"p50_inter_chunk_ms":0.292,"p95_inter_chunk_ms":229.253,"iterations":127,"mixed_iterations":0,"prefill_only_iterations":23,"decode_only_iterations":104,"mean_batch_tokens":36.047244,"mean_token_occupancy":0.035202},
+    {"trace":"representative","pass":"reverse","arm":"base","completion_tokens":640,"makespan_ms":4317.063,"completion_tokens_per_second":148.248931,"p50_ttft_ms":363.365,"p95_ttft_ms":1239.837,"p50_inter_chunk_ms":0.172,"p95_inter_chunk_ms":235.247,"iterations":127,"mixed_iterations":0,"prefill_only_iterations":23,"decode_only_iterations":104,"mean_batch_tokens":36.047244,"mean_token_occupancy":0.035202},
+    {"trace":"stress","pass":"forward","arm":"base","completion_tokens":768,"makespan_ms":6184.807,"completion_tokens_per_second":124.175252,"p50_ttft_ms":1180.688,"p95_ttft_ms":3636.216,"p50_inter_chunk_ms":22.261,"p95_inter_chunk_ms":135.920,"iterations":236,"mixed_iterations":0,"prefill_only_iterations":68,"decode_only_iterations":168,"mean_batch_tokens":35.101695,"mean_token_occupancy":0.137116},
+    {"trace":"stress","pass":"forward","arm":"candidate","completion_tokens":768,"makespan_ms":6131.668,"completion_tokens_per_second":125.251409,"p50_ttft_ms":1247.949,"p95_ttft_ms":3580.550,"p50_inter_chunk_ms":0.160,"p95_inter_chunk_ms":199.894,"iterations":236,"mixed_iterations":0,"prefill_only_iterations":68,"decode_only_iterations":168,"mean_batch_tokens":35.101695,"mean_token_occupancy":0.137116},
+    {"trace":"stress","pass":"reverse","arm":"candidate","completion_tokens":768,"makespan_ms":6154.443,"completion_tokens_per_second":124.787897,"p50_ttft_ms":1206.807,"p95_ttft_ms":3630.857,"p50_inter_chunk_ms":0.143,"p95_inter_chunk_ms":176.581,"iterations":237,"mixed_iterations":0,"prefill_only_iterations":68,"decode_only_iterations":169,"mean_batch_tokens":34.953586,"mean_token_occupancy":0.136537},
+    {"trace":"stress","pass":"reverse","arm":"base","completion_tokens":768,"makespan_ms":6097.715,"completion_tokens_per_second":125.948828,"p50_ttft_ms":1087.260,"p95_ttft_ms":3640.243,"p50_inter_chunk_ms":0.162,"p95_inter_chunk_ms":222.557,"iterations":236,"mixed_iterations":0,"prefill_only_iterations":68,"decode_only_iterations":168,"mean_batch_tokens":35.101695,"mean_token_occupancy":0.137116}
+  ]
+}

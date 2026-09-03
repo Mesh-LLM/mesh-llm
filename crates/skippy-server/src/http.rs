@@ -27,12 +27,42 @@ use crate::{
     cli::ServeArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeState, load_runtime},
+    runtime_state::{RuntimeState, load_runtime, loaded_model_state_kind},
     telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
     tokenizer::tokenizer_identity_from_stage,
 };
 
 type KvRecordCandidate = ();
+
+/// Accept backlog for benchmark-facing serving listeners.
+///
+/// `TcpListener::bind` requests a backlog of 128, which a simultaneous
+/// c256 connect burst can overflow before the accept task is polled again
+/// (the kernel then RSTs the excess SYNs, surfacing client-side as
+/// `ECONNRESET` in well under a millisecond). Request an explicit larger
+/// backlog; hosts with a lower `somaxconn` clamp it as they see fit.
+const SERVE_LISTEN_BACKLOG: i32 = 1024;
+
+/// Bind a serving TCP listener with [`SERVE_LISTEN_BACKLOG`].
+pub(crate) fn bind_serve_listener(bind_addr: SocketAddr) -> Result<TcpListener> {
+    let domain = match bind_addr {
+        SocketAddr::V4(_) => socket2::Domain::IPV4,
+        SocketAddr::V6(_) => socket2::Domain::IPV6,
+    };
+    let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
+        .with_context(|| format!("create serving socket for {bind_addr}"))?;
+    socket
+        .bind(&bind_addr.into())
+        .with_context(|| format!("bind serving socket to {bind_addr}"))?;
+    socket
+        .listen(SERVE_LISTEN_BACKLOG)
+        .with_context(|| format!("listen on {bind_addr} with backlog {SERVE_LISTEN_BACKLOG}"))?;
+    socket
+        .set_nonblocking(true)
+        .context("set serving listener nonblocking")?;
+    let std_listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(std_listener).context("register serving listener with tokio")
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -188,7 +218,7 @@ pub async fn serve_stage_http_with_shutdown(
         bind_addr, stage_id, layer_start, layer_end, load_mode,
     );
 
-    let listener = TcpListener::bind(bind_addr).await?;
+    let listener = bind_serve_listener(bind_addr)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
@@ -213,7 +243,9 @@ pub fn stage_http_router(options: StageHttpOptions) -> Result<Router> {
     );
     telemetry.emit("stage.server_start", lifecycle_attrs(&config));
     let runtime = load_runtime(&config)?;
-    let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
+    let kv =
+        KvStageIntegration::from_loaded_model(&config, loaded_model_state_kind(runtime.as_ref()))?
+            .map(Arc::new);
 
     let state = AppState {
         config: Arc::new(config),
@@ -799,9 +831,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_owned(),
             cache_type_v: "f16".to_owned(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -810,6 +853,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_owned(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 

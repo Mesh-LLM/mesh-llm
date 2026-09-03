@@ -1,4 +1,5 @@
 use super::*;
+use serial_test::serial;
 
 fn synthetic_gpu(index: usize, stable_id: Option<&str>) -> GpuFacts {
     GpuFacts {
@@ -641,30 +642,208 @@ fn test_hardware_survey_default() {
     assert!(s.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
 
-    apply_cpu_only_runtime_budget(&mut survey, &[Metric::VramBytes], 16_000_000_000);
+    apply_cpu_only_runtime_budget(&mut survey, &[Metric::VramBytes], || 16_000_000_000);
 
     assert_eq!(survey.vram_bytes, 12_000_000_000);
     assert!(survey.gpu_vram.is_empty());
     assert!(survey.gpus.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[test]
 fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     let mut survey = HardwareSurvey::default();
 
-    apply_cpu_only_runtime_budget(&mut survey, &[Metric::GpuName], 16_000_000_000);
+    apply_cpu_only_runtime_budget(&mut survey, &[Metric::GpuName], || {
+        panic!("system RAM must not be probed when VramBytes is not requested")
+    });
 
     assert_eq!(survey.vram_bytes, 0);
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Err::<Vec<GpuFacts>, ()>(()),
+        || 16_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+    assert!(survey.gpu_vram.is_empty());
+    assert!(survey.gpus.is_empty());
+
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Err::<Vec<GpuFacts>, ()>(()),
+        || 16_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 0);
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(Vec::new()),
+        || 16_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+    assert!(survey.gpu_vram.is_empty());
+    assert!(survey.gpus.is_empty());
+
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Ok::<Vec<GpuFacts>, ()>(Vec::new()),
+        || 16_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 0);
+}
+
+#[test]
+fn test_healthy_gpu_probe_credits_ram_offload_from_injected_source() {
+    // 12 GB dGPU in a 32 GB machine → 12 + 0.90 × 20 = 30 GB advertised,
+    // matching both the Linux behavior of this seam and the legacy Windows
+    // collector path.
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 32_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 30_000_000_000);
+    assert_eq!(survey.gpu_vram, vec![12_000_000_000]);
+}
+
+#[test]
+fn test_healthy_gpu_probe_with_zero_ram_source_advertises_bare_vram() {
+    // A zero RAM source (platforms without a reader) keeps the pre-existing
+    // behavior: bare VRAM, no offload credit.
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 0,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+}
+
+#[test]
+fn test_healthy_gpu_probe_ram_below_vram_saturates_to_bare_vram() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 12_000_000_000;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || 8_000_000_000,
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 12_000_000_000);
+}
+
+#[test]
+fn test_healthy_soc_probe_does_not_probe_system_ram() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 16_000_000_000;
+    gpu.reserved_bytes = Some(2_000_000_000);
+    gpu.unified_memory = true;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::IsSoc, Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || panic!("system RAM must not be probed for a unified-memory survey"),
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 14_000_000_000);
+}
+
+#[test]
+fn test_healthy_soc_probe_without_is_soc_metric_still_skips_ram_offload() {
+    let mut survey = HardwareSurvey::default();
+    let mut gpu = synthetic_gpu(0, None);
+    gpu.vram_bytes = 16_000_000_000;
+    gpu.reserved_bytes = Some(2_000_000_000);
+    gpu.unified_memory = true;
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(vec![gpu]),
+        || panic!("system RAM must not be probed for unified memory, even without IsSoc"),
+    );
+    assert!(handled);
+    assert!(!survey.is_soc);
+    assert_eq!(survey.vram_bytes, 14_000_000_000);
+}
+
+#[test]
+fn test_healthy_gpu_probe_without_vram_metric_does_not_probe_system_ram() {
+    let mut survey = HardwareSurvey::default();
+    let handled = apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::GpuName],
+        Ok::<Vec<GpuFacts>, ()>(vec![synthetic_gpu(0, None)]),
+        || panic!("system RAM must not be probed when VramBytes is not requested"),
+    );
+    assert!(handled);
+    assert_eq!(survey.vram_bytes, 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_probe_fallback_leaves_vram_untouched_on_macos() {
+    let mut survey = HardwareSurvey::default();
+    assert!(apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Err::<Vec<GpuFacts>, ()>(()),
+        || 16_000_000_000,
+    ));
+    assert_eq!(survey.vram_bytes, 0);
+
+    let mut survey = HardwareSurvey::default();
+    assert!(apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes],
+        Ok::<Vec<GpuFacts>, ()>(Vec::new()),
+        || 16_000_000_000,
+    ));
+    assert_eq!(survey.vram_bytes, 0);
+}
+
+// Keep real-collector tests in one group so the Linux-only process-global
+// skippy probe override cannot be consumed by an unrelated query test.
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[serial(real_collector)]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
 
@@ -686,6 +865,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
+#[serial(real_collector)]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));
 
@@ -711,6 +891,7 @@ fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_gpu_name_only() {
     let result = query(&[Metric::GpuName]);
     assert_eq!(result.vram_bytes, 0);
@@ -718,6 +899,7 @@ fn test_query_gpu_name_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_vram_only() {
     let result = query(&[Metric::VramBytes]);
     assert_eq!(result.gpu_name, None);
@@ -725,6 +907,7 @@ fn test_query_vram_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_multiple_metrics() {
     let result = query(&[Metric::GpuName, Metric::VramBytes]);
     assert_eq!(result.hostname, None);
@@ -732,6 +915,7 @@ fn test_query_multiple_metrics() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_survey_returns_all_metrics() {
     let s = survey();
     let q = query(&[
@@ -739,11 +923,17 @@ fn test_survey_returns_all_metrics() {
         Metric::VramBytes,
         Metric::GpuCount,
         Metric::Hostname,
+        Metric::IsSoc,
+        Metric::GpuFacts,
     ]);
     assert_eq!(s.vram_bytes, q.vram_bytes);
     assert_eq!(s.gpu_name, q.gpu_name);
     assert_eq!(s.gpu_count, q.gpu_count);
     assert_eq!(s.hostname.is_some(), q.hostname.is_some());
+    assert_eq!(s.is_soc, q.is_soc);
+    assert_eq!(s.gpu_vram, q.gpu_vram);
+    assert_eq!(s.gpu_reserved, q.gpu_reserved);
+    assert_eq!(s.gpus, q.gpus);
 }
 
 #[test]
@@ -901,6 +1091,7 @@ fn test_query_hostname_only() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_detect_collector_returns_default_on_non_tegra() {
     let collector = detect_collector();
     let s = collector.collect(&[Metric::VramBytes]);
@@ -908,6 +1099,7 @@ fn test_detect_collector_returns_default_on_non_tegra() {
 }
 
 #[test]
+#[serial(real_collector)]
 fn test_query_is_soc_only() {
     let result = query(&[Metric::IsSoc]);
     assert_eq!(result.vram_bytes, 0);
@@ -919,6 +1111,7 @@ fn test_query_is_soc_only() {
 
 #[cfg(target_os = "macos")]
 #[test]
+#[serial(real_collector)]
 fn test_macos_is_soc_true() {
     let result = DefaultCollector.collect(&[Metric::IsSoc]);
     assert!(
@@ -929,6 +1122,7 @@ fn test_macos_is_soc_true() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[serial(real_collector)]
 fn test_tegra_is_soc_true() {
     let result = TegraCollector.collect(&[Metric::IsSoc]);
     assert!(result.is_soc, "TegraCollector must report is_soc=true");
@@ -936,6 +1130,7 @@ fn test_tegra_is_soc_true() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[serial(real_collector)]
 fn test_linux_discrete_is_soc_false() {
     let result = DefaultCollector.collect(&[Metric::IsSoc]);
     assert!(
