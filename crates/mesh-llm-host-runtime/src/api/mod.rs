@@ -557,13 +557,18 @@ impl MeshApi {
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (runtime_status, openai_guardrails) = {
+        let (runtime_status, openai_guardrails, node, is_client, plugin_manager) = {
             let inner = self.inner.lock().await;
             (
                 inner.runtime_data_collector.runtime_status_snapshot(),
                 inner.openai_guardrails.clone(),
+                inner.node.clone(),
+                inner.is_client,
+                inner.plugin_manager.clone(),
             )
         };
+        let local_processes =
+            runtime_data::runtime_process_payloads(&runtime_status.local_processes);
         let mut payload = build_runtime_status_payload(
             runtime_status.primary_model.as_deref().unwrap_or_default(),
             runtime_status.primary_backend,
@@ -571,12 +576,38 @@ impl MeshApi {
             runtime_status.is_host,
             runtime_status.llama_ready,
             runtime_status.llama_port,
-            runtime_data::runtime_process_payloads(&runtime_status.local_processes),
+            local_processes.clone(),
         );
-        payload.capabilities = Some(RuntimeCapabilityFlags {
-            runtime_events: Some(RUNTIME_EVENTS_CAPABILITY),
-            ..RuntimeCapabilityFlags::default()
-        });
+        // Same derivation `status()` uses for `/api/status`'s
+        // `runtime.capabilities`, so both routes agree on one node state
+        // (review defect D4). `node` was cloned out of the lock above, so
+        // these calls run without holding `self.inner`.
+        let plugin_models = external_inference_models(&plugin_manager).await;
+        let plugin_ingress = !plugin_models.is_empty();
+        let local_serving = local_processes
+            .iter()
+            .any(|process| matches!(process.status.as_str(), "serving" | "ready"));
+        let peers = node.peers().await;
+        let proxying = plugin_ingress
+            || peers
+                .iter()
+                .any(|peer| !peer.http_routable_models().is_empty());
+        let accepting_local = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::LocalOpenAi)
+            == crate::runtime::AdmissionResult::Allowed;
+        let accepting_remote = node
+            .activity_policy_guard
+            .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
+            == crate::runtime::AdmissionResult::Allowed;
+        payload.capabilities = Some(derive_capability_flags(
+            is_client,
+            local_serving,
+            proxying,
+            plugin_ingress,
+            accepting_local,
+            accepting_remote,
+        ));
         payload
     }
 

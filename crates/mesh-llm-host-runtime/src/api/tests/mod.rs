@@ -72,3 +72,4 @@ include!("status_metrics.rs");
 include!("openai_smoke.rs");
 include!("ui_routes.rs");
 include!("runtime_events_v1.rs");
+include!("runtime_capabilities_parity.rs");
