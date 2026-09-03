@@ -24,7 +24,7 @@ pub use env_overrides::{
     CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, LifecycleLogParserSelection,
     MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV, MESH_LLM_CONFIG_ENV, MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
     apply_env_overrides, benchmark_tune_trial_enabled, resolve_benchmark_tune_trial_gate,
-    resolve_lifecycle_log_parser_override,
+    resolve_lifecycle_log_parser_override, with_env_override_for_test,
 };
 pub use model::*;
 pub use plugin_validation::control_behavior::{
@@ -38,7 +38,10 @@ pub use plugin_validation::{
     PluginSettingConstraint, PluginSettingSchema, PluginValueKind, PluginValueSchema,
     SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
 };
-pub use store::{ConfigStore, config_path, config_to_toml, load_config, parse_config_toml};
+pub use store::{
+    ConfigStore, config_path, config_to_toml, load_config, parse_config_toml,
+    parse_config_toml_structural,
+};
 pub use validate::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,
     ConfigDiagnosticSource, alias_diagnostic, built_in_support_diagnostic,

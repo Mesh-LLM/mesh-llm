@@ -114,6 +114,32 @@ pub fn benchmark_tune_trial_enabled() -> Result<bool> {
     )
 }
 
+/// Test-only helper: sets `name` to `value` for the duration of `f`, then
+/// restores whatever `name` held before (or clears it if it was unset). The
+/// unsafe environment mutation stays contained here, in the single typed
+/// owner of every `MESH_LLM_*` override name, so a downstream crate with
+/// `#![forbid(unsafe_code)]` (e.g. `mesh-llm-commands`) can still exercise
+/// [`apply_env_overrides`] end to end in its own tests without writing
+/// `unsafe` itself. Callers MUST annotate the enclosing test with
+/// `#[serial_test::serial]` -- mutating the process environment races any
+/// other test in the same binary otherwise.
+pub fn with_env_override_for_test<T>(name: &str, value: &str, f: impl FnOnce() -> T) -> T {
+    let previous = std::env::var_os(name);
+    // SAFETY: the enclosing test contract is `#[serial_test::serial]`, so no
+    // other test's env read/write races this mutation.
+    unsafe { std::env::set_var(name, value) };
+    let result = f();
+    match previous {
+        // SAFETY: the enclosing test contract is `#[serial_test::serial]`, so
+        // no other test's env read/write races this mutation.
+        Some(previous) => unsafe { std::env::set_var(name, previous) },
+        // SAFETY: the enclosing test contract is `#[serial_test::serial]`, so
+        // no other test's env read/write races this mutation.
+        None => unsafe { std::env::remove_var(name) },
+    }
+    result
+}
+
 /// Pure resolver behind [`benchmark_tune_trial_enabled`], mirroring
 /// [`resolve_lifecycle_log_parser_override`]'s shape so it is testable
 /// without mutating real process environment. Accepts exactly `"1"`

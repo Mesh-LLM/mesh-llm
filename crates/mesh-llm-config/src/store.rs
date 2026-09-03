@@ -28,6 +28,23 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
 }
 
 pub fn parse_config_toml(raw: &str) -> Result<MeshConfig> {
+    let config = parse_config_toml_structural(raw)?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+/// Structurally deserializes `raw` into a `MeshConfig`, performing the same
+/// config-source tagging as `parse_config_toml` (e.g.
+/// `runtime.lifecycle_log_parser_source`), but WITHOUT enforcing semantic
+/// validation.
+///
+/// This exists for callers like `mesh-llm config validate` that want to
+/// report semantic diagnostics themselves (so an operator sees the full
+/// diagnostics list for a broken file) rather than hard-failing on the first
+/// error the way `parse_config_toml` / `load_config` do for production config
+/// loading, where refusing to boot on an invalid config is the correct
+/// behavior.
+pub fn parse_config_toml_structural(raw: &str) -> Result<MeshConfig> {
     let document: toml::Value = toml::from_str(raw).context("failed to parse config TOML")?;
     let has_lifecycle_log_parser = document
         .get("runtime")
@@ -37,7 +54,6 @@ pub fn parse_config_toml(raw: &str) -> Result<MeshConfig> {
     if has_lifecycle_log_parser {
         config.runtime.lifecycle_log_parser_source = ConfigValueSource::Config;
     }
-    validate_config(&config)?;
     Ok(config)
 }
 
