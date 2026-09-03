@@ -432,6 +432,7 @@ fn runtime_config_from_stage_config(
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("parse checkpoint_quantization for {}", config.stage_id))?,
         checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
+        checkpoint_imatrix_sha256: config.checkpoint_imatrix_sha256.clone(),
     })
 }
 
@@ -604,6 +605,7 @@ mod tests {
             layer_end: 1,
             checkpoint_quantization: Some("IQ2_XXS".to_string()),
             checkpoint_imatrix: Some("/models/imatrix.gguf".to_string()),
+            checkpoint_imatrix_sha256: Some("a".repeat(64)),
             ..StageConfig::default()
         };
 
@@ -617,6 +619,7 @@ mod tests {
             runtime.checkpoint_imatrix.as_deref(),
             Some(std::path::Path::new("/models/imatrix.gguf"))
         );
+        assert_eq!(runtime.checkpoint_imatrix_sha256, Some("a".repeat(64)));
     }
 
     fn fake_stage_config_with_cache_idle_slots(cache_idle_slots: Option<u32>) -> StageConfig {

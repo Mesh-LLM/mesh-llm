@@ -207,6 +207,7 @@ pub(in crate::frontend) fn draft_runtime_config(
             .map_err(anyhow::Error::msg)
             .context("parse checkpoint_quantization for draft model")?,
         checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
+        checkpoint_imatrix_sha256: config.checkpoint_imatrix_sha256.clone(),
         kv_offload: config.kv_offload,
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,

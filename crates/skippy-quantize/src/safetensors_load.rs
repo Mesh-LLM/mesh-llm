@@ -49,6 +49,7 @@ pub(crate) fn run_validate_safetensors_load(args: ValidateSafetensorsLoadArgs) -
         n_ubatch: Some(128),
         checkpoint_quantization: args.quantization,
         checkpoint_imatrix: args.imatrix,
+        checkpoint_imatrix_sha256: None,
         ..RuntimeConfig::default()
     };
     let model = StageModel::open(&args.source, &runtime_config)?;

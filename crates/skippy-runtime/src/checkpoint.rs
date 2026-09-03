@@ -1,10 +1,12 @@
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
+use sha2::{Digest, Sha256};
 use skippy_ffi::{Error, Model as RawModel, ModelImatrixEntryV1, ModelTensorSourceV1, Status};
 use skippy_model::gguf_writer::DirectCheckpoint;
 use skippy_model::imatrix::Imatrix;
@@ -274,8 +276,19 @@ struct NativeImatrix {
 }
 
 impl NativeImatrix {
-    fn load(path: &Path) -> Result<Self> {
-        let imatrix = Imatrix::load(path, &[], &[])?;
+    fn load(path: &Path, expected_sha256: Option<&str>) -> Result<Self> {
+        let bytes = fs::read(path)
+            .with_context(|| format!("read checkpoint importance matrix {}", path.display()))?;
+        if let Some(expected_sha256) = expected_sha256 {
+            let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+            if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+                return Err(anyhow!(
+                    "checkpoint importance matrix SHA-256 mismatch for {}: expected {expected_sha256}, got {actual_sha256}",
+                    path.display()
+                ));
+            }
+        }
+        let imatrix = Imatrix::from_bytes(path, &bytes, &[], &[])?;
         let names = imatrix
             .entries()
             .iter()
@@ -376,7 +389,7 @@ pub(crate) fn open_safetensors(
     });
     let imatrix = imatrix_path
         .as_deref()
-        .map(NativeImatrix::load)
+        .map(|path| NativeImatrix::load(path, config.checkpoint_imatrix_sha256.as_deref()))
         .transpose()
         .context("load checkpoint importance matrix")?;
     if quantization.requires_imatrix() && imatrix.is_none() {
@@ -427,6 +440,17 @@ pub(crate) fn open_safetensors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn write_minimal_legacy_imatrix(file: &mut tempfile::NamedTempFile) {
+        let name = "blk.0.attn_q.weight";
+        file.write_all(&1_i32.to_le_bytes()).unwrap();
+        file.write_all(&(name.len() as i32).to_le_bytes()).unwrap();
+        file.write_all(name.as_bytes()).unwrap();
+        file.write_all(&1_i32.to_le_bytes()).unwrap();
+        file.write_all(&1_i32.to_le_bytes()).unwrap();
+        file.write_all(&1.0_f32.to_le_bytes()).unwrap();
+    }
 
     #[test]
     fn canonical_quantization_catalog_round_trips() {
@@ -469,5 +493,29 @@ mod tests {
         assert!(CheckpointQuantization::IQ2XXS.requires_imatrix());
         assert!(CheckpointQuantization::IQ3XXS.requires_imatrix());
         assert!(!CheckpointQuantization::IQ3XS.requires_imatrix());
+    }
+
+    #[test]
+    fn native_imatrix_verifies_the_bytes_it_parses() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write_minimal_legacy_imatrix(&mut file);
+        let bytes = fs::read(file.path()).unwrap();
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+
+        let loaded = NativeImatrix::load(file.path(), Some(&digest)).unwrap();
+
+        assert_eq!(loaded.imatrix.entry_count(), 1);
+    }
+
+    #[test]
+    fn native_imatrix_rejects_bytes_that_do_not_match_identity() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write_minimal_legacy_imatrix(&mut file);
+
+        let error = NativeImatrix::load(file.path(), Some(&"0".repeat(64)))
+            .err()
+            .expect("mismatched digest must be rejected");
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
     }
 }

@@ -128,6 +128,7 @@ mod tests {
             split_mode: SplitMode::Auto,
             checkpoint_quantization: CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
         };
         StageModel::open(model_path, &config)
     }

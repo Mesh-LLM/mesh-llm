@@ -48,10 +48,23 @@ impl Imatrix {
     ) -> Result<Self> {
         let bytes =
             fs::read(path).with_context(|| format!("read imatrix file {}", path.display()))?;
+        Self::from_bytes(path, &bytes, include_weights, exclude_weights)
+    }
+
+    /// Parse an importance matrix from caller-owned bytes.
+    ///
+    /// This lets callers bind verification and parsing to the same immutable
+    /// snapshot instead of reopening a path after it has been hashed.
+    pub fn from_bytes(
+        path: &Path,
+        bytes: &[u8],
+        include_weights: &[String],
+        exclude_weights: &[String],
+    ) -> Result<Self> {
         let loaded = if bytes.starts_with(GGUF_MAGIC) {
-            load_gguf_imatrix(&bytes, path)?
+            load_gguf_imatrix(bytes, path)?
         } else {
-            load_legacy_imatrix(&bytes, path)?
+            load_legacy_imatrix(bytes, path)?
         };
         Self::from_loaded(path, loaded, include_weights, exclude_weights)
     }

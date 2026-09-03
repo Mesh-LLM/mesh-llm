@@ -107,6 +107,9 @@ pub struct RuntimeConfig {
     pub checkpoint_quantization: CheckpointQuantization,
     /// Importance matrix used by quantization recipes that require calibration data.
     pub checkpoint_imatrix: Option<std::path::PathBuf>,
+    /// Expected SHA-256 for `checkpoint_imatrix`. When set, the runtime verifies
+    /// the exact bytes that it passes to the importance-matrix parser.
+    pub checkpoint_imatrix_sha256: Option<String>,
     /// K/V cache backend offload. `None` preserves llama.cpp's derived
     /// default (offloaded); `Some` forces the value.
     pub kv_offload: Option<bool>,
@@ -355,6 +358,7 @@ impl Default for RuntimeConfig {
             filter_tensors_on_load: false,
             checkpoint_quantization: CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             kv_offload: None,
             kv_unified: None,
             swa_full: None,

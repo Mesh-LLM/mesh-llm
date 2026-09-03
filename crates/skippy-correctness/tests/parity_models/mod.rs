@@ -1559,6 +1559,7 @@ fn open_stage_model(path: &StagePath, shape: StageShape, n_gpu_layers: i32) -> R
             filter_tensors_on_load: path.filter_tensors_on_load,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             kv_offload: None,
             kv_unified: None,
             swa_full: None,
