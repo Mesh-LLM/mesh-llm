@@ -1,5 +1,6 @@
 use std::{
     fs::{self, File},
+    io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -271,9 +272,17 @@ fn source_model_sha256(model: &Path) -> Result<String> {
     let mut file =
         fs::File::open(model).with_context(|| format!("failed to open {}", model.display()))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .with_context(|| format!("failed to hash {}", model.display()))?;
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash {}", model.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn merge_stage_config(base: &Value, stage: Value) -> Value {

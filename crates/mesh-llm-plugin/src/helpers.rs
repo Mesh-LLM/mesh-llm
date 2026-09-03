@@ -1,12 +1,10 @@
-use rmcp::model::{AnnotateAble, RawResource, RawResourceTemplate};
 use rmcp::model::{
-    CallToolResult, CancelTaskParams, CancelTaskResult, CompleteRequestParams, CompleteResult,
-    CompletionInfo, Content, GetPromptRequestParams, GetPromptResult, GetTaskInfoParams,
-    GetTaskPayloadResult, GetTaskResult, GetTaskResultParams, Implementation, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListTasksResult, ListToolsResult,
-    PaginatedRequestParams, Prompt, PromptArgument, ReadResourceRequestParams, ReadResourceResult,
-    Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo, Task, TaskStatus,
-    Tool,
+    CallToolResult, CancelTaskParams, CompleteRequestParams, CompleteResult, CompletionInfo,
+    ContentBlock, DetailedTask, GetPromptRequestParams, GetPromptResult, GetTaskParams,
+    GetTaskResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, Prompt, PromptArgument, ReadResourceRequestParams,
+    ReadResourceResult, Resource, ResourceContents, ResourceTemplate, ServerCapabilities,
+    ServerInfo, Task, TaskStatus, Tool, UpdateTaskParams,
 };
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -69,7 +67,7 @@ pub fn structured_tool_result<T: Serialize>(value: T) -> PluginResult<CallToolRe
 }
 
 pub fn tool_error(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(message.into())])
+    CallToolResult::error(vec![ContentBlock::text(message.into())])
 }
 
 pub fn operation_error(message: impl Into<String>) -> CallToolResult {
@@ -77,41 +75,21 @@ pub fn operation_error(message: impl Into<String>) -> CallToolResult {
 }
 
 pub fn list_tools(tools: Vec<Tool>) -> ListToolsResult {
-    ListToolsResult {
-        tools,
-        meta: None,
-        next_cursor: None,
-    }
+    ListToolsResult::with_all_items(tools)
 }
 
 pub fn list_prompts(prompts: Vec<Prompt>) -> ListPromptsResult {
-    ListPromptsResult {
-        prompts,
-        meta: None,
-        next_cursor: None,
-    }
+    ListPromptsResult::with_all_items(prompts)
 }
 
 pub fn list_resources(resources: Vec<Resource>) -> ListResourcesResult {
-    ListResourcesResult {
-        resources,
-        meta: None,
-        next_cursor: None,
-    }
+    ListResourcesResult::with_all_items(resources)
 }
 
 pub fn list_resource_templates(
     resource_templates: Vec<ResourceTemplate>,
 ) -> ListResourceTemplatesResult {
-    ListResourceTemplatesResult {
-        resource_templates,
-        meta: None,
-        next_cursor: None,
-    }
-}
-
-pub fn list_tasks(tasks: Vec<Task>) -> ListTasksResult {
-    ListTasksResult::new(tasks)
+    ListResourceTemplatesResult::with_all_items(resource_templates)
 }
 
 pub fn read_resource_result(contents: Vec<ResourceContents>) -> ReadResourceResult {
@@ -147,14 +125,14 @@ pub fn prompt_argument(
 }
 
 pub fn text_resource(uri: impl Into<String>, name: impl Into<String>) -> Resource {
-    RawResource::new(uri, name).no_annotation()
+    Resource::new(uri, name)
 }
 
 pub fn resource_template(
     uri_template: impl Into<String>,
     name: impl Into<String>,
 ) -> ResourceTemplate {
-    RawResourceTemplate::new(uri_template, name).no_annotation()
+    ResourceTemplate::new(uri_template, name)
 }
 
 pub fn task(
@@ -171,18 +149,8 @@ pub fn task(
     )
 }
 
-pub fn get_task_result(task: Task) -> GetTaskResult {
-    GetTaskResult { meta: None, task }
-}
-
-pub fn get_task_payload_result<T: Serialize>(value: T) -> PluginResult<GetTaskPayloadResult> {
-    let value =
-        serde_json::to_value(value).map_err(|err| PluginError::internal(err.to_string()))?;
-    Ok(GetTaskPayloadResult::new(value))
-}
-
-pub fn cancel_task_result(task: Task) -> CancelTaskResult {
-    CancelTaskResult { meta: None, task }
+pub fn get_task_result(task: DetailedTask) -> GetTaskResult {
+    GetTaskResult::new(task)
 }
 
 #[allow(deprecated)]
@@ -518,14 +486,9 @@ pub type ResourceFuture<'a> =
     Pin<Box<dyn Future<Output = PluginResult<ReadResourceResult>> + Send + 'a>>;
 pub type CompletionFuture<'a> =
     Pin<Box<dyn Future<Output = PluginResult<CompleteResult>> + Send + 'a>>;
-pub type TaskListFuture<'a> =
-    Pin<Box<dyn Future<Output = PluginResult<ListTasksResult>> + Send + 'a>>;
-pub type TaskInfoFuture<'a> =
-    Pin<Box<dyn Future<Output = PluginResult<GetTaskResult>> + Send + 'a>>;
-pub type TaskResultFuture<'a> =
-    Pin<Box<dyn Future<Output = PluginResult<GetTaskPayloadResult>> + Send + 'a>>;
-pub type TaskCancelFuture<'a> =
-    Pin<Box<dyn Future<Output = PluginResult<CancelTaskResult>> + Send + 'a>>;
+pub type TaskGetFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<GetTaskResult>> + Send + 'a>>;
+pub type TaskUpdateFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>>;
+pub type TaskCancelFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>>;
 
 type ToolHandler = Arc<
     dyn for<'a, 'ctx> Fn(ToolCallRequest, &'a mut PluginContext<'ctx>) -> ToolFuture<'a>
@@ -741,7 +704,7 @@ impl ResourceRouter {
             + Sync
             + 'static,
     {
-        let uri = resource.raw.uri.to_string();
+        let uri = resource.uri.clone();
         self.resources.push(resource);
         self.handlers
             .push((ResourceReadMatcher::Exact(uri), Arc::new(handler)));
@@ -990,21 +953,13 @@ impl Default for CompletionRouter {
     }
 }
 
-type TaskListHandler = Arc<
-    dyn for<'a, 'ctx> Fn(
-            Option<PaginatedRequestParams>,
-            &'a mut PluginContext<'ctx>,
-        ) -> TaskListFuture<'a>
+type TaskGetHandler = Arc<
+    dyn for<'a, 'ctx> Fn(GetTaskParams, &'a mut PluginContext<'ctx>) -> TaskGetFuture<'a>
         + Send
         + Sync,
 >;
-type TaskInfoHandler = Arc<
-    dyn for<'a, 'ctx> Fn(GetTaskInfoParams, &'a mut PluginContext<'ctx>) -> TaskInfoFuture<'a>
-        + Send
-        + Sync,
->;
-type TaskResultHandler = Arc<
-    dyn for<'a, 'ctx> Fn(GetTaskResultParams, &'a mut PluginContext<'ctx>) -> TaskResultFuture<'a>
+type TaskUpdateHandler = Arc<
+    dyn for<'a, 'ctx> Fn(UpdateTaskParams, &'a mut PluginContext<'ctx>) -> TaskUpdateFuture<'a>
         + Send
         + Sync,
 >;
@@ -1016,58 +971,39 @@ type TaskCancelHandler = Arc<
 
 #[derive(Clone)]
 pub struct TaskRouter {
-    list_handler: Option<TaskListHandler>,
-    info_handler: Option<TaskInfoHandler>,
-    result_handler: Option<TaskResultHandler>,
+    get_handler: Option<TaskGetHandler>,
+    update_handler: Option<TaskUpdateHandler>,
     cancel_handler: Option<TaskCancelHandler>,
 }
 
 impl TaskRouter {
     pub fn new() -> Self {
         Self {
-            list_handler: None,
-            info_handler: None,
-            result_handler: None,
+            get_handler: None,
+            update_handler: None,
             cancel_handler: None,
         }
     }
 
-    pub fn with_list<F>(mut self, handler: F) -> Self
+    pub fn with_get<F>(mut self, handler: F) -> Self
     where
-        F: for<'a, 'ctx> Fn(
-                Option<PaginatedRequestParams>,
-                &'a mut PluginContext<'ctx>,
-            ) -> TaskListFuture<'a>
+        F: for<'a, 'ctx> Fn(GetTaskParams, &'a mut PluginContext<'ctx>) -> TaskGetFuture<'a>
             + Send
             + Sync
             + 'static,
     {
-        self.list_handler = Some(Arc::new(handler));
+        self.get_handler = Some(Arc::new(handler));
         self
     }
 
-    pub fn with_get_info<F>(mut self, handler: F) -> Self
+    pub fn with_update<F>(mut self, handler: F) -> Self
     where
-        F: for<'a, 'ctx> Fn(GetTaskInfoParams, &'a mut PluginContext<'ctx>) -> TaskInfoFuture<'a>
+        F: for<'a, 'ctx> Fn(UpdateTaskParams, &'a mut PluginContext<'ctx>) -> TaskUpdateFuture<'a>
             + Send
             + Sync
             + 'static,
     {
-        self.info_handler = Some(Arc::new(handler));
-        self
-    }
-
-    pub fn with_get_result<F>(mut self, handler: F) -> Self
-    where
-        F: for<'a, 'ctx> Fn(
-                GetTaskResultParams,
-                &'a mut PluginContext<'ctx>,
-            ) -> TaskResultFuture<'a>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.result_handler = Some(Arc::new(handler));
+        self.update_handler = Some(Arc::new(handler));
         self
     }
 
@@ -1082,34 +1018,23 @@ impl TaskRouter {
         self
     }
 
-    pub async fn list_tasks(
+    pub async fn get_task(
         &self,
-        request: Option<PaginatedRequestParams>,
-        context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<ListTasksResult>> {
-        match &self.list_handler {
-            Some(handler) => Ok(Some(handler(request, context).await?)),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn get_task_info(
-        &self,
-        request: GetTaskInfoParams,
+        request: GetTaskParams,
         context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<GetTaskResult>> {
-        match &self.info_handler {
+        match &self.get_handler {
             Some(handler) => Ok(Some(handler(request, context).await?)),
             None => Ok(None),
         }
     }
 
-    pub async fn get_task_result(
+    pub async fn update_task(
         &self,
-        request: GetTaskResultParams,
+        request: UpdateTaskParams,
         context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<GetTaskPayloadResult>> {
-        match &self.result_handler {
+    ) -> PluginResult<Option<()>> {
+        match &self.update_handler {
             Some(handler) => Ok(Some(handler(request, context).await?)),
             None => Ok(None),
         }
@@ -1119,7 +1044,7 @@ impl TaskRouter {
         &self,
         request: CancelTaskParams,
         context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<CancelTaskResult>> {
+    ) -> PluginResult<Option<()>> {
         match &self.cancel_handler {
             Some(handler) => Ok(Some(handler(request, context).await?)),
             None => Ok(None),

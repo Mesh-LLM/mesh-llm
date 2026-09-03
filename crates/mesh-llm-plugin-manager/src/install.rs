@@ -389,7 +389,7 @@ async fn download_asset(
 
 fn verify_plugin_asset_checksum(asset: &GitHubReleaseAsset, hasher: sha2::Sha256) -> Result<()> {
     let expected = required_plugin_asset_sha256(asset)?;
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
     if actual != expected {
         bail!(
             "plugin asset checksum mismatch for {}: expected {expected}, got {actual}",
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn modified_plugin_asset_is_rejected_before_extraction() {
-        let expected = format!("{:x}", sha2::Sha256::digest(b"expected plugin archive"));
+        let expected = hex::encode(sha2::Sha256::digest(b"expected plugin archive"));
         let asset = GitHubReleaseAsset {
             name: "demo.tar.gz".to_string(),
             browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
