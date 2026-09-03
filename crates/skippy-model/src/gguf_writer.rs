@@ -22,10 +22,7 @@ use crate::gguf_metadata::{
     GGUF_TYPE_UINT16, GGUF_TYPE_UINT32, GGUF_TYPE_UINT64,
 };
 use crate::gguf_template::{metadata_from_hf_config, mtp_layer_start_from_hf_config};
-use crate::hf_checkpoint::{
-    SafetensorFile, SafetensorTensorInfo, open_safetensor_files,
-    resolve_auto_output_type_from_files,
-};
+use crate::hf_checkpoint::{SafetensorFile, SafetensorTensorInfo, open_safetensor_files};
 use crate::tensor_map::{
     TensorNameMap, hf_layer_id, inkling_mtp_depth, is_inkling_fused_w13, is_mtp_source_tensor,
     is_shared_mtp_context_tensor,
@@ -204,7 +201,6 @@ impl DirectCheckpoint {
             "no safetensors files found under {}",
             source.display()
         );
-        let output_type = resolve_auto_output_type_from_files(&files, ConvertOutputType::Auto);
         let tensor_count = files.iter().map(|file| file.tensors().len()).sum();
         let mtp_layer_start = mtp_layer_start_from_hf_config(source)?;
         let tensor_name_map = mtp_layer_start
@@ -217,7 +213,7 @@ impl DirectCheckpoint {
                 metadata: Some(metadata_from_hf_config(source, tensor_count)?),
                 tensor_name_map,
                 split: None,
-                output_type: Some(output_type),
+                output_type: None,
                 tensor_selection: TensorSelection::All,
             },
             files,

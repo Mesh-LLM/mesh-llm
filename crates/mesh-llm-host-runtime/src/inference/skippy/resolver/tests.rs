@@ -1052,9 +1052,14 @@ fn safetensors_checkpoint_reaches_mesh_host_runtime() -> anyhow::Result<()> {
         stage.checkpoint_quantization.as_deref(),
         Some(quantization.as_str())
     );
+    let canonical_checkpoint_imatrix = checkpoint_imatrix
+        .as_deref()
+        .map(std::fs::canonicalize)
+        .transpose()?
+        .map(|path| path.to_string_lossy().into_owned());
     assert_eq!(
         stage.checkpoint_imatrix.as_deref(),
-        checkpoint_imatrix.as_deref()
+        canonical_checkpoint_imatrix.as_deref()
     );
     if checkpoint_imatrix.is_some() {
         anyhow::ensure!(

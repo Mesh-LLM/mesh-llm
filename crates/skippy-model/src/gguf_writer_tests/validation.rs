@@ -18,6 +18,78 @@ fn direct_checkpoint_accepts_safetensors_file_path() {
 }
 
 #[test]
+fn direct_checkpoint_preserves_f32_tensor_values() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_qwen_config_and_tokenizer(&root);
+    let values = [1.0001_f32, 0.33333334_f32];
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[(
+            "model.embed_tokens.weight",
+            "F32",
+            &[2, 1],
+            &f32_bytes(&values),
+        )],
+    );
+
+    let checkpoint = DirectCheckpoint::open(&root, 4).unwrap();
+    let mut decoded = [0.0_f32; 2];
+    checkpoint
+        .read_tensor_f32("token_embd.weight", &mut decoded)
+        .unwrap();
+
+    assert_eq!(decoded, values);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn direct_checkpoint_preserves_mixed_float_precisions() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_qwen_config_and_tokenizer(&root);
+    let f16_bits = [0x3555_u16, 0x3c00_u16];
+    let bf16_bits = [0x60ad_u16, 0x3f80_u16];
+    let f16_bytes = f16_bits
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    let bf16_bytes = bf16_bits
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[
+            ("lm_head.weight", "F16", &[2, 1], &f16_bytes),
+            (
+                "model.embed_tokens.weight",
+                "BF16",
+                &[2, 1],
+                &bf16_bytes,
+            ),
+        ],
+    );
+
+    let checkpoint = DirectCheckpoint::open(&root, 4).unwrap();
+    let mut f16_decoded = [0.0_f32; 2];
+    checkpoint
+        .read_tensor_f32("output.weight", &mut f16_decoded)
+        .unwrap();
+    let mut bf16_decoded = [0.0_f32; 2];
+    checkpoint
+        .read_tensor_f32("token_embd.weight", &mut bf16_decoded)
+        .unwrap();
+
+    assert_eq!(f16_decoded, [0.33325195, 1.0]);
+    assert_eq!(
+        bf16_decoded,
+        bf16_bits.map(|value| f32::from_bits(u32::from(value) << 16))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn validates_qwen_dense_native_conversion_fixture() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
