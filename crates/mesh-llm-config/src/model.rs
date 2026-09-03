@@ -1404,8 +1404,8 @@ pub struct LoggingConfig {
     #[serde(default)]
     pub webhook: LoggingWebhookConfig,
 
-    /// Security audit stream configuration. Nested under [logging] so the
-    /// logging master switch (logging.enabled) gates the audit stream too.
+    /// Security audit stream configuration. Nested under `[logging]` so the
+    /// logging master switch (`logging.enabled`) gates the audit stream too.
     #[serde(default)]
     pub audit: AuditConfig,
 }

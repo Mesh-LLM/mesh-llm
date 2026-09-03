@@ -13,6 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "llama-upstream-canary.yml"
+UPDATE_PIN = ROOT / "scripts" / "update-llama-pin.sh"
 BATTERY = ROOT / "scripts" / "skippy-family-battery.sh"
 BATTERY_PLANNER = ROOT / "scripts" / "plan-family-battery.py"
 FAMILY_CERTIFY = ROOT / "scripts" / "family-certify.sh"
@@ -125,6 +126,69 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-latest", update_job)
         self.assertIn("permissions:\n      contents: write", update_job)
         self.assertIn("trusted_queue_sha", update_job)
+
+    def test_update_job_writes_the_single_upstream_pin(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        update_step = _step_block(workflow, "Commit validated upstream pin to main")
+        self.assertIn('scripts/update-llama-pin.sh "$VALIDATED_SHA"', update_step)
+        self.assertIn(
+            "git add third_party/llama.cpp/upstream.txt",
+            update_step,
+        )
+        self.assertNotIn("LLAMA_CPP_SHA", update_step)
+
+    def test_update_pin_script_writes_pin_and_rejects_invalid_sha(self) -> None:
+        updater = UPDATE_PIN.read_text(encoding="utf-8")
+        self.assertNotIn("LLAMA_CPP_SHA", updater)
+        self.assertNotIn("LLAMA_PIN_MIRROR_FILE", updater)
+        target = "a" * 40
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            pin = temp / "upstream.txt"
+            env = {
+                **os.environ,
+                "LLAMA_PIN_FILE": str(pin),
+            }
+            result = subprocess.run(
+                [str(UPDATE_PIN), target],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(target + "\n", pin.read_text(encoding="utf-8"))
+
+            invalid = subprocess.run(
+                [str(UPDATE_PIN), "not-a-sha"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(1, invalid.returncode)
+            self.assertIn("refusing to write a non-40-hex", invalid.stderr)
+            self.assertEqual(target + "\n", pin.read_text(encoding="utf-8"))
+
+            prepared_target = "b" * 40
+            workdir = temp / "llama.cpp"
+            workdir.mkdir()
+            (workdir / ".mesh-llm-upstream-sha").write_text(
+                prepared_target + "\n", encoding="utf-8"
+            )
+            prepared_env = {**env, "LLAMA_WORKDIR": str(workdir)}
+            prepared = subprocess.run(
+                [str(UPDATE_PIN)],
+                cwd=ROOT,
+                env=prepared_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, prepared.returncode, prepared.stderr)
+            self.assertEqual(prepared_target + "\n", pin.read_text(encoding="utf-8"))
 
     def test_repair_loop_is_wired_for_both_failure_modes(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

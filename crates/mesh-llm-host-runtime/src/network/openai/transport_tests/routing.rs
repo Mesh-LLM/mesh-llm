@@ -209,6 +209,7 @@ fn test_remote_retry_policy_only_retries_uncommitted_failures() {
         RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         }
     ));
 }
@@ -323,6 +324,7 @@ async fn prefix_kill_switch_prevents_cache_evidence_reordering() -> Result<()> {
             tier: CacheTier::L1,
             restore_micros: 0,
             queue_delay_micros: 0,
+            prefill_micros_per_token: 0,
         }],
     });
     node.insert_test_peer(peer).await;

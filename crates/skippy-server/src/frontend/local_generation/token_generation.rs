@@ -36,9 +36,12 @@ use skippy_runtime::SamplingConfig;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
+
+mod exact_state_recording;
+mod kv_restore;
 
 pub(in crate::frontend) fn resident_capacity_admission_error(
     capacity: &crate::kv_integration::ResidentCapacityDecision,
@@ -84,7 +87,11 @@ struct PromptPrefillResult {
 }
 
 struct KvRecordResult {
+    /// Pages synchronously written during the restore phase.
     resident_recorded_pages: usize,
+    /// Exact-state checkpoint tasks enqueued for detached async execution.
+    /// These may not result in a write if the session has already advanced.
+    resident_enqueued_checkpoints: usize,
     proactive_eviction_status: &'static str,
     proactive_eviction_error_kind: Option<&'static str>,
     proactive_eviction_target_tokens: u64,
@@ -125,6 +132,7 @@ impl Default for KvRecordResult {
     fn default() -> Self {
         Self {
             resident_recorded_pages: 0,
+            resident_enqueued_checkpoints: 0,
             proactive_eviction_status: "disabled",
             proactive_eviction_error_kind: None,
             proactive_eviction_target_tokens: 0,
@@ -868,43 +876,14 @@ impl StageOpenAiBackend {
                 runtime_lock_acquires =
                     runtime_lock_acquires.saturating_add(checkpoint_prefill.chunk_count);
 
-                let checkpoint_tokens = request.prompt_token_ids[..boundary].to_vec();
-                let scheduler_backend = self.clone();
-                let scheduler_session_id = session_id.to_string();
-                let scheduler_ids = request.ids.clone();
-                if let Ok(checkpoint_outcome) =
-                    self.iteration_scheduler.execute_runtime_timed_bounded(
-                        "feature-kv-shared-checkpoint",
-                        request.ids.request_id_string(),
-                        cache_operation_deadline,
-                        request.cancellation,
-                        move |runtime| {
-                            let recorded = scheduler_backend.record_exact_state_at_tokens(
-                                runtime,
-                                &scheduler_session_id,
-                                &scheduler_ids,
-                                &checkpoint_tokens,
-                                "shared_prefill_checkpoint",
-                            );
-                            Ok((
-                                recorded,
-                                scheduler_backend
-                                    .telemetry
-                                    .is_debug_enabled()
-                                    .then(|| runtime.session_stats()),
-                            ))
-                        },
-                    )
-                {
-                    let (recorded, sessions_after) = checkpoint_outcome.value;
-                    runtime_lock_wait_ms += checkpoint_outcome.runtime_lock_wait_ms;
-                    runtime_lock_hold_ms += checkpoint_outcome.runtime_lock_hold_ms;
-                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
-                    if recorded {
-                        record.resident_recorded_pages =
-                            record.resident_recorded_pages.saturating_add(1);
-                    }
-                    runtime_sessions_after = sessions_after;
+                if self.enqueue_exact_state_record_at_tokens(
+                    session_id,
+                    request.ids,
+                    request.prompt_token_ids[..boundary].to_vec(),
+                    "shared_prefill_checkpoint",
+                ) {
+                    record.resident_enqueued_checkpoints =
+                        record.resident_enqueued_checkpoints.saturating_add(1);
                 }
                 suffix_start = boundary;
             }
@@ -937,43 +916,14 @@ impl StageOpenAiBackend {
                 // the native session at the full-prompt boundary. Exporting
                 // that state is useful for growing prompts, but is strictly
                 // best-effort after the preferred shared checkpoint above.
-                let final_prompt_tokens = request.prompt_token_ids.to_vec();
-                let scheduler_backend = self.clone();
-                let scheduler_session_id = session_id.to_string();
-                let scheduler_ids = request.ids.clone();
-                if let Ok(final_record_outcome) =
-                    self.iteration_scheduler.execute_runtime_timed_bounded(
-                        "feature-kv-final-state",
-                        request.ids.request_id_string(),
-                        cache_operation_deadline,
-                        request.cancellation,
-                        move |runtime| {
-                            let recorded = scheduler_backend.record_exact_state_at_tokens(
-                                runtime,
-                                &scheduler_session_id,
-                                &scheduler_ids,
-                                &final_prompt_tokens,
-                                "final_prefill_state",
-                            );
-                            Ok((
-                                recorded,
-                                scheduler_backend
-                                    .telemetry
-                                    .is_debug_enabled()
-                                    .then(|| runtime.session_stats()),
-                            ))
-                        },
-                    )
-                {
-                    let (recorded, sessions_after) = final_record_outcome.value;
-                    runtime_lock_wait_ms += final_record_outcome.runtime_lock_wait_ms;
-                    runtime_lock_hold_ms += final_record_outcome.runtime_lock_hold_ms;
-                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
-                    if recorded {
-                        record.resident_recorded_pages =
-                            record.resident_recorded_pages.saturating_add(1);
-                    }
-                    runtime_sessions_after = sessions_after;
+                if self.enqueue_exact_state_record_at_tokens(
+                    session_id,
+                    request.ids,
+                    request.prompt_token_ids.to_vec(),
+                    "final_prefill_state",
+                ) {
+                    record.resident_enqueued_checkpoints =
+                        record.resident_enqueued_checkpoints.saturating_add(1);
                 }
             } else {
                 let scheduler_backend = self.clone();
@@ -1055,6 +1005,10 @@ impl StageOpenAiBackend {
             attrs.insert(
                 "skippy.kv.recorded_pages".to_string(),
                 json!(record.resident_recorded_pages),
+            );
+            attrs.insert(
+                "skippy.kv.enqueued_checkpoint_pages".to_string(),
+                json!(record.resident_enqueued_checkpoints),
             );
             insert_resident_capacity_attrs(&mut attrs, &capacity);
             attrs.insert(
@@ -1263,6 +1217,13 @@ impl StageOpenAiBackend {
                     cache_operation,
                 )?;
                 ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+                // This branch is the max_tokens=0 prefill-only fallback. The
+                // chat-prefix state must be exported before this same runtime
+                // operation advances through the remaining suffix. A detached
+                // command cannot run until this operation releases the scheduler,
+                // by which point the canonical-position guard would reject the
+                // earlier checkpoint. Generation requests use the split, detached
+                // FIFO checkpoint path in `restore_or_record_kv` instead.
                 let _ = self.record_exact_state_at_tokens(
                     runtime,
                     session_id,
@@ -1349,469 +1310,6 @@ impl StageOpenAiBackend {
             record,
             prompt_prefill_sample,
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lookup_and_restore_kv(
-        &self,
-        kv: &KvStageIntegration,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        ids: &OpenAiGenerationIds,
-        prefill_tokens: &[i32],
-        identities: &[PrefillKvIdentity],
-        kv_identity_ms: f64,
-        cache_stats: &mut GenerationCacheStats,
-    ) -> (bool, usize, Option<i32>) {
-        let mut restored_prefill = false;
-        let mut restored_prefill_tokens = 0usize;
-        let mut protected_resident_seq_id = None;
-        let kv_restore_timer = self.telemetry.is_debug_enabled().then(PhaseTimer::start);
-        match kv.restore_exact_state(runtime, session_id, identities) {
-            Ok(Some(restored)) => {
-                restored_prefill = true;
-                cache_stats.status = "hit";
-                cache_stats.hit_kind = Some("exact_prefix");
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert("skippy.kv.decision".to_string(), json!("exact_hit"));
-                attrs.insert(
-                    "skippy.exact_cache.hit_page_id".to_string(),
-                    json!(restored.page_id),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.payload_kind".to_string(),
-                    json!(restored.payload_kind.to_string()),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.restored_tokens".to_string(),
-                    json!(restored.token_count),
-                );
-                attrs.insert(
-                    "skippy.kv.matched_prefix_tokens".to_string(),
-                    json!(restored.token_count),
-                );
-                attrs.insert(
-                    "skippy.kv.suffix_prefill_tokens".to_string(),
-                    json!(prefill_tokens.len().saturating_sub(restored.token_count)),
-                );
-                restored_prefill_tokens = restored.token_count;
-                cache_stats.cached_prompt_tokens = saturating_u32(restored_prefill_tokens);
-                attrs.insert(
-                    "skippy.exact_cache.logical_bytes".to_string(),
-                    json!(restored.logical_bytes),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.entries".to_string(),
-                    json!(restored.entries),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.reconstruct_ms".to_string(),
-                    json!(restored.reconstruct_ms),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.reconstruct_bytes".to_string(),
-                    json!(restored.reconstruct_bytes),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.reconstruct_blocks".to_string(),
-                    json!(restored.reconstruct_blocks),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.lookup_ms".to_string(),
-                    json!(restored.lookup_ms),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.kv_import_ms".to_string(),
-                    json!(restored.kv_import_ms),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.recurrent_import_ms".to_string(),
-                    json!(restored.recurrent_import_ms),
-                );
-                self.telemetry
-                    .emit("stage.openai_kv_lookup_decision", attrs);
-            }
-            Ok(None) => {
-                match kv.restore_resident_prefix(runtime, session_id, identities, prefill_tokens) {
-                    Ok(Some(restored)) => {
-                        restored_prefill = true;
-                        cache_stats.status = "hit";
-                        cache_stats.hit_kind = Some("resident_prefix");
-                        let mut attrs = self.openai_attrs(ids);
-                        attrs.insert("skippy.kv.decision".to_string(), json!("resident_hit"));
-                        attrs.insert("skippy.kv.hit_page_id".to_string(), json!(restored.page_id));
-                        attrs.insert(
-                            "skippy.kv.restored_tokens".to_string(),
-                            json!(restored.token_count),
-                        );
-                        attrs.insert(
-                            "skippy.kv.matched_prefix_tokens".to_string(),
-                            json!(restored.token_count),
-                        );
-                        attrs.insert(
-                            "skippy.kv.suffix_prefill_tokens".to_string(),
-                            json!(prefill_tokens.len().saturating_sub(restored.token_count)),
-                        );
-                        restored_prefill_tokens = restored.token_count;
-                        protected_resident_seq_id = Some(restored.seq_id);
-                        cache_stats.cached_prompt_tokens = saturating_u32(restored_prefill_tokens);
-                        attrs.insert(
-                            "skippy.kv.resident_seq_id".to_string(),
-                            json!(restored.seq_id),
-                        );
-                        self.telemetry
-                            .emit("stage.openai_kv_lookup_decision", attrs);
-                    }
-                    Ok(None) => {
-                        let mut attrs = self.openai_attrs(ids);
-                        attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
-                        self.telemetry
-                            .emit("stage.openai_kv_lookup_decision", attrs);
-                    }
-                    Err(error) => {
-                        let mut attrs = self.openai_attrs(ids);
-                        attrs.insert("skippy.kv.decision".to_string(), json!("resident_error"));
-                        attrs.insert(
-                            "skippy.kv.error_class".to_string(),
-                            json!(crate::kv_integration::telemetry_error_class(&error)),
-                        );
-                        self.telemetry
-                            .emit("stage.openai_kv_lookup_decision", attrs);
-                    }
-                }
-            }
-            Err(error) => {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert("skippy.kv.decision".to_string(), json!("exact_error"));
-                attrs.insert(
-                    "skippy.kv.error_class".to_string(),
-                    json!(crate::kv_integration::telemetry_error_class(&error)),
-                );
-                self.telemetry
-                    .emit("stage.openai_kv_lookup_decision", attrs);
-            }
-        }
-        if let Some(kv_restore_timer) = kv_restore_timer {
-            let mut attrs = self.openai_attrs(ids);
-            attrs.insert("skippy.kv.identity_ms".to_string(), json!(kv_identity_ms));
-            attrs.insert(
-                "skippy.kv.restore_ms".to_string(),
-                json!(kv_restore_timer.elapsed_ms()),
-            );
-            attrs.insert(
-                "skippy.kv.identity_count".to_string(),
-                json!(identities.len()),
-            );
-            self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
-        }
-        (
-            restored_prefill,
-            restored_prefill_tokens,
-            protected_resident_seq_id,
-        )
-    }
-
-    fn record_and_evict_kv(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        ids: &OpenAiGenerationIds,
-        prefill_tokens: &[i32],
-        restored_prefill: bool,
-        decoded_prefill_suffix: bool,
-    ) -> KvRecordResult {
-        let mut resident_recorded_pages = 0usize;
-        if let (true, Some(kv)) = (
-            !restored_prefill || decoded_prefill_suffix,
-            self.kv.as_ref(),
-        ) {
-            let base = self.local_kv_message_base(session_id, ids);
-            let exact_identity = kv.prefill_identity(&self.config, &base, 0, prefill_tokens);
-            if let Ok(Some(record)) = kv.record_exact_state(runtime, session_id, &exact_identity) {
-                resident_recorded_pages = resident_recorded_pages.saturating_add(1);
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert(
-                    "skippy.exact_cache.recorded_page_id".to_string(),
-                    json!(record.page_id),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.payload_kind".to_string(),
-                    json!(record.payload_kind.to_string()),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.recorded_tokens".to_string(),
-                    json!(record.token_count),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.stored".to_string(),
-                    json!(record.stored),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.logical_bytes".to_string(),
-                    json!(record.logical_bytes),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.physical_bytes".to_string(),
-                    json!(record.physical_bytes),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.entries".to_string(),
-                    json!(record.entries),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.evicted_entries".to_string(),
-                    json!(record.evicted_entries),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.evicted_logical_bytes".to_string(),
-                    json!(record.evicted_logical_bytes),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.dedupe_hash_ms".to_string(),
-                    json!(record.dedupe.hash_ms),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.dedupe_block_count".to_string(),
-                    json!(record.dedupe.block_count),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.dedupe_new_block_count".to_string(),
-                    json!(record.dedupe.new_block_count),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.dedupe_reused_block_count".to_string(),
-                    json!(record.dedupe.reused_block_count),
-                );
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
-            }
-            for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
-                if let Ok(Some(record)) =
-                    kv.record_resident_prefix(runtime, session_id, &identity, prefill_tokens)
-                {
-                    resident_recorded_pages = resident_recorded_pages.saturating_add(1);
-                    let mut attrs = self.openai_attrs(ids);
-                    attrs.insert(
-                        "skippy.kv.recorded_page_id".to_string(),
-                        json!(record.page_id),
-                    );
-                    attrs.insert(
-                        "skippy.kv.recorded_tokens".to_string(),
-                        json!(record.token_count),
-                    );
-                    attrs.insert(
-                        "skippy.kv.resident_seq_id".to_string(),
-                        json!(record.seq_id),
-                    );
-                    attrs.insert(
-                        "skippy.kv.resident_entries".to_string(),
-                        json!(record.entries),
-                    );
-                    attrs.insert(
-                        "skippy.kv.evicted_entries".to_string(),
-                        json!(record.evicted_entries),
-                    );
-                    self.telemetry
-                        .emit("stage.openai_kv_record_decision", attrs);
-                }
-            }
-        }
-        // Proactive eviction: after prefill recording, evict enough
-        // LRU resident-prefix entries to free one native decode batch
-        // for grammar-triggered retries during the decode loop.
-        let mut proactive_eviction_status = "disabled";
-        let mut proactive_eviction_error_kind_attr = None;
-        let mut proactive_eviction_target_tokens = 0_u64;
-        let mut proactive_evicted_entries = 0_usize;
-        let mut proactive_evicted_tokens = 0_u64;
-        let mut proactive_eviction_error = None;
-        if let Some(kv) = self.kv.as_ref() {
-            match kv.evict_resident_prefix_for_decode_batch(runtime, session_id) {
-                Ok(eviction) => {
-                    proactive_eviction_status = if eviction.evicted_entries > 0 {
-                        "evicted"
-                    } else {
-                        "noop"
-                    };
-                    proactive_eviction_target_tokens = eviction.target_tokens;
-                    proactive_evicted_entries = eviction.evicted_entries;
-                    proactive_evicted_tokens = eviction.evicted_tokens;
-                }
-                Err(error) => {
-                    proactive_eviction_status = "error";
-                    proactive_eviction_error_kind_attr =
-                        Some(proactive_eviction_error_kind(&error));
-                    proactive_eviction_error =
-                        Some(error.context("evict resident-prefix KV before local OpenAI decode"));
-                }
-            }
-        }
-        KvRecordResult {
-            resident_recorded_pages,
-            proactive_eviction_status,
-            proactive_eviction_error_kind: proactive_eviction_error_kind_attr,
-            proactive_eviction_target_tokens,
-            proactive_evicted_entries,
-            proactive_evicted_tokens,
-            proactive_eviction_error,
-        }
-    }
-
-    fn record_post_decode_exact_state(
-        &self,
-        request: &LocalGeneration<'_>,
-        session_id: &str,
-        state: &DecodeState,
-    ) -> bool {
-        let Some(kv) = self.kv.as_ref() else {
-            return false;
-        };
-        if !kv.payload_is_exact_state() {
-            return false;
-        }
-        let Some(checkpoint_tokens) =
-            post_decode_checkpoint_tokens(request.prompt_token_ids, &state.generated_token_ids)
-        else {
-            return false;
-        };
-        let mut attrs = self.openai_attrs(request.ids);
-        let scheduler_backend = self.clone();
-        let scheduler_session_id = session_id.to_string();
-        let scheduler_ids = request.ids.clone();
-        let Ok(outcome) = self.iteration_scheduler.execute_runtime_timed(
-            "feature-post-decode-checkpoint",
-            move |runtime| {
-                Ok(scheduler_backend.record_exact_state_at_tokens(
-                    runtime,
-                    &scheduler_session_id,
-                    &scheduler_ids,
-                    &checkpoint_tokens,
-                    "post_decode_checkpoint",
-                ))
-            },
-        ) else {
-            attrs.insert(
-                "skippy.kv.decision".to_string(),
-                json!("post_decode_checkpoint_scheduler_error"),
-            );
-            self.telemetry
-                .emit("stage.openai_kv_record_decision", attrs);
-            return false;
-        };
-        let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
-        let recorded = outcome.value;
-        attrs.insert(
-            "skippy.kv.decision".to_string(),
-            json!(if recorded {
-                "post_decode_checkpoint_recorded"
-            } else {
-                "post_decode_checkpoint_skipped"
-            }),
-        );
-        attrs.insert(
-            "llama_stage.runtime_lock_wait_ms".to_string(),
-            json!(runtime_lock_wait_ms),
-        );
-        self.telemetry
-            .emit("stage.openai_kv_record_decision", attrs);
-        recorded
-    }
-
-    /// Record a recurrent state only when the native session is at the exact
-    /// token boundary named by `checkpoint_tokens`.
-    ///
-    /// The caller must hold the runtime lock. This check is intentionally
-    /// canonical-position based: token text or a caller-supplied count cannot
-    /// authorize exporting a state at a different native position.
-    fn record_exact_state_at_tokens(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        ids: &OpenAiGenerationIds,
-        checkpoint_tokens: &[i32],
-        decision_prefix: &str,
-    ) -> bool {
-        let Some(kv) = self.kv.as_ref() else {
-            return false;
-        };
-        if !kv.payload_is_exact_state() {
-            return false;
-        }
-        let Ok(checkpoint_token_count) = u64::try_from(checkpoint_tokens.len()) else {
-            return false;
-        };
-        let runtime_token_count = match runtime.canonical_session_position(session_id) {
-            Ok(position) => position,
-            Err(error) => {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert(
-                    "skippy.kv.decision".to_string(),
-                    json!(format!("{decision_prefix}_skipped")),
-                );
-                attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
-                return false;
-            }
-        };
-        if runtime_token_count != checkpoint_token_count {
-            let mut attrs = self.openai_attrs(ids);
-            attrs.insert(
-                "skippy.kv.decision".to_string(),
-                json!(format!("{decision_prefix}_skipped")),
-            );
-            attrs.insert(
-                "skippy.kv.checkpoint_token_count".to_string(),
-                json!(checkpoint_token_count),
-            );
-            attrs.insert(
-                "skippy.kv.runtime_token_count".to_string(),
-                json!(runtime_token_count),
-            );
-            self.telemetry
-                .emit("stage.openai_kv_record_decision", attrs);
-            return false;
-        }
-
-        let base = self.local_kv_message_base(session_id, ids);
-        let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
-        match kv.record_exact_state(runtime, session_id, &identity) {
-            Ok(Some(record)) => {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert(
-                    "skippy.kv.decision".to_string(),
-                    json!(format!("{decision_prefix}_recorded")),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.recorded_page_id".to_string(),
-                    json!(record.page_id),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.payload_kind".to_string(),
-                    json!(record.payload_kind.to_string()),
-                );
-                attrs.insert(
-                    "skippy.exact_cache.recorded_tokens".to_string(),
-                    json!(record.token_count),
-                );
-                attrs.insert("skippy.exact_cache.queued".to_string(), json!(true));
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
-                true
-            }
-            Ok(None) => false,
-            Err(error) => {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert(
-                    "skippy.kv.decision".to_string(),
-                    json!(format!("{decision_prefix}_error")),
-                );
-                attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
-                self.telemetry
-                    .emit("stage.openai_kv_record_decision", attrs);
-                false
-            }
-        }
     }
 
     fn configure_chat_sampling(

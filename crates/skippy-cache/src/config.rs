@@ -20,7 +20,7 @@ pub struct ResidentCacheConfig {
     /// Set this to a fraction of the model's `n_ctx`. A value of 0 disables
     /// the cap and behaves like the legacy unbounded-by-tokens cache. The cap is
     /// only useful when `n_ctx` is comfortably larger than
-    /// `min_tokens`; see [`derive_max_resident_tokens`] for the floor.
+    /// `min_tokens`; see `derive_max_resident_tokens` for the floor.
     pub max_resident_tokens: u64,
 }
 

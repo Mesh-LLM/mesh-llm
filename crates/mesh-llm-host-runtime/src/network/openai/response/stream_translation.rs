@@ -1,3 +1,4 @@
+use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
 use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
 use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
 use super::relay::{relay_error_response, relay_success_response};
@@ -30,6 +31,7 @@ struct ResponsesStreamRelayState {
     output_text: String,
     usage: Option<serde_json::Value>,
     observed_usage: Option<TokenUsage>,
+    observed_cache_cost: Option<CacheCostObservation>,
     sequence_number: i32,
     created_emitted: bool,
     output_item_emitted: bool,
@@ -49,6 +51,7 @@ impl ResponsesStreamRelayState {
             output_text: String::new(),
             usage: None,
             observed_usage: None,
+            observed_cache_cost: None,
             sequence_number: 0,
             created_emitted: false,
             output_item_emitted: false,
@@ -96,6 +99,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
     let mut state = ChatStreamNormalizationState::default();
     let mut observed_usage = None;
+    let mut observed_cache_cost = None;
     let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
@@ -134,6 +138,8 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
                 observed_usage = Some(usage);
             }
+            observed_cache_cost =
+                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
             let normalized = state.normalize_data(&data);
             write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
             if upstream_error_seen {
@@ -176,6 +182,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         return Ok(RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         });
     }
     if !done_seen {
@@ -187,6 +194,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage: observed_usage,
+        cache_cost: observed_cache_cost,
     })
 }
 
@@ -238,6 +246,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         if !should_parse_stream_chunk(data, state.model.is_empty(), state.usage.is_none()) {
             return Ok(());
         }
+        state.observed_cache_cost = state
+            .observed_cache_cost
+            .or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
         process_translated_responses_frame(tcp_stream, response_capture, state, data).await?;
         if progress.first_chunk_seen {
             route_observer.stream_chunk();
@@ -324,6 +335,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         return Ok(RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         });
     }
     if !progress.done_seen {
@@ -339,6 +351,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage: state.observed_usage,
+        cache_cost: state.observed_cache_cost,
     })
 }
 
@@ -738,6 +751,7 @@ mod tests {
                     completion_tokens: Some(13),
                     total_tokens: Some(18),
                 }),
+                cache_cost: None,
             }
         );
 
@@ -785,13 +799,13 @@ mod tests {
             .expect("relay")
         });
 
-        let usage_chunk = r#"{"id":"chatcmpl-y","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9}}"#;
+        let usage_chunk = r#"{"id":"chatcmpl-y","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9},"timings":{"prompt_ms":6.0,"queue_wait_ms":1.0,"cache_restore_ms":2.0,"suffix_prefill_n":2}}"#;
         upstream_writer
             .write_all(format!("data: {usage_chunk}\n\n").as_bytes())
             .await
             .unwrap();
         upstream_writer
-            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"prompt_ms\":99.0,\"queue_wait_ms\":99.0,\"cache_restore_ms\":99.0,\"suffix_prefill_n\":1}}\n\ndata: [DONE]\n\n")
             .await
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
@@ -812,6 +826,11 @@ mod tests {
                     cached_prompt_tokens: None,
                     completion_tokens: Some(7),
                     total_tokens: Some(9),
+                }),
+                cache_cost: Some(CacheCostObservation {
+                    queue_delay_micros: 1_000,
+                    restore_micros: 2_000,
+                    prefill_micros_per_token: Some(2_000),
                 }),
             }
         );
@@ -977,6 +996,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }
@@ -1032,6 +1052,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }
@@ -1083,6 +1104,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }

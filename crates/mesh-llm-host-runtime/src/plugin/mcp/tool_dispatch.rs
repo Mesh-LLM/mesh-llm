@@ -1,14 +1,19 @@
+#![allow(
+    deprecated,
+    reason = "server keeps legacy MCP logging and resource subscriptions for older peers"
+)]
+
 use anyhow::Result;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult,
-        CompleteRequestParams, CompleteResult, CustomNotification, CustomRequest,
-        GetPromptRequestParams, GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult,
-        GetTaskResult, GetTaskResultParams, Implementation, ListPromptsResult,
-        ListResourceTemplatesResult, ListResourcesResult, ListTasksResult, ListToolsResult,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-        ServerInfo, SetLevelRequestParams, SubscribeRequestParams, UnsubscribeRequestParams,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
+        CompleteRequestParams, CompleteResult, ContentBlock, CustomNotification, CustomRequest,
+        GetPromptRequestParams, GetPromptResponse, GetTaskParams, GetTaskResult, Implementation,
+        ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, ServerCapabilities, ServerInfo, SetLevelRequestParams,
+        SubscribeRequestParams, UnsubscribeRequestParams, UpdateTaskParams,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -326,11 +331,11 @@ impl PluginMcpServer {
         {
             for resource in listed {
                 resources.insert(
-                    endpoint.canonical_resource_uri(&resource.raw.uri),
+                    endpoint.canonical_resource_uri(&resource.uri),
                     ResourceRef {
                         target: ResourceTarget::External {
                             endpoint: endpoint.clone(),
-                            original_uri: resource.raw.uri,
+                            original_uri: resource.uri,
                         },
                     },
                 );
@@ -359,23 +364,20 @@ impl ServerHandler for PluginMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
-        Ok(ListToolsResult {
-            tools: self
-                .discover_tools()
+        Ok(ListToolsResult::with_all_items(
+            self.discover_tools()
                 .await?
                 .into_values()
                 .map(|entry| entry.tool)
                 .collect(),
-            meta: None,
-            next_cursor: None,
-        })
+        ))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         let tools = self.discover_tools().await?;
         let Some(tool_ref) = tools.get(request.name.as_ref()) else {
@@ -402,7 +404,7 @@ impl ServerHandler for PluginMcpServer {
                     )
                     .await
                     .map_err(internal_error)?;
-                Ok(operation_result_to_call_tool_result(result))
+                Ok(operation_result_to_call_tool_result(result).into())
             }
             ToolTarget::External {
                 endpoint,
@@ -413,13 +415,17 @@ impl ServerHandler for PluginMcpServer {
                 if let Some(arguments) = request.arguments {
                     params = params.with_arguments(arguments);
                 }
-                if let Some(task) = request.task {
-                    params = params.with_task(task);
-                }
+                params.input_responses = request.input_responses;
+                params.request_state = request.request_state;
                 if let Some(meta) = request.meta {
                     params.meta = Some(meta);
                 }
-                client.peer.call_tool(params).await.map_err(internal_error)
+                client
+                    .peer
+                    .call_tool(params)
+                    .await
+                    .map(Into::into)
+                    .map_err(internal_error)
             }
         }
     }
@@ -458,18 +464,14 @@ impl ServerHandler for PluginMcpServer {
                 prompt
             }));
         }
-        Ok(ListPromptsResult {
-            prompts,
-            meta: None,
-            next_cursor: None,
-        })
+        Ok(ListPromptsResult::with_all_items(prompts))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
+    ) -> Result<GetPromptResponse, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         let prompts = self.discover_prompts().await?;
         let Some(entry) = prompts.get(request.name.as_str()) else {
@@ -491,10 +493,13 @@ impl ServerHandler for PluginMcpServer {
                 if let Some(meta) = request.meta {
                     params.meta = Some(meta);
                 }
+                params.input_responses = request.input_responses;
+                params.request_state = request.request_state;
 
                 self.plugin_manager
                     .get_prompt(plugin_name, prompt_name, params)
                     .await
+                    .map(Into::into)
                     .map_err(internal_error)
             }
             PromptTarget::External {
@@ -509,7 +514,14 @@ impl ServerHandler for PluginMcpServer {
                 if let Some(meta) = request.meta {
                     params.meta = Some(meta);
                 }
-                client.peer.get_prompt(params).await.map_err(internal_error)
+                params.input_responses = request.input_responses;
+                params.request_state = request.request_state;
+                client
+                    .peer
+                    .get_prompt(params)
+                    .await
+                    .map(Into::into)
+                    .map_err(internal_error)
             }
         }
     }
@@ -542,16 +554,12 @@ impl ServerHandler for PluginMcpServer {
             .await?
         {
             resources.extend(listed.into_iter().map(|mut resource| {
-                resource.raw.name = endpoint.canonical_name(&resource.raw.name);
-                resource.raw.uri = endpoint.canonical_resource_uri(&resource.raw.uri);
+                resource.name = endpoint.canonical_name(&resource.name);
+                resource.uri = endpoint.canonical_resource_uri(&resource.uri);
                 resource
             }));
         }
-        Ok(ListResourcesResult {
-            resources,
-            meta: None,
-            next_cursor: None,
-        })
+        Ok(ListResourcesResult::with_all_items(resources))
     }
 
     async fn list_resource_templates(
@@ -587,24 +595,22 @@ impl ServerHandler for PluginMcpServer {
             .await?
         {
             resource_templates.extend(listed.into_iter().map(|mut template| {
-                template.raw.name = endpoint.canonical_name(&template.raw.name);
-                template.raw.uri_template =
-                    endpoint.canonical_resource_template_uri(&template.raw.uri_template);
+                template.name = endpoint.canonical_name(&template.name);
+                template.uri_template =
+                    endpoint.canonical_resource_template_uri(&template.uri_template);
                 template
             }));
         }
-        Ok(ListResourceTemplatesResult {
+        Ok(ListResourceTemplatesResult::with_all_items(
             resource_templates,
-            meta: None,
-            next_cursor: None,
-        })
+        ))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         if let Some(resource_ref) = self.discover_resources().await?.get(&request.uri).cloned() {
             match resource_ref.target {
@@ -616,10 +622,13 @@ impl ServerHandler for PluginMcpServer {
                     if let Some(meta) = request.meta {
                         params.meta = Some(meta);
                     }
+                    params.input_responses = request.input_responses;
+                    params.request_state = request.request_state;
                     return self
                         .plugin_manager
                         .read_resource(&plugin_name, &request.uri, params)
                         .await
+                        .map(Into::into)
                         .map_err(internal_error);
                 }
                 ResourceTarget::External {
@@ -631,6 +640,8 @@ impl ServerHandler for PluginMcpServer {
                     if let Some(meta) = request.meta {
                         params.meta = Some(meta);
                     }
+                    params.input_responses = request.input_responses;
+                    params.request_state = request.request_state;
                     let mut result = client
                         .peer
                         .read_resource(params)
@@ -642,13 +653,16 @@ impl ServerHandler for PluginMcpServer {
                             | rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => {
                                 *uri = request.uri.clone();
                             }
+                            _ => {}
                         }
                     }
-                    return Ok(result);
+                    return Ok(result.into());
                 }
             }
         }
-        try_plugins(&self.plugin_manager, "resources/read", request).await
+        try_plugins::<ReadResourceResult, _>(&self.plugin_manager, "resources/read", request)
+            .await
+            .map(Into::into)
     }
 
     async fn subscribe(
@@ -774,54 +788,29 @@ impl ServerHandler for PluginMcpServer {
         }
     }
 
-    async fn list_tasks(
+    async fn get_task(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<ListTasksResult, ErrorData> {
-        self.refresh_peer(context.peer.clone()).await;
-        let mut tasks = Vec::new();
-        for (plugin_name, server_info) in self.plugin_manager.list_server_infos().await {
-            if server_info.capabilities.tasks.is_none() {
-                continue;
-            }
-            let result: ListTasksResult = self
-                .plugin_manager
-                .mcp_request(
-                    &plugin_name,
-                    "tasks/list",
-                    Option::<PaginatedRequestParams>::None,
-                )
-                .await
-                .map_err(internal_error)?;
-            tasks.extend(result.tasks);
-        }
-        Ok(ListTasksResult::new(tasks))
-    }
-
-    async fn get_task_info(
-        &self,
-        request: GetTaskInfoParams,
+        request: GetTaskParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetTaskResult, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         try_plugins(&self.plugin_manager, "tasks/get", request).await
     }
 
-    async fn get_task_result(
+    async fn update_task(
         &self,
-        request: GetTaskResultParams,
+        request: UpdateTaskParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetTaskPayloadResult, ErrorData> {
+    ) -> Result<(), ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
-        try_plugins(&self.plugin_manager, "tasks/result", request).await
+        try_plugins(&self.plugin_manager, "tasks/update", request).await
     }
 
     async fn cancel_task(
         &self,
         request: CancelTaskParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CancelTaskResult, ErrorData> {
+    ) -> Result<(), ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         try_plugins(&self.plugin_manager, "tasks/cancel", request).await
     }
@@ -916,7 +905,7 @@ impl ServerHandler for PluginMcpServer {
 fn operation_result_to_call_tool_result(result: plugin::ToolCallResult) -> CallToolResult {
     let mut call_result = match serde_json::from_str::<Value>(&result.content_json) {
         Ok(value) => CallToolResult::structured(value),
-        Err(_) => CallToolResult::success(vec![rmcp::model::Content::text(result.content_json)]),
+        Err(_) => CallToolResult::success(vec![ContentBlock::text(result.content_json)]),
     };
     call_result.is_error = Some(result.is_error);
     call_result

@@ -17,10 +17,10 @@ embedded-runtime = []
 
 [dependencies]
 mesh-llm-sdk = { path = "../mesh-llm-sdk", version = "0.76.0-rc9", default-features = false, features = ["client", "node", "console", "serving"] }
-napi = { version = "2.16.17", features = ["napi4", "tokio_rt"] }
-napi-derive = "2.16.13"
+napi = { version = "3.12.2", features = ["napi4", "tokio_rt"] }
+napi-derive = "3.6.3"
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [build-dependencies]
-napi-build = "2.1.6"
+napi-build = "2.4.1"

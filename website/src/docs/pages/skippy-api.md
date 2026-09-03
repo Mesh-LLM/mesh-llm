@@ -1018,7 +1018,7 @@ LLAMA_API enum skippy_status skippy_session_signal_window(
 Creates a request-local n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_create(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_create(
          uint16_t ngram_min,
         uint16_t ngram_max,
         struct skippy_ngram_cache ** out_cache,
@@ -1031,7 +1031,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_create(
 Releases an n-gram proposal cache.
 
 ```cpp
-LLAMA_API void skippy_ngram_cache_free(
+SKIPPY_COMMON_API void skippy_ngram_cache_free(
         struct skippy_ngram_cache * cache);
 ```
 
@@ -1041,7 +1041,7 @@ LLAMA_API void skippy_ngram_cache_free(
 Replaces committed history in an n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_reset(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_reset(
          struct skippy_ngram_cache * cache,
         const llama_token * token_ids,
         size_t token_count,
@@ -1054,7 +1054,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_reset(
 Appends newly committed tokens to an n-gram proposal cache.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_append(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_append(
          struct skippy_ngram_cache * cache,
         const llama_token * token_ids,
         size_t token_count,
@@ -1067,7 +1067,7 @@ LLAMA_API enum skippy_status skippy_ngram_cache_append(
 Drafts tokens from committed history plus an optional provisional prefix.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_ngram_cache_draft(
+SKIPPY_COMMON_API enum skippy_status skippy_ngram_cache_draft(
          struct skippy_ngram_cache * cache,
         const llama_token * continuation_prefix,
         size_t continuation_prefix_count,
@@ -1347,7 +1347,7 @@ LLAMA_API const struct llama_model * skippy_model_native_model(
 Renders OpenAI-style JSON messages through the model chat template.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_apply_chat_template_json(
+SKIPPY_COMMON_API enum skippy_status skippy_apply_chat_template_json(
          struct skippy_model * model,
         const char * messages_json,
         const char * tools_json,
@@ -1378,7 +1378,7 @@ LLAMA_API enum skippy_status skippy_apply_chat_template_json(
 Parses generated chat text and template metadata into an OpenAI message.
 
 ```cpp
-LLAMA_API enum skippy_status skippy_parse_chat_response_json(
+SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
          const char * generated_text,
         const char * metadata_json,
         bool is_partial,

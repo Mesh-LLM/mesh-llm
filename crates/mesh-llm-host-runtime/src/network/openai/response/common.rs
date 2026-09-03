@@ -1,3 +1,4 @@
+use super::cache_cost::CacheCostObservation;
 use crate::inference::election;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::request_normalize::ResponseAdapter;
@@ -35,6 +36,7 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     Delivered {
         status_code: u16,
         usage: Option<TokenUsage>,
+        cache_cost: Option<CacheCostObservation>,
     },
     RetryableTimeout,
     RetryableUnavailable,
@@ -305,6 +307,7 @@ mod tests {
             route_attempt_result_label(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             "delivered"
         );
@@ -338,6 +341,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Success
         );
@@ -345,6 +349,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 503,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Unavailable
         );
@@ -352,6 +357,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 400,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Rejected
         );
@@ -414,6 +420,7 @@ mod tests {
         );
         assert_eq!(parse_token_usage_from_json_body(br#"{"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":1,"total_tokens":0}}"#), None);
     }
+
     #[tokio::test]
     async fn test_is_timeout_error_accepts_concrete_timeout_types_only() {
         let io_timeout = anyhow::Error::from(std::io::Error::new(

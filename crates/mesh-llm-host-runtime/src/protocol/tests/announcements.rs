@@ -208,8 +208,9 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                         matched_tokens: 512,
                         suffix_prefill_tokens: 24,
                         tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
-                        restore_micros: 0,
+                        restore_micros: 25,
                         queue_delay_micros: 50,
+                        prefill_micros_per_token: 750,
                     },
                     mesh_llm_routing::cache_inventory::CacheAffinityEntry {
                         model: "ghost".to_string(),
@@ -219,6 +220,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                         tier: mesh_llm_routing::cache_inventory::CacheTier::L1,
                         restore_micros: 0,
                         queue_delay_micros: 0,
+                        prefill_micros_per_token: 0,
                     },
                 ],
             },
@@ -270,8 +272,13 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 prefix_hash,
                 crate::mesh::current_time_unix_ms(),
             ))
-            .map(|entry| entry.matched_tokens),
-        Some(512)
+            .map(|entry| (
+                entry.matched_tokens,
+                entry.restore_micros,
+                entry.queue_delay_micros,
+                entry.prefill_micros_per_token,
+            )),
+        Some((512, 25, 50, 750))
     );
 }
 

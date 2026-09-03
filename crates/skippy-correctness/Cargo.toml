@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+hex = "0.4"
 anyhow.workspace = true
 clap.workspace = true
 skippy-protocol = { path = "../skippy-protocol" }
@@ -12,7 +13,7 @@ skippy-runtime = { path = "../skippy-runtime" }
 model-artifact = { path = "../model-artifact" }
 model-hf = { path = "../model-hf" }
 model-ref = { path = "../model-ref" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"

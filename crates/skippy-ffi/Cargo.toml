@@ -13,4 +13,4 @@ default = ["dynamic-runtime"]
 dynamic-runtime = ["dep:libloading"]
 
 [dependencies]
-libloading = { version = "0.8", optional = true }
+libloading = { version = "0.9", optional = true }

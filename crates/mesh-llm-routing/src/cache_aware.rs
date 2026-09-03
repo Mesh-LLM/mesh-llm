@@ -32,12 +32,17 @@ pub struct TargetCacheEvidence {
 
 impl TargetCacheEvidence {
     pub fn estimated_cost_micros(&self, config: CacheAwareConfig) -> u64 {
+        let prefill_micros_per_token = if self.entry.prefill_micros_per_token == 0 {
+            config.prefill_micros_per_token
+        } else {
+            self.entry.prefill_micros_per_token
+        };
         self.entry
             .queue_delay_micros
             .saturating_add(self.entry.restore_micros)
             .saturating_add(
                 u64::from(self.entry.suffix_prefill_tokens)
-                    .saturating_mul(config.prefill_micros_per_token),
+                    .saturating_mul(prefill_micros_per_token),
             )
     }
 }
@@ -58,10 +63,15 @@ pub fn select_cache_target(
                 .find(|item| &item.target == candidate)
                 .filter(|item| item.entry.matched_tokens >= config.min_saved_tokens)
                 .filter(|item| {
+                    let prefill_micros_per_token = if item.entry.prefill_micros_per_token == 0 {
+                        config.prefill_micros_per_token
+                    } else {
+                        item.entry.prefill_micros_per_token
+                    };
                     let cold_tokens = u64::from(item.entry.matched_tokens)
                         .saturating_add(u64::from(item.entry.suffix_prefill_tokens));
                     item.estimated_cost_micros(config)
-                        < cold_tokens.saturating_mul(config.prefill_micros_per_token)
+                        < cold_tokens.saturating_mul(prefill_micros_per_token)
                 })
                 .map(|item| {
                     (
@@ -104,6 +114,7 @@ mod tests {
                 tier: CacheTier::L1,
                 restore_micros: 0,
                 queue_delay_micros: queue,
+                prefill_micros_per_token: 0,
             },
         }
     }
@@ -166,5 +177,25 @@ mod tests {
         .expect("the individually beneficial deep hit remains eligible");
 
         assert_eq!(selected.target, deep);
+    }
+
+    #[test]
+    fn target_specific_prefill_rates_replace_the_fallback_when_measured() {
+        let fast = remote(1);
+        let slow = remote(2);
+        let mut fast_evidence = evidence(fast, 1_000, 100, 0);
+        fast_evidence.entry.prefill_micros_per_token = 200;
+        let mut slow_evidence = evidence(slow.clone(), 1_000, 100, 0);
+        slow_evidence.entry.prefill_micros_per_token = 2_000;
+
+        let selected = select_cache_target(
+            &[slow.clone(), fast_evidence.target.clone()],
+            &[slow_evidence, fast_evidence],
+            CacheAwareConfig::default(),
+        )
+        .expect("material hit");
+
+        assert_eq!(selected.target, remote(1));
+        assert_eq!(selected.entry.prefill_micros_per_token, 200);
     }
 }

@@ -275,12 +275,25 @@ struct NativeImatrix {
     entries: Vec<ModelImatrixEntryV1>,
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    Sha256::digest(bytes)
+        .iter()
+        .flat_map(|byte| {
+            [
+                HEX[(byte >> 4) as usize] as char,
+                HEX[(byte & 0x0f) as usize] as char,
+            ]
+        })
+        .collect()
+}
+
 impl NativeImatrix {
     fn load(path: &Path, expected_sha256: Option<&str>) -> Result<Self> {
         let bytes = fs::read(path)
             .with_context(|| format!("read checkpoint importance matrix {}", path.display()))?;
         if let Some(expected_sha256) = expected_sha256 {
-            let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+            let actual_sha256 = sha256_hex(&bytes);
             if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
                 return Err(anyhow!(
                     "checkpoint importance matrix SHA-256 mismatch for {}: expected {expected_sha256}, got {actual_sha256}",
@@ -500,7 +513,7 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         write_minimal_legacy_imatrix(&mut file);
         let bytes = fs::read(file.path()).unwrap();
-        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let digest = sha256_hex(&bytes);
 
         let loaded = NativeImatrix::load(file.path(), Some(&digest)).unwrap();
 

@@ -438,7 +438,7 @@ class SccacheEvidenceTests(unittest.TestCase):
 
         self.assertIn(
             "uses: Swatinem/rust-cache@"
-            "e18b497796c12c097a38f9edb9d0641fb99eee32",
+            "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
             swift,
         )
         self.assertIn("shared-key: swift-sdk", swift)

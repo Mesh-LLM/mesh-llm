@@ -6,7 +6,7 @@
 
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-alpine AS ui-builder
+FROM node:24.20.0-alpine AS ui-builder
 ARG TARGETARCH
 ARG VITE_API_URL=https://public.meshllm.cloud
 ARG VITE_APP_VERSION=

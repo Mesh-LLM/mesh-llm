@@ -28,7 +28,7 @@ physical KV pinning are separate Skippy data-plane concerns.
 
 Cache advertisements are routing hints from admitted peers, not cryptographic
 proofs of residency. A malicious or compromised admitted peer can advertise a
-forged hit, token depth, queue delay, or restore cost. The public rotating salt
+forged hit, token depth, queue delay, restore cost, or prefill rate. The public rotating salt
 limits how long an observed digest can be linked; it is not a secret and does
 not authenticate the evidence. Routing therefore accepts only bounded,
 short-lived, monotonically newer advertisements and falls back to normal
@@ -36,7 +36,8 @@ health/context ordering when evidence is absent, stale, malformed, or not
 individually cheaper than cold prefill. Raw prompt content and token IDs are
 never placed on the gossip wire.
 
-The current L1 producer reports suffix-prefill work and queue delay. Restore
-cost remains zero for L1 because no restore operation occurs; non-zero restore
-cost and lower-tier evidence are reserved scaffolding for future data-plane
-work and must not be treated as independently verified measurements.
+The current L1 producer reports suffix-prefill work, measured admission wait,
+measured restore time, and a bounded node/model prefill-cost EWMA. Older or
+third-party producers encode the prefill rate as zero, which retains the
+conservative fallback. Lower-tier evidence remains reserved scaffolding for
+future data-plane work and must not be treated as independently verified.

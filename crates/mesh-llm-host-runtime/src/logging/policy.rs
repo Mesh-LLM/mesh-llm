@@ -477,7 +477,7 @@ pub fn hash_value(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     // Return first 16 hex chars (8 bytes of fingerprint).
-    format!("{:x}", hasher.finalize())[..16].to_string()
+    hex::encode(hasher.finalize())[..16].to_string()
 }
 
 /// Remove private directory prefixes from a string containing paths.

@@ -829,7 +829,7 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update([u8::from(participant.5)]);
         hasher.update(participant.6.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
@@ -842,7 +842,7 @@ pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
         hasher.update(stage.layer_end.to_le_bytes());
         hasher.update(stage.parameter_bytes.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_node_labels(nodes: &[iroh::EndpointId]) -> Vec<String> {
