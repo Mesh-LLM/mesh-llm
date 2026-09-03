@@ -34,10 +34,13 @@ use super::health::EngineHealthSnapshot;
 /// operation/session/request ID, never prompt/completion content.
 #[derive(Debug, Clone, Copy)]
 pub enum RuntimeEventTelemetrySample {
-    /// One `try_submit` call observed through [`ObservingIngress`]: the
-    /// delivery class the fact carried, the outcome the engine returned,
-    /// and the wall-clock time the call took. This is the source for the
-    /// certification ingress-latency (p99) instrument.
+    /// One observed `try_submit` call: the delivery class the fact carried,
+    /// the outcome the engine returned, and the wall-clock time the call
+    /// took. Produced either by [`ObservingIngress`] (an opt-in decorator)
+    /// or by `RuntimeEventEngine::submit`'s own installed-queue hook (the
+    /// live production path -- see `RuntimeEventEngine::install_telemetry_queue`).
+    /// This is the source for the certification ingress-latency (p99)
+    /// instrument.
     ClassOutcome {
         class: DeliveryClass,
         outcome: SubmitOutcome,
@@ -127,15 +130,34 @@ impl RuntimeEventTelemetryQueue {
             samples_dropped: self.dropped.load(Ordering::Relaxed),
         }
     }
+
+    /// Record one observed `try_submit` call. The single construction point
+    /// for a `ClassOutcome` sample, shared by [`ObservingIngress`] (an
+    /// explicit producer-side decorator) and `RuntimeEventEngine::submit`'s
+    /// own installed-queue hook (the live wiring every producer already
+    /// funnels through -- see `RuntimeEventEngine::install_telemetry_queue`).
+    pub fn record_class_outcome(
+        &self,
+        class: DeliveryClass,
+        outcome: SubmitOutcome,
+        ingress_elapsed: Duration,
+    ) {
+        self.push(RuntimeEventTelemetrySample::ClassOutcome {
+            class,
+            outcome,
+            ingress_elapsed,
+        });
+    }
 }
 
 /// A `RuntimeEventIngress` decorator: forwards every `try_submit` to
-/// `inner` unchanged, then pushes a [`RuntimeEventTelemetrySample::ClassOutcome`]
-/// sample recording the delivery class, outcome, and elapsed time. Producers
-/// (a later, out-of-scope-for-this-task integration) opt into latency
-/// telemetry by wrapping their ingress with this; nothing in this crate
-/// wraps a live producer ingress yet -- this task adds the instrument, not
-/// the production wiring into task 9-12's owned producer files.
+/// `inner` unchanged, then records a [`RuntimeEventTelemetrySample::ClassOutcome`]
+/// sample via [`RuntimeEventTelemetryQueue::record_class_outcome`]. Available
+/// for a producer that wants to opt a specific ingress handle in directly;
+/// the live production wiring instead installs a queue on the engine itself
+/// (`RuntimeEventEngine::install_telemetry_queue`), which observes every
+/// producer's real traffic without touching task 9-12's owned files -- see
+/// that method's doc for why the engine is the chosen seam.
 pub struct ObservingIngress<I: RuntimeEventIngress> {
     inner: I,
     queue: std::sync::Arc<RuntimeEventTelemetryQueue>,
@@ -152,12 +174,8 @@ impl<I: RuntimeEventIngress> RuntimeEventIngress for ObservingIngress<I> {
         let class = fact.delivery_class();
         let start = Instant::now();
         let outcome = self.inner.try_submit(fact);
-        let ingress_elapsed = start.elapsed();
-        self.queue.push(RuntimeEventTelemetrySample::ClassOutcome {
-            class,
-            outcome,
-            ingress_elapsed,
-        });
+        self.queue
+            .record_class_outcome(class, outcome, start.elapsed());
         outcome
     }
 }

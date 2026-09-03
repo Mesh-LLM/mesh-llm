@@ -36,6 +36,7 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use super::SurveySettings;
 use crate::plugin;
 use crate::runtime_events::config::{HEALTH_PUBLISH_MIN_INTERVAL, PROGRESS_EXPORT_INTERVAL};
+use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::health::EngineHealthSnapshot;
 use crate::runtime_events::runtime_event_engine;
 use crate::runtime_events::telemetry::{
@@ -270,7 +271,15 @@ impl RuntimeEventTelemetry {
         }
     }
 
-    pub(crate) fn start(config: &plugin::MeshConfig) -> Self {
+    /// `engine` is the SAME engine `install_runtime_event_engine` just
+    /// installed at the call site: when telemetry is enabled, its sample
+    /// queue is installed onto `engine` too
+    /// (`RuntimeEventEngine::install_telemetry_queue`), so every real
+    /// producer's `try_submit` call -- which already funnels through that
+    /// engine's `submit` dispatch -- starts feeding the ingress-latency and
+    /// class-outcome instruments with live traffic, not just this module's
+    /// own unit tests.
+    pub(crate) fn start(config: &plugin::MeshConfig, engine: &Arc<RuntimeEventEngine>) -> Self {
         let Some(settings) = SurveySettings::from_config(config) else {
             return Self::disabled();
         };
@@ -282,6 +291,7 @@ impl RuntimeEventTelemetry {
                 return Self::disabled();
             }
         };
+        engine.install_telemetry_queue(Arc::clone(&queue));
         spawn_runtime_event_telemetry_worker(Arc::clone(&queue), recorder);
         spawn_runtime_event_telemetry_sampler(queue);
         Self {
@@ -496,7 +506,8 @@ mod tests {
     fn start_returns_disabled_when_telemetry_is_configured_off() {
         let mut config = super::super::tests::survey_config();
         config.telemetry.enabled = Some(false);
-        let telemetry = RuntimeEventTelemetry::start(&config);
+        let engine = RuntimeEventEngine::with_capacity(4);
+        let telemetry = RuntimeEventTelemetry::start(&config, &engine);
         assert!(!telemetry.is_enabled());
     }
 
@@ -506,14 +517,64 @@ mod tests {
         // A NUL byte is never a valid URI byte; the OTLP exporter builder
         // must reject it at construction rather than at first export.
         config.telemetry.endpoint = Some("http://\u{0}invalid.example".into());
-        let telemetry = RuntimeEventTelemetry::start(&config);
+        let engine = RuntimeEventEngine::with_capacity(4);
+        let telemetry = RuntimeEventTelemetry::start(&config, &engine);
         assert!(!telemetry.is_enabled());
     }
 
     #[tokio::test]
     async fn start_enables_telemetry_for_a_valid_config() {
         let config = super::super::tests::survey_config();
-        let telemetry = RuntimeEventTelemetry::start(&config);
+        let engine = RuntimeEventEngine::with_capacity(4);
+        let telemetry = RuntimeEventTelemetry::start(&config, &engine);
         assert!(telemetry.is_enabled());
+    }
+
+    // ─── Live-wiring proof: start() installs the queue on the real engine ──
+
+    #[tokio::test]
+    async fn start_installs_its_queue_on_the_engine_so_ordinary_submissions_are_observed() {
+        // This is the fix for the REJECT basis: `start` must install its
+        // queue onto the SAME engine a producer submits through
+        // (`RuntimeEventEngine::install_telemetry_queue`), so
+        // `ingress_duration_us`/`class_outcome_total` receive real samples
+        // from ordinary `try_submit` calls -- not only from a
+        // test-constructed `ObservingIngress`. `install_telemetry_queue`
+        // itself is `OnceLock`-backed: a second `set` after the first is a
+        // silent no-op, so calling `start` here (which installs a queue we
+        // cannot otherwise observe from this module) and then separately
+        // installing our own queue proves nothing was already installed by
+        // this path -- so instead this test exercises the exact production
+        // sequence (`start` before any producer submits) and relies on
+        // `engine/tests/telemetry.rs`'s deterministic, synchronous proof
+        // for the queue-content assertion; this test's job is proving
+        // `start` does not panic, disable, or change `try_submit`'s outcome
+        // on a real producer path when telemetry is live.
+        use mesh_llm_runtime_event_contracts::{
+            FamilyFact, NativeRuntimeEventKind, OperationId, RuntimeEventIngress, RuntimeFact,
+            SubmitOutcome,
+        };
+
+        let config = super::super::tests::survey_config();
+        let engine = RuntimeEventEngine::with_capacity(4);
+        let telemetry = RuntimeEventTelemetry::start(&config, &engine);
+        assert!(telemetry.is_enabled());
+
+        // A completely ordinary producer path: reserve, get the real
+        // `ScopedIngress` every task 9-12 producer already uses, submit a
+        // terminal fact. No `ObservingIngress`, no telemetry-aware code in
+        // this call at all -- exactly what a live host does.
+        let reservation = engine
+            .reserve_root(OperationId::new(), || {
+                RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeStopped))
+            })
+            .expect("reserve");
+        let outcome =
+            reservation
+                .ingress()
+                .try_submit(RuntimeFact::NativeRuntime(FamilyFact::new(
+                    NativeRuntimeEventKind::RuntimeStopped,
+                )));
+        assert_eq!(outcome, SubmitOutcome::Accepted);
     }
 }

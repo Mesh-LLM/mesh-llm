@@ -113,9 +113,8 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     // management subscribers attached: nothing here calls `.subscribers()`,
     // matching the plan's "zero management subscribers" requirement for
     // this mode without needing a separate no-op engine variant.
-    crate::runtime_events::install_runtime_event_engine(
-        crate::runtime_events::engine::RuntimeEventEngine::new(),
-    );
+    let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+    crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
     super::node_lifecycle_events::emit_node_starting();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
@@ -123,8 +122,12 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     apply_runtime_config_options(&mut options, &config);
     // Task 16: same OTLP-specific runtime-event telemetry consumer as the
     // mesh-serve path in `run_auto.rs`; a disabled or failed exporter
-    // degrades to a no-op instance and never affects startup.
-    let _runtime_event_telemetry = survey::runtime_events::RuntimeEventTelemetry::start(&config);
+    // degrades to a no-op instance and never affects startup. Installs its
+    // sample queue onto `runtime_event_engine` so the single local model's
+    // real submissions feed the ingress-latency and class-outcome
+    // instruments too.
+    let _runtime_event_telemetry =
+        survey::runtime_events::RuntimeEventTelemetry::start(&config, &runtime_event_engine);
 
     let startup_specs = build_startup_model_specs(&options, &config)?;
     anyhow::ensure!(

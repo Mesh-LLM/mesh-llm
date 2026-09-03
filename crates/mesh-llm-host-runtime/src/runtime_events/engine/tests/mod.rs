@@ -10,4 +10,5 @@ mod lanes;
 mod ordering;
 mod rebuild;
 mod shutdown;
+mod telemetry;
 mod terminal;

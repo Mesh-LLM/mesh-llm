@@ -256,11 +256,18 @@ coalesced deltas of the engine's own `EngineHealth` counters and reservation
 occupancy, sampled at most once per second (the same cadence
 `EngineHealth::publish_at` already enforces), never per-event.
 
-The ingress-latency/class-outcome instruments are fed by
-`crate::runtime_events::telemetry::ObservingIngress`, a decorator any
-producer's `RuntimeEventIngress` can opt into. No in-tree producer wraps its
-ingress with it yet; that live wiring belongs to whichever task owns that
-producer's file.
+The ingress-latency/class-outcome instruments are fed live in production:
+`RuntimeEventTelemetry::start` installs its sample queue directly onto the
+process's `RuntimeEventEngine` (`RuntimeEventEngine::install_telemetry_queue`).
+Every producer's `try_submit` call -- via `ScopedIngress` or
+`UnreservedIngress`, minted by `reserve_root`/`reserve_child`/
+`unreserved_ingress` -- already funnels through that engine's `submit`
+dispatch, so installing the queue there observes real traffic from every
+task 9-12 producer without any producer file needing to change. A producer
+that wants a locally-scoped decorator instead can still opt in with
+`crate::runtime_events::telemetry::ObservingIngress`, which shares the same
+`record_class_outcome` recording path; nothing in-tree uses that decorator
+directly, since the engine-level hook already covers every real call site.
 
 ## Review Checklist
 

@@ -1390,10 +1390,12 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     // Task 16: the OTLP-specific runtime-event telemetry consumer. Reuses
     // `[telemetry]` config the same way `survey::SurveyTelemetry::start`
     // does; a disabled or failed exporter degrades to a no-op instance and
-    // never affects startup. No producer wraps its ingress with
-    // `runtime_events::telemetry::ObservingIngress` yet -- see
-    // `survey/runtime_events.rs`'s doc.
-    let _runtime_event_telemetry = survey::runtime_events::RuntimeEventTelemetry::start(&config);
+    // never affects startup. Installs its sample queue onto
+    // `runtime_event_engine` itself, so every real producer's `try_submit`
+    // (which already funnels through that engine) feeds the ingress-latency
+    // and class-outcome instruments -- see `survey/runtime_events.rs`'s doc.
+    let _runtime_event_telemetry =
+        survey::runtime_events::RuntimeEventTelemetry::start(&config, &runtime_event_engine);
     let presentation_subscriber =
         crate::runtime_events::presentation::spawn_presentation_subscriber(&runtime_event_engine)
             .inspect_err(|_| {

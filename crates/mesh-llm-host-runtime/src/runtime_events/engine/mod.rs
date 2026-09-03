@@ -8,7 +8,8 @@ mod tests;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use mesh_llm_runtime_event_contracts::{
     OperationId, OperationScope, ProcessInstanceId, RuntimeEventIngress, RuntimeFact, SubmitOutcome,
@@ -20,6 +21,7 @@ use super::reducer::ReducerSnapshot;
 use super::replay::ReplayBuffer;
 use super::reservation::{ReservationTable, SlotHandle};
 use super::subscribers::SubscriberRegistry;
+use super::telemetry::RuntimeEventTelemetryQueue;
 use super::wake::WakeList;
 
 use lanes::{DiagnosticLane, StateLane};
@@ -43,6 +45,7 @@ pub struct RuntimeEventEngine {
     diagnostic_lane: DiagnosticLane,
     reducer_state: Mutex<Arc<ReducerSnapshot>>,
     process_instance: ProcessInstanceId,
+    telemetry: OnceLock<Arc<RuntimeEventTelemetryQueue>>,
 }
 
 impl RuntimeEventEngine {
@@ -76,7 +79,24 @@ impl RuntimeEventEngine {
             diagnostic_lane: DiagnosticLane::default(),
             reducer_state: Mutex::new(ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
+            telemetry: OnceLock::new(),
         })
+    }
+
+    /// Install this engine's telemetry sample queue: the live wiring seam
+    /// for the certification ingress-latency instrument. Every producer
+    /// already funnels its `try_submit` calls through `submit` below (via
+    /// `ScopedIngress`/`UnreservedIngress`, minted by `reserve_root`/
+    /// `reserve_child`/`unreserved_ingress`), so installing the queue here
+    /// -- once, at the same startup site the engine itself is installed --
+    /// observes every real producer's traffic without touching any task
+    /// 9-12 producer file. Idempotent: a second call is a silent no-op
+    /// (`OnceLock` refuses a second write), matching "install once at
+    /// startup" alongside `install_runtime_event_engine`. Before this is
+    /// called, or if it is never called, `submit` behaves identically with
+    /// zero telemetry overhead.
+    pub fn install_telemetry_queue(&self, queue: Arc<RuntimeEventTelemetryQueue>) {
+        let _ = self.telemetry.set(queue);
     }
 
     /// This engine's process-local identity: the first component of the
@@ -195,12 +215,19 @@ impl RuntimeEventEngine {
         fact: RuntimeFact,
     ) -> SubmitOutcome {
         use mesh_llm_runtime_event_contracts::DeliveryClass;
-        match fact.delivery_class() {
+        let class = fact.delivery_class();
+        let telemetry = self.telemetry.get();
+        let start = telemetry.map(|_| Instant::now());
+        let outcome = match class {
             DeliveryClass::Terminal => lanes::submit_terminal(self, scope, handle, fact),
             DeliveryClass::Progress => lanes::submit_progress(self, handle, fact),
             DeliveryClass::StateTransition => lanes::submit_state_transition(self, fact),
             DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, fact),
+        };
+        if let (Some(queue), Some(start)) = (telemetry, start) {
+            queue.record_class_outcome(class, outcome, start.elapsed());
         }
+        outcome
     }
 
     /// A `RuntimeEventIngress` bound to `scope` with no slot. Used by an
