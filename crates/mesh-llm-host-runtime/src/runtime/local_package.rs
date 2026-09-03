@@ -80,10 +80,10 @@ pub(super) fn split_runtime_kv_bytes_per_token(
 
 /// Resolve the K/V cache types that split stages will actually load with.
 ///
-/// Stage loading applies the family default (for example Inkling's Q4_0 K/V)
-/// ahead of the size-tiered `KvCachePolicy`. Planning must resolve K/V the same
-/// way, or it budgets for a cheaper cache than the stages allocate and
-/// over-packs the topology into an out-of-memory load.
+/// Stage loading applies metadata-derived native requirements (for example
+/// Inkling's Q4_0 K/V) ahead of the size-tiered `KvCachePolicy`. Planning must
+/// resolve K/V the same way, or it budgets for a cheaper cache than the stages
+/// allocate and over-packs the topology into an out-of-memory load.
 pub(super) fn split_effective_kv_cache_quant(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
@@ -92,26 +92,25 @@ pub(super) fn split_effective_kv_cache_quant(
 ) -> models::gguf::GgufKvCacheQuant {
     // Guard the size-tiered default against the model's quantised-KV
     // compatibility (Flash Attention / block alignment) so planning budgets for
-    // the same cache the stage load can actually allocate. The family default
-    // gets the same metadata guard: a family that defaults to quantised K/V
-    // (Inkling -> q4_0) must fall back to f16 when the actual GGUF metadata
+    // the same cache the stage load can actually allocate. A metadata-derived
+    // native requirement gets the same guard: Inkling q4_0 must fall back to
+    // f16 when the actual GGUF metadata
     // cannot load it, or planning and load both select an unloadable cache.
     // Explicit overrides below are never guarded — an override that cannot
     // load must fail loudly.
     let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
         .guarded_for_model(Some(compact_meta));
-    let family_default = skippy::family_policy_for_compact_meta(compact_meta)
-        .default_kv_cache_type
+    let native_default = skippy::required_native_kv_cache_type(compact_meta)
         .and_then(|default| models::gguf::GgufKvCacheQuant::from_llama_args(default, default))
         .map(|quant| compact_meta.compatible_default_kv_cache_quant(quant))
         .map(|quant| quant.k.as_llama_arg());
 
-    // Explicit user overrides win, then the family default, then model size.
+    // Explicit user overrides win, then metadata requirements, then model size.
     let effective_k = cache_type_k_override
-        .or(family_default)
+        .or(native_default)
         .unwrap_or(size_policy.cache_type_k());
     let effective_v = cache_type_v_override
-        .or(family_default)
+        .or(native_default)
         .unwrap_or(size_policy.cache_type_v());
 
     models::gguf::GgufKvCacheQuant::from_llama_args(effective_k, effective_v).unwrap_or_else(|| {

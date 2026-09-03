@@ -6,7 +6,7 @@
   `ResidentKv` and `KvRecurrent` policies restore before decode, record after
   prefill, dedupe exact payloads, evict by entry/byte caps, and emit cache
   telemetry. `FullState` remains a correctness/certification payload only; it
-  is not selected by production family policy.
+  is not selected by automatic production cache configuration.
 - README benchmark evidence now has an explicit production-payload table.
   Every reviewed family with a local full GGUF is benchmarked with either
   `ResidentKv` or `KvRecurrent`; `FullState` rows are excluded from production
@@ -174,6 +174,7 @@ clear failure behavior.
    - Document whether payload economics differ from normal dense attention KV.
    - Expected outcome: MLA families get the smallest exact replay payload the
      backend can safely expose.
-   - Exit criteria: accept family policy only after state-handoff correctness
-     passes on representative GGUFs and payload/timing data is recorded; leave
-     DeepSeek3/MLA cache disabled if native latent state cannot be proven exact.
+   - Exit criteria: enable automatic production caching only after
+     state-handoff correctness passes on representative GGUFs and
+     payload/timing data is recorded; leave DeepSeek3/MLA cache disabled if
+     native latent state cannot be proven exact.

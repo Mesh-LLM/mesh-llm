@@ -918,11 +918,13 @@ fn stage_config(
         upstream: load.upstream.as_ref().map(peer_config),
         downstream: load.downstream.as_ref().map(peer_config),
     };
-    let family_policy = super::family_policy_for_stage_config(&config);
     config.kv_cache = package.map_or_else(
-        || family_policy.stage_kv_cache_config_for_stage(&config),
+        || Some(super::default_stage_prefix_cache(&config)),
         |package| {
-            family_policy.stage_kv_cache_config_for_package(&config, Path::new(&package.local_ref))
+            Some(super::default_stage_prefix_cache_for_package(
+                &config,
+                Path::new(&package.local_ref),
+            ))
         },
     );
     Ok(config)

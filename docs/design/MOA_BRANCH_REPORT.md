@@ -199,12 +199,13 @@ lanes had nowhere to write fresh prompts.
 
 **Three coordinated fixes**:
 
-1. `family_policy.rs::estimate_stage_cache_max_bytes`: drop the
+1. The host cache-budget calculation (now
+   `kv_cache.rs::estimate_stage_cache_max_bytes`): drop the
    `lane_count` multiplier. The total native KV memory is
    `bytes_per_token_layer * stage_layers * n_ctx` — lanes share the
    pool under `kv_unified = true`, they don't multiply it. Cache
    byte budget was 2–4× the actual KV memory.
-2. `family_policy.rs::resident_kv_policy` and `kv_recurrent_policy`:
+2. The former resident and recurrent cache-default constructors:
    `max_entries` 128 → 16, plus a budget-aware secondary cap
    `derive_max_entries_from_kv_cells` that clamps by
    `n_ctx / (2 * min_tokens)`.

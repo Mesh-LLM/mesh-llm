@@ -1711,7 +1711,7 @@ fn oversized_chat_template_file_is_rejected_before_runtime_startup() {
 }
 
 #[test]
-fn inkling_family_defaults_to_q4_kv() {
+fn inkling_metadata_requires_q4_kv() {
     let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &MeshConfig::default(),
         model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
@@ -1728,12 +1728,12 @@ fn inkling_family_defaults_to_q4_kv() {
     assert_eq!(resolved.model_fit.cache_type_v, "q4_0");
 }
 
-/// The family q4_0 default must be guarded against the model's own metadata:
+/// The metadata-derived q4_0 requirement must be guarded against the model's own metadata:
 /// an Inkling variant with per-head widths not divisible by the q4_0 block
 /// size (32) cannot load quantised KV, so the resolver must degrade the
 /// default to f16 rather than fail the context build.
 #[test]
-fn inkling_family_kv_default_degrades_to_f16_for_incompatible_meta() {
+fn inkling_required_kv_type_degrades_to_f16_for_incompatible_meta() {
     let compact_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -1789,7 +1789,7 @@ kv_cache_policy = "saver"
 }
 
 #[test]
-fn explicit_inkling_kv_override_beats_family_default() {
+fn explicit_inkling_kv_override_beats_metadata_requirement() {
     let mesh_config = parse_config(
         r#"
 [[models]]
@@ -1815,7 +1815,7 @@ cache_type_v = "q8_0"
 }
 
 #[test]
-fn explicit_global_inkling_kv_override_beats_family_default() {
+fn explicit_global_inkling_kv_override_beats_metadata_requirement() {
     let mesh_config = parse_config(
         r#"
 [defaults.model_fit]
@@ -1862,7 +1862,7 @@ fn generic_policy_defers_default_prefix_payload_to_loaded_model() {
         .expect("stage config should build");
     let kv_cache = stage_config
         .kv_cache
-        .expect("generic policy should enable prefix cache by default");
+        .expect("automatic configuration should enable prefix cache by default");
 
     assert_eq!(kv_cache.mode, StageKvCacheMode::LookupRecord);
     assert_eq!(kv_cache.payload, StageKvCachePayload::Auto);
@@ -1871,7 +1871,7 @@ fn generic_policy_defers_default_prefix_payload_to_loaded_model() {
 }
 
 #[test]
-fn explicit_prefix_cache_disable_overrides_supported_family_default() {
+fn explicit_prefix_cache_disable_overrides_automatic_default() {
     let model_file = temp_model_file();
     let config = parse_config(
         r#"
@@ -1896,7 +1896,7 @@ enabled = false
         .expect("stage config should build");
     let kv_cache = stage_config
         .kv_cache
-        .expect("explicit disable must survive family-default materialization");
+        .expect("explicit disable must survive automatic-default materialization");
 
     assert_eq!(kv_cache.mode, StageKvCacheMode::Disabled);
 }

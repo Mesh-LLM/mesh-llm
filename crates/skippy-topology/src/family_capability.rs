@@ -1453,7 +1453,7 @@ fn qwen3_release(release_form: &str) -> Option<Qwen3Release> {
         })
 }
 
-/// Reports a Qwen3 point release that no family policy covers yet.
+/// Reports a Qwen3 point release that has no certified capability record yet.
 ///
 /// A release such as `Qwen3.9` almost certainly does not load as plain
 /// `qwen3moe`, so guessing that family would advertise a non-recurrent policy

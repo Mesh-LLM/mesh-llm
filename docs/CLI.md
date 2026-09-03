@@ -220,7 +220,7 @@ Config file semantics:
 
 - `mesh-llm serve` reads `~/.mesh-llm/config.toml` by default.
 - Precedence is request values, then per-model config, then `[defaults.*]`, then
-  family or topology policy, then built-in runtime defaults.
+  topology planning, then built-in runtime defaults.
 - Request defaults only fill absent or null request fields at the OpenAI
   frontend boundary. Explicit request values win, and the defaults never flow
   into `StageConfig`, runtime load structs, protobuf, or lower runtime.

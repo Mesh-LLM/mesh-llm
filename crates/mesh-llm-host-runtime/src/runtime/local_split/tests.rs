@@ -1805,7 +1805,7 @@ fn split_topology_minimum_rejects_single_stage_split_candidate() {
 }
 
 #[test]
-fn split_planning_uses_family_kv_defaults_for_inkling() {
+fn split_planning_uses_required_kv_type_for_inkling() {
     let mut meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -1819,8 +1819,8 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
     };
     meta.kv_head_counts = vec![8; 66];
 
-    // Inkling's reviewed family default keeps both planning and stage loading
-    // on quantized Q4_0 K/V rather than silently expanding to F16.
+    // Inkling's metadata-derived requirement keeps both planning and stage
+    // loading on quantized Q4_0 K/V rather than silently expanding to F16.
     let mut identity = package(66);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
 
@@ -1831,18 +1831,18 @@ fn split_planning_uses_family_kv_defaults_for_inkling() {
         .unwrap();
     assert_eq!(planned, expected_q4);
 
-    // Explicit user overrides still win over the family default.
+    // Explicit user overrides still win over the metadata requirement.
     let overridden =
         split_runtime_kv_bytes_per_token(&identity, &meta, Some("f16"), Some("f16")).unwrap();
     assert!(overridden > planned);
 }
 
-/// The family default must get the same metadata guard as the size-tiered
+/// The native requirement must get the same metadata guard as the size-tiered
 /// policy: an Inkling variant whose per-head widths are not q4_0-block-aligned
 /// cannot load quantised K/V, so planning must budget f16 bytes instead of
-/// selecting an unloadable family default.
+/// selecting an unloadable requirement.
 #[test]
-fn split_planning_guards_family_kv_default_against_incompatible_meta() {
+fn split_planning_guards_required_kv_type_against_incompatible_meta() {
     let mut meta = crate::models::gguf::GgufCompactMeta {
         architecture: "inkling".to_string(),
         context_length: 65_536,
@@ -1851,7 +1851,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
         kv_head_count: 8,
         layer_count: 66,
         // 100 is not a multiple of the q4_0/q8_0 block size (32), so the
-        // quantised family default cannot load.
+        // quantised native requirement cannot load.
         key_length: 100,
         value_length: 100,
         ..Default::default()
@@ -1868,7 +1868,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
         .unwrap();
     assert_eq!(
         planned, expected_f16,
-        "incompatible family default must degrade to f16 in split planning"
+        "incompatible native requirement must degrade to f16 in split planning"
     );
 
     // An explicit override is never guarded — it still selects q4_0 even
@@ -1887,7 +1887,7 @@ fn split_planning_guards_family_kv_default_against_incompatible_meta() {
 /// Set `INKLING_METADATA_GGUF` to a package's `shared/metadata.gguf` to run it;
 /// skipped otherwise so CI stays hermetic.
 #[test]
-fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
+fn real_inkling_metadata_plans_required_kv_not_size_tiered() {
     let Ok(path) = std::env::var("INKLING_METADATA_GGUF") else {
         eprintln!("skip: INKLING_METADATA_GGUF not set");
         return;
@@ -1905,11 +1905,8 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
         meta.context_length
     );
 
-    let policy = crate::inference::skippy::family_policy_for_compact_meta(&meta);
-    eprintln!(
-        "FAMILY default_kv_cache_type={:?}",
-        policy.default_kv_cache_type
-    );
+    let required_cache_type = crate::inference::skippy::required_native_kv_cache_type(&meta);
+    eprintln!("required native KV cache type={:?}", required_cache_type);
 
     let mut identity = package(meta.layer_count);
     identity.source_model_bytes = 318 * 1024 * 1024 * 1024;
@@ -1936,12 +1933,12 @@ fn real_inkling_metadata_plans_family_kv_not_size_tiered() {
     );
 
     assert_eq!(
-        policy.default_kv_cache_type,
+        required_cache_type,
         Some("q4_0"),
-        "inkling must resolve a q4_0 family K/V default"
+        "Inkling metadata must require q4_0 K/V storage"
     );
     assert_eq!(
         planned, expected_q4,
-        "family-aware planning must use the Inkling Q4_0 K/V default"
+        "planning must use the Inkling q4_0 K/V storage requirement"
     );
 }

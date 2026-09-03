@@ -7,8 +7,8 @@ Current supported families, recommended artifacts, and shipping settings live in
 `docs/skippy/FAMILY_STATUS.md`.
 
 For a new model that is not already in the support matrix, start with
-`docs/skippy/NEW_MODEL_ONBOARDING.md` before adding reviewed family policy or a
-customer-facing support row.
+`docs/skippy/NEW_MODEL_ONBOARDING.md` before adding runtime-capability evidence
+or a customer-facing support row.
 
 ## What Certified Means
 

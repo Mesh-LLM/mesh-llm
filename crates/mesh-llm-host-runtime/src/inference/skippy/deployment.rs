@@ -2,12 +2,11 @@ use std::collections::HashMap;
 
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
 
-use super::family_policy::FamilyPolicy;
 use super::materialization::StagePackageInfo;
 use super::topology::MeshStagePlan;
 use super::{
     KvCachePolicy, StageLoadRequest, StageLoadRuntimeSettings, StagePeerDescriptor,
-    StageStatusSnapshot, StageStopRequest,
+    StageStatusSnapshot, StageStopRequest, default_stage_prefix_cache_for_package,
 };
 use crate::mesh;
 
@@ -16,7 +15,6 @@ pub(crate) struct StageDeploymentContext<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) model_id: &'a str,
     pub(crate) package: &'a StagePackageInfo,
-    pub(crate) family_policy: &'a FamilyPolicy,
     pub(crate) ctx_size: u32,
     pub(crate) lane_count: u32,
     pub(crate) continuous_batching: bool,
@@ -156,9 +154,10 @@ pub(crate) fn stage0_config(
             endpoint: downstream_endpoint,
         }),
     };
-    config.kv_cache = context
-        .family_policy
-        .stage_kv_cache_config_for_package(&config, &context.package.package_dir);
+    config.kv_cache = Some(default_stage_prefix_cache_for_package(
+        &config,
+        &context.package.package_dir,
+    ));
     config
 }
 
@@ -261,9 +260,6 @@ mod tests {
             run_id: "run-a",
             model_id: "model-a",
             package: &package,
-            family_policy: &crate::inference::skippy::family_policy::family_policy_for_model_path(
-                "model.gguf",
-            ),
             ctx_size: 8192,
             lane_count: 2,
             continuous_batching: true,

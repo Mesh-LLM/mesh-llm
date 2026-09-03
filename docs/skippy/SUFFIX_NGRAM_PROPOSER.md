@@ -332,7 +332,7 @@ This is a mechanism microbenchmark, not yet a production or quality result:
   respectively, which suggests the underlying baseline was stable.
 
 Two small observability fixes were made while obtaining these results. An
-explicit `prefix_cache.enabled = false` now survives model-family defaults, and
+explicit `prefix_cache.enabled = false` now survives automatic defaults, and
 standalone response timings now report generic proposed, accepted, rejected,
 and acceptance totals. These fixes make the arms comparable and do not change
 the suffix lookup algorithm.

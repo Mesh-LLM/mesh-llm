@@ -283,7 +283,7 @@ impl GgufCompactMeta {
     /// Resolve a *default* KV quant to one this model can actually load: returns
     /// `desired` when supported, else falls back to f16 K/V.
     ///
-    /// Intended only for policy/family defaults. Explicit user overrides must
+    /// Intended only for automatic defaults. Explicit user overrides must
     /// NOT be routed through here — an override that cannot load should fail
     /// loudly with llama.cpp's own error rather than being silently rewritten.
     pub fn compatible_default_kv_cache_quant(&self, desired: GgufKvCacheQuant) -> GgufKvCacheQuant {

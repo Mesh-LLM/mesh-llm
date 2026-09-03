@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::super::{KvCachePolicy, family_policy_for_model_path};
+use super::super::{KvCachePolicy, required_native_kv_cache_type_for_model_path};
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
@@ -47,13 +47,15 @@ fn resolve_skippy_config_with_context(
     // Guard the size-tiered default so a model that cannot load quantised KV
     // (Flash Attention off, or a head_dim not divisible by the block size)
     // resolves to f16 instead of failing the context build. Explicit config /
-    // family defaults still take precedence in resolve_cache_type_* below and
+    // metadata-derived native requirements still take precedence in
+    // resolve_cache_type_* below and
     // are intentionally not guarded here.
     let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes)
         .guarded_for_model(context.request.compact_meta);
     let hardware = resolve_hardware_config(&context)?;
-    let family_policy = family_policy_for_model_path(&hardware.resolved_model_path);
-    let model_fit = resolve_model_fit_config(&context, kv_policy, &family_policy)?;
+    let native_kv_cache_type =
+        required_native_kv_cache_type_for_model_path(&hardware.resolved_model_path);
+    let model_fit = resolve_model_fit_config(&context, kv_policy, native_kv_cache_type)?;
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context);
     let speculative = resolve_speculative_config(
@@ -209,7 +211,7 @@ fn validate_supported_hardware_controls(context: &ResolverContext<'_>) -> Result
 fn resolve_model_fit_config(
     context: &ResolverContext<'_>,
     kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
+    native_kv_cache_type: Option<&'static str>,
 ) -> Result<ResolvedModelFitConfig> {
     let kv = resolve_kv_defaults(context, kv_policy);
     let throughput = resolve_throughput_defaults(context);
@@ -245,8 +247,8 @@ fn resolve_model_fit_config(
             .and_then(|defaults| defaults.ubatch),
         BUILTIN_UBATCH,
     );
-    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, family_policy);
-    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, family_policy);
+    let cache_type_k = resolve_cache_type_k(context, &kv, kv_policy, native_kv_cache_type);
+    let cache_type_v = resolve_cache_type_v(context, &kv, kv_policy, native_kv_cache_type);
     let kv_offload = resolve_kv_offload(context, &kv);
     let kv_offload_resolved = parse_kv_offload_string(&kv_offload);
     let kv_unified = resolve_kv_unified(context)?;
@@ -322,12 +324,11 @@ fn resolve_kv_defaults(context: &ResolverContext<'_>, kv_policy: KvCachePolicy) 
     }
 }
 
-fn guarded_family_default_kv_cache_type(
+fn guarded_native_kv_cache_type(
     context: &ResolverContext<'_>,
-    family_policy: &super::super::family_policy::FamilyPolicy,
+    native_kv_cache_type: Option<&'static str>,
 ) -> Option<&'static str> {
-    family_policy
-        .default_kv_cache_type
+    native_kv_cache_type
         .and_then(|default| {
             crate::models::gguf::GgufKvCacheQuant::from_llama_args(default, default)
         })
@@ -345,7 +346,7 @@ fn resolve_cache_type_k(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
+    native_kv_cache_type: Option<&'static str>,
 ) -> String {
     if let Some(explicit) = context
         .model_fit
@@ -353,17 +354,17 @@ fn resolve_cache_type_k(
     {
         return explicit.to_string();
     }
-    // Guard the family default against the model's quantised-KV compatibility
-    // so an unloadable family default degrades to f16 instead of failing the
+    // Guard the metadata-derived requirement against the model's quantised-KV
+    // compatibility so an unloadable automatic choice degrades to f16 instead of failing the
     // context build. Explicit config above and below stays unguarded.
-    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
+    if let Some(native_default) = guarded_native_kv_cache_type(context, native_kv_cache_type) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_k.as_deref()))
         {
             return explicit.to_string();
         }
-        return family_default.to_string();
+        return native_default.to_string();
     }
     resolve_field_string(
         None,
@@ -384,7 +385,7 @@ fn resolve_cache_type_v(
     context: &ResolverContext<'_>,
     kv: &KvDefaults,
     kv_policy: KvCachePolicy,
-    family_policy: &super::super::family_policy::FamilyPolicy,
+    native_kv_cache_type: Option<&'static str>,
 ) -> String {
     if let Some(explicit) = context
         .model_fit
@@ -392,14 +393,14 @@ fn resolve_cache_type_v(
     {
         return explicit.to_string();
     }
-    if let Some(family_default) = guarded_family_default_kv_cache_type(context, family_policy) {
+    if let Some(native_default) = guarded_native_kv_cache_type(context, native_kv_cache_type) {
         if let Some(explicit) = context
             .global_model_fit
             .and_then(|fit| non_auto_string(fit.cache_type_v.as_deref()))
         {
             return explicit.to_string();
         }
-        return family_default.to_string();
+        return native_default.to_string();
     }
     resolve_field_string(
         None,

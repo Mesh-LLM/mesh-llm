@@ -167,9 +167,10 @@ selects one payload shape:
 - `KvRecurrent` for hybrid/recurrent families where attention KV and recurrent
   state must move together
 
-`FullState` is intentionally not selected by the production family policy. It is
-kept as a correctness/certification tool so a family can first prove exact
-restore behavior before we design and promote a compact serving payload.
+`FullState` is intentionally not selected by automatic production cache
+configuration. It is kept as a correctness/certification tool so a model can
+first prove exact restore behavior before we design and promote a compact
+serving payload.
 
 ## Why Skippy Cache Beats llama-server
 

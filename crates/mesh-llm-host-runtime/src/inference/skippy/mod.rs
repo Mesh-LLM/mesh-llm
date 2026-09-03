@@ -2,7 +2,6 @@
 
 mod certification;
 mod deployment;
-mod family_policy;
 mod hash_cache;
 mod hooks;
 mod kv_cache;
@@ -48,11 +47,11 @@ use skippy_server::{
 pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
-pub(crate) use family_policy::{
-    family_policy_for_compact_meta, family_policy_for_model_path, family_policy_for_stage_config,
-};
 pub(crate) use hooks::MeshAutoHookPolicy;
-pub(crate) use kv_cache::KvCachePolicy;
+pub(crate) use kv_cache::{
+    KvCachePolicy, default_stage_prefix_cache, default_stage_prefix_cache_for_package,
+    required_native_kv_cache_type, required_native_kv_cache_type_for_model_path,
+};
 #[cfg(test)]
 pub(crate) use local_source::local_source_required_for_model;
 pub(crate) use local_source::{
@@ -906,8 +905,7 @@ impl SkippyModelHandle {
             })
         };
         if config.kv_cache.is_none() {
-            let family_policy = family_policy_for_stage_config(config);
-            config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
+            config.kv_cache = Some(default_stage_prefix_cache(config));
         }
         let runtime_config = config.clone();
         let runtime = SkippyRuntimeHandle::load(runtime_options).with_context(|| {
@@ -1017,8 +1015,7 @@ impl SkippyModelHandle {
             })
         };
         if config.kv_cache.is_none() {
-            let family_policy = family_policy_for_stage_config(config);
-            config.kv_cache = family_policy.stage_kv_cache_config_for_stage(config);
+            config.kv_cache = Some(default_stage_prefix_cache(config));
         }
         let runtime_config = config.clone();
         let runtime =
@@ -1260,7 +1257,6 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         "skippy stage layer range must satisfy layer_start < layer_end"
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let family_policy = family_policy_for_model_path(&options.model_path);
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),
@@ -1323,10 +1319,12 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         upstream: None,
         downstream: None,
     };
-    config.kv_cache = options
-        .kv_cache
-        .clone()
-        .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
+    config.kv_cache = Some(
+        options
+            .kv_cache
+            .clone()
+            .unwrap_or_else(|| default_stage_prefix_cache(&config)),
+    );
     Ok(config)
 }
 

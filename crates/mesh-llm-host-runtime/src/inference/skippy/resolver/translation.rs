@@ -18,7 +18,7 @@ use skippy_server::{
 
 use super::super::{
     SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyPackageIdentity, SkippyTelemetryOptions,
-    family_policy_for_model_path, single_stage_config, synthetic_direct_gguf_package,
+    default_stage_prefix_cache, single_stage_config, synthetic_direct_gguf_package,
 };
 use super::request_defaults::{
     resolve_reasoning_budget, resolve_reasoning_enabled, resolve_reasoning_format,
@@ -100,9 +100,8 @@ impl ResolvedSkippyConfig {
             )?);
         }
         let stage_config = single_stage_config(&options)?;
-        let family_policy = family_policy_for_model_path(&self.hardware.resolved_model_path);
-        let kv_cache = self
-            .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
+        let kv_cache =
+            self.resolve_stage_kv_cache(Some(default_stage_prefix_cache(&stage_config)))?;
         Ok(options.with_kv_cache(kv_cache))
     }
 
@@ -197,9 +196,8 @@ impl ResolvedSkippyConfig {
             stage_config.package_ref = Some(synthetic.package_ref.clone());
             stage_config.manifest_sha256 = Some(synthetic.manifest_sha256.clone());
         }
-        let family_policy = family_policy_for_model_path(&self.hardware.resolved_model_path);
-        stage_config.kv_cache = self
-            .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
+        stage_config.kv_cache =
+            self.resolve_stage_kv_cache(Some(default_stage_prefix_cache(&stage_config)))?;
         Ok(stage_config)
     }
 
@@ -462,10 +460,10 @@ impl ResolvedSkippyConfig {
 
     fn resolve_stage_kv_cache(
         &self,
-        family_default: Option<StageKvCacheConfig>,
+        automatic_default: Option<StageKvCacheConfig>,
     ) -> Result<Option<StageKvCacheConfig>> {
         match &self.model_fit.prefix_cache {
-            ResolvedStageKvCache::FamilyDefault => Ok(family_default),
+            ResolvedStageKvCache::AutomaticDefault => Ok(automatic_default),
             ResolvedStageKvCache::Disabled => Ok(Some(StageKvCacheConfig {
                 mode: StageKvCacheMode::Disabled,
                 payload: StageKvCachePayload::Auto,
@@ -476,7 +474,7 @@ impl ResolvedSkippyConfig {
                 shared_prefix_record_limit: 0,
             })),
             ResolvedStageKvCache::Explicit(template) => {
-                let mut cache = family_default.unwrap_or(StageKvCacheConfig {
+                let mut cache = automatic_default.unwrap_or(StageKvCacheConfig {
                     mode: template.mode.clone(),
                     payload: StageKvCachePayload::Auto,
                     max_entries: 128,

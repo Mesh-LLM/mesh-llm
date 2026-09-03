@@ -127,7 +127,7 @@ pub struct SparseCheckpointPolicy {
     /// Total tokens the resident cache may pin, used to bound how deep the
     /// record ladder can go. `0` means unknown and leaves it unbounded.
     ///
-    /// The entry-count cap in `family_policy` assumes each entry costs about
+    /// The host entry-count cap assumes each entry costs about
     /// `min_tokens` cells, which the ladder violates: its first two slots are
     /// the longest candidates. Bounding by tokens keeps a single request from
     /// trying to pin more than the pool holds and evicting its own records.
@@ -622,7 +622,7 @@ mod shipped_default_ladder_tests {
     /// The ladder must produce shareable rungs under the *shipped* config,
     /// not just under hand-picked test values.
     ///
-    /// `family_policy` derives `record_limit` from the entry cap, which is
+    /// The host cache defaults derive `record_limit` from the entry cap, which is
     /// itself derived from `n_ctx`, and `max_resident_tokens_hint` is a fixed
     /// fraction of `n_ctx`. Those three interact: charging the unconditional
     /// exact and near-tail slots against the token budget consumed it entirely

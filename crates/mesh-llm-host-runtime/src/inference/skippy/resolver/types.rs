@@ -134,7 +134,7 @@ pub(crate) struct ResolvedSpeculativeConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedStageKvCache {
-    FamilyDefault,
+    AutomaticDefault,
     Disabled,
     Explicit(ResolvedStageKvCacheTemplate),
 }

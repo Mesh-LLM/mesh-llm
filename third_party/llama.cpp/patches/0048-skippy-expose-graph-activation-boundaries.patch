@@ -80,7 +80,7 @@ index ba62f60cf..f63a3418f 100644
  struct skippy_session;
 +struct skippy_activation_boundary_desc;
  
- /** @brief Model, stage, memory, cache, device, and family-policy load options. */
+ /** @brief Model, stage, memory, cache, device, and runtime load options. */
  struct skippy_runtime_config {
 @@ -164,6 +165,16 @@ LLAMA_API enum skippy_status skippy_model_free(
  LLAMA_API const struct llama_model * skippy_model_llama_model(
@@ -538,4 +538,3 @@ index 5180bfa24..a82b64408 100644
      std::vector<bool> lane_in_use;
 -- 
 2.54.0 (Apple Git-157)
-

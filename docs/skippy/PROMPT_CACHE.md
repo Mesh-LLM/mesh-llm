@@ -49,21 +49,22 @@ Skippy reports cache state in OpenAI usage and telemetry:
 
 ## mesh-llm Defaults
 
-mesh-llm wires Skippy prefix cache through family policy. For supported model
-families, generated `StageConfig` values receive a bounded cache config with
-`mode = "lookup-record"` and a production payload such as `resident-kv` or
-`kv-recurrent`. This applies to normal mesh-llm embedded Skippy serving without
-requiring users to send `prompt_cache_key`.
+mesh-llm gives generated `StageConfig` values a bounded, model-agnostic cache
+config with `mode = "lookup-record"` and `payload = "auto"`. After loading the
+model, the server selects `resident-kv` or `kv-recurrent` from the runtime state
+descriptor reported by llama.cpp. This applies to normal mesh-llm embedded
+Skippy serving without requiring users to send `prompt_cache_key`.
 
 The default is conditional, not universal:
 
-- unsupported or unknown families may leave `kv_cache` unset.
+- an unavailable or diffusion runtime state descriptor disables automatic cache
+  selection.
 - raw `skippy-server serve-openai` leaves cache off unless the stage config or
   `SKIPPY_KV_CACHE`/`SKIPPY_PREFIX_CACHE` enables it.
 - operators can disable cache with `model_fit.prompt_cache = false` or
   `model_fit.prefix_cache.enabled = false`.
-- recurrent-state families use `kv-recurrent` rather than `resident-kv` when
-  the family policy requires it.
+- a loaded recurrent or hybrid model uses `kv-recurrent`; a loaded dense model
+  uses `resident-kv`.
 
 ## Benchmarking
 
@@ -106,4 +107,4 @@ does not expose cached-token counts.
 
 The cold Skippy endpoint should use a config with no `kv_cache` or with
 `kv_cache.mode = "disabled"`. The warm Skippy endpoint should use mesh-llm
-family defaults or an explicit `lookup-record` prefix cache.
+automatic defaults or an explicit `lookup-record` prefix cache.

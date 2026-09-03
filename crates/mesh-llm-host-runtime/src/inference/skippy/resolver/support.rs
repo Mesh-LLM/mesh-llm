@@ -139,7 +139,7 @@ pub(super) fn resolve_prefix_cache(
     let Some(prefix_cache) = prefix_cache else {
         return Ok(match prompt_cache {
             Some(BoolOrAuto::Bool(false)) => ResolvedStageKvCache::Disabled,
-            _ => ResolvedStageKvCache::FamilyDefault,
+            _ => ResolvedStageKvCache::AutomaticDefault,
         });
     };
     if prefix_cache.enabled == Some(false) {

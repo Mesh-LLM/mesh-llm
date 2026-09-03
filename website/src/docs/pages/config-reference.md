@@ -22,7 +22,7 @@ Status values used below:
 - **rejected** — `mesh-llm config validate` fails the field; see [Unsupported and reserved settings](#unsupported-and-reserved-settings).
 
 Precedence for every field below: request value (where applicable), then
-`[[models]]`, then `[defaults]`, then family or topology policy, then the
+`[[models]]`, then `[defaults]`, then topology planning, then the
 built-in runtime default.
 
 ## Environment variables

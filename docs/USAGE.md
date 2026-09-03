@@ -414,7 +414,7 @@ sections and fields are optional unless noted.
 #   explicit request field value
 #   → per-model config ([[models]] entry)
 #   → [defaults.*] global config
-#   → family / topology policy
+#   → topology planning
 #   → built-in runtime defaults
 #
 # Request defaults are merged ONLY at the OpenAI frontend boundary when the
@@ -947,7 +947,7 @@ mesh-llm serve --config /path/to/config.toml
 Config precedence:
 
 - Request values override per-model config, which override `[defaults.*]`, which
-  override family or topology policy, which finally override built-in runtime
+  override topology planning, which finally overrides built-in runtime
   defaults.
 - Request defaults only fill missing or null request fields at the OpenAI
   frontend boundary. Explicit request values win, and those defaults never

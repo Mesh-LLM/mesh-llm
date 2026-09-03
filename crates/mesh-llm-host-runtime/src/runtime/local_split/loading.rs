@@ -741,8 +741,8 @@ pub(super) async fn split_generation_load_settings<'a>(
             request_defaults: None,
             package_generation: spec.package.generation.as_ref(),
             // Split stage load uses the compact metadata scanned during planning
-            // so the resolver guards both the size-tiered default and the family
-            // K/V default exactly like the split planner does.
+            // so the resolver guards both the size-tiered default and the
+            // metadata-derived K/V requirement exactly like the split planner does.
             compact_meta: Some(spec.compact_meta),
         },
         spec.config_model_id,

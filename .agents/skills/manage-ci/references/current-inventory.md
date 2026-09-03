@@ -60,7 +60,7 @@ manual dispatch; it is not ordinary push or PR CI. It executes trusted
 default-branch content only on the persistent self-hosted `family-certify`
 runner group (tools come from the runner image; no GitHub Actions model
 caching). Before native compilation,
-`scripts/plan-family-battery.py` validates the versioned JSON family policy,
+`scripts/plan-family-battery.py` validates the versioned JSON certification plan,
 the mandatory three-lane contract for every certified profile, and every exact
 artifact revision/file in the immutable local cache. It reads only GGUF
 metadata headers, requires each artifact to have at least one metadata-bearing

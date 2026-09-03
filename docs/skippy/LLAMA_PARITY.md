@@ -515,10 +515,9 @@ Dense and MoE-text `ResidentKv` additions passed in:
 rerun exited early during process startup before writing a report; the completed
 tranche reports are the current evidence.
 
-Negative policy regression tests now assert that Falcon-H1, Qwen3Next, Jamba,
-Kimi Linear, LFM2, Mamba, Mamba2, RWKV6, and RWKV7 select `KvRecurrent`, never
-`ResidentKv`, through mesh family policy and server-side auto-payload
-inference.
+Runtime-capability regression tests assert that loaded recurrent and hybrid
+models select `KvRecurrent`, never `ResidentKv`, through server-side
+auto-payload inference. Model names do not participate in that decision.
 
 | Family | Model ref | Payload | Topology | Result | Seq remap | Source -> target seq | Suffix prefill | Payload bytes | Recurrent bytes | Repeated hits |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
