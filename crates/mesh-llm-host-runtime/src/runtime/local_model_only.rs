@@ -168,7 +168,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
 
     let bind_addr = local_openai_bind_addr(&options);
     let runtime = acquire_instance_runtime(&options);
-    configure_run_auto_process_state(&options, runtime.as_ref());
+    configure_run_auto_process_state(&options, runtime.as_ref(), &config);
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
 
     let model_name = model.declared_ref.clone();

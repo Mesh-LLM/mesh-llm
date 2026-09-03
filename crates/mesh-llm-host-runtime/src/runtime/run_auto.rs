@@ -587,6 +587,7 @@ pub(super) fn skippy_telemetry_options(options: &RuntimeOptions) -> skippy::Skip
 pub(super) fn configure_run_auto_process_state(
     options: &RuntimeOptions,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
+    config: &plugin::MeshConfig,
 ) {
     // SAFETY: UNSAFE CONTRACT — callers must invoke this before concurrent
     // runtime work can access the process environment. The current runtime
@@ -616,10 +617,33 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    skippy_runtime::set_filtered_native_logs_enabled(true);
+    let parser_mode = native_log_parser_mode(config.runtime.lifecycle_log_parser);
+    let capabilities = skippy_runtime::probe_capabilities();
+    skippy_runtime::configure_native_log_parser(skippy_runtime::NativeLogParserPolicy::new(
+        parser_mode,
+        &capabilities,
+    ));
+    tracing::info!(
+        source = config.runtime.lifecycle_log_parser_source.as_str(),
+        "configured lifecycle native-log parser"
+    );
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
+}
+
+pub(super) fn native_log_parser_mode(
+    mode: mesh_llm_config::LifecycleLogParserMode,
+) -> skippy_runtime::NativeLogParserMode {
+    match mode {
+        mesh_llm_config::LifecycleLogParserMode::Auto => skippy_runtime::NativeLogParserMode::Auto,
+        mesh_llm_config::LifecycleLogParserMode::Enabled => {
+            skippy_runtime::NativeLogParserMode::Enabled
+        }
+        mesh_llm_config::LifecycleLogParserMode::Disabled => {
+            skippy_runtime::NativeLogParserMode::Disabled
+        }
+    }
 }
 
 pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
@@ -1417,7 +1441,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         "loaded creation-time mesh requirements into runtime startup state"
     );
     let api_port = options.port;
-    configure_run_auto_process_state(&options, runtime.as_ref());
+    configure_run_auto_process_state(&options, runtime.as_ref(), &config);
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
     // Embedded native logs are process-global and are redirected to the runtime log
     // file before model load. We also forward the filtered, aggregated model-loading

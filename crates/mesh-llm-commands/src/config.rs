@@ -8,7 +8,7 @@ use mesh_llm_config::{
     PluginDisabledWritePolicy, PluginNumericControl, PluginObjectPropertySchema,
     PluginOptionsSource, PluginSchemaAvailability, PluginSettingConstraint, PluginSettingSchema,
     PluginTextFormat, PluginValueKind, PluginValueSchema, SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
-    config_path, validate_config_diagnostics_with_plugin_schemas,
+    config_path, load_config, validate_config_diagnostics_with_plugin_schemas,
 };
 use mesh_llm_plugin_manager::{
     InstalledPluginConditionOperator, InstalledPluginConditionValue,
@@ -55,8 +55,7 @@ fn validate_config_file(override_path: Option<&Path>) -> Result<ConfigFileValida
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config {}", path.display()))?;
-    let config: MeshConfig =
-        toml::from_str(&raw).with_context(|| format!("Invalid config {}", path.display()))?;
+    let config: MeshConfig = load_config(Some(&path))?;
     let diagnostics =
         validate_config_diagnostics_with_plugin_schemas(&config, Some(&raw), plugin_schema);
     Ok(ConfigFileValidation { path, diagnostics })
