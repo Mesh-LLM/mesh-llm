@@ -3,32 +3,21 @@ use crate::{
     NativeProgressUnit, NativeSourceEnvelope, NativeStatus,
 };
 
-const RAW_EVENT_FIELD_NAMES: [&str; 23] = [
-    "abi_version",
-    "struct_size",
-    "category",
-    "kind",
-    "emitter",
-    "reserved0",
-    "sequence",
-    "timestamp_mono_ns",
-    "model_id",
-    "stage_id",
-    "session_id",
-    "progress_current",
-    "progress_total",
-    "progress_unit",
-    "failure_code",
-    "status",
-    "reserved1",
-    "detail_ptr",
-    "detail_len",
-    "numeric_summary_0",
-    "numeric_summary_1",
-    "numeric_summary_2",
-    "numeric_summary_3",
-];
-
+// `RawNativeEventV1Fixture`'s fields (declaration order) are a deliberate
+// byte-for-byte mirror of `skippy_ffi::abi::SkippyRuntimeEventV1`'s fields.
+// That cross-crate drift check does NOT live here as a test, because a
+// published `mesh-llm-runtime-event-contracts` tarball contains only this
+// crate's own package root — an `include_str!` reaching into the sibling
+// `skippy-ffi` crate's source would fail to compile for any downstream
+// consumer of the published crate (enforced by
+// `tools/xtask/src/publish_consistency.rs`'s literal-include package-root
+// check). The equivalent assertion instead runs from the repo's dev-only
+// `xtask` binary, which is free to read across crate boundaries:
+// `tools/xtask/src/repo_consistency.rs::check_runtime_event_abi_mirror`,
+// invoked by `cargo run -p xtask -- repo-consistency ci-crate-lists` (`just
+// ci-crate-lists`). Keep this struct's field names and order exactly in
+// sync with `SkippyRuntimeEventV1` — the xtask check parses both structs as
+// text and fails loudly if they diverge.
 struct RawNativeEventV1Fixture {
     abi_version: u32,
     struct_size: u32,
@@ -150,32 +139,6 @@ fn raw_native_event_fixture(extension: Option<(u64, u64, u64, u64)>) -> RawNativ
         numeric_summary_2: extension.map(|(_, _, c, _)| c),
         numeric_summary_3: extension.map(|(.., d)| d),
     }
-}
-
-#[test]
-fn raw_callback_fixture_tracks_every_current_abi_field() {
-    // Given
-    let abi_source = include_str!("../../../skippy-ffi/src/abi.rs");
-
-    // When
-    let fields = abi_source
-        .split_once("pub struct SkippyRuntimeEventV1 {")
-        .expect("SkippyRuntimeEventV1 declaration should exist")
-        .1
-        .split_once("\n}")
-        .expect("SkippyRuntimeEventV1 declaration should close")
-        .0
-        .lines()
-        .filter_map(|line| {
-            line.trim()
-                .strip_prefix("pub ")?
-                .split_once(':')
-                .map(|(name, _)| name)
-        })
-        .collect::<Vec<_>>();
-
-    // Then
-    assert_eq!(fields, RAW_EVENT_FIELD_NAMES);
 }
 
 #[test]
