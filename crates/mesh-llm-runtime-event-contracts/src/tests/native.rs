@@ -141,17 +141,11 @@ fn raw_native_event_fixture(extension: Option<(u64, u64, u64, u64)>) -> RawNativ
     }
 }
 
-#[test]
-fn unknown_native_reason_and_carriers_round_trip_exactly() {
-    // Given
-    let mut raw = raw_native_event_fixture(Some((50, 51, 52, 53)));
-
-    // When
-    let source = raw.to_owned_envelope();
-    raw.detail_ptr.fill(b'x');
-    let recovered = RawNativeEventV1Fixture::from_owned(&source);
-
-    // Then
+/// Every field except the appended numeric summaries: the original 19-field
+/// prefix shared by every native ABI version. Split out of the round-trip
+/// test itself purely to keep that test's own cognitive complexity under the
+/// configured Clippy limit; each assertion's exact message is unchanged.
+fn assert_prefix_fields_preserved(recovered: &RawNativeEventV1Fixture) {
     assert_eq!(recovered.abi_version, 17, "abi_version was not preserved");
     assert_eq!(recovered.struct_size, 112, "struct_size was not preserved");
     assert_eq!(recovered.category, u32::MAX, "category was not preserved");
@@ -191,6 +185,11 @@ fn unknown_native_reason_and_carriers_round_trip_exactly() {
         "owned detail bytes were not preserved"
     );
     assert_eq!(recovered.detail_len, 14, "detail_len was not reconstructed");
+}
+
+/// The four append-only numeric summary fields, checked separately from
+/// `assert_prefix_fields_preserved` for the same cognitive-complexity reason.
+fn assert_numeric_summary_fields_preserved(recovered: &RawNativeEventV1Fixture) {
     assert_eq!(
         recovered.numeric_summary_0,
         Some(50),
@@ -211,6 +210,21 @@ fn unknown_native_reason_and_carriers_round_trip_exactly() {
         Some(53),
         "numeric_summary_3 was not preserved"
     );
+}
+
+#[test]
+fn unknown_native_reason_and_carriers_round_trip_exactly() {
+    // Given
+    let mut raw = raw_native_event_fixture(Some((50, 51, 52, 53)));
+
+    // When
+    let source = raw.to_owned_envelope();
+    raw.detail_ptr.fill(b'x');
+    let recovered = RawNativeEventV1Fixture::from_owned(&source);
+
+    // Then
+    assert_prefix_fields_preserved(&recovered);
+    assert_numeric_summary_fields_preserved(&recovered);
 }
 
 #[test]
