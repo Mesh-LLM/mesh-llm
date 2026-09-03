@@ -3,10 +3,10 @@ use std::ffi::{c_char, c_int, c_void};
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper,
-    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
-    TensorInfo, TokenSignal,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
+    SamplingConfig, Session, SlicePlan, Status, TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -79,6 +79,16 @@ unsafe extern "C" {
     pub fn skippy_model_open_from_parts(
         paths: *const *const c_char,
         path_count: usize,
+        config: *const RuntimeConfig,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_model_open_from_source(
+        metadata_gguf: *const c_void,
+        metadata_gguf_size: usize,
+        source: *const ModelTensorSourceV1,
+        quantization_ftype: i32,
         config: *const RuntimeConfig,
         out_model: *mut *mut Model,
         out_error: *mut *mut Error,

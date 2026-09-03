@@ -5,9 +5,10 @@ mod tests {
 
     use super::{
         ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, DecodeFrameBatchRequest,
-        FlashAttentionType, GGML_TYPE_F16, GlmDsaPolicy, IterationBatchPhase, IterationBatchRequest,
-        ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        SplitMode, StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        CheckpointQuantization, FlashAttentionType, GGML_TYPE_F16, GlmDsaPolicy,
+        IterationBatchPhase, IterationBatchRequest, ModelInfo, MtpSource, NativeMtpDraft,
+        RuntimeConfig, RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession, Status,
+        TensorRole, format_skippy_error,
     };
     use std::{
         env,
@@ -125,6 +126,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            checkpoint_quantization: CheckpointQuantization::Preserve,
         };
         StageModel::open(model_path, &config)
     }

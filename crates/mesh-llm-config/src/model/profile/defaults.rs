@@ -173,6 +173,10 @@ fn merge_hardware(effective: &mut ModelConfigEntry, defaults: &ModelConfigDefaul
             .clone_from(&default_hardware.control_vectors);
     }
     hardware.check_tensors = hardware.check_tensors.or(default_hardware.check_tensors);
+    hardware.checkpoint_quantization = hardware
+        .checkpoint_quantization
+        .clone()
+        .or_else(|| default_hardware.checkpoint_quantization.clone());
     hardware.direct_io = hardware.direct_io.or(default_hardware.direct_io);
     hardware.repack = hardware.repack.or(default_hardware.repack);
     hardware.op_offload = hardware.op_offload.or(default_hardware.op_offload);

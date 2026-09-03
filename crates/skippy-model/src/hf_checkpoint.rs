@@ -1,42 +1,45 @@
+//! Validated SafeTensors checkpoint discovery and tensor access.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
+use memmap2::{Mmap, MmapOptions};
+use safetensors::SafeTensors;
 use serde::{Deserialize, Serialize};
 
-use crate::memory_budget::MemorySize;
-use crate::types::ConvertOutputType;
+use crate::ConvertOutputType;
 
 #[derive(Debug, Serialize)]
-pub(crate) struct HfCheckpointPlan {
-    pub(crate) source: PathBuf,
-    pub(crate) safetensor_count: usize,
-    pub(crate) tensor_count: usize,
-    pub(crate) total_tensor_bytes: u64,
-    pub(crate) largest_tensor_bytes: u64,
-    pub(crate) source_windows: Vec<HfSourceWindow>,
+pub struct HfCheckpointPlan {
+    pub source: PathBuf,
+    pub safetensor_count: usize,
+    pub tensor_count: usize,
+    pub total_tensor_bytes: u64,
+    pub largest_tensor_bytes: u64,
+    pub source_windows: Vec<HfSourceWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) stream_verification: Option<HfStreamVerification>,
+    pub stream_verification: Option<HfStreamVerification>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct HfSourceWindow {
-    pub(crate) index: u32,
-    pub(crate) files: Vec<PathBuf>,
-    pub(crate) tensor_count: usize,
-    pub(crate) total_tensor_bytes: u64,
-    pub(crate) largest_tensor_bytes: u64,
+pub struct HfSourceWindow {
+    pub index: u32,
+    pub files: Vec<PathBuf>,
+    pub tensor_count: usize,
+    pub total_tensor_bytes: u64,
+    pub largest_tensor_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct HfStreamVerification {
-    pub(crate) safetensor_count: usize,
-    pub(crate) tensor_count: usize,
-    pub(crate) streamed_bytes: u64,
-    pub(crate) buffer_size: usize,
+pub struct HfStreamVerification {
+    pub safetensor_count: usize,
+    pub tensor_count: usize,
+    pub streamed_bytes: u64,
+    pub buffer_size: usize,
 }
 
 #[derive(Debug)]
@@ -47,71 +50,92 @@ struct SafetensorSummary {
     largest_tensor_bytes: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct SafetensorTensor {
-    dtype: String,
-    shape: Vec<u64>,
-    data_offsets: [u64; 2],
-}
-
 #[derive(Debug)]
-pub(crate) struct SafetensorFile {
+pub struct SafetensorFile {
     path: PathBuf,
     data_start: u64,
+    mapping: Mmap,
     tensors: BTreeMap<String, SafetensorTensorInfo>,
 }
 
 impl SafetensorFile {
-    pub(crate) fn open(path: &Path) -> Result<Self> {
-        let (data_start, raw_tensors) = read_safetensor_header(path)?;
-        let file_len = fs::metadata(path)
-            .with_context(|| format!("stat {}", path.display()))?
-            .len();
+    pub fn open(path: &Path) -> Result<Self> {
+        let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+        // SAFETY: the file is opened read-only and Skippy never mutates or truncates checkpoint
+        // files while a SafetensorFile exists. The mapping is owned by this object and therefore
+        // outlives every tensor slice exposed through its methods.
+        let mapping = unsafe { MmapOptions::new().map(&file) }
+            .with_context(|| format!("mmap {}", path.display()))?;
+        let parsed = SafeTensors::deserialize(&mapping)
+            .with_context(|| format!("validate safetensors container {}", path.display()))?;
+        let data_start = parsed
+            .tensors()
+            .into_iter()
+            .map(|(_, tensor)| tensor.data().as_ptr() as usize - mapping.as_ptr() as usize)
+            .min()
+            .unwrap_or(mapping.len()) as u64;
         let mut tensors = BTreeMap::new();
-        for (name, tensor) in raw_tensors {
+        for (name, tensor) in parsed.tensors() {
+            let absolute_start = tensor.data().as_ptr() as usize - mapping.as_ptr() as usize;
+            let absolute_end = absolute_start
+                .checked_add(tensor.data().len())
+                .with_context(|| format!("data range overflow for tensor {name}"))?;
+            ensure!(
+                absolute_start >= data_start as usize,
+                "tensor {name} precedes data section"
+            );
+            let shape = tensor
+                .shape()
+                .iter()
+                .map(|&dim| u64::try_from(dim).context("tensor dimension does not fit u64"))
+                .collect::<Result<Vec<_>>>()?;
             tensors.insert(
-                name.clone(),
-                SafetensorTensorInfo::from_raw(name, tensor, data_start, file_len)?,
+                name.to_string(),
+                SafetensorTensorInfo {
+                    name: name.to_string(),
+                    dtype: format!("{:?}", tensor.dtype()),
+                    shape,
+                    relative_data_offsets: [
+                        (absolute_start - data_start as usize) as u64,
+                        (absolute_end - data_start as usize) as u64,
+                    ],
+                    absolute_data_start: absolute_start,
+                    byte_len: tensor.data().len(),
+                },
             );
         }
         Ok(Self {
             path: path.to_path_buf(),
             data_start,
+            mapping,
             tensors,
         })
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn data_start(&self) -> u64 {
+    pub fn data_start(&self) -> u64 {
         self.data_start
     }
 
-    pub(crate) fn tensors(&self) -> &BTreeMap<String, SafetensorTensorInfo> {
+    pub fn tensors(&self) -> &BTreeMap<String, SafetensorTensorInfo> {
         &self.tensors
     }
 
-    pub(crate) fn stream_tensor<W: Write>(
+    pub fn stream_tensor<W: Write>(
         &self,
         name: &str,
         writer: &mut W,
         buffer_size: usize,
     ) -> Result<u64> {
-        let tensor = self
-            .tensors
-            .get(name)
-            .with_context(|| format!("tensor {name} not found in {}", self.path.display()))?;
-        stream_file_range(
-            &self.path,
-            tensor.absolute_data_range(),
-            writer,
-            buffer_size,
-        )
+        self.stream_tensor_chunks(name, buffer_size, |chunk| {
+            writer.write_all(chunk).context("write tensor bytes")
+        })
     }
 
-    pub(crate) fn stream_tensor_chunks<F>(
+    pub fn stream_tensor_chunks<F>(
         &self,
         name: &str,
         buffer_size: usize,
@@ -124,91 +148,58 @@ impl SafetensorFile {
             .tensors
             .get(name)
             .with_context(|| format!("tensor {name} not found in {}", self.path.display()))?;
-        stream_file_range_chunks(
-            &self.path,
-            tensor.absolute_data_range(),
-            buffer_size,
-            |chunk| on_chunk(chunk),
-        )
+        ensure!(buffer_size > 0, "buffer_size must be greater than zero");
+        let range = tensor.absolute_data_range();
+        let data = self
+            .mapping
+            .get(range.clone())
+            .with_context(|| format!("tensor {name} range is outside {}", self.path.display()))?;
+        for chunk in data.chunks(buffer_size) {
+            on_chunk(chunk)?;
+        }
+        Ok(data.len() as u64)
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct SafetensorTensorInfo {
+pub struct SafetensorTensorInfo {
     name: String,
     dtype: String,
     shape: Vec<u64>,
     relative_data_offsets: [u64; 2],
-    absolute_data_start: u64,
-    byte_len: u64,
+    absolute_data_start: usize,
+    byte_len: usize,
 }
 
 impl SafetensorTensorInfo {
-    fn from_raw(
-        name: String,
-        tensor: SafetensorTensor,
-        data_start: u64,
-        file_len: u64,
-    ) -> Result<Self> {
-        let relative_start = tensor.data_offsets[0];
-        let relative_end = tensor.data_offsets[1];
-        let byte_len = relative_end
-            .checked_sub(relative_start)
-            .with_context(|| format!("invalid data_offsets for tensor {name}"))?;
-        let shape_bytes = tensor_shape_bytes(&tensor)
-            .with_context(|| format!("validate shape for tensor {name}"))?;
-        ensure!(
-            byte_len == shape_bytes,
-            "tensor {name} byte length {byte_len} does not match dtype/shape byte length {shape_bytes}"
-        );
-        let absolute_data_start = data_start
-            .checked_add(relative_start)
-            .with_context(|| format!("absolute data offset overflow for tensor {name}"))?;
-        let absolute_data_end = absolute_data_start
-            .checked_add(byte_len)
-            .with_context(|| format!("absolute data end overflow for tensor {name}"))?;
-        ensure!(
-            absolute_data_end <= file_len,
-            "tensor {name} extends past end of safetensors file"
-        );
-        Ok(Self {
-            name,
-            dtype: tensor.dtype,
-            shape: tensor.shape,
-            relative_data_offsets: tensor.data_offsets,
-            absolute_data_start,
-            byte_len,
-        })
-    }
-
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub(crate) fn dtype(&self) -> &str {
+    pub fn dtype(&self) -> &str {
         &self.dtype
     }
 
-    pub(crate) fn shape(&self) -> &[u64] {
+    pub fn shape(&self) -> &[u64] {
         &self.shape
     }
 
-    pub(crate) fn relative_data_offsets(&self) -> [u64; 2] {
+    pub fn relative_data_offsets(&self) -> [u64; 2] {
         self.relative_data_offsets
     }
 
-    pub(crate) fn byte_len(&self) -> u64 {
-        self.byte_len
+    pub fn byte_len(&self) -> u64 {
+        self.byte_len as u64
     }
 
-    fn absolute_data_range(&self) -> Range<u64> {
+    fn absolute_data_range(&self) -> Range<usize> {
         self.absolute_data_start..self.absolute_data_start + self.byte_len
     }
 }
 
-pub(crate) fn inspect_hf_checkpoint(
+pub fn inspect_hf_checkpoint(
     source: &Path,
-    max_memory: Option<MemorySize>,
+    max_memory_bytes: Option<u64>,
     staging_fraction: f64,
 ) -> Result<HfCheckpointPlan> {
     ensure!(
@@ -236,7 +227,7 @@ pub(crate) fn inspect_hf_checkpoint(
         .map(|summary| summary.largest_tensor_bytes)
         .max()
         .unwrap_or(0);
-    let source_windows = plan_source_windows(&summaries, max_memory, staging_fraction)?;
+    let source_windows = plan_source_windows(&summaries, max_memory_bytes, staging_fraction)?;
     Ok(HfCheckpointPlan {
         source: source.to_path_buf(),
         safetensor_count: summaries.len(),
@@ -248,7 +239,7 @@ pub(crate) fn inspect_hf_checkpoint(
     })
 }
 
-pub(crate) fn verify_hf_checkpoint_tensor_streams(
+pub fn verify_hf_checkpoint_tensor_streams(
     source: &Path,
     buffer_size: usize,
 ) -> Result<HfStreamVerification> {
@@ -297,14 +288,14 @@ pub(crate) fn verify_hf_checkpoint_tensor_streams(
     })
 }
 
-pub(crate) fn open_safetensor_files(source: &Path) -> Result<Vec<SafetensorFile>> {
+pub fn open_safetensor_files(source: &Path) -> Result<Vec<SafetensorFile>> {
     discover_safetensors(source)?
         .iter()
         .map(|path| SafetensorFile::open(path))
         .collect()
 }
 
-pub(crate) fn resolve_auto_output_type(
+pub fn resolve_auto_output_type(
     source: &Path,
     requested: ConvertOutputType,
 ) -> Result<ConvertOutputType> {
@@ -326,7 +317,7 @@ pub(crate) fn resolve_auto_output_type(
     Ok(ConvertOutputType::F16)
 }
 
-fn discover_safetensors(source: &Path) -> Result<Vec<PathBuf>> {
+pub fn discover_safetensors(source: &Path) -> Result<Vec<PathBuf>> {
     ensure!(
         source.is_dir(),
         "HF checkpoint source must be a directory: {}",
@@ -364,12 +355,37 @@ fn discover_indexed_safetensors(source: &Path) -> Result<Vec<PathBuf>> {
     let mut files = index
         .weight_map
         .values()
-        .map(|name| source.join(name))
-        .collect::<BTreeSet<_>>()
+        .map(|name| indexed_shard_path(source, name))
+        .collect::<Result<BTreeSet<_>>>()?
         .into_iter()
         .collect::<Vec<_>>();
     files.sort();
     Ok(files)
+}
+
+fn indexed_shard_path(source: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    ensure!(
+        !name.is_empty()
+            && !relative.is_absolute()
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+        "SafeTensors index shard path must remain within the checkpoint directory: {name:?}"
+    );
+    ensure!(
+        relative
+            .extension()
+            .is_some_and(|extension| extension == "safetensors"),
+        "SafeTensors index shard must have a .safetensors extension: {name:?}"
+    );
+    let path = source.join(relative);
+    ensure!(
+        path.is_file(),
+        "SafeTensors index shard does not exist: {}",
+        path.display()
+    );
+    Ok(path)
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,46 +415,6 @@ fn summarize_safetensor(path: &Path) -> Result<SafetensorSummary> {
     })
 }
 
-fn read_safetensor_header(path: &Path) -> Result<(u64, BTreeMap<String, SafetensorTensor>)> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut len_bytes = [0_u8; 8];
-    file.read_exact(&mut len_bytes)
-        .with_context(|| format!("read safetensors header length from {}", path.display()))?;
-    let header_len = u64::from_le_bytes(len_bytes);
-    ensure!(
-        header_len <= 256 * 1024 * 1024,
-        "safetensors header is unexpectedly large in {}: {header_len} bytes",
-        path.display()
-    );
-    let mut header = vec![0_u8; header_len as usize];
-    file.read_exact(&mut header)
-        .with_context(|| format!("read safetensors header from {}", path.display()))?;
-    let raw: BTreeMap<String, serde_json::Value> = serde_json::from_slice(&header)
-        .with_context(|| format!("parse safetensors header {}", path.display()))?;
-    let mut tensors = BTreeMap::new();
-    for (name, value) in raw {
-        if name == "__metadata__" {
-            continue;
-        }
-        tensors.insert(name, serde_json::from_value(value)?);
-    }
-    let data_start = 8_u64
-        .checked_add(header_len)
-        .with_context(|| format!("safetensors data start overflow in {}", path.display()))?;
-    Ok((data_start, tensors))
-}
-
-fn tensor_shape_bytes(tensor: &SafetensorTensor) -> Result<u64> {
-    let element_size = dtype_size(&tensor.dtype)
-        .ok_or_else(|| anyhow!("unsupported safetensors dtype {}", tensor.dtype))?;
-    let elements = tensor.shape.iter().try_fold(1_u64, |acc, dim| {
-        acc.checked_mul(*dim).context("tensor shape overflow")
-    })?;
-    elements
-        .checked_mul(element_size)
-        .context("tensor byte size overflow")
-}
-
 fn dtype_size(dtype: &str) -> Option<u64> {
     match dtype {
         "BOOL" | "I8" | "U8" | "F8_E4M3" | "F8_E5M2" => Some(1),
@@ -451,11 +427,11 @@ fn dtype_size(dtype: &str) -> Option<u64> {
 
 fn plan_source_windows(
     summaries: &[SafetensorSummary],
-    max_memory: Option<MemorySize>,
+    max_memory_bytes: Option<u64>,
     staging_fraction: f64,
 ) -> Result<Vec<HfSourceWindow>> {
-    let budget = max_memory
-        .map(|memory| ((memory.bytes() as f64) * staging_fraction).floor() as u64)
+    let budget = max_memory_bytes
+        .map(|memory| ((memory as f64) * staging_fraction).floor() as u64)
         .unwrap_or(u64::MAX)
         .max(1);
     let mut windows = Vec::new();
@@ -514,44 +490,6 @@ impl SourceWindowBuilder {
     }
 }
 
-fn stream_file_range<W: Write>(
-    path: &Path,
-    range: Range<u64>,
-    writer: &mut W,
-    buffer_size: usize,
-) -> Result<u64> {
-    stream_file_range_chunks(path, range, buffer_size, |chunk| {
-        writer.write_all(chunk).context("write tensor bytes")
-    })
-}
-
-fn stream_file_range_chunks<F>(
-    path: &Path,
-    range: Range<u64>,
-    buffer_size: usize,
-    mut on_chunk: F,
-) -> Result<u64>
-where
-    F: FnMut(&[u8]) -> Result<()>,
-{
-    ensure!(buffer_size > 0, "buffer_size must be greater than zero");
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    file.seek(SeekFrom::Start(range.start))
-        .with_context(|| format!("seek {}", path.display()))?;
-    let mut remaining = range.end - range.start;
-    let mut copied = 0_u64;
-    let mut buffer = vec![0_u8; buffer_size];
-    while remaining > 0 {
-        let read_len = buffer.len().min(remaining as usize);
-        file.read_exact(&mut buffer[..read_len])
-            .with_context(|| format!("read tensor bytes from {}", path.display()))?;
-        on_chunk(&buffer[..read_len])?;
-        remaining -= read_len as u64;
-        copied += read_len as u64;
-    }
-    Ok(copied)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,8 +510,7 @@ mod tests {
             &[("b.weight", "BF16", &[4], &[1, 2, 3, 4, 5, 6, 7, 8])],
         );
 
-        let plan =
-            inspect_hf_checkpoint(&root, Some(MemorySize::from_bytes_for_tests(12)), 1.0).unwrap();
+        let plan = inspect_hf_checkpoint(&root, Some(12), 1.0).unwrap();
 
         assert_eq!(plan.safetensor_count, 2);
         assert_eq!(plan.tensor_count, 2);
@@ -606,6 +543,22 @@ mod tests {
 
         assert_eq!(plan.safetensor_count, 2);
         assert_eq!(plan.source_windows.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_index_shards_that_escape_checkpoint_directory() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("model.safetensors.index.json"),
+            r#"{"metadata":{},"weight_map":{"a.weight":"../outside.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let error = discover_safetensors(&root).unwrap_err().to_string();
+
+        assert!(error.contains("must remain within the checkpoint directory"));
         fs::remove_dir_all(root).unwrap();
     }
 

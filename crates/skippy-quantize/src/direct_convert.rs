@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 
-use crate::hf_checkpoint::resolve_auto_output_type;
 use crate::locking::with_manifest_lock;
 use crate::manifest::ensure_manifest;
 use crate::preflight::run_job_preflight;
@@ -15,6 +14,7 @@ use crate::{
     convert_manifest_from_args, prepare_convert_runner, run_convert_unlocked,
     run_convert_window_once_with_manifest,
 };
+use skippy_model::hf_checkpoint::resolve_auto_output_type;
 
 #[derive(Debug, Parser)]
 pub(crate) struct DirectConvertArgs {

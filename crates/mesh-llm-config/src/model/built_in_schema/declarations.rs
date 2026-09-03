@@ -483,6 +483,13 @@ fn hardware_settings(
             &format!("{prefix}.check_tensors"),
             ConfigValueSchema::Boolean,
         ),
+        experimental_setting(
+            &format!("{prefix}.checkpoint_quantization"),
+            string_enum([
+                "preserve", "F32", "F16", "BF16", "Q4_0", "Q4_K_S", "Q4_K_M", "Q5_K_M",
+                "Q6_K", "Q8_0",
+            ]),
+        ),
         basic_setting(&format!("{prefix}.mmap"), bool_or_auto_schema()),
         unsupported_setting(
             &format!("{prefix}.use_mmap_prefetch"),

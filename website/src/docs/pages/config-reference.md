@@ -177,6 +177,7 @@ one.
 | `hardware.lora_adapters` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.control_vectors` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.check_tensors` | boolean | `false` | both | model reload | partial (single-node resolution only; multi-node stages use disabled default) | none |
+| `hardware.checkpoint_quantization` | enum | `preserve` (default), `F32`, `F16`, `BF16`, `Q4_0`, `Q4_K_S`, `Q4_K_M`, `Q5_K_M`, `Q6_K`, `Q8_0` | both | model reload | partial (single-node direct SafeTensors checkpoints only) | none |
 | `hardware.mmap` | bool-or-`auto` | `auto` | both | model reload | wired | `--mmap` |
 | `hardware.use_mmap_prefetch` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |
 | `hardware.use_mmap_buffer` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |

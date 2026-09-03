@@ -1,3 +1,4 @@
+// Tensor layout and transform coverage.
 #[test]
 fn streams_expert_tensors_as_merged_gguf_tensor() {
     let root = unique_temp_dir();

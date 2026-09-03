@@ -1,3 +1,5 @@
+//! Canonical GGUF metadata and streaming tensor preparation.
+
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::fs::{self, File};
 use std::io::{Seek, Write};
@@ -5,21 +7,29 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
+use serde_json::Value;
 
-use crate::float_convert::{FloatDType, convert_float_chunk, target_dtype_for_tensor};
-pub(crate) use crate::gguf_metadata::GgufKv;
+use crate::ConvertOutputType;
+use crate::float_convert::{
+    FloatDType, convert_float_chunk, read_float_element, target_dtype_for_tensor,
+    write_float_element,
+};
+pub use crate::gguf_metadata::GgufKv;
 use crate::gguf_metadata::write_kv;
 #[cfg(test)]
 use crate::gguf_metadata::{
     GGUF_TYPE_ARRAY, GGUF_TYPE_BOOL, GGUF_TYPE_FLOAT32, GGUF_TYPE_INT32, GGUF_TYPE_STRING,
     GGUF_TYPE_UINT16, GGUF_TYPE_UINT32, GGUF_TYPE_UINT64,
 };
-use crate::hf_checkpoint::{SafetensorFile, SafetensorTensorInfo, open_safetensor_files};
+use crate::gguf_template::{metadata_from_hf_config, mtp_layer_start_from_hf_config};
+use crate::hf_checkpoint::{
+    SafetensorFile, SafetensorTensorInfo, inspect_hf_checkpoint, open_safetensor_files,
+    resolve_auto_output_type,
+};
 use crate::tensor_map::{
     TensorNameMap, hf_layer_id, inkling_mtp_depth, is_inkling_fused_w13, is_mtp_source_tensor,
     is_shared_mtp_context_tensor,
 };
-use crate::types::ConvertOutputType;
 
 mod glm_dsa;
 
@@ -35,17 +45,17 @@ const GGML_TYPE_F32: u32 = 0;
 const GGML_TYPE_F16: u32 = 1;
 const GGML_TYPE_BF16: u32 = 30;
 #[derive(Debug, Clone)]
-pub(crate) struct RawGgufWriteOptions {
-    pub(crate) buffer_size: usize,
-    pub(crate) metadata: Option<Vec<GgufKv>>,
-    pub(crate) tensor_name_map: TensorNameMap,
-    pub(crate) split: Option<GgufSplit>,
-    pub(crate) output_type: Option<ConvertOutputType>,
-    pub(crate) tensor_selection: TensorSelection,
+pub struct RawGgufWriteOptions {
+    pub buffer_size: usize,
+    pub metadata: Option<Vec<GgufKv>>,
+    pub tensor_name_map: TensorNameMap,
+    pub split: Option<GgufSplit>,
+    pub output_type: Option<ConvertOutputType>,
+    pub tensor_selection: TensorSelection,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) enum TensorSelection {
+pub enum TensorSelection {
     #[default]
     All,
     ExcludeMtp {
@@ -57,12 +67,12 @@ pub(crate) enum TensorSelection {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct GgufSplit {
-    pub(crate) split_index: u32,
-    pub(crate) split_count: u32,
+pub struct GgufSplit {
+    pub split_index: u32,
+    pub split_count: u32,
 }
 
-pub(crate) fn write_raw_safetensors_gguf(
+pub fn write_raw_safetensors_gguf(
     source: &Path,
     output: &Path,
     options: RawGgufWriteOptions,
@@ -81,7 +91,7 @@ pub(crate) fn write_raw_safetensors_gguf(
     stream_tensor_data(&mut writer, &files, &tensors, options.buffer_size)
 }
 
-pub(crate) fn validate_raw_safetensors_gguf(
+pub fn validate_raw_safetensors_gguf(
     source: &Path,
     options: RawGgufWriteOptions,
 ) -> Result<RawGgufValidation> {
@@ -96,7 +106,7 @@ pub(crate) fn validate_raw_safetensors_gguf(
     })
 }
 
-pub(crate) fn recommended_raw_safetensors_gguf_split_count(
+pub fn recommended_raw_safetensors_gguf_split_count(
     source: &Path,
     mut options: RawGgufWriteOptions,
     max_tensor_bytes: u64,
@@ -154,13 +164,117 @@ struct PreparedGgufWrite {
     metadata: Vec<GgufKv>,
 }
 
+/// A validated Hugging Face checkpoint prepared for direct runtime loading.
+///
+/// The object owns immutable mappings for every SafeTensors shard. Its GGUF
+/// buffer contains metadata and tensor descriptors only; tensor bytes are read
+/// from the source mappings on demand.
+pub struct DirectCheckpoint {
+    files: Vec<SafetensorFile>,
+    tensors: Vec<TensorSource>,
+    metadata_gguf: Vec<u8>,
+    buffer_size: usize,
+}
+
+impl DirectCheckpoint {
+    /// Open a checkpoint and prepare canonical llama.cpp metadata and names.
+    pub fn open(source: &Path, buffer_size: usize) -> Result<Self> {
+        let output_type = resolve_auto_output_type(source, ConvertOutputType::Auto)?;
+        let plan = inspect_hf_checkpoint(source, None, 1.0)?;
+        let mtp_layer_start = mtp_layer_start_from_hf_config(source)?;
+        let tensor_name_map = mtp_layer_start
+            .map(|layer_start| TensorNameMap::HfToGgufWithMtp { layer_start })
+            .unwrap_or(TensorNameMap::HfToGguf);
+        let prepared = prepare_raw_safetensors_gguf(
+            source,
+            &RawGgufWriteOptions {
+                buffer_size,
+                metadata: Some(metadata_from_hf_config(source, plan.tensor_count)?),
+                tensor_name_map,
+                split: None,
+                output_type: Some(output_type),
+                tensor_selection: TensorSelection::All,
+            },
+        )?;
+        let mut metadata_gguf = Vec::new();
+        write_header_and_tensor_table(&mut metadata_gguf, &prepared.metadata, &prepared.tensors)?;
+        let aligned_len = usize::try_from(align_to(metadata_gguf.len() as u64, GGUF_ALIGNMENT))
+            .context("metadata GGUF length does not fit usize")?;
+        metadata_gguf.resize(aligned_len, 0);
+        Ok(Self {
+            files: prepared.files,
+            tensors: prepared.tensors,
+            metadata_gguf,
+            buffer_size,
+        })
+    }
+
+    /// Metadata-only GGUF consumed by the native model constructor.
+    pub fn metadata_gguf(&self) -> &[u8] {
+        &self.metadata_gguf
+    }
+
+    /// Number of canonical tensors exposed by this checkpoint.
+    pub fn tensor_count(&self) -> usize {
+        self.tensors.len()
+    }
+
+    /// Decode one canonical tensor into the caller-provided F32 destination.
+    pub fn read_tensor_f32(&self, name: &str, destination: &mut [f32]) -> Result<()> {
+        let tensor = self
+            .tensors
+            .iter()
+            .find(|tensor| tensor.name == name)
+            .with_context(|| format!("canonical tensor {name} not found in checkpoint"))?;
+        let target_dtype = tensor
+            .segments
+            .first()
+            .context("tensor has no source segments")?
+            .target_dtype;
+        ensure!(
+            tensor
+                .segments
+                .iter()
+                .all(|segment| segment.target_dtype == target_dtype),
+            "tensor {name} has mixed target dtypes"
+        );
+        let expected_elements = tensor.byte_len / target_dtype.byte_size();
+        ensure!(
+            destination.len() as u64 == expected_elements,
+            "tensor {name} destination has {} elements, expected {expected_elements}",
+            destination.len()
+        );
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(tensor.byte_len).context("tensor byte length does not fit usize")?,
+        );
+        for segment in &tensor.segments {
+            stream_segment(
+                &mut bytes,
+                &self.files[segment.file_index],
+                segment,
+                self.buffer_size,
+            )?;
+        }
+        ensure!(
+            bytes.len() as u64 == tensor.byte_len,
+            "decoded {} bytes for {name}, expected {}",
+            bytes.len(),
+            tensor.byte_len
+        );
+        for (index, value) in destination.iter_mut().enumerate() {
+            *value = read_float_element(&bytes, target_dtype, index);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
-pub(crate) struct RawGgufValidation {
-    pub(crate) selected_tensor_count: usize,
-    pub(crate) selected_tensor_bytes: u64,
-    pub(crate) metadata_count: usize,
+pub struct RawGgufValidation {
+    pub selected_tensor_count: usize,
+    pub selected_tensor_bytes: u64,
+    pub metadata_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) output_type: Option<String>,
+    pub output_type: Option<String>,
 }
 
 fn prepare_raw_safetensors_gguf(
@@ -179,12 +293,14 @@ fn prepare_raw_safetensors_gguf(
     );
     let metadata_seed = options.metadata.clone();
     let glm_dsa_kv_b_split = glm_dsa_kv_b_split_mode(metadata_seed.as_deref())?;
+    let hf_layout = HfTensorLayout::from_checkpoint(source, options.tensor_name_map)?;
     let tensors = collect_tensor_sources(
         &files,
         options.tensor_name_map,
         options.output_type,
         options.tensor_selection,
         glm_dsa_kv_b_split,
+        hf_layout,
     )?;
     ensure!(
         !tensors.is_empty(),
@@ -349,6 +465,7 @@ fn collect_tensor_sources(
     output_type: Option<ConvertOutputType>,
     tensor_selection: TensorSelection,
     glm_dsa_kv_b_split: GlmDsaKvBSplitMode,
+    hf_layout: HfTensorLayout,
 ) -> Result<Vec<TensorSource>> {
     let mut tensors = Vec::new();
     let mut expert_groups = BTreeMap::<ExpertGroupKey, ExpertGroup>::new();
@@ -362,6 +479,16 @@ fn collect_tensor_sources(
                     file_index,
                     tensor,
                     tensor_name_map,
+                    output_type,
+                )?);
+                continue;
+            }
+            if matches!(hf_layout, HfTensorLayout::GraniteHybrid { .. })
+                && tensor.name().ends_with("shared_mlp.input_linear.weight")
+            {
+                tensors.extend(granite_shared_mlp_tensor_sources(
+                    file_index,
+                    tensor,
                     output_type,
                 )?);
                 continue;
@@ -409,6 +536,7 @@ fn collect_tensor_sources(
                 tensor,
                 tensor_name_map,
                 output_type,
+                hf_layout,
             )?);
         }
     }
@@ -451,6 +579,7 @@ impl TensorSource {
         tensor: &SafetensorTensorInfo,
         tensor_name_map: TensorNameMap,
         output_type: Option<ConvertOutputType>,
+        hf_layout: HfTensorLayout,
     ) -> Result<Self> {
         let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
             format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
@@ -459,7 +588,8 @@ impl TensorSource {
         let target_dtype =
             target_dtype_for_mapped_tensor(source_dtype, output_type, tensor.shape(), &name)?;
         let element_count = tensor_element_count(tensor)?;
-        let dims = mapped_tensor_dims(tensor.shape(), &name)?;
+        let dims = mapped_tensor_dims(tensor.shape(), &name, hf_layout)?;
+        let transform = tensor_transform(tensor, &name, hf_layout)?;
         Ok(Self {
             segments: vec![TensorSegment {
                 file_index,
@@ -469,7 +599,7 @@ impl TensorSource {
                 element_count,
                 source_byte_len: tensor.byte_len(),
                 target_byte_len: tensor_byte_len(element_count, target_dtype)?,
-                transform: TensorTransform::Identity,
+                transform,
             }],
             name,
             dims,
@@ -486,13 +616,20 @@ fn target_dtype_for_mapped_tensor(
     shape: &[u64],
     mapped_name: &str,
 ) -> Result<FloatDType> {
-    if mapped_name.ends_with("attn_rel_proj.weight") || mapped_name.contains(".shortconv_") {
+    if mapped_name.ends_with("attn_rel_proj.weight")
+        || mapped_name.contains(".shortconv_")
+        || mapped_name.ends_with(".ssm_conv1d.weight")
+    {
         return Ok(FloatDType::F32);
     }
     target_dtype_for_tensor(source_dtype, output_type, shape)
 }
 
-fn mapped_tensor_dims(shape: &[u64], mapped_name: &str) -> Result<Vec<u64>> {
+fn mapped_tensor_dims(
+    shape: &[u64],
+    mapped_name: &str,
+    hf_layout: HfTensorLayout,
+) -> Result<Vec<u64>> {
     if mapped_name.contains(".shortconv_") {
         ensure!(
             shape.len() == 3 && shape[1] == 1,
@@ -500,7 +637,204 @@ fn mapped_tensor_dims(shape: &[u64], mapped_name: &str) -> Result<Vec<u64>> {
         );
         return Ok(vec![shape[2], shape[0]]);
     }
+    if matches!(hf_layout, HfTensorLayout::GraniteHybrid { .. })
+        && mapped_name.ends_with(".ssm_conv1d.weight")
+    {
+        ensure!(
+            shape.len() == 3 && shape[1] == 1,
+            "Granite Hybrid SSM convolution {mapped_name} must have shape [channels, 1, kernel], got {shape:?}"
+        );
+        return Ok(vec![shape[2], shape[0]]);
+    }
+    if matches!(hf_layout, HfTensorLayout::GraniteHybrid { .. })
+        && (mapped_name.ends_with(".ssm_a") || mapped_name.ends_with(".ssm_d"))
+    {
+        ensure!(
+            shape.len() == 1,
+            "Granite Hybrid {mapped_name} must be rank 1, got {shape:?}"
+        );
+        return Ok(vec![1, shape[0]]);
+    }
+    if let HfTensorLayout::GraniteHybrid {
+        ssm_group_count, ..
+    } = hf_layout
+        && mapped_name.ends_with(".ssm_norm.weight")
+    {
+        ensure!(
+            shape.len() == 1 && shape[0].is_multiple_of(ssm_group_count),
+            "Granite Hybrid {mapped_name} shape {shape:?} is not divisible by SSM group count {ssm_group_count}"
+        );
+        return Ok(vec![shape[0] / ssm_group_count, ssm_group_count]);
+    }
     Ok(shape.iter().rev().copied().collect())
+}
+
+fn tensor_transform(
+    tensor: &SafetensorTensorInfo,
+    mapped_name: &str,
+    hf_layout: HfTensorLayout,
+) -> Result<TensorTransform> {
+    if matches!(hf_layout, HfTensorLayout::GraniteHybrid { .. }) && mapped_name.ends_with(".ssm_a")
+    {
+        return Ok(TensorTransform::NegativeExp);
+    }
+    let head_count = match (hf_layout, mapped_name) {
+        (
+            HfTensorLayout::LlamaLike {
+                head_count,
+                kv_head_count: _,
+            }
+            | HfTensorLayout::GraniteHybrid {
+                head_count,
+                kv_head_count: _,
+                ssm_group_count: _,
+            },
+            name,
+        ) if name.ends_with(".attn_q.weight") || name.ends_with(".attn_q.bias") => Some(head_count),
+        (
+            HfTensorLayout::LlamaLike { kv_head_count, .. }
+            | HfTensorLayout::GraniteHybrid { kv_head_count, .. },
+            name,
+        ) if name.ends_with(".attn_k.weight") || name.ends_with(".attn_k.bias") => {
+            Some(kv_head_count)
+        }
+        _ => None,
+    };
+    let Some(head_count) = head_count else {
+        return Ok(TensorTransform::Identity);
+    };
+    let row_count = *tensor
+        .shape()
+        .first()
+        .with_context(|| format!("RoPE tensor {} has no dimensions", tensor.name()))?;
+    let row_elements = tensor.shape()[1..].iter().try_fold(1_u64, |acc, dim| {
+        acc.checked_mul(*dim)
+            .with_context(|| format!("RoPE row width overflow for {}", tensor.name()))
+    })?;
+    ensure!(
+        head_count > 0 && row_count.is_multiple_of(head_count * 2),
+        "RoPE tensor {} row count {row_count} must be divisible by twice the head count {head_count}",
+        tensor.name()
+    );
+    Ok(TensorTransform::RopePermutation {
+        head_count,
+        row_count,
+        row_elements,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum HfTensorLayout {
+    #[default]
+    Generic,
+    LlamaLike {
+        head_count: u64,
+        kv_head_count: u64,
+    },
+    GraniteHybrid {
+        head_count: u64,
+        kv_head_count: u64,
+        ssm_group_count: u64,
+    },
+}
+
+impl HfTensorLayout {
+    fn from_checkpoint(source: &Path, tensor_name_map: TensorNameMap) -> Result<Self> {
+        if !matches!(
+            tensor_name_map,
+            TensorNameMap::HfToGguf | TensorNameMap::HfToGgufWithMtp { .. }
+        ) {
+            return Ok(Self::Generic);
+        }
+        let path = source.join("config.json");
+        if !path.is_file() {
+            return Ok(Self::Generic);
+        }
+        let config: Value = serde_json::from_slice(
+            &fs::read(&path).with_context(|| format!("read {}", path.display()))?,
+        )
+        .with_context(|| format!("parse {}", path.display()))?;
+        let model_type = config
+            .get("model_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let value_u64 = |key: &str| -> Result<u64> {
+            config
+                .get(key)
+                .and_then(Value::as_u64)
+                .with_context(|| format!("config missing integer {key}"))
+        };
+        let head_count = || value_u64("num_attention_heads");
+        let kv_head_count = || {
+            config
+                .get("num_key_value_heads")
+                .and_then(Value::as_u64)
+                .map(Ok)
+                .unwrap_or_else(head_count)
+        };
+        match model_type {
+            "llama" | "mistral" => Ok(Self::LlamaLike {
+                head_count: head_count()?,
+                kv_head_count: kv_head_count()?,
+            }),
+            "granitemoehybrid" => Ok(Self::GraniteHybrid {
+                head_count: head_count()?,
+                kv_head_count: kv_head_count()?,
+                ssm_group_count: value_u64("mamba_n_groups")?,
+            }),
+            _ => Ok(Self::Generic),
+        }
+    }
+}
+
+fn granite_shared_mlp_tensor_sources(
+    file_index: usize,
+    tensor: &SafetensorTensorInfo,
+    output_type: Option<ConvertOutputType>,
+) -> Result<Vec<TensorSource>> {
+    ensure!(
+        tensor.shape().len() == 2 && tensor.shape()[0].is_multiple_of(2),
+        "Granite Hybrid shared MLP input {} must have shape [2 * intermediate, hidden], got {:?}",
+        tensor.name(),
+        tensor.shape()
+    );
+    let layer = hf_layer_id(tensor.name())?
+        .with_context(|| format!("missing Granite Hybrid layer id in {}", tensor.name()))?;
+    let source_dtype = FloatDType::from_safetensor(tensor.dtype())
+        .with_context(|| format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name()))?;
+    let row_count = tensor.shape()[0] / 2;
+    let row_elements = tensor.shape()[1];
+    let output_shape = [row_count, row_elements];
+    let target_dtype = target_dtype_for_tensor(source_dtype, output_type, &output_shape)?;
+    let element_count = row_count
+        .checked_mul(row_elements)
+        .context("Granite Hybrid shared MLP element count overflow")?;
+    let target_byte_len = tensor_byte_len(element_count, target_dtype)?;
+    let dims = vec![row_elements, row_count];
+    Ok([("ffn_gate", 0_u64), ("ffn_up", row_count)]
+        .into_iter()
+        .map(|(projection, row_start)| TensorSource {
+            segments: vec![TensorSegment {
+                file_index,
+                source_name: tensor.name().to_string(),
+                source_dtype,
+                target_dtype,
+                element_count,
+                source_byte_len: tensor.byte_len(),
+                target_byte_len,
+                transform: TensorTransform::ContiguousRows {
+                    row_start,
+                    row_count,
+                    row_elements,
+                },
+            }],
+            name: format!("blk.{layer}.{projection}.weight"),
+            dims: dims.clone(),
+            ggml_type: ggml_type_for_dtype(target_dtype),
+            byte_len: target_byte_len,
+            gguf_offset: 0,
+        })
+        .collect())
 }
 
 fn inkling_w13_tensor_sources(
@@ -867,8 +1201,8 @@ fn stream_tensor_data(
     Ok(())
 }
 
-fn stream_segment(
-    writer: &mut File,
+fn stream_segment<W: Write>(
+    writer: &mut W,
     file: &SafetensorFile,
     segment: &TensorSegment,
     buffer_size: usize,
@@ -879,6 +1213,41 @@ fn stream_segment(
     } = segment.transform
     {
         return stream_alternating_rows(writer, file, segment, buffer_size, parity, row_elements);
+    }
+    if let TensorTransform::ContiguousRows {
+        row_start,
+        row_count,
+        row_elements,
+    } = segment.transform
+    {
+        return stream_contiguous_rows(
+            writer,
+            file,
+            segment,
+            buffer_size,
+            row_start,
+            row_count,
+            row_elements,
+        );
+    }
+    if let TensorTransform::RopePermutation {
+        head_count,
+        row_count,
+        row_elements,
+    } = segment.transform
+    {
+        return stream_rope_permutation(
+            writer,
+            file,
+            segment,
+            buffer_size,
+            head_count,
+            row_count,
+            row_elements,
+        );
+    }
+    if matches!(segment.transform, TensorTransform::NegativeExp) {
+        return stream_negative_exp(writer, file, segment, buffer_size);
     }
     if let Some(written) = stream_transformed_segment(writer, file, segment, buffer_size)? {
         return Ok(written);
@@ -929,8 +1298,8 @@ fn stream_segment(
 
 /// Deinterleave alternating rows of a fused SwiGLU tensor (Inkling MTP fused
 /// w13): parity 0 keeps even rows (gate), parity 1 keeps odd rows (up).
-fn stream_alternating_rows(
-    writer: &mut File,
+fn stream_alternating_rows<W: Write>(
+    writer: &mut W,
     file: &SafetensorFile,
     segment: &TensorSegment,
     buffer_size: usize,
@@ -978,6 +1347,185 @@ fn stream_alternating_rows(
         segment.target_byte_len
     );
     Ok(output_bytes)
+}
+
+fn stream_contiguous_rows<W: Write>(
+    writer: &mut W,
+    file: &SafetensorFile,
+    segment: &TensorSegment,
+    buffer_size: usize,
+    row_start: u64,
+    row_count: u64,
+    row_elements: u64,
+) -> Result<u64> {
+    ensure!(row_count > 0, "contiguous-row count must be non-zero");
+    ensure!(row_elements > 0, "contiguous-row width must be non-zero");
+    let source = read_segment_source(file, segment, buffer_size)?;
+    let source_width = segment.source_dtype.byte_size();
+    let start_element = row_start
+        .checked_mul(row_elements)
+        .context("contiguous-row start overflow")?;
+    let element_count = row_count
+        .checked_mul(row_elements)
+        .context("contiguous-row element count overflow")?;
+    let start_byte = start_element
+        .checked_mul(source_width)
+        .context("contiguous-row byte start overflow")?;
+    let byte_len = element_count
+        .checked_mul(source_width)
+        .context("contiguous-row byte length overflow")?;
+    let end_byte = start_byte
+        .checked_add(byte_len)
+        .context("contiguous-row byte end overflow")?;
+    let start = usize::try_from(start_byte).context("contiguous-row start does not fit usize")?;
+    let end = usize::try_from(end_byte).context("contiguous-row end does not fit usize")?;
+    ensure!(
+        end <= source.len(),
+        "contiguous-row range {start}..{end} exceeds {} source bytes for {}",
+        source.len(),
+        segment.source_name
+    );
+    let written = if segment.source_dtype == segment.target_dtype {
+        writer.write_all(&source[start..end])?;
+        byte_len
+    } else {
+        convert_float_chunk(
+            &source[start..end],
+            segment.source_dtype,
+            segment.target_dtype,
+            writer,
+        )?
+    };
+    ensure!(
+        written == segment.target_byte_len,
+        "wrote {written} bytes for contiguous rows of {}, expected {}",
+        segment.source_name,
+        segment.target_byte_len
+    );
+    Ok(written)
+}
+
+fn stream_rope_permutation<W: Write>(
+    writer: &mut W,
+    file: &SafetensorFile,
+    segment: &TensorSegment,
+    buffer_size: usize,
+    head_count: u64,
+    row_count: u64,
+    row_elements: u64,
+) -> Result<u64> {
+    ensure!(head_count > 0, "RoPE head count must be non-zero");
+    ensure!(row_elements > 0, "RoPE row width must be non-zero");
+    ensure!(
+        row_count.is_multiple_of(head_count * 2),
+        "RoPE row count {row_count} must be divisible by twice head count {head_count}"
+    );
+    let source = read_segment_source(file, segment, buffer_size)?;
+    let head_dim = row_count / head_count;
+    let source_element_count = row_count
+        .checked_mul(row_elements)
+        .context("RoPE tensor element count overflow")?;
+    ensure!(
+        source_element_count == segment.element_count,
+        "RoPE transform element count {source_element_count} does not match {} for {}",
+        segment.element_count,
+        segment.source_name
+    );
+    let flush_limit = buffer_size.max(segment.target_dtype.byte_size() as usize);
+    let mut output = Vec::with_capacity(flush_limit);
+    let mut written = 0_u64;
+    for head in 0..head_count {
+        for target_row_in_head in 0..head_dim {
+            let source_row_in_head =
+                (target_row_in_head % 2) * (head_dim / 2) + target_row_in_head / 2;
+            let source_row = head * head_dim + source_row_in_head;
+            for column in 0..row_elements {
+                let source_index = source_row
+                    .checked_mul(row_elements)
+                    .and_then(|value| value.checked_add(column))
+                    .context("RoPE source index overflow")?;
+                let source_index = usize::try_from(source_index)
+                    .context("RoPE source index does not fit usize")?;
+                ensure!(
+                    source_index < segment.element_count as usize,
+                    "RoPE source index {source_index} exceeds {} elements",
+                    segment.element_count
+                );
+                write_float_element(
+                    &mut output,
+                    segment.target_dtype,
+                    read_float_element(&source, segment.source_dtype, source_index),
+                );
+                written += segment.target_dtype.byte_size();
+                if output.len() >= flush_limit {
+                    writer.write_all(&output)?;
+                    output.clear();
+                }
+            }
+        }
+    }
+    writer.write_all(&output)?;
+    ensure!(
+        written == segment.target_byte_len,
+        "wrote {written} bytes for RoPE permutation of {}, expected {}",
+        segment.source_name,
+        segment.target_byte_len
+    );
+    Ok(written)
+}
+
+fn stream_negative_exp<W: Write>(
+    writer: &mut W,
+    file: &SafetensorFile,
+    segment: &TensorSegment,
+    buffer_size: usize,
+) -> Result<u64> {
+    let source = read_segment_source(file, segment, buffer_size)?;
+    let flush_limit = buffer_size.max(segment.target_dtype.byte_size() as usize);
+    let mut output = Vec::with_capacity(flush_limit);
+    let mut written = 0_u64;
+    let element_count = usize::try_from(segment.element_count)
+        .context("negative-exp element count does not fit usize")?;
+    for index in 0..element_count {
+        let value = -read_float_element(&source, segment.source_dtype, index).exp();
+        write_float_element(&mut output, segment.target_dtype, value);
+        written += segment.target_dtype.byte_size();
+        if output.len() >= flush_limit {
+            writer.write_all(&output)?;
+            output.clear();
+        }
+    }
+    writer.write_all(&output)?;
+    ensure!(
+        written == segment.target_byte_len,
+        "wrote {written} bytes for negative-exp transform of {}, expected {}",
+        segment.source_name,
+        segment.target_byte_len
+    );
+    Ok(written)
+}
+
+fn read_segment_source(
+    file: &SafetensorFile,
+    segment: &TensorSegment,
+    buffer_size: usize,
+) -> Result<Vec<u8>> {
+    let mut source = Vec::with_capacity(
+        usize::try_from(segment.source_byte_len)
+            .context("transformed source byte length does not fit usize")?,
+    );
+    file.stream_tensor_chunks(&segment.source_name, buffer_size, |chunk| {
+        source.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    ensure!(
+        source.len() as u64 == segment.source_byte_len,
+        "read {} bytes for {}, expected {}",
+        source.len(),
+        segment.source_name,
+        segment.source_byte_len
+    );
+    Ok(source)
 }
 
 fn aligned_chunk_size(buffer_size: usize, element_size: usize) -> usize {

@@ -2742,7 +2742,11 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-ui-artifact-slice.yml": {"runner_policy", "ui_artifact"},
             "ci-linux-host-slice.yml": {"runner_policy", "linux_host"},
             "ci-linux-runtime-slice.yml": {"runner_policy", "linux_runtime"},
-            "ci-rust-tests-slice.yml": {"runner_policy", "rust_tests"},
+            "ci-rust-tests-slice.yml": {
+                "runner_policy",
+                "rust_tests",
+                "safetensors_runtime_smoke",
+            },
             "ci-macos-host-slice.yml": {"runner_policy", "macos_host"},
             "ci-platform-checks-slice.yml": {"runner_policy", "platform_checks"},
             "ci-windows-host-slice.yml": {"runner_policy", "windows_host"},

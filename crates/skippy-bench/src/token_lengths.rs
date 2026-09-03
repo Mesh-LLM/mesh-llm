@@ -106,6 +106,7 @@ pub fn token_lengths(args: TokenLengthsArgs) -> Result<()> {
             include_output: false,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: true,
+            checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
             kv_offload: None,
             kv_unified: None,
             swa_full: None,

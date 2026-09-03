@@ -853,6 +853,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::SilentNoOp,
     },
     WiringEntry {
+        path: "hardware.checkpoint_quantization",
+        status: WiringStatus::Partial,
+        owner: "SafeTensors direct-load follow-up",
+        reason: "Single-node direct SafeTensors resolution propagates it; prepared GGUF and multi-node stage constructors do not consume it",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "hardware.mmap",
         status: WiringStatus::Wired,
         owner: "n/a",

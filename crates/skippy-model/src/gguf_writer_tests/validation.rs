@@ -1,3 +1,4 @@
+// Family checkpoint validation coverage.
 #[test]
 fn validates_qwen_dense_native_conversion_fixture() {
     let root = unique_temp_dir();
@@ -642,7 +643,7 @@ fn validates_llama_dense_native_conversion_fixture() {
     assert!(parsed.metadata_count > 10);
     assert_eq!(
         parsed.tensor("blk.0.attn_q.weight").ggml_type,
-        GGML_TYPE_F32
+        GGML_TYPE_BF16
     );
     fs::remove_dir_all(root).unwrap();
 }

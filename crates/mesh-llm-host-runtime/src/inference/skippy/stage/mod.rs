@@ -910,6 +910,7 @@ fn stage_config(
             load.load_mode,
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
         ),
+        checkpoint_quantization: None,
         selected_device: load.selected_device.clone(),
         kv_cache: None,
         native_mtp_enabled: load.native_mtp_enabled,

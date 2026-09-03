@@ -1,3 +1,5 @@
+//! Family-specific canonical GGUF metadata templates.
+
 use std::fs;
 use std::path::Path;
 
@@ -9,8 +11,8 @@ use crate::inkling_metadata;
 use crate::tokenizer_metadata::push_tokenizer_metadata;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MetadataOptions {
-    pub(crate) include_mtp: bool,
+pub struct MetadataOptions {
+    pub include_mtp: bool,
 }
 
 impl Default for MetadataOptions {
@@ -19,11 +21,11 @@ impl Default for MetadataOptions {
     }
 }
 
-pub(crate) fn metadata_from_hf_config(source: &Path, tensor_count: usize) -> Result<Vec<GgufKv>> {
+pub fn metadata_from_hf_config(source: &Path, tensor_count: usize) -> Result<Vec<GgufKv>> {
     metadata_from_hf_config_with_options(source, tensor_count, MetadataOptions::default())
 }
 
-pub(crate) fn mtp_layer_start_from_hf_config(source: &Path) -> Result<Option<u32>> {
+pub fn mtp_layer_start_from_hf_config(source: &Path) -> Result<Option<u32>> {
     let config = read_hf_config(source)?;
     if inkling_metadata::is_inkling_config(&config) {
         return inkling_metadata::mtp_layer_start(&config);
@@ -39,7 +41,7 @@ pub(crate) fn mtp_layer_start_from_hf_config(source: &Path) -> Result<Option<u32
     required_u32(&config, "num_hidden_layers").map(Some)
 }
 
-pub(crate) fn metadata_from_hf_config_with_options(
+pub fn metadata_from_hf_config_with_options(
     source: &Path,
     tensor_count: usize,
     options: MetadataOptions,
@@ -94,6 +96,9 @@ fn architecture_name(config: &Value) -> Result<&'static str> {
     if matches!(model_type, "glm_moe_dsa" | "glm-dsa") {
         return Ok("glm-dsa");
     }
+    if model_type == "granitemoehybrid" {
+        return Ok("granitehybrid");
+    }
     if is_unsupported_qwen3_variant(model_type) {
         anyhow::bail!(
             "native GGUF metadata for model_type={model_type:?} requires \
@@ -137,13 +142,17 @@ fn push_common_llm_metadata(
     options: MetadataOptions,
 ) -> Result<()> {
     push_required_u32(metadata, arch, "vocab_size", config, "vocab_size")?;
-    push_required_u32(
-        metadata,
-        arch,
-        "context_length",
-        config,
-        "max_position_embeddings",
-    )?;
+    if arch == "granitehybrid" {
+        metadata.push(GgufKv::u32(&format!("{arch}.context_length"), 1 << 20));
+    } else {
+        push_required_u32(
+            metadata,
+            arch,
+            "context_length",
+            config,
+            "max_position_embeddings",
+        )?;
+    }
     push_required_u32(metadata, arch, "embedding_length", config, "hidden_size")?;
     let block_count = required_u32(config, "num_hidden_layers")?
         + if options.include_mtp {
@@ -182,10 +191,43 @@ fn push_attention_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Valu
         &format!("{arch}.attention.head_count"),
         head_count,
     ));
-    metadata.push(GgufKv::u32(
-        &format!("{arch}.attention.head_count_kv"),
-        optional_u32(config, "num_key_value_heads").unwrap_or(head_count),
-    ));
+    let head_count_kv = optional_u32(config, "num_key_value_heads").unwrap_or(head_count);
+    if arch == "granitehybrid" {
+        let layer_types = config
+            .get("layer_types")
+            .and_then(Value::as_array)
+            .context("Granite Hybrid config missing layer_types")?;
+        let block_count = required_u32(config, "num_hidden_layers")? as usize;
+        ensure!(
+            layer_types.len() == block_count,
+            "Granite Hybrid layer_types length {} must match num_hidden_layers {block_count}",
+            layer_types.len()
+        );
+        let mut per_layer = Vec::with_capacity(block_count);
+        for layer_type in layer_types {
+            let layer_type = layer_type
+                .as_str()
+                .context("Granite Hybrid layer_types must contain strings")?;
+            ensure!(
+                matches!(layer_type, "attention" | "mamba"),
+                "unsupported Granite Hybrid layer type {layer_type:?}"
+            );
+            per_layer.push(if layer_type == "attention" {
+                i32::try_from(head_count_kv).context("head count exceeds i32")?
+            } else {
+                0
+            });
+        }
+        metadata.push(GgufKv::array_i32(
+            &format!("{arch}.attention.head_count_kv"),
+            per_layer,
+        ));
+    } else {
+        metadata.push(GgufKv::u32(
+            &format!("{arch}.attention.head_count_kv"),
+            head_count_kv,
+        ));
+    }
     let mut key_len_mla = None;
     let (key_len, rope_dim) = if let Some((nope, rope)) =
         optional_u32(config, "qk_nope_head_dim").zip(optional_u32(config, "qk_rope_head_dim"))
@@ -438,6 +480,31 @@ fn push_glm_dsa_indexer_types(
 }
 
 fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) -> Result<()> {
+    if arch == "granitehybrid" {
+        push_first_u32(
+            metadata,
+            arch,
+            "expert_count",
+            config,
+            &["num_local_experts"],
+        );
+        push_first_u32(
+            metadata,
+            arch,
+            "expert_used_count",
+            config,
+            &["num_experts_per_tok"],
+        );
+        push_first_u32(
+            metadata,
+            arch,
+            "expert_shared_feed_forward_length",
+            config,
+            &["shared_intermediate_size"],
+        );
+        push_granite_hybrid_metadata(metadata, arch, config)?;
+        return Ok(());
+    }
     if arch == "glm-dsa" {
         validate_glm_dsa_moe_contract(config)?;
         push_required_first_u32(
@@ -547,6 +614,42 @@ fn push_moe_metadata(metadata: &mut Vec<GgufKv>, arch: &str, config: &Value) -> 
     if let Some(norm) = optional_bool(config, "norm_topk_prob") {
         metadata.push(GgufKv::bool(&format!("{arch}.expert_weights_norm"), norm));
     }
+    Ok(())
+}
+
+fn push_granite_hybrid_metadata(
+    metadata: &mut Vec<GgufKv>,
+    arch: &str,
+    config: &Value,
+) -> Result<()> {
+    for (gguf_suffix, config_key) in [
+        ("attention.scale", "attention_multiplier"),
+        ("embedding_scale", "embedding_multiplier"),
+        ("residual_scale", "residual_multiplier"),
+        ("logit_scale", "logits_scaling"),
+    ] {
+        if let Some(value) = optional_f32(config, config_key) {
+            metadata.push(GgufKv::f32(&format!("{arch}.{gguf_suffix}"), value));
+        }
+    }
+    push_required_u32(metadata, arch, "ssm.conv_kernel", config, "mamba_d_conv")?;
+    push_required_u32(metadata, arch, "ssm.state_size", config, "mamba_d_state")?;
+    push_required_u32(metadata, arch, "ssm.group_count", config, "mamba_n_groups")?;
+    let inner_size = required_u32(config, "mamba_expand")?
+        .checked_mul(required_u32(config, "hidden_size")?)
+        .context("Granite Hybrid SSM inner size overflow")?;
+    metadata.push(GgufKv::u32(&format!("{arch}.ssm.inner_size"), inner_size));
+    push_required_u32(
+        metadata,
+        arch,
+        "ssm.time_step_rank",
+        config,
+        "mamba_n_heads",
+    )?;
+    metadata.push(GgufKv::bool(
+        &format!("{arch}.rope.scaling.finetuned"),
+        false,
+    ));
     Ok(())
 }
 
@@ -1034,6 +1137,95 @@ mod tests {
         assert!(text.contains("32"));
         assert!(text.contains("llama.attention.head_count_kv"));
         assert!(text.contains("8"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builds_granite_hybrid_metadata_from_fixed_model_config() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let mut layer_types = vec!["mamba"; 40];
+        for layer in [5_usize, 15, 25, 35] {
+            layer_types[layer] = "attention";
+        }
+        let config = serde_json::json!({
+            "architectures": ["GraniteMoeHybridForCausalLM"],
+            "model_type": "granitemoehybrid",
+            "vocab_size": 100352,
+            "hidden_size": 1536,
+            "intermediate_size": 4096,
+            "shared_intermediate_size": 4096,
+            "num_hidden_layers": 40,
+            "num_attention_heads": 12,
+            "num_key_value_heads": 4,
+            "head_dim": 128,
+            "layer_types": layer_types,
+            "num_local_experts": 0,
+            "num_experts_per_tok": 0,
+            "mamba_d_conv": 4,
+            "mamba_d_state": 128,
+            "mamba_n_groups": 1,
+            "mamba_expand": 2,
+            "mamba_n_heads": 48,
+            "attention_multiplier": 0.0078125,
+            "embedding_multiplier": 12.0,
+            "residual_multiplier": 0.22,
+            "logits_scaling": 6.0,
+            "rope_theta": 10000.0,
+            "rms_norm_eps": 1e-5
+        });
+        fs::write(
+            root.join("config.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+
+        let metadata = metadata_from_hf_config(&root, 506).unwrap();
+
+        assert!(metadata.iter().any(|kv| matches!(
+            kv,
+            GgufKv::String { key, value }
+                if key == "general.architecture" && value == "granitehybrid"
+        )));
+        assert!(metadata.iter().any(|kv| matches!(
+            kv,
+            GgufKv::U32 { key, value }
+                if key == "granitehybrid.context_length" && *value == 1 << 20
+        )));
+        assert!(metadata.iter().any(|kv| matches!(
+            kv,
+            GgufKv::ArrayI32 { key, value }
+                if key == "granitehybrid.attention.head_count_kv"
+                    && value.len() == 40
+                    && value[5] == 4
+                    && value[15] == 4
+                    && value.iter().filter(|head_count| **head_count == 4).count() == 4
+                    && value.iter().filter(|head_count| **head_count == 0).count() == 36
+        )));
+        for (key, expected) in [
+            ("granitehybrid.ssm.conv_kernel", 4),
+            ("granitehybrid.ssm.state_size", 128),
+            ("granitehybrid.ssm.group_count", 1),
+            ("granitehybrid.ssm.inner_size", 3072),
+            ("granitehybrid.ssm.time_step_rank", 48),
+            ("granitehybrid.expert_count", 0),
+            ("granitehybrid.expert_used_count", 0),
+            ("granitehybrid.expert_shared_feed_forward_length", 4096),
+        ] {
+            assert!(
+                metadata.iter().any(|kv| matches!(
+                    kv,
+                    GgufKv::U32 { key: actual, value }
+                        if actual == key && *value == expected
+                )),
+                "missing {key}={expected}"
+            );
+        }
+        assert!(metadata.iter().any(|kv| matches!(
+            kv,
+            GgufKv::Bool { key, value }
+                if key == "granitehybrid.rope.scaling.finetuned" && !*value
+        )));
         fs::remove_dir_all(root).unwrap();
     }
 

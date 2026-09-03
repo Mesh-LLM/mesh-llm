@@ -16,6 +16,8 @@ flowchart TB
     Mesh["mesh-llm<br/>embedded serving + lifecycle"] --> R["skippy-runtime"]
     P["bench / prompt / correctness<br/>tokenization and local checks"] --> R
     S["skippy-server<br/>prefill/decode requests"] --> R
+    ST["HF SafeTensors checkpoint<br/>config + tokenizer + shards"] --> M["skippy-model<br/>mapping + transforms"]
+    M --> R
     R --> PS["package selector<br/>manifest + selected parts<br/>direct GGUF fake packages"]
     PS --> R
     R --> F["skippy-ffi"]
@@ -31,6 +33,8 @@ native exact-cache movement.
 ## Responsibilities
 
 - open staged model views
+- open local Hugging Face SafeTensors checkpoints directly, with optional
+  tensor-by-tensor load-time quantization and no intermediate GGUF
 - create runtime sessions
 - tokenize and detokenize through llama
 - run prefill/decode calls
@@ -46,3 +50,19 @@ native exact-cache movement.
 - open selected package parts directly through the ABI for server runtime loads
 
 Keep service lifecycle, transport, and telemetry in higher-level crates.
+
+## Direct SafeTensors loading
+
+`StageModel::open` recognizes a local checkpoint directory containing
+`config.json` plus either `model.safetensors` or
+`model.safetensors.index.json`. It also accepts a `.safetensors` file and uses
+its parent directory for the checkpoint metadata. Set
+`RuntimeConfig::checkpoint_quantization` to preserve the canonical checkpoint
+types or select a supported llama.cpp quantization recipe such as `Bf16`,
+`Q4KM`, or `Q8_0`.
+
+The runtime validates immutable shards with the official Rust `safetensors`
+crate. `skippy-model` maps and transforms source tensors, while the native
+Skippy ABI chooses destination tensor types and quantizes each stage-owned
+tensor as it is loaded. This initial direct path does not materialize a derived
+artifact cache and does not emit the GGUF model-open progress events.

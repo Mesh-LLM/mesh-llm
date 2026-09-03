@@ -139,6 +139,19 @@ fn update_weight_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
             }
         }
     }
+    hasher.update(b"checkpoint-quantization:");
+    let quantization = config
+        .checkpoint_quantization
+        .as_deref()
+        .unwrap_or("preserve")
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect::<String>();
+    hasher.update(match quantization.as_str() {
+        "DIRECT" | "NONE" | "PRESERVE" => b"PRESERVE" as &[u8],
+        _ => quantization.as_bytes(),
+    });
     // Layer packages and direct GGUFs assemble tensors differently even for
     // the same underlying model.
     // Matched exhaustively on purpose: a new load mode is a new way of
@@ -250,6 +263,7 @@ mod identity_completeness_tests {
             materialized_path: None,
             materialized_pinned: false,
             model_path: None,
+            checkpoint_quantization: None,
             projector_path: None,
             projector_use_gpu: None,
             media_marker: None,
@@ -526,6 +540,7 @@ mod identity_stability_tests {
             materialized_path: None,
             materialized_pinned: false,
             model_path: None,
+            checkpoint_quantization: None,
             projector_path: None,
             projector_use_gpu: None,
             media_marker: None,
@@ -608,6 +623,10 @@ mod identity_stability_tests {
             source_model_sha256: Some("d".repeat(64)),
             ..base.clone()
         };
+        let load_time_quantized = StageConfig {
+            checkpoint_quantization: Some("Q4_K_M".to_string()),
+            ..base.clone()
+        };
 
         assert_eq!(base.model_id, repacked.model_id);
         assert_ne!(
@@ -619,6 +638,29 @@ mod identity_stability_tests {
             prefix_identity(&base, 0, &tokens).page_id,
             prefix_identity(&requantized, 0, &tokens).page_id,
             "different source weights must not reuse cached pages"
+        );
+        assert_ne!(
+            prefix_identity(&base, 0, &tokens).page_id,
+            prefix_identity(&load_time_quantized, 0, &tokens).page_id,
+            "different load-time quantization must not reuse cached pages"
+        );
+    }
+
+    #[test]
+    fn absent_and_explicit_preserve_quantization_share_weight_identity() {
+        let tokens = (0..128).collect::<Vec<_>>();
+        let absent = StageConfig {
+            source_model_sha256: Some("b".repeat(64)),
+            ..config_with_topology("topology-a")
+        };
+        let explicit = StageConfig {
+            checkpoint_quantization: Some("preserve".to_string()),
+            ..absent.clone()
+        };
+
+        assert_eq!(
+            prefix_identity(&absent, 0, &tokens).page_id,
+            prefix_identity(&explicit, 0, &tokens).page_id
         );
     }
 

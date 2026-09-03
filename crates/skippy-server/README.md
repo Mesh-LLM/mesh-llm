@@ -44,9 +44,25 @@ flowchart LR
 ```
 
 Stage configs bind `stage_id`, `stage_index`, `layer_start`, `layer_end`,
-`model_path`, `upstream`, `downstream`, optional K/V cache type settings, and
-runtime settings into one loaded stage. Model execution flows through
+`model_path`, `checkpoint_quantization`, `upstream`, `downstream`, optional K/V
+cache type settings, and runtime settings into one loaded stage. Model execution flows through
 `skippy-runtime` and the staged llama.cpp ABI.
+
+For a direct Hugging Face checkpoint, point `model_path` at the local checkpoint
+directory and optionally select load-time quantization:
+
+```json
+{
+  "model_path": "/srv/models/Qwen2.5-0.5B-Instruct",
+  "checkpoint_quantization": "Q4_K_M"
+}
+```
+
+The supported values are `preserve` (the default), `F32`, `F16`, `BF16`,
+`Q4_0`, `Q4_K_S`, `Q4_K_M`, `Q5_K_M`, `Q6_K`, and `Q8_0`. The checkpoint must
+contain `config.json`, tokenizer metadata, and a single or indexed set of
+SafeTensors shards. Quantization happens as each stage-owned tensor loads; no
+intermediate model-sized GGUF is written.
 
 ## Commands
 

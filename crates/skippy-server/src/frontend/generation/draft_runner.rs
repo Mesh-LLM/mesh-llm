@@ -199,6 +199,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         include_output: true,
         mtp_source,
         filter_tensors_on_load: false,
+        checkpoint_quantization: Default::default(),
         kv_offload: config.kv_offload,
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,

@@ -40,6 +40,7 @@ impl DraftRunner {
                 include_output: true,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: true,
+                checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
                 mlock: false,
                 repack: false,
                 op_offload: None,

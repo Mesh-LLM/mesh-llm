@@ -137,6 +137,11 @@ fn write_hardware_source_profile(buffer: &mut Vec<u8>, hardware: &HardwareConfig
 
 fn write_hardware_flag_profile(buffer: &mut Vec<u8>, hardware: &HardwareConfig) {
     write_option!(buffer, "check_tensors", hardware.check_tensors);
+    write_option!(
+        buffer,
+        "checkpoint_quantization",
+        hardware.checkpoint_quantization
+    );
     write_option!(buffer, "mmap", hardware.mmap);
     write_option!(buffer, "use_mmap_prefetch", hardware.use_mmap_prefetch);
     write_option!(buffer, "use_mmap_buffer", hardware.use_mmap_buffer);

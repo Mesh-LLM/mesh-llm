@@ -69,6 +69,9 @@ pub struct StageConfig {
     pub materialized_pinned: bool,
     #[serde(default)]
     pub model_path: Option<String>,
+    /// Optional load-time quantization recipe for a SafeTensors checkpoint.
+    #[serde(default)]
+    pub checkpoint_quantization: Option<String>,
     #[serde(default)]
     pub projector_path: Option<String>,
     #[serde(default)]
