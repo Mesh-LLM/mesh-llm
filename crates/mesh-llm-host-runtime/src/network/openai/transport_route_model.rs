@@ -70,11 +70,12 @@ async fn cache_target_for_request(
         return Some(target);
     }
 
+    let lease_epoch = affinity.cache_lease_epoch();
     let selected = node
         .select_cache_target(model, prefix_hash, candidates)
         .await;
     if let Some(target) = selected.as_ref() {
-        affinity.remember_cache_lease(model, prefix_hash, target);
+        affinity.remember_cache_lease_if_epoch(model, prefix_hash, target, lease_epoch);
     }
     selected
 }
@@ -349,31 +350,33 @@ fn update_local_cache_evidence(
     if !(200..400).contains(&status_code) {
         return;
     }
-    let (Some(prefix_hash), election::InferenceTarget::Local(_), Some(cached_tokens)) = (
+    let (Some(prefix_hash), Some(cached_tokens)) = (
         context.selection.prefix_hash,
-        context.target,
         usage.and_then(|usage| usage.cached_prompt_tokens),
     ) else {
         return;
     };
     if cached_tokens > 0 {
-        let suffix = usage
-            .and_then(|usage| usage.prompt_tokens)
-            .unwrap_or(cached_tokens)
-            .saturating_sub(cached_tokens);
-        context.node.record_local_cache_hit(
-            context.model,
-            prefix_hash,
-            u32::try_from(cached_tokens).unwrap_or(u32::MAX),
-            u32::try_from(suffix).unwrap_or(u32::MAX),
-            0,
-        );
+        if matches!(context.target, election::InferenceTarget::Local(_)) {
+            let suffix = usage
+                .and_then(|usage| usage.prompt_tokens)
+                .unwrap_or(cached_tokens)
+                .saturating_sub(cached_tokens);
+            context.node.record_local_cache_hit(
+                context.model,
+                prefix_hash,
+                u32::try_from(cached_tokens).unwrap_or(u32::MAX),
+                u32::try_from(suffix).unwrap_or(u32::MAX),
+                0,
+            );
+        }
         return;
     }
 
-    let inventory_invalidated = context
-        .node
-        .invalidate_local_cache_evidence(context.model, prefix_hash);
+    let inventory_invalidated = matches!(context.target, election::InferenceTarget::Local(_))
+        && context
+            .node
+            .invalidate_local_cache_evidence(context.model, prefix_hash);
     let lease_invalidated = context
         .affinity
         .forget_cache_lease(context.model, prefix_hash);
@@ -383,7 +386,7 @@ fn update_local_cache_evidence(
             prefix_hash,
             inventory_invalidated,
             lease_invalidated,
-            "invalidated cache affinity after authoritative local miss"
+            "invalidated cache affinity after authoritative miss"
         );
     }
 }
@@ -472,9 +475,11 @@ fn record_route_model_attempt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroh::SecretKey;
 
-    async fn local_cache_context(
+    async fn cache_context(
         prefix_hash: u64,
+        target: election::InferenceTarget,
     ) -> (
         mesh::Node,
         AffinityRouter,
@@ -486,7 +491,6 @@ mod tests {
             .await
             .expect("test node");
         let affinity = AffinityRouter::with_config(true, true);
-        let target = election::InferenceTarget::Local(9337);
         let selection = TargetSelection {
             target: target.clone(),
             prefix_hash: Some(prefix_hash),
@@ -503,7 +507,8 @@ mod tests {
     #[tokio::test]
     async fn authoritative_local_miss_invalidates_inventory_and_lease() {
         let prefix_hash = 0xfeed_beef;
-        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {
@@ -537,9 +542,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authoritative_remote_miss_invalidates_lease_but_not_local_inventory() {
+        let prefix_hash = 0xfeed_beef;
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        let remote = election::InferenceTarget::Remote(SecretKey::from_bytes(&bytes).public());
+        let (node, affinity, target, selection, state) = cache_context(prefix_hash, remote).await;
+        let local = election::InferenceTarget::Local(9337);
+        node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
+        affinity.remember_cache_lease("qwen", prefix_hash, &target);
+        let context = DeliveredRouteModelContext {
+            node: &node,
+            model: "qwen",
+            target: &target,
+            selection: &selection,
+            affinity: &affinity,
+            state: &state,
+        };
+
+        update_local_cache_evidence(
+            &context,
+            200,
+            Some(&TokenUsage {
+                prompt_tokens: Some(536),
+                cached_prompt_tokens: Some(0),
+                ..TokenUsage::default()
+            }),
+        );
+
+        assert_eq!(
+            affinity.lookup_cache_lease("qwen", prefix_hash, std::slice::from_ref(&target)),
+            None
+        );
+        assert_eq!(
+            node.select_cache_target("qwen", prefix_hash, std::slice::from_ref(&local))
+                .await,
+            Some(local)
+        );
+    }
+
+    #[tokio::test]
     async fn missing_cache_usage_does_not_refute_positive_evidence() {
         let prefix_hash = 0xfeed_beef;
-        let (node, affinity, target, selection, state) = local_cache_context(prefix_hash).await;
+        let (node, affinity, target, selection, state) =
+            cache_context(prefix_hash, election::InferenceTarget::Local(9337)).await;
         node.record_local_cache_hit("qwen", prefix_hash, 512, 24, 0);
         affinity.remember_cache_lease("qwen", prefix_hash, &target);
         let context = DeliveredRouteModelContext {

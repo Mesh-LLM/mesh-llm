@@ -604,11 +604,12 @@ async fn order_mesh_target_hosts(
         prepared.cache_target = match affinity.lookup_cache_lease(name, prefix_hash, &candidates) {
             Some(target) => Some(target),
             None => {
+                let lease_epoch = affinity.cache_lease_epoch();
                 let selected = node
                     .select_cache_target(name, prefix_hash, &candidates)
                     .await;
                 if let Some(target) = selected.as_ref() {
-                    affinity.remember_cache_lease(name, prefix_hash, target);
+                    affinity.remember_cache_lease_if_epoch(name, prefix_hash, target, lease_epoch);
                 }
                 selected
             }
