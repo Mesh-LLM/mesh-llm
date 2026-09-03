@@ -1,11 +1,15 @@
+#![allow(
+    deprecated,
+    reason = "plugin API keeps legacy MCP logging for older hosts"
+)]
+
 use anyhow::Result;
 use rmcp::model::{
-    CallToolResult, CancelTaskParams, CancelTaskResult, CompleteRequestParams, CompleteResult,
-    GetPromptRequestParams, GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult,
-    GetTaskResult, GetTaskResultParams, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListTasksResult, ListToolsResult, PaginatedRequestParams,
+    CallToolResult, CancelTaskParams, CompleteRequestParams, CompleteResult,
+    GetPromptRequestParams, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResult, ServerInfo, SetLevelRequestParams,
-    SubscribeRequestParams, UnsubscribeRequestParams,
+    SubscribeRequestParams, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use std::sync::Arc;
 
@@ -474,35 +478,24 @@ impl Plugin for SimplePlugin {
         }
     }
 
-    async fn list_tasks(
+    async fn get_task(
         &mut self,
-        request: Option<PaginatedRequestParams>,
-        context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<ListTasksResult>> {
-        match &self.task_router {
-            Some(router) => router.list_tasks(request, context).await,
-            None => Ok(None),
-        }
-    }
-
-    async fn get_task_info(
-        &mut self,
-        request: GetTaskInfoParams,
+        request: GetTaskParams,
         context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<GetTaskResult>> {
         match &self.task_router {
-            Some(router) => router.get_task_info(request, context).await,
+            Some(router) => router.get_task(request, context).await,
             None => Ok(None),
         }
     }
 
-    async fn get_task_result(
+    async fn update_task(
         &mut self,
-        request: GetTaskResultParams,
+        request: UpdateTaskParams,
         context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<GetTaskPayloadResult>> {
+    ) -> PluginResult<Option<()>> {
         match &self.task_router {
-            Some(router) => router.get_task_result(request, context).await,
+            Some(router) => router.update_task(request, context).await,
             None => Ok(None),
         }
     }
@@ -511,7 +504,7 @@ impl Plugin for SimplePlugin {
         &mut self,
         request: CancelTaskParams,
         context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<CancelTaskResult>> {
+    ) -> PluginResult<Option<()>> {
         match &self.task_router {
             Some(router) => router.cancel_task(request, context).await,
             None => Ok(None),

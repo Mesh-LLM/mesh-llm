@@ -26,7 +26,7 @@ mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.76.0-rc9" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.76.0-rc9" }
 mesh-llm-system = { path = "../mesh-llm-system", version = "0.76.0-rc9", features = ["skippy-devices"] }
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.76.0-rc9" }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
 tabwriter = "1"
@@ -36,7 +36,7 @@ urlencoding = "2"
 [dev-dependencies]
 axum = "0.8"
 hex = "0.4"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 serial_test = "3"
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client" }
 serde_json = "1"

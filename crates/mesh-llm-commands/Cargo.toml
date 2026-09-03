@@ -38,7 +38,7 @@ model-hf = { path = "../model-hf", version = "0.76.0-rc9" }
 model-package = { path = "../model-package", version = "0.76.0-rc9" }
 model-ref = { path = "../model-ref", version = "0.76.0-rc9" }
 rpassword = "7.5"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 strum = { workspace = true }

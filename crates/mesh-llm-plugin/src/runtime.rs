@@ -1,11 +1,15 @@
+#![allow(
+    deprecated,
+    reason = "plugin RPC keeps legacy MCP logging for older hosts"
+)]
+
 use anyhow::{Result, bail};
 use rmcp::model::{
-    CallToolResult, CancelTaskParams, CancelTaskResult, CompleteRequestParams, CompleteResult,
-    GetPromptRequestParams, GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult,
-    GetTaskResult, GetTaskResultParams, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListTasksResult, ListToolsResult, PaginatedRequestParams,
+    CallToolResult, CancelTaskParams, CompleteRequestParams, CompleteResult,
+    GetPromptRequestParams, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResult, ServerInfo, SetLevelRequestParams,
-    SubscribeRequestParams, UnsubscribeRequestParams,
+    SubscribeRequestParams, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -333,27 +337,19 @@ pub trait Plugin: Send {
         Ok(None)
     }
 
-    async fn list_tasks(
+    async fn get_task(
         &mut self,
-        _request: Option<PaginatedRequestParams>,
-        _context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<ListTasksResult>> {
-        Ok(None)
-    }
-
-    async fn get_task_info(
-        &mut self,
-        _request: GetTaskInfoParams,
+        _request: GetTaskParams,
         _context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<GetTaskResult>> {
         Ok(None)
     }
 
-    async fn get_task_result(
+    async fn update_task(
         &mut self,
-        _request: GetTaskResultParams,
+        _request: UpdateTaskParams,
         _context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<GetTaskPayloadResult>> {
+    ) -> PluginResult<Option<()>> {
         Ok(None)
     }
 
@@ -361,7 +357,7 @@ pub trait Plugin: Send {
         &mut self,
         _request: CancelTaskParams,
         _context: &mut PluginContext<'_>,
-    ) -> PluginResult<Option<CancelTaskResult>> {
+    ) -> PluginResult<Option<()>> {
         Ok(None)
     }
 
@@ -491,7 +487,7 @@ pub trait Plugin: Send {
             "resources/subscribe" => {
                 let params: SubscribeRequestParams = parse_rpc_params(&request)?;
                 match self.subscribe_resource(params, context).await? {
-                    Some(()) => json_response(&serde_json::json!({})),
+                    Some(()) => json_response(&()),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'resources/subscribe'",
                     )),
@@ -500,7 +496,7 @@ pub trait Plugin: Send {
             "resources/unsubscribe" => {
                 let params: UnsubscribeRequestParams = parse_rpc_params(&request)?;
                 match self.unsubscribe_resource(params, context).await? {
-                    Some(()) => json_response(&serde_json::json!({})),
+                    Some(()) => json_response(&()),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'resources/unsubscribe'",
                     )),
@@ -524,37 +520,28 @@ pub trait Plugin: Send {
                     )),
                 }
             }
-            "tasks/list" => {
-                let params: Option<PaginatedRequestParams> = parse_rpc_params(&request)?;
-                match self.list_tasks(params, context).await? {
-                    Some(result) => json_response(&result),
-                    None => Err(PluginError::method_not_found(
-                        "Unsupported MCP method 'tasks/list'",
-                    )),
-                }
-            }
             "tasks/get" => {
-                let params: GetTaskInfoParams = parse_rpc_params(&request)?;
-                match self.get_task_info(params, context).await? {
+                let params: GetTaskParams = parse_rpc_params(&request)?;
+                match self.get_task(params, context).await? {
                     Some(result) => json_response(&result),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'tasks/get'",
                     )),
                 }
             }
-            "tasks/result" => {
-                let params: GetTaskResultParams = parse_rpc_params(&request)?;
-                match self.get_task_result(params, context).await? {
-                    Some(result) => json_response(&result),
+            "tasks/update" => {
+                let params: UpdateTaskParams = parse_rpc_params(&request)?;
+                match self.update_task(params, context).await? {
+                    Some(()) => json_response(&serde_json::json!({})),
                     None => Err(PluginError::method_not_found(
-                        "Unsupported MCP method 'tasks/result'",
+                        "Unsupported MCP method 'tasks/update'",
                     )),
                 }
             }
             "tasks/cancel" => {
                 let params: CancelTaskParams = parse_rpc_params(&request)?;
                 match self.cancel_task(params, context).await? {
-                    Some(result) => json_response(&result),
+                    Some(()) => json_response(&serde_json::json!({})),
                     None => Err(PluginError::method_not_found(
                         "Unsupported MCP method 'tasks/cancel'",
                     )),
@@ -1203,9 +1190,7 @@ mod tests {
     use super::*;
     use crate::{mcp, plugin, plugin_server_info};
     use crate::{read_envelope, write_envelope};
-    use rmcp::model::{
-        ArgumentInfo, PromptMessage, PromptMessageContent, PromptMessageRole, Reference,
-    };
+    use rmcp::model::{ArgumentInfo, ContentBlock, PromptMessage, Reference, Role};
     use serde_json::json;
     use tokio::sync::{Barrier, Notify};
     use tokio::time::{Duration, timeout};
@@ -1264,8 +1249,8 @@ mod tests {
                     .description("Brief")
                     .handle(|request, _context| Box::pin(async move {
                         Ok(crate::get_prompt_result(vec![PromptMessage::new(
-                            PromptMessageRole::User,
-                            PromptMessageContent::text(format!("brief:{}", request.name)),
+                            Role::User,
+                            ContentBlock::text(format!("brief:{}", request.name)),
                         )]))
                     })),
                 mcp::completion("prompt.brief.topic")
@@ -1336,10 +1321,7 @@ mod tests {
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&CompleteRequestParams::new(
                         Reference::for_prompt("brief"),
-                        ArgumentInfo {
-                            name: "topic".into(),
-                            value: "a".into(),
-                        },
+                        ArgumentInfo::new("topic", "a"),
                     ))
                     .unwrap(),
                 },

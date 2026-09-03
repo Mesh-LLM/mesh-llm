@@ -20,7 +20,7 @@ mesh-llm-gpu-bench = { path = "../mesh-llm-gpu-bench", version = "0.76.0-rc9"  }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.76.0-rc9" }
 mesh-llm-release-footer.workspace = true
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.0-rc9" }
-reqwest = { version = "0.12", features = ["stream", "json"] }
+reqwest = { version = "0.13", features = ["stream", "json"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
