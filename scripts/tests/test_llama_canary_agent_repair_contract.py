@@ -62,6 +62,45 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertLess(wrapper.index("draft_pr_body()"), first_certify)
         self.assertNotIn("write_pr_body", wrapper)
 
+    def test_repair_branch_selects_the_certified_upstream_through_checked_in_pin(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        # The deterministic wrapper, not an agent turn, owns the repository
+        # selector. The sole pin must select the exact 40-hex target before a
+        # repair is published or certified.
+        self.assertIn("write_repair_pin() {", wrapper)
+        self.assertIn('scripts/update-llama-pin.sh "$UPSTREAM_SHA"', wrapper)
+        self.assertIn("verify_repair_pin() {", wrapper)
+        self.assertIn('pin="$(tr -d \'[:space:]\' < "$PIN_FILE")"', wrapper)
+        self.assertIn('[[ "$pin" != "$UPSTREAM_SHA" ]]', wrapper)
+        self.assertNotIn("PIN_MIRROR_FILE", wrapper)
+
+        # Certification must exercise the same path normal builds use and
+        # bind the prepared checkout stamp back to the requested target.
+        self.assertIn("prepare_repair_target() {", wrapper)
+        self.assertIn("write_repair_pin || return 1", wrapper)
+        self.assertIn("verify_repair_pin || return 1", wrapper)
+        self.assertIn("scripts/prepare-llama.sh pinned || return 1", wrapper)
+        self.assertIn('prepared_upstream="$(tr -d \'[:space:]\' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"', wrapper)
+        self.assertIn('[[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]', wrapper)
+        self.assertIn("  prepare_repair_target || return 1\n  arch -arm64", wrapper)
+
+        # Both entry modes establish the pinned target before the first
+        # publish_work_in_progress call can create or update the repair PR.
+        mode_start = wrapper.index(
+            'if [[ "$MODE" == "patch-queue" ]]',
+            wrapper.index("publish_work_in_progress()"),
+        )
+        mode_flow = wrapper[mode_start:]
+        patch_queue_branch, battery_and_shared = mode_flow.split("\nelse\n", 1)
+        battery_branch = battery_and_shared.split(
+            "\nfi\n\n# Publish the agent's repair work", 1
+        )[0]
+        for branch in (patch_queue_branch, battery_branch):
+            self.assertLess(
+                branch.index("if ! prepare_repair_target; then"),
+                branch.index("\n    publish_work_in_progress\n"),
+            )
+
     def test_post_green_review_may_modify_the_certified_repair(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
         # Even a green, certified repair gets one fresh-context review turn:
