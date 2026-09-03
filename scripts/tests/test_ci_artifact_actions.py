@@ -1753,6 +1753,13 @@ class CiArtifactActionTests(unittest.TestCase):
             "if: ${{ inputs.sdk_kind == 'rust' }}",
             consumer_workflow,
         )
+        self.assertNotIn("pnpm/action-setup@", consumer_workflow)
+        self.assertNotIn("actions/setup-node@", consumer_workflow)
+        self.assertIn(
+            'LEGACY_PNPM_STORE="$(pnpm store path --silent)"',
+            consumer_script,
+        )
+        self.assertIn('mkdir -p "$LEGACY_PNPM_STORE"', consumer_script)
 
         for forbidden in (
             "cargo ",

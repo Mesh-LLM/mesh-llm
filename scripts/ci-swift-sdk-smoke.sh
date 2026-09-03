@@ -15,6 +15,22 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+# Pull requests execute the protected default-branch workflow definition. Until
+# the workflow change that removes Swift's unused setup-node pnpm cache reaches
+# main, its post-job hook still requires the computed store directory to exist.
+# Creating the empty directory keeps that legacy cleanup hook from turning a
+# successful Swift smoke into a failure; current workflows do not install pnpm
+# for this job, so the guard becomes a no-op after the workflow update lands.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && command -v pnpm >/dev/null 2>&1; then
+    LEGACY_PNPM_STORE="$(pnpm store path --silent)"
+    if [[ -z "$LEGACY_PNPM_STORE" ]]; then
+        echo "pnpm returned an empty store path" >&2
+        exit 1
+    fi
+    mkdir -p "$LEGACY_PNPM_STORE"
+fi
+
 SWIFT_INPUT_ARCHIVE="$4"
 SWIFT_INPUT_MODE="$5"
 SWIFT_INPUT_BINDING="$6"

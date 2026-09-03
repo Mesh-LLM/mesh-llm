@@ -297,6 +297,9 @@ runtime producers are not duplicated.
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
+The Swift SDK smoke consumes the lane's immutable UI distribution with
+`--skip-build`; it does not install Node or pnpm and owns no package-manager
+cache.
 
 ## Fan-out and timing controls
 
