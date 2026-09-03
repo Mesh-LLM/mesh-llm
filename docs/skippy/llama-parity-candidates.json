@@ -242,7 +242,7 @@
       "status": "certified",
       "repo": "bartowski/Phi-3.5-MoE-instruct-GGUF",
       "include": "Phi-3.5-MoE-instruct-Q4_K_M.gguf",
-      "notes": "text lane passed in llama-parity-phimoe-runtime-slice-2 after adding PhiMoE to the runtime-slice ABI allowlist; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed"
+      "notes": "text lane passed in llama-parity-phimoe-runtime-slice-2 after adding PhiMoE staged-graph support; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed"
     },
     {
       "llama_model": "gemma",
@@ -363,7 +363,7 @@
       "status": "certified",
       "repo": "mradermacher/tiny-random-granite-moe-GGUF",
       "include": "tiny-random-granite-moe.Q4_K_M.gguf",
-      "notes": "text lane passed in llama-parity-granite-moe-runtime-slice-2 after adding Granite-MoE to the skippy ABI allowlist; tiny random GGUF certifies graph/tensor layout only, so replace with a real small artifact when available"
+      "notes": "text lane passed in llama-parity-granite-moe-runtime-slice-2 after adding Granite-MoE staged-graph support; tiny random GGUF certifies graph/tensor layout only, so replace with a real small artifact when available"
     },
     {
       "llama_model": "gptneox",
@@ -740,7 +740,7 @@
         "DeepSeek-OCR-Q8_0.gguf",
         "mmproj-DeepSeek-OCR-Q8_0.gguf"
       ],
-      "notes": "OCR multimodal/MLA family; text split, chain, dtype matrix, ResidentKv handoff, and split multimodal serving passed on ggml-org/DeepSeek-OCR-GGUF:Q8_0 plus mmproj-DeepSeek-OCR-Q8_0.gguf after adding runtime-slice ABI allowlist coverage and media activation position sideband forwarding; q8 activation wire rejected, default f16 is the support target"
+      "notes": "OCR multimodal/MLA family; text split, chain, dtype matrix, ResidentKv handoff, and split multimodal serving passed on ggml-org/DeepSeek-OCR-GGUF:Q8_0 plus mmproj-DeepSeek-OCR-Q8_0.gguf after adding staged-graph support and media activation position sideband forwarding; q8 activation wire rejected, default f16 is the support target"
     },
     {
       "llama_model": "delta-net-base",

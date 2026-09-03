@@ -3,6 +3,7 @@ use crate::dynamic;
 #[cfg(not(feature = "dynamic-runtime"))]
 use crate::static_bindings;
 
+use crate::Opaque;
 #[cfg(not(feature = "dynamic-runtime"))]
 use crate::{SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
 
@@ -75,6 +76,66 @@ pub fn try_abi_features() -> Option<u64> {
 #[cfg(feature = "dynamic-runtime")]
 pub fn abi_features() -> u64 {
     skippy_abi_features()
+}
+
+/// Reports whether the loaded model uses recurrent state when the native
+/// runtime exposes the corresponding llama.cpp capability probe.
+///
+/// `None` is the fail-closed result for an older compatible runtime that does
+/// not export this optional upstream symbol.
+///
+/// # Safety
+///
+/// `model` must be a valid llama.cpp model pointer owned by the loaded runtime.
+pub unsafe fn llama_model_is_recurrent(model: *const Opaque) -> Option<bool> {
+    #[cfg(feature = "dynamic-runtime")]
+    {
+        dynamic::llama_model_is_recurrent_fn().map(|probe| unsafe { probe(model) })
+    }
+    #[cfg(not(feature = "dynamic-runtime"))]
+    {
+        Some(unsafe { static_bindings::llama_model_is_recurrent(model) })
+    }
+}
+
+/// Reports whether the loaded model uses hybrid state when the native runtime
+/// exposes the corresponding llama.cpp capability probe.
+///
+/// `None` is the fail-closed result for an older compatible runtime that does
+/// not export this optional upstream symbol.
+///
+/// # Safety
+///
+/// `model` must be a valid llama.cpp model pointer owned by the loaded runtime.
+pub unsafe fn llama_model_is_hybrid(model: *const Opaque) -> Option<bool> {
+    #[cfg(feature = "dynamic-runtime")]
+    {
+        dynamic::llama_model_is_hybrid_fn().map(|probe| unsafe { probe(model) })
+    }
+    #[cfg(not(feature = "dynamic-runtime"))]
+    {
+        Some(unsafe { static_bindings::llama_model_is_hybrid(model) })
+    }
+}
+
+/// Reports whether the loaded model is diffusion-based when the native runtime
+/// exposes the corresponding llama.cpp capability probe.
+///
+/// `None` is the fail-closed result for an older compatible runtime that does
+/// not export this optional upstream symbol.
+///
+/// # Safety
+///
+/// `model` must be a valid llama.cpp model pointer owned by the loaded runtime.
+pub unsafe fn llama_model_is_diffusion(model: *const Opaque) -> Option<bool> {
+    #[cfg(feature = "dynamic-runtime")]
+    {
+        dynamic::llama_model_is_diffusion_fn().map(|probe| unsafe { probe(model) })
+    }
+    #[cfg(not(feature = "dynamic-runtime"))]
+    {
+        Some(unsafe { static_bindings::llama_model_is_diffusion(model) })
+    }
 }
 
 /// Returns the statically linked Skippy ABI feature bitmask.

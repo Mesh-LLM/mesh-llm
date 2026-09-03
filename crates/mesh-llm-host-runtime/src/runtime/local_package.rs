@@ -64,14 +64,12 @@ pub(super) async fn split_runtime_compact_meta(
 pub(super) fn split_runtime_kv_bytes_per_token(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
-    model_ref: &str,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> Result<u64> {
     let kv_cache_quant = split_effective_kv_cache_quant(
         package,
         compact_meta,
-        model_ref,
         cache_type_k_override,
         cache_type_v_override,
     );
@@ -89,7 +87,6 @@ pub(super) fn split_runtime_kv_bytes_per_token(
 pub(super) fn split_effective_kv_cache_quant(
     package: &skippy::SkippyPackageIdentity,
     compact_meta: &models::gguf::GgufCompactMeta,
-    model_ref: &str,
     cache_type_k_override: Option<&str>,
     cache_type_v_override: Option<&str>,
 ) -> models::gguf::GgufKvCacheQuant {
@@ -103,7 +100,7 @@ pub(super) fn split_effective_kv_cache_quant(
     // load must fail loudly.
     let size_policy = skippy::KvCachePolicy::for_model_size(package.source_model_bytes)
         .guarded_for_model(Some(compact_meta));
-    let family_default = skippy::family_policy_for_compact_meta(compact_meta, Some(model_ref))
+    let family_default = skippy::family_policy_for_compact_meta(compact_meta)
         .default_kv_cache_type
         .and_then(|default| models::gguf::GgufKvCacheQuant::from_llama_args(default, default))
         .map(|quant| compact_meta.compatible_default_kv_cache_quant(quant))
@@ -832,7 +829,7 @@ pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> S
         hasher.update([u8::from(participant.5)]);
         hasher.update(participant.6.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
@@ -845,7 +842,7 @@ pub(super) fn split_topology_hash(stages: &[RuntimeSliceStagePlan]) -> String {
         hasher.update(stage.layer_end.to_le_bytes());
         hasher.update(stage.parameter_bytes.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub(super) fn split_node_labels(nodes: &[iroh::EndpointId]) -> Vec<String> {

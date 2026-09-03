@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn kv_identities_use_one_full_radix_path() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("cache enabled");
         let tokens = (0..160).collect::<Vec<_>>();
@@ -271,7 +271,7 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("cache enabled");
         let base = test_base();
@@ -316,9 +316,10 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+                .unwrap()
+                .expect("cache enabled");
         let base = test_base();
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
         let recorded = kv.prefill_identity(&config, &base, 0, &recorded_tokens);
@@ -364,9 +365,10 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+                .unwrap()
+                .expect("cache enabled");
 
         assert!(
             kv.exact_shared_checkpoint_identity(&config, &test_base(), 0, &[1])

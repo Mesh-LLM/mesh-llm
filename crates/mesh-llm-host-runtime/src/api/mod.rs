@@ -621,7 +621,8 @@ impl MeshApi {
                     "layer_end": status.layer_end,
                     "state": runtime_stage_state_label(status.state),
                     "bind_addr": status.bind_addr.clone(),
-                    "activation_width": status.activation_width,
+                    "input_activation_boundary": status.input_activation_boundary,
+                    "output_activation_boundary": status.output_activation_boundary,
                     "selected_device": status.selected_device.as_ref().map(|device| {
                         serde_json::json!({
                             "backend_device": device.backend_device,

@@ -113,8 +113,9 @@ Privacy and compatibility boundaries:
   paths, cache roots, or tokens.
 - Mesh owns only the subprotocol open envelope; Skippy owns the artifact
   request/response schema, authorization semantics, and byte framing.
-- Peer cache transfer uses the mesh `STREAM_SUBPROTOCOL` envelope. Generation-3
-  Skippy stage peers are a compatibility break, so older chained-reply
+- Peer cache transfer uses the mesh `STREAM_SUBPROTOCOL` envelope. Generation-7
+  Skippy stage peers require the complete control/status/content-identity
+  capability bundle, so older or partially capable
   subprotocol peers are not mixed into new split topologies.
 - Only `hf://namespace/repo@revision` package refs are eligible for peer
   transfer.
@@ -255,7 +256,7 @@ Required top-level fields:
 | `source_model` | MUST identify the source artifact used to build the package. |
 | `format` | MUST be `layer-package`. |
 | `layer_count` | MUST match the source model's transformer layer count. |
-| `activation_width` | SHOULD be present; routing and topology planning rely on it. |
+| `activation_width` | SHOULD be present as a scalar pre-load estimate for topology diagnostics. It is not an activation-frame contract, and reviewed family data takes precedence. |
 | `generation` | MAY declare package-owned generation defaults, including native speculative decoding strategies. |
 | `shared` | MUST include `metadata`, `embeddings`, and `output` artifacts. |
 | `layers` | MUST include exactly one entry for each layer index `0..layer_count`. |

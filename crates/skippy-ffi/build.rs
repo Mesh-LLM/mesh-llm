@@ -323,8 +323,8 @@ fn ensure_static_native_ready(
         );
     }
 
-    println!(
-        "cargo:warning=building patched llama.cpp ABI for mesh-llm SDK ({backend}) at {}",
+    eprintln!(
+        "building patched llama.cpp ABI for mesh-llm SDK ({backend}) at {}",
         build_dir.display()
     );
     run_native_script(

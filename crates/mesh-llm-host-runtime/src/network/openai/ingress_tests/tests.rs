@@ -535,6 +535,7 @@ fn plugin_route_success_records_one_attempt_and_one_terminal_outcome() {
         super::super::response::RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         },
     );
     assert!(matches!(

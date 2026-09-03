@@ -1210,7 +1210,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "actions/download-artifact@"
-            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
             consumer_workflow,
         )
         self.assertIn(
@@ -1745,7 +1745,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "actions/download-artifact@"
-            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
             consumer_workflow,
         )
         self.assertIn("persist-credentials: false", consumer_workflow)
@@ -1753,6 +1753,13 @@ class CiArtifactActionTests(unittest.TestCase):
             "if: ${{ inputs.sdk_kind == 'rust' }}",
             consumer_workflow,
         )
+        self.assertNotIn("pnpm/action-setup@", consumer_workflow)
+        self.assertNotIn("actions/setup-node@", consumer_workflow)
+        self.assertIn(
+            'LEGACY_PNPM_STORE="$(pnpm store path --silent)"',
+            consumer_script,
+        )
+        self.assertIn('mkdir -p "$LEGACY_PNPM_STORE"', consumer_script)
 
         for forbidden in (
             "cargo ",

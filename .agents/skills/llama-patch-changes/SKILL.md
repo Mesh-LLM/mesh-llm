@@ -13,8 +13,6 @@ that prepare or consume patched llama.cpp.
 
 - Keep durable llama-side changes in `third_party/llama.cpp/patches/*.patch`.
 - Keep the upstream pin in `third_party/llama.cpp/upstream.txt`.
-- Keep `LLAMA_CPP_SHA` as a compatibility mirror of `upstream.txt` while this
-  repository still has legacy readers.
 - Do not add a submodule, vendor a llama checkout, or depend on the old
   Mesh-LLM llama.cpp fork.
 - Do not treat edits in `.deps/llama.cpp` as durable until the patch queue has
@@ -136,12 +134,11 @@ just build
 cargo test -p mesh-llm --lib
 ```
 
-If the queue applies and validation passes, update both pin files:
+If the queue applies and validation passes, update the upstream pin:
 
 ```bash
 cp third_party/llama.cpp/upstream.txt /tmp/old-llama-upstream.txt
 git -C .deps/llama.cpp rev-parse "$(cat .deps/llama.cpp/.git/mesh-llm-upstream-sha)" > third_party/llama.cpp/upstream.txt
-cp third_party/llama.cpp/upstream.txt LLAMA_CPP_SHA
 ```
 
 Commit the pin update with any patch refreshes.

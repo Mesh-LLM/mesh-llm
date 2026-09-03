@@ -1,21 +1,23 @@
-From ce95c713e0b881339653b4893458ada67c25d7dd Mon Sep 17 00:00:00 2001
+From 955040775049a693f532142ea8e1291bc4f8c402 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 29 Aug 2026 01:31:34 -0700
 Subject: [PATCH] skippy: account retained tensors during staged loads
 
 ---
- src/CMakeLists.txt                            |  46 +++
+ src/CMakeLists.txt                            |  46 ++++
  src/llama-model-loader.cpp                    |  43 ++-
- tests/CMakeLists.txt                          |  16 +
- tests/test-skippy-model-loader-accounting.cpp | 286 ++++++++++++++++++
- 4 files changed, 379 insertions(+), 12 deletions(-)
+ tests/CMakeLists.txt                          |  16 ++
+ tests/test-skippy-model-loader-accounting.cpp | 260 ++++++++++++++++++
+ 4 files changed, 353 insertions(+), 12 deletions(-)
  create mode 100644 tests/test-skippy-model-loader-accounting.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index b59528d62..981f24b1a 100644
+index 894741717..f25a38e24 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -91,2 +91,48 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -89,6 +89,52 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_test(
+         NAME skippy_hardware_application_probe
          COMMAND skippy-hardware-application-probe)
 +
 +    set(SKIPPY_MODEL_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/skippy/test-models")
@@ -64,35 +66,55 @@ index b59528d62..981f24b1a 100644
 +    set_tests_properties(skippy_model_loader_accounting_moe PROPERTIES
 +        FIXTURES_REQUIRED skippy-model-loader-fixtures)
  endif()
+ 
+ if (BUILD_SHARED_LIBS)
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index b831fa385..bde67cf23 100644
+index 8ade72322..2d4993f3e 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -11,2 +11,3 @@
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ #include <array>
  #include <cinttypes>
 +#include <cmath>
  #include <cstdint>
-@@ -1313,3 +1314,2 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+ #include <cstring>
+ #include <future>
+@@ -1270,7 +1271,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+                         nbytes);
+ 
                  if (requested_tensor_exists && first_filtered_request) {
 -                    size_data -= nbytes;
                      if (!(flags & TENSOR_DUPLICATED)) {
-@@ -1364,3 +1364,2 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+                         n_created++;
+                     }
+@@ -1321,7 +1321,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+             const size_t nbytes = ggml_nbytes(t_meta);
+             LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tn.str().c_str(), nbytes);
  
 -            size_data -= nbytes;
              n_created++;
-@@ -1570,4 +1569,2 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+ 
+             return nullptr;
+@@ -1530,14 +1529,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+         }
+     }
  
 -    const bool duplicated = flags & TENSOR_DUPLICATED;
 -
      struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
-@@ -1575,5 +1572,3 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+     ggml_set_name(tensor, ggml_get_name(&t_meta));
  
 -    if (duplicated) {
 -        size_data += ggml_nbytes(&t_meta);
 -    } else {
 +    if (!(flags & TENSOR_DUPLICATED)) {
          n_created++;
-@@ -1635,5 +1630,24 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+     }
+ 
+@@ -1595,9 +1590,28 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+         }
+     }
  
 -    // compute the total size of all tensors for progress reporting
 -    for (const auto & it : weights_map) {
@@ -120,11 +142,19 @@ index b831fa385..bde67cf23 100644
 +            size_data += ggml_nbytes(weight.tensor);
 +        }
      }
-@@ -1698,2 +1712,3 @@ bool llama_model_loader::load_all_data(
+ }
+ 
+@@ -1658,6 +1672,7 @@ bool llama_model_loader::load_all_data(
+         return true;
+     }
      GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 +    const size_t size_done_before = size_done;
  
-@@ -1808,3 +1823,6 @@ bool llama_model_loader::load_all_data(
+     std::vector<no_init<uint8_t>> read_buf;
+     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
+@@ -1768,7 +1783,10 @@ bool llama_model_loader::load_all_data(
+         }
+ 
          if (progress_callback) {
 -            if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
 +            const float progress = std::min(
@@ -132,20 +162,32 @@ index b831fa385..bde67cf23 100644
 +                    std::nextafter(1.0f, 0.0f));
 +            if (!progress_callback(progress, progress_callback_user_data)) {
                  return false;
-@@ -1925,2 +1943,3 @@ bool llama_model_loader::load_all_data(
+             }
+         }
+@@ -1881,6 +1899,7 @@ bool llama_model_loader::load_all_data(
+         }
+ 
          size_done += n_size;
 +        GGML_ASSERT(size_done <= size_data);
      }
-@@ -1951,3 +1970,3 @@ bool llama_model_loader::load_all_data(
+ 
+     // free temporary resources used for async uploads
+@@ -1907,7 +1926,7 @@ bool llama_model_loader::load_all_data(
+     }
+ 
      // check if this is the last call and do final cleanup
 -    if (size_done >= size_data) {
 +    if (size_done_before < size_data && size_done == size_data) {
          // unmap offloaded tensors and metadata
+         if (use_mmap) {
+             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 index 376e9b09f..ed156f339 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -219,2 +219,18 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -217,6 +217,22 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+         FIXTURES_SETUP generate-models
+     )
  
 +    llama_build_and_test(
 +        test-skippy-model-loader-accounting.cpp
@@ -164,12 +206,14 @@ index 376e9b09f..ed156f339 100644
 +    set_tests_properties(test-skippy-model-loader-accounting-moe PROPERTIES FIXTURES_REQUIRED generate-models)
 +
      llama_test(
+         test-recurrent-state-rollback
+         LABEL main
 diff --git a/tests/test-skippy-model-loader-accounting.cpp b/tests/test-skippy-model-loader-accounting.cpp
 new file mode 100644
-index 000000000..e629d555e
+index 000000000..c8ad5f1b2
 --- /dev/null
 +++ b/tests/test-skippy-model-loader-accounting.cpp
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,260 @@
 +#include "llama.h"
 +#include "llama-model-loader.h"
 +
@@ -236,8 +280,8 @@ index 000000000..e629d555e
 +            nullptr);
 +}
 +
-+static ggml_context_ptr make_accounting_context(const ggml_tensor * weight, bool include_synthetic) {
-+    const size_t tensor_count = include_synthetic ? 2 : 1;
++static ggml_context_ptr make_accounting_context(const ggml_tensor * weight) {
++    const size_t tensor_count = 2;
 +    ggml_init_params params = {
 +        /*.mem_size   =*/ tensor_count * ggml_tensor_overhead(),
 +        /*.mem_buffer =*/ nullptr,
@@ -250,10 +294,8 @@ index 000000000..e629d555e
 +
 +    ggml_tensor * duplicate = ggml_dup_tensor(ctx.get(), weight);
 +    ggml_set_name(duplicate, ggml_get_name(weight));
-+    if (include_synthetic) {
-+        ggml_tensor * synthetic = ggml_dup_tensor(ctx.get(), weight);
-+        ggml_set_name(synthetic, "skippy.synthetic");
-+    }
++    ggml_tensor * tied = ggml_dup_tensor(ctx.get(), weight);
++    ggml_set_name(tied, ggml_get_name(weight));
 +    return ctx;
 +}
 +
@@ -289,20 +331,17 @@ index 000000000..e629d555e
 +    }
 +
 +    const ggml_tensor * weight = loader.weights_map.begin()->second.tensor;
-+    ggml_context_ptr primary_ctx = make_accounting_context(weight, false);
-+    ggml_context_ptr secondary_ctx = make_accounting_context(weight, true);
++    ggml_context_ptr accounting_ctx = make_accounting_context(weight);
 +    ggml_context_ptr synthetic_ctx = make_synthetic_context(weight);
-+    if (primary_ctx == nullptr || secondary_ctx == nullptr || synthetic_ctx == nullptr) {
++    if (accounting_ctx == nullptr || synthetic_ctx == nullptr) {
 +        std::fprintf(stderr, "failed to allocate accounting contexts\n");
 +        return false;
 +    }
 +
-+    ggml_context * primary_ctx_raw = primary_ctx.get();
-+    ggml_context * secondary_ctx_raw = secondary_ctx.get();
++    ggml_context * accounting_ctx_raw = accounting_ctx.get();
 +    ggml_context * synthetic_ctx_raw = synthetic_ctx.get();
 +    const auto cpu_buft = ggml_backend_cpu_buffer_type();
-+    loader.ctx_map.emplace(llama_model_loader::ctx_key { cpu_buft, false }, std::move(primary_ctx));
-+    loader.ctx_map.emplace(llama_model_loader::ctx_key { cpu_buft, true }, std::move(secondary_ctx));
++    loader.ctx_map.emplace(cpu_buft, std::move(accounting_ctx));
 +    loader.init_mappings(false);
 +
 +    const size_t weight_size = ggml_nbytes(weight);
@@ -316,50 +355,29 @@ index 000000000..e629d555e
 +        return false;
 +    }
 +
-+    ggml_backend_buffer_ptr primary_buffer {
-+        ggml_backend_alloc_ctx_tensors_from_buft(primary_ctx_raw, cpu_buft)
-+    };
-+    ggml_backend_buffer_ptr secondary_buffer {
-+        ggml_backend_alloc_ctx_tensors_from_buft(secondary_ctx_raw, cpu_buft)
++    ggml_backend_buffer_ptr accounting_buffer {
++        ggml_backend_alloc_ctx_tensors_from_buft(accounting_ctx_raw, cpu_buft)
 +    };
 +    ggml_backend_buffer_ptr synthetic_buffer {
 +        ggml_backend_alloc_ctx_tensors_from_buft(synthetic_ctx_raw, cpu_buft)
 +    };
-+    if (primary_buffer == nullptr || secondary_buffer == nullptr || synthetic_buffer == nullptr) {
++    if (accounting_buffer == nullptr || synthetic_buffer == nullptr) {
 +        std::fprintf(stderr, "failed to allocate CPU accounting buffers\n");
 +        return false;
 +    }
 +
-+    llama_buf_map primary_buffers = make_buffer_map(loader, primary_buffer.get());
-+    llama_buf_map secondary_buffers = make_buffer_map(loader, secondary_buffer.get());
++    llama_buf_map accounting_buffers = make_buffer_map(loader, accounting_buffer.get());
 +    llama_buf_map synthetic_buffers = make_buffer_map(loader, synthetic_buffer.get());
 +    progress_state progress;
 +
-+    if (!loader.load_all_data(primary_ctx_raw, primary_buffers, nullptr, observe_progress, &progress)) {
-+        std::fprintf(stderr, "first context load was cancelled\n");
-+        return false;
-+    }
-+    if (loader.size_done != weight_size || loader.size_done >= loader.size_data) {
-+        std::fprintf(
-+                stderr,
-+                "first context completed early: loaded %zu of %zu bytes\n",
-+                loader.size_done,
-+                loader.size_data);
-+        return false;
-+    }
-+    if (progress.completion_count != 0 || progress.last >= 1.0f) {
-+        std::fprintf(stderr, "first context triggered final cleanup\n");
-+        return false;
-+    }
-+
-+    if (!loader.load_all_data(secondary_ctx_raw, secondary_buffers, nullptr, observe_progress, &progress)) {
-+        std::fprintf(stderr, "second context load was cancelled\n");
++    if (!loader.load_all_data(accounting_ctx_raw, accounting_buffers, nullptr, observe_progress, &progress)) {
++        std::fprintf(stderr, "accounting context load was cancelled\n");
 +        return false;
 +    }
 +    if (loader.size_done != loader.size_data) {
 +        std::fprintf(
 +                stderr,
-+                "final context did not complete accounting: loaded %zu of %zu bytes\n",
++                "accounting context did not complete: loaded %zu of %zu bytes\n",
 +                loader.size_done,
 +                loader.size_data);
 +        return false;
@@ -373,7 +391,7 @@ index 000000000..e629d555e
 +    // it again, so a single completion proves that cleanup ran exactly once.
 +    if (!progress.bounded || !progress.monotonic || progress.completion_count != 1 ||
 +            progress.progressed_after_completion) {
-+        std::fprintf(stderr, "two-context progress lifecycle was invalid\n");
++        std::fprintf(stderr, "tied-weight progress lifecycle was invalid\n");
 +        return false;
 +    }
 +    return true;
@@ -456,3 +474,6 @@ index 000000000..e629d555e
 +
 +    return EXIT_SUCCESS;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

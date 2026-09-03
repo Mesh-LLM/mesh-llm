@@ -52,7 +52,6 @@ pub struct LayerPackageInfo {
     pub source_model_sha256: String,
     pub source_model_bytes: Option<u64>,
     pub layer_count: u32,
-    pub activation_width: Option<u32>,
     pub generation: Option<PackageGenerationInfo>,
     pub projectors: Vec<PackageProjectorInfo>,
     pub layers: Vec<LayerPackageLayerInfo>,
@@ -187,8 +186,6 @@ struct PackageManifest {
     source_model: PackageSourceModel,
     format: String,
     layer_count: u32,
-    #[serde(default)]
-    activation_width: Option<u32>,
     #[serde(default)]
     generation: Option<PackageGeneration>,
     shared: PackageShared,
@@ -558,11 +555,6 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let activation_width = match manifest.activation_width {
-        Some(width) => Some(width),
-        None => infer_activation_width_from_layers(&package_dir, &manifest.layers)?,
-    };
-
     Ok(LayerPackageInfo {
         package_dir,
         manifest_sha256,
@@ -584,7 +576,6 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             })
             .flatten(),
         layer_count: manifest.layer_count,
-        activation_width,
         generation: manifest.generation.map(package_generation_info),
         projectors,
         layers: manifest
@@ -665,73 +656,6 @@ fn package_speculative_strategy_info(
                 max_tokens: policy.max_tokens,
             }),
     }
-}
-
-fn infer_activation_width_from_layers(
-    package_dir: &Path,
-    layers: &[PackageLayer],
-) -> Result<Option<u32>> {
-    let Some(layer) = layers.first() else {
-        return Ok(None);
-    };
-    let layer_path = package_dir.join(safe_relative_manifest_path(&layer.path)?);
-    if !layer_path.is_file() {
-        return Ok(None);
-    }
-    let info = match crate::ModelInfo::open(&layer_path) {
-        Ok(info) => info,
-        Err(_) => return Ok(None),
-    };
-    let count = match info.tensor_count() {
-        Ok(count) => count,
-        Err(_) => return Ok(None),
-    };
-    let mut names = Vec::with_capacity(count);
-    for i in 0..count {
-        let Ok(tensor) = info.tensor_at(i) else {
-            continue;
-        };
-        names.push((tensor.name, tensor.element_count));
-    }
-
-    match select_activation_width_tensor(&names) {
-        Some((name, element_count)) => Ok(Some(activation_width_from_tensor_count(
-            name,
-            &layer_path,
-            element_count,
-        )?)),
-        None => Ok(None),
-    }
-}
-
-/// Pick the per-layer norm whose element count equals the stage boundary width.
-///
-/// Order matters. A hyper-connected architecture (qwen4exp) has no plain
-/// `attn_norm`; its per-layer norm is `hc_attn_norm`, whose element count is
-/// already the wide `hc * n_embd` boundary width. Match that name explicitly
-/// instead of relying on a substring test happening to also match it, and
-/// require an exact suffix for the plain case so a future `*_attn_norm.weight`
-/// tensor cannot silently take over this inference.
-fn select_activation_width_tensor(names: &[(String, u64)]) -> Option<(&str, u64)> {
-    for suffix in [".hc_attn_norm.weight", ".attn_norm.weight"] {
-        if let Some((name, element_count)) = names.iter().find(|(name, _)| name.ends_with(suffix)) {
-            return Some((name.as_str(), *element_count));
-        }
-    }
-    None
-}
-
-fn activation_width_from_tensor_count(
-    name: &str,
-    layer_path: &Path,
-    element_count: u64,
-) -> Result<u32> {
-    u32::try_from(element_count).with_context(|| {
-        format!(
-            "activation width tensor {name} in {} has {element_count} elements, which exceeds u32::MAX",
-            layer_path.display()
-        )
-    })
 }
 
 pub fn is_hf_package_ref(value: &str) -> bool {
@@ -1353,7 +1277,6 @@ mod tests {
             },
             "format": "layer-package",
             "layer_count": 1,
-            "activation_width": 4096,
             "shared": {
                 "metadata": {
                     "path": "metadata.gguf",
@@ -1592,7 +1515,6 @@ mod tests {
 
         assert_eq!(info.model_id, "model-a");
         assert_eq!(info.layer_count, 1);
-        assert_eq!(info.activation_width, Some(4096));
         assert_eq!(info.source_model_bytes, Some(123));
         assert_eq!(info.projectors.len(), 1);
         assert_eq!(info.projectors[0].kind, "mmproj");
@@ -1743,75 +1665,5 @@ mod tests {
             .to_string();
 
         assert!(error.contains("safe relative"), "{error}");
-    }
-
-    #[test]
-    fn activation_width_inference_rejects_u32_overflow() {
-        let path = Path::new("/package/layers/00000.gguf");
-
-        let error = activation_width_from_tensor_count(
-            "blk.0.attn_norm.weight",
-            path,
-            u64::from(u32::MAX) + 1,
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("exceeds u32::MAX"));
-    }
-
-    #[test]
-    fn activation_width_inference_prefers_the_hyper_connected_norm() {
-        // qwen4exp exchanges hc parallel residual streams across a boundary, so
-        // its width is hc*n_embd, carried by blk.N.hc_attn_norm.weight. There is
-        // no plain attn_norm in this architecture.
-        let names = vec![
-            ("blk.0.hc_attn_norm.weight".to_string(), 8192),
-            ("blk.0.hc_ffn_norm.weight".to_string(), 8192),
-            ("blk.0.ssm_norm.weight".to_string(), 128),
-        ];
-
-        assert_eq!(
-            select_activation_width_tensor(&names),
-            Some(("blk.0.hc_attn_norm.weight", 8192))
-        );
-    }
-
-    #[test]
-    fn activation_width_inference_prefers_hc_norm_over_a_plain_norm() {
-        // Guards the ordering: if an artifact ever carried both, the wide
-        // hyper-connected boundary is the one a stage actually exchanges.
-        let names = vec![
-            ("blk.0.attn_norm.weight".to_string(), 2048),
-            ("blk.0.hc_attn_norm.weight".to_string(), 8192),
-        ];
-
-        assert_eq!(
-            select_activation_width_tensor(&names),
-            Some(("blk.0.hc_attn_norm.weight", 8192))
-        );
-    }
-
-    #[test]
-    fn activation_width_inference_matches_the_plain_norm_by_exact_suffix() {
-        let names = vec![
-            ("blk.0.ffn_norm.weight".to_string(), 4096),
-            ("blk.0.attn_norm.weight".to_string(), 4096),
-        ];
-
-        assert_eq!(
-            select_activation_width_tensor(&names),
-            Some(("blk.0.attn_norm.weight", 4096))
-        );
-    }
-
-    #[test]
-    fn activation_width_inference_ignores_an_unrelated_norm() {
-        // "attn_norm.weight" as a substring is not enough; a differently owned
-        // tensor must not be mistaken for the layer boundary norm. The previous
-        // `contains` predicate accepted this name and returned 999 as the width.
-        let names = vec![("blk.0.cross_attn_norm.weight".to_string(), 999)];
-
-        assert_eq!(select_activation_width_tensor(&names), None);
     }
 }

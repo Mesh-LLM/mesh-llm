@@ -373,7 +373,7 @@ analysis: what the request is really asking, and what you would do. Be concise."
 ///   the tests" role-plays the actor instead of advising it;
 /// * the tool-call transcript — it anchors every advisor on the trajectory
 ///   already taken, collapsing the error-independence aggregation depends on;
-/// * any instruction to emit a tool call (see [`REFERENCE_PREAMBLE`]).
+/// * any instruction to emit a tool call (see `REFERENCE_PREAMBLE`).
 ///
 /// The view is uniform across advisors (no per-role trimming) and is a stable
 /// function of the history, so it caches across iterations.

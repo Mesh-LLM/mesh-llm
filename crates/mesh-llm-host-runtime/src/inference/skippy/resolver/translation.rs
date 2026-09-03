@@ -100,8 +100,7 @@ impl ResolvedSkippyConfig {
             )?);
         }
         let stage_config = single_stage_config(&options)?;
-        let family_policy =
-            family_policy_for_model_path(&self.hardware.resolved_model_path, Some(&self.model_id));
+        let family_policy = family_policy_for_model_path(&self.hardware.resolved_model_path);
         let kv_cache = self
             .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
         Ok(options.with_kv_cache(kv_cache))
@@ -198,8 +197,7 @@ impl ResolvedSkippyConfig {
             stage_config.package_ref = Some(synthetic.package_ref.clone());
             stage_config.manifest_sha256 = Some(synthetic.manifest_sha256.clone());
         }
-        let family_policy =
-            family_policy_for_model_path(&self.hardware.resolved_model_path, Some(&self.model_id));
+        let family_policy = family_policy_for_model_path(&self.hardware.resolved_model_path);
         stage_config.kv_cache = self
             .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
         Ok(stage_config)

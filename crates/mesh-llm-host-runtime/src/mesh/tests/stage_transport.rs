@@ -168,7 +168,7 @@ fn artifact_transfer_authorization_is_limited_to_stage_assignment() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
-async fn artifact_transfer_stream_serves_authorized_stage_artifact() -> Result<()> {
+async fn artifact_transfer_stream_uses_mesh_subprotocol_and_rejects_dedicated_alpn() -> Result<()> {
     use crate::protocol::{read_len_prefixed, write_len_prefixed};
     use base64::Engine as _;
     use prost::Message as _;
@@ -272,28 +272,16 @@ async fn artifact_transfer_stream_serves_authorized_stage_artifact() -> Result<(
     assert_eq!(resumed_bytes, b"000");
 
     let conn = client.stage_connection_to_peer(server_id).await?;
-    let (mut legacy_send, mut legacy_recv) = conn.open_bi().await?;
-    legacy_send
+    let (mut dedicated_send, mut dedicated_recv) = conn.open_bi().await?;
+    dedicated_send
         .write_all(&[skippy_protocol::STAGE_STREAM_ARTIFACT_TRANSFER])
         .await?;
-    write_len_prefixed(&mut legacy_send, &request.encode_to_vec()).await?;
-    legacy_send.finish()?;
-    let legacy_response_buf = read_len_prefixed(&mut legacy_recv).await?;
-    let legacy_response =
-        skippy_stage_proto::StageArtifactTransferResponse::decode(legacy_response_buf.as_slice())?;
+    write_len_prefixed(&mut dedicated_send, &request.encode_to_vec()).await?;
+    dedicated_send.finish()?;
     assert!(
-        legacy_response.accepted,
-        "legacy artifact response: {:?}",
-        legacy_response.error
+        read_len_prefixed(&mut dedicated_recv).await.is_err(),
+        "dedicated stage ALPN must reject artifact transfer"
     );
-    assert_eq!(legacy_response.total_size, 8);
-    assert_eq!(
-        legacy_response.sha256.as_deref(),
-        Some(expected_sha.as_str())
-    );
-    let mut legacy_bytes = vec![0u8; legacy_response.total_size as usize];
-    legacy_recv.read_exact(&mut legacy_bytes).await?;
-    assert_eq!(legacy_bytes, b"layer000");
     assert!(package_dir.join("model-package.json").is_file());
 
     Ok(())
