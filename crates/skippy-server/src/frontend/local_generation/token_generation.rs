@@ -1217,6 +1217,13 @@ impl StageOpenAiBackend {
                     cache_operation,
                 )?;
                 ensure_cache_operation_active(runtime, session_id, cache_operation)?;
+                // This branch is the max_tokens=0 prefill-only fallback. The
+                // chat-prefix state must be exported before this same runtime
+                // operation advances through the remaining suffix. A detached
+                // command cannot run until this operation releases the scheduler,
+                // by which point the canonical-position guard would reject the
+                // earlier checkpoint. Generation requests use the split, detached
+                // FIFO checkpoint path in `restore_or_record_kv` instead.
                 let _ = self.record_exact_state_at_tokens(
                     runtime,
                     session_id,

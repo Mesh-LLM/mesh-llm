@@ -166,6 +166,12 @@ block hashing, or radix insertion. Exported bytes retain their contiguous
 allocation while the blob store indexes them by block, so an unfragmented hit
 is imported without first reconstructing a second full-size buffer.
 
+Prefill-only requests (`max_tokens=0`) retain a synchronous chat-prefix export.
+That fallback must capture the checkpoint before the same scheduler operation
+advances through the remaining suffix; a detached command could only run after
+the named native position had passed. Generation requests use the detached path
+described above.
+
 The OpenAI serving path now uses the same cache policy. A cache-enabled stage
 selects one payload shape:
 
