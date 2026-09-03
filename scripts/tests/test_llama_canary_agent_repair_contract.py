@@ -91,12 +91,15 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
             wrapper.index("publish_work_in_progress()"),
         )
         mode_flow = wrapper[mode_start:]
-        first_publish = mode_flow.index("\npublish_work_in_progress\n")
-        self.assertLess(mode_flow.index("if ! prepare_repair_target; then"), first_publish)
-        self.assertLess(
-            mode_flow.index("if ! prepare_repair_target; then", mode_flow.index("else\n")),
-            first_publish,
-        )
+        patch_queue_branch, battery_and_shared = mode_flow.split("\nelse\n", 1)
+        battery_branch = battery_and_shared.split(
+            "\nfi\n\n# Publish the agent's repair work", 1
+        )[0]
+        for branch in (patch_queue_branch, battery_branch):
+            self.assertLess(
+                branch.index("if ! prepare_repair_target; then"),
+                branch.index("\n    publish_work_in_progress\n"),
+            )
 
     def test_post_green_review_may_modify_the_certified_repair(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
