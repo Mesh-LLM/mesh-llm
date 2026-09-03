@@ -214,7 +214,7 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
             ("timeout", "stage 1 binary server did not become ready\n"),
             (
                 "unsupported",
-                "Unsupported: runtime-slice execution is not supported for this model architecture yet\n",
+                "Unsupported: stage graph did not expose a stable output activation boundary\n",
             ),
             ("model-invalid", "missing tensor blk.5.ssm_in.weight\n"),
             ("mismatch", "authoritative token mismatch\n"),
