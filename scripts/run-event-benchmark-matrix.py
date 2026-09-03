@@ -274,6 +274,7 @@ class TrialPlanEntry:
     scenario: str
     pair_index: int
     prompt_seed: int
+    side_order_first: str
 
 
 def build_trial_plan(
@@ -290,7 +291,16 @@ def build_trial_plan(
     produce an IDENTICAL plan, so the comparator can pair trial i of one
     manifest with trial i of another by (scenario, pair_index): "same
     prompt and seed" pairing without the two sides needing to run in the
-    same process."""
+    same process. Each entry also carries `side_order_first` -- which mode
+    (`VALID_MODES`) is nominally "first" for that pair -- minted from the
+    SAME seeded `rng` as `prompt_seed`. Because `--mode production` and
+    `--mode event-disabled` are separate process invocations of this
+    script, side order cannot be randomized within one run; encoding it
+    into this shared deterministic plan is what makes "side order
+    randomized per pair" (`TRIAL_UNIT_DEFINITION["pair"]`) reproducible:
+    every invocation with the same seed/counts/scenarios independently
+    derives the IDENTICAL per-pair ordering, so the comparator can verify
+    two manifests agree on it."""
     if pairs_primary < 1:
         raise ValueError("--pairs-primary must be at least 1")
     if pairs_scenario < 1:
@@ -300,10 +310,10 @@ def build_trial_plan(
     rng = random.Random(seed)
     plan: list[TrialPlanEntry] = []
     for index in range(pairs_primary):
-        plan.append(TrialPlanEntry(PRIMARY_SCENARIO, index, rng.getrandbits(64)))
+        plan.append(TrialPlanEntry(PRIMARY_SCENARIO, index, rng.getrandbits(64), rng.choice(VALID_MODES)))
     for scenario in scenarios:
         for index in range(pairs_scenario):
-            plan.append(TrialPlanEntry(scenario, index, rng.getrandbits(64)))
+            plan.append(TrialPlanEntry(scenario, index, rng.getrandbits(64), rng.choice(VALID_MODES)))
     return plan
 
 
@@ -500,6 +510,7 @@ def wait_for_readiness(
 class TrialResult:
     scenario: str
     pair_index: int
+    side_order_first: str
     status: str
     completion_tokens: int | None
     elapsed_ms: float | None
@@ -594,6 +605,7 @@ def execute_trial(
             return TrialResult(
                 scenario=entry.scenario,
                 pair_index=entry.pair_index,
+                side_order_first=entry.side_order_first,
                 status="failed",
                 completion_tokens=None,
                 elapsed_ms=None,
@@ -610,6 +622,7 @@ def execute_trial(
             return TrialResult(
                 scenario=entry.scenario,
                 pair_index=entry.pair_index,
+                side_order_first=entry.side_order_first,
                 status="failed",
                 completion_tokens=None,
                 elapsed_ms=None,
@@ -633,6 +646,7 @@ def execute_trial(
             return TrialResult(
                 scenario=entry.scenario,
                 pair_index=entry.pair_index,
+                side_order_first=entry.side_order_first,
                 status="failed",
                 completion_tokens=None,
                 elapsed_ms=None,
@@ -658,6 +672,7 @@ def execute_trial(
         return TrialResult(
             scenario=entry.scenario,
             pair_index=entry.pair_index,
+            side_order_first=entry.side_order_first,
             status="failed",
             completion_tokens=None,
             elapsed_ms=elapsed_ms,
@@ -672,6 +687,7 @@ def execute_trial(
     return TrialResult(
         scenario=entry.scenario,
         pair_index=entry.pair_index,
+        side_order_first=entry.side_order_first,
         status="succeeded",
         completion_tokens=parsed.completion_tokens,
         elapsed_ms=elapsed_ms,
@@ -751,7 +767,21 @@ def build_manifest(
         "environment": capture_environment_snapshot(environ),
         "trial_unit": dict(TRIAL_UNIT_DEFINITION),
         "callback_ingress_p99_us": callback_ingress_p99_us,
-        "health": health if health is not None else {},
+        # Honest reporting, not fabrication: `--local-model-only` starts no
+        # console/management API, so real health counters
+        # (dropped_progress/dropped_diagnostic/terminal_delivery_failed/
+        # state_lane_evictions) are genuinely unreachable by ANY current
+        # call site -- the same architectural wall as
+        # `callback_ingress_p99_us` above. A caller that never collected
+        # health data must leave `health` as `None` (JSON null), which the
+        # comparator's `health_is_available` reads as "unmeasured" and
+        # BLOCKS on -- never as a silently-zero `{}`, which would let a
+        # missing `!= 0` invariant check vacuously pass. `health` stays
+        # unchanged when a caller supplies one, so a future collector that
+        # CAN reach these counters (e.g. by parsing the subject process's
+        # own `event_system_health:` log line) works without a manifest
+        # shape change.
+        "health": health,
         "expected_dropped_progress": expectations["expected_dropped_progress"],
         "expected_dropped_diagnostic": expectations["expected_dropped_diagnostic"],
         "trials": [asdict(result) for result in results],

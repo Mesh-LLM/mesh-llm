@@ -23,10 +23,20 @@ def load_module():
     return module
 
 
-def make_trial(scenario, pair_index, *, decode_tok_s=50.0, ttft_ms=100.0, decode_only_tok_s=55.0, status="succeeded"):
+def make_trial(
+    scenario,
+    pair_index,
+    *,
+    decode_tok_s=50.0,
+    ttft_ms=100.0,
+    decode_only_tok_s=55.0,
+    status="succeeded",
+    side_order_first="production",
+):
     return {
         "scenario": scenario,
         "pair_index": pair_index,
+        "side_order_first": side_order_first,
         "status": status,
         "completion_tokens": 100,
         "elapsed_ms": 2000.0,
@@ -40,6 +50,21 @@ def make_trial(scenario, pair_index, *, decode_tok_s=50.0, ttft_ms=100.0, decode
     }
 
 
+def alternating_trials(scenario, count):
+    """Trial fixtures with a genuinely-varied (non-constant)
+    `side_order_first`, matching what a real deterministic plan produces --
+    use this instead of the `make_trial` default in any fixture that feeds
+    `build_report`, so the new side-order-variety gate doesn't spuriously
+    fire for tests that aren't exercising that gate."""
+    return [
+        make_trial(scenario, i, side_order_first="production" if i % 2 == 0 else "event-disabled")
+        for i in range(count)
+    ]
+
+
+_UNSET = object()
+
+
 def make_manifest(
     *,
     mode="production",
@@ -51,14 +76,14 @@ def make_manifest(
     host=None,
     thermal_state=None,
     callback_ingress_p99_us=50.0,
-    health=None,
+    health=_UNSET,
     expected_dropped_progress=0,
     expected_dropped_diagnostic=0,
     attempt=1,
     binary_path="/fixtures/mesh-llm",
 ):
     scenarios = scenarios if scenarios is not None else []
-    trials = trials if trials is not None else [make_trial("__primary__", i) for i in range(pairs_primary)]
+    trials = trials if trials is not None else alternating_trials("__primary__", pairs_primary)
     environment = (
         environment
         if environment is not None
@@ -75,7 +100,17 @@ def make_manifest(
         "p99_gate": "enforced",
     }
     thermal_state = thermal_state if thermal_state is not None else {"available": True, "source": "pmset -g therm", "raw": "No thermal warning"}
-    health = health if health is not None else {"terminal_delivery_failed": 0, "dropped_progress": expected_dropped_progress, "dropped_diagnostic": expected_dropped_diagnostic}
+    if health is _UNSET:
+        health = {
+            "terminal_delivery_failed": 0,
+            "dropped_progress": expected_dropped_progress,
+            "dropped_diagnostic": expected_dropped_diagnostic,
+        }
+    # `health=None` (distinct from omitting the arg) explicitly represents
+    # an unavailable health block (JSON null), e.g. a real
+    # `--local-model-only` trial run where no live console API ever
+    # collected health counters -- passed through unchanged, never
+    # defaulted to a fabricated dict.
     return {
         "schema_version": 1,
         "metrics_schema": "streaming_v1",
@@ -449,6 +484,54 @@ class ExactHealthCountTests(unittest.TestCase):
         self.assertTrue(any("state-transition" in v for v in violations))
 
 
+class HealthAvailabilityTests(unittest.TestCase):
+    def test_health_is_available_true_when_health_dict_present(self):
+        harness = load_module()
+        self.assertTrue(harness.health_is_available(make_manifest()))
+
+    def test_health_is_available_false_when_health_is_null(self):
+        harness = load_module()
+        self.assertFalse(harness.health_is_available(make_manifest(health=None)))
+
+    def test_evaluate_health_expectations_returns_no_fabricated_violations_when_unavailable(self):
+        """Defect A: an absent health block must never be silently read as
+        all-zero counts, which would vacuously pass the !=0 checks and
+        falsely fire dropped_progress/dropped_diagnostic mismatches
+        against a manifest's real expected counts."""
+        harness = load_module()
+        manifest = make_manifest(health=None, expected_dropped_progress=20, expected_dropped_diagnostic=20)
+        self.assertEqual(harness.evaluate_health_expectations(manifest), [])
+
+
+class SideOrderConsistencyTests(unittest.TestCase):
+    def test_agreeing_and_varied_order_has_no_violations(self):
+        harness = load_module()
+        baseline_trials = alternating_trials("__primary__", 4)
+        candidate_trials = alternating_trials("__primary__", 4)
+        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
+        self.assertEqual(violations, [])
+
+    def test_disagreement_between_manifests_is_a_violation(self):
+        harness = load_module()
+        baseline_trials = [
+            make_trial("__primary__", 0, side_order_first="production"),
+            make_trial("__primary__", 1, side_order_first="event-disabled"),
+        ]
+        candidate_trials = [
+            make_trial("__primary__", 0, side_order_first="event-disabled"),
+            make_trial("__primary__", 1, side_order_first="event-disabled"),
+        ]
+        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
+        self.assertTrue(any("disagreement" in v for v in violations))
+
+    def test_constant_order_across_all_pairs_is_a_violation(self):
+        harness = load_module()
+        baseline_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(5)]
+        candidate_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(5)]
+        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
+        self.assertTrue(any("constant" in v for v in violations))
+
+
 class ThermalRecordTests(unittest.TestCase):
     def test_thermal_state_is_recorded_per_side_in_the_final_report(self):
         harness = load_module()
@@ -554,12 +637,124 @@ class SeedConsistencyTests(unittest.TestCase):
         self.assertIn("b", violations[0])
 
 
+class HealthUnavailableBlockingTests(unittest.TestCase):
+    def test_missing_health_blocks_with_the_accurately_named_reason(self):
+        """Defect A: a null health block must block certification (never a
+        silent pass) but with an honestly-named reason -- never the
+        misleading `health_expectation_violation`, which claims a real
+        count mismatch that was never actually observed."""
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            trials = alternating_trials("__primary__", 20)
+            production = write_manifest(
+                directory, "production.json", make_manifest(mode="production", trials=trials, health=None)
+            )
+            event_disabled = write_manifest(
+                directory,
+                "event-disabled.json",
+                make_manifest(mode="event-disabled", trials=alternating_trials("__primary__", 20), health=None),
+            )
+            baseline = write_manifest(
+                directory,
+                "baseline.json",
+                make_manifest(mode="production", trials=trials, binary_path="/fixtures/baseline", health=None),
+            )
+            args = harness.build_arg_parser().parse_args(
+                [
+                    "--production",
+                    str(production),
+                    "--event-disabled",
+                    str(event_disabled),
+                    "--baseline",
+                    str(baseline),
+                    "--output",
+                    str(directory / "report.json"),
+                    "--bootstrap-samples",
+                    "200",
+                    "--seed",
+                    "42",
+                    "--max-degradation-percent",
+                    "3",
+                    "--min-primary-pairs",
+                    "20",
+                    "--min-scenario-pairs",
+                    "10",
+                    "--max-mdd-percent",
+                    "10",
+                ]
+            )
+            report = harness.build_report(args)
+            self.assertIn("health_unavailable", report["blocking_reasons"])
+            self.assertNotIn("health_expectation_violation", report["blocking_reasons"])
+            self.assertEqual(report["certification_status"], "blocked")
+
+
+class SideOrderBlockingTests(unittest.TestCase):
+    def test_constant_side_order_blocks_with_a_clearly_named_reason(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            constant_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(20)]
+            production = write_manifest(
+                directory, "production.json", make_manifest(mode="production", trials=constant_trials)
+            )
+            event_disabled = write_manifest(
+                directory,
+                "event-disabled.json",
+                make_manifest(
+                    mode="event-disabled",
+                    trials=[make_trial("__primary__", i, side_order_first="production") for i in range(20)],
+                ),
+            )
+            baseline = write_manifest(
+                directory,
+                "baseline.json",
+                make_manifest(mode="production", trials=constant_trials, binary_path="/fixtures/baseline"),
+            )
+            args = harness.build_arg_parser().parse_args(
+                [
+                    "--production",
+                    str(production),
+                    "--event-disabled",
+                    str(event_disabled),
+                    "--baseline",
+                    str(baseline),
+                    "--output",
+                    str(directory / "report.json"),
+                    "--bootstrap-samples",
+                    "200",
+                    "--seed",
+                    "42",
+                    "--max-degradation-percent",
+                    "3",
+                    "--min-primary-pairs",
+                    "20",
+                    "--min-scenario-pairs",
+                    "10",
+                    "--max-mdd-percent",
+                    "10",
+                ]
+            )
+            report = harness.build_report(args)
+            self.assertIn("side_order_inconsistent", report["blocking_reasons"])
+
+
 class EndToEndReportTests(unittest.TestCase):
     def test_full_report_pass_case_has_correct_wording_and_no_forbidden_phrases(self):
         harness = load_module()
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            identical_trials = [make_trial("__primary__", i, decode_tok_s=100.0, ttft_ms=50.0) for i in range(20)]
+            identical_trials = [
+                make_trial(
+                    "__primary__",
+                    i,
+                    decode_tok_s=100.0,
+                    ttft_ms=50.0,
+                    side_order_first="production" if i % 2 == 0 else "event-disabled",
+                )
+                for i in range(20)
+            ]
             production = write_manifest(
                 directory,
                 "production.json",
@@ -570,7 +765,16 @@ class EndToEndReportTests(unittest.TestCase):
                 "event-disabled.json",
                 make_manifest(
                     mode="event-disabled",
-                    trials=[make_trial("__primary__", i, decode_tok_s=100.0, ttft_ms=50.0) for i in range(20)],
+                    trials=[
+                        make_trial(
+                            "__primary__",
+                            i,
+                            decode_tok_s=100.0,
+                            ttft_ms=50.0,
+                            side_order_first="production" if i % 2 == 0 else "event-disabled",
+                        )
+                        for i in range(20)
+                    ],
                     expected_dropped_progress=20,
                     expected_dropped_diagnostic=20,
                     health={"terminal_delivery_failed": 0, "dropped_progress": 20, "dropped_diagnostic": 20},
@@ -581,7 +785,16 @@ class EndToEndReportTests(unittest.TestCase):
                 "baseline.json",
                 make_manifest(
                     mode="production",
-                    trials=[make_trial("__primary__", i, decode_tok_s=100.0, ttft_ms=50.0) for i in range(20)],
+                    trials=[
+                        make_trial(
+                            "__primary__",
+                            i,
+                            decode_tok_s=100.0,
+                            ttft_ms=50.0,
+                            side_order_first="production" if i % 2 == 0 else "event-disabled",
+                        )
+                        for i in range(20)
+                    ],
                     binary_path="/fixtures/baseline",
                 ),
             )

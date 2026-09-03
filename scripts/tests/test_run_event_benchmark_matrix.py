@@ -193,6 +193,27 @@ class TrialPlanDeterminismTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             harness.build_trial_plan(1, 1, 1, [])
 
+    def test_side_order_first_is_a_valid_mode_for_every_entry(self):
+        harness = load_module()
+        plan = harness.build_trial_plan(7, 3, 2, ["alpha"])
+        for entry in plan:
+            self.assertIn(entry.side_order_first, harness.VALID_MODES)
+
+    def test_side_order_first_uses_both_modes_across_many_seeds(self):
+        """Side order is minted from the SAME deterministic per-plan rng
+        that mints prompt_seed (see build_trial_plan), so re-running with
+        the same seed/counts/scenarios always reproduces the same order --
+        proven separately by
+        test_same_seed_produces_identical_plans_across_invocations, since
+        TrialPlanEntry equality now covers side_order_first too. This test
+        instead proves the ordering genuinely VARIES rather than being a
+        constant: across many different seeds, both modes must appear."""
+        harness = load_module()
+        observed = {
+            harness.build_trial_plan(seed, 1, 1, ["s"])[0].side_order_first for seed in range(50)
+        }
+        self.assertEqual(observed, set(harness.VALID_MODES))
+
 
 class DecodeOnlyTokSTests(unittest.TestCase):
     def test_null_when_ttft_is_null(self):
@@ -343,6 +364,7 @@ class ManifestBuildingTests(unittest.TestCase):
         result = harness.TrialResult(
             scenario=harness.PRIMARY_SCENARIO,
             pair_index=0,
+            side_order_first="production",
             status="succeeded",
             completion_tokens=10,
             elapsed_ms=1000.0,
@@ -392,6 +414,49 @@ class ManifestBuildingTests(unittest.TestCase):
             run_version=lambda _b: None,
         )
         self.assertEqual(manifest["attempt"], 2)
+
+    def test_manifest_health_is_null_when_not_collected(self):
+        """Defect A: no real call site collects health data (see
+        summarize_health_expectations's own docstring on what CAN be
+        proven without a live console API); build_manifest must report
+        that honestly as JSON null, never a silently-zero {}."""
+        harness = load_module()
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="production",
+            seed=1,
+            pairs_primary=1,
+            pairs_scenario=1,
+            scenarios=["s"],
+            results=[],
+            environ={},
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+        )
+        self.assertIsNone(manifest["health"])
+
+    def test_manifest_preserves_an_explicitly_supplied_health_dict(self):
+        """A future caller that CAN collect real health data must have its
+        value pass through unchanged -- build_manifest never overwrites a
+        caller-supplied health block."""
+        harness = load_module()
+        supplied = {"terminal_delivery_failed": 0, "dropped_progress": 3, "dropped_diagnostic": 3}
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="event-disabled",
+            seed=1,
+            pairs_primary=1,
+            pairs_scenario=1,
+            scenarios=["s"],
+            results=[],
+            environ={},
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+            health=supplied,
+        )
+        self.assertEqual(manifest["health"], supplied)
 
 
 class MainThreadsAttemptIntoManifestTests(unittest.TestCase):
@@ -633,6 +698,7 @@ class RunTrialPlanInjectionTests(unittest.TestCase):
             return harness.TrialResult(
                 scenario=entry.scenario,
                 pair_index=entry.pair_index,
+                side_order_first=entry.side_order_first,
                 status="succeeded",
                 completion_tokens=1,
                 elapsed_ms=1.0,
@@ -649,6 +715,28 @@ class RunTrialPlanInjectionTests(unittest.TestCase):
         )
         self.assertEqual(len(results), len(plan))
         self.assertEqual(len(calls), len(plan))
+
+
+class SideOrderThreadingTests(unittest.TestCase):
+    """`execute_trial` must thread `entry.side_order_first` into every
+    `TrialResult` it constructs (all 5 return paths) so the manifest can
+    record the deterministic per-pair ordering for the comparator to
+    verify -- a source-level check since `execute_trial` spawns a real
+    process and is never invoked by this module's own test suite (see the
+    module docstring)."""
+
+    def test_execute_trial_threads_side_order_first_into_every_trial_result(self):
+        harness = load_module()
+        source = SCRIPT.read_text()
+        start = source.index("def execute_trial(")
+        end = source.index("\ndef ", start + 1)
+        body = source[start:end]
+        occurrences = body.count("side_order_first=entry.side_order_first")
+        self.assertEqual(
+            occurrences,
+            5,
+            f"expected 5 TrialResult(...) constructions to thread side_order_first, found {occurrences}",
+        )
 
 
 if __name__ == "__main__":
