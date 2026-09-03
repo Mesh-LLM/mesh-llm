@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 PIN_FILE="${LLAMA_PIN_FILE:-$ROOT/third_party/llama.cpp/upstream.txt}"
-PIN_MIRROR_FILE="${LLAMA_PIN_MIRROR_FILE:-$ROOT/LLAMA_CPP_SHA}"
 
 if (( $# > 1 )); then
   echo "usage: scripts/update-llama-pin.sh [40-hex-upstream-sha]" >&2
@@ -28,6 +27,4 @@ if [[ ! "$NEW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 printf '%s\n' "$NEW_SHA" > "$PIN_FILE"
-printf '%s\n' "$NEW_SHA" > "$PIN_MIRROR_FILE"
 echo "updated $PIN_FILE to $NEW_SHA"
-echo "updated $PIN_MIRROR_FILE to $NEW_SHA"

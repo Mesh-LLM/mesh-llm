@@ -75,7 +75,6 @@ MAX_REPAIR_TURNS="${CANARY_REPAIR_MAX_TURNS:-2}"
 BRANCH="llama-canary/patch-queue-fix"
 BATTERY_LOG="$ROOT/.deps/llama-canary-repair-battery.log"
 PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
-PIN_MIRROR_FILE="$ROOT/LLAMA_CPP_SHA"
 
 mkdir -p "$ROOT/.deps"
 echo "$UPSTREAM_SHA" > "$ROOT/.deps/llama-canary-target-sha"
@@ -260,26 +259,25 @@ redact_token() {
   sed "s/${CANARY_REPAIR_TOKEN}/***redacted***/g"
 }
 
-write_repair_pins() {
+write_repair_pin() {
   # Pin ownership is deterministic wrapper work, never agent work. The repair
   # branch must select the same upstream that its queue and battery certify.
   scripts/update-llama-pin.sh "$UPSTREAM_SHA"
 }
 
-verify_repair_pins() {
-  local pin mirror
+verify_repair_pin() {
+  local pin
   pin="$(tr -d '[:space:]' < "$PIN_FILE")"
-  mirror="$(tr -d '[:space:]' < "$PIN_MIRROR_FILE")"
-  if [[ "$pin" != "$UPSTREAM_SHA" || "$mirror" != "$UPSTREAM_SHA" ]]; then
-    echo "repair pins do not select certified upstream $UPSTREAM_SHA (upstream.txt=$pin, LLAMA_CPP_SHA=$mirror)" >&2
+  if [[ "$pin" != "$UPSTREAM_SHA" ]]; then
+    echo "repair pin does not select certified upstream $UPSTREAM_SHA (upstream.txt=$pin)" >&2
     return 1
   fi
 }
 
 prepare_repair_target() {
   local prepared_upstream
-  write_repair_pins || return 1
-  verify_repair_pins || return 1
+  write_repair_pin || return 1
+  verify_repair_pin || return 1
   scripts/prepare-llama.sh pinned || return 1
   prepared_upstream="$(tr -d '[:space:]' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"
   if [[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]; then
@@ -509,9 +507,9 @@ Write your review findings (verification steps, defects found, fixes made or rec
     return 0
   fi
   # A review turn may edit the worktree, but it never owns the selected
-  # upstream. Restore and verify both pin files before publishing its result.
-  write_repair_pins || return 1
-  verify_repair_pins || return 1
+  # upstream. Restore and verify the pin before publishing its result.
+  write_repair_pin || return 1
+  verify_repair_pin || return 1
   # The agent may have committed locally (per its prompt) and/or left work in
   # the working tree; the wrapper owns every push. Publish whatever HEAD is
   # now only when it differs from the certified commit.

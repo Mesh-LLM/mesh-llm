@@ -350,7 +350,7 @@ jobs:
           scripts/update-llama-pin.sh "$VALIDATED_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add third_party/llama.cpp/upstream.txt LLAMA_CPP_SHA
+          git add third_party/llama.cpp/upstream.txt
           if git diff --cached --quiet; then
             echo "No upstream pin changes to commit."
             exit 0

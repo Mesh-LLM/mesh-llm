@@ -56,10 +56,10 @@ in those skills are hard requirements for this repair, not suggestions.
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`
   is only a miss backstop. Never add GitHub Actions model caching.
-- The deterministic wrapper owns `third_party/llama.cpp/upstream.txt` and its
-  `LLAMA_CPP_SHA` compatibility mirror. It writes both to the repair target and
+- The deterministic wrapper owns the sole upstream selector,
+  `third_party/llama.cpp/upstream.txt`. It writes it to the repair target and
   validates the queue through `scripts/prepare-llama.sh pinned`; do not edit
-  either pin file yourself.
+  the pin file yourself.
 - Do not modify files outside `third_party/llama.cpp/patches/` unless the
   Rust ABI mirrors in `crates/` genuinely need to track a patch ABI change
   (bump `PREPARE_SCHEMA`/ABI version together in that case).
