@@ -82,7 +82,7 @@ futures-util = "0.3"
 semver = "1"
 sha2 = "0.10"
 tar = "0.4"
-ed25519-dalek = { version = "=3.0.0-rc.0", features = ["rand_core"] }
+ed25519-dalek = { version = "=3.0.0", features = ["rand_core"] }
 crypto_box = "0.9"
 chacha20poly1305 = "0.10"
 argon2 = "0.5"

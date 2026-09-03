@@ -33,7 +33,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 camino = "1"
-uniffi_bindgen = "=0.31.0"
+uniffi_bindgen = "=0.31.2"
 EOF
 
 cat > "$RUNNER_DIR/src/main.rs" <<EOF
