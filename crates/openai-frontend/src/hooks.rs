@@ -392,7 +392,7 @@ pub struct TerminalGuardedChatStream {
 }
 
 impl TerminalGuardedChatStream {
-    pub fn new(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
+    pub fn pinned(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
         Box::pin(Self {
             inner,
             guard: Some(guard),
@@ -571,7 +571,7 @@ impl OpenAiBackend for HookedOpenAiBackend {
         // — the stream itself will own `request` from here.
         guard.set_request(request.clone());
         match self.backend.chat_completion_stream(request, context).await {
-            Ok(stream) => Ok(TerminalGuardedChatStream::new(stream, guard)),
+            Ok(stream) => Ok(TerminalGuardedChatStream::pinned(stream, guard)),
             Err(error) => {
                 // The backend failed before yielding a stream at all — an
                 // `Error` terminal, exactly like a non-streaming backend
