@@ -24,6 +24,7 @@ use crate::frontend::wire_messages::openai_stage_mask;
 use crate::kv_integration::KvStageIntegration;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
+use crate::kv_integration::resident_record_eviction_attrs;
 use anyhow::Context;
 use openai_frontend::OpenAiError;
 use openai_frontend::OpenAiResult;
@@ -423,6 +424,7 @@ impl StageOpenAiBackend {
         for record in resident_records.into_iter().flatten() {
             recorded_any = true;
             let mut attrs = self.openai_attrs(ids);
+            attrs.extend(resident_record_eviction_attrs(&record));
             attrs.insert("skippy.kv.decision".to_string(), json!("stage0_record"));
             attrs.insert(
                 "skippy.kv.record_candidates".to_string(),
@@ -535,6 +537,7 @@ impl StageOpenAiBackend {
         for record in records.into_iter().flatten() {
             recorded_any = true;
             let mut attrs = self.openai_attrs(ids);
+            attrs.extend(resident_record_eviction_attrs(&record));
             attrs.insert(
                 "skippy.kv.decision".to_string(),
                 json!("stage0_full_prefill_record"),

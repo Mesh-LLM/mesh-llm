@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex};
 use crate::runtime_state::RuntimeState;
 
 use super::{
-    KvStageIntegration, PrefillKvIdentity, RadixResidentEntry, ResidentPrefixRecord,
-    ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload, lock_resident_sequences,
+    KvStageIntegration, PrefillKvIdentity, RadixResidentEntry, ResidentPrefixEvictionVictim,
+    ResidentPrefixRecord, ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload,
+    lock_resident_sequences,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -520,6 +521,7 @@ impl KvStageIntegration {
         }
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
+        let mut evicted_victims = Vec::new();
         let seq_id = {
             let mut radix = self
                 .radix
@@ -538,6 +540,7 @@ impl KvStageIntegration {
                     stored: false,
                     evicted_entries: 0,
                     evicted_tokens: 0,
+                    evicted_victims: Vec::new(),
                     entries: stats.resident_entries,
                     resident_tokens: stats.resident_tokens,
                 }));
@@ -562,6 +565,12 @@ impl KvStageIntegration {
                 };
                 evicted_entries = evicted_entries.saturating_add(1);
                 evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
+                evicted_victims.push(ResidentPrefixEvictionVictim {
+                    page_id: removed.value.page_id.clone(),
+                    seq_id: removed.value.seq_id,
+                    token_count: removed.value.token_count,
+                    recompute_cost: removed.value.recompute_cost,
+                });
             }
 
             sequences.allocate()?
@@ -610,6 +619,7 @@ impl KvStageIntegration {
                 stored: false,
                 evicted_entries,
                 evicted_tokens,
+                evicted_victims,
                 entries: stats.resident_entries,
                 resident_tokens: stats.resident_tokens,
             }));
@@ -623,6 +633,7 @@ impl KvStageIntegration {
             stored: true,
             evicted_entries,
             evicted_tokens,
+            evicted_victims,
             entries: stats.resident_entries,
             resident_tokens: stats.resident_tokens,
         }))

@@ -33,8 +33,8 @@ mod resident_prefix;
 
 pub use records::{
     AttachedPage, ExactStateRecord, ExactStateRestore, LookupBatchOutcome, PrefillKvIdentity,
-    RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
-    ResidentPrefixRestore,
+    RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore,
+    ResidentPrefixEvictionVictim, ResidentPrefixRecord, ResidentPrefixRestore,
 };
 pub use resident_prefix::{ResidentCapacityDecision, ResidentPrefixEviction};
 
@@ -120,6 +120,60 @@ pub(crate) fn proactive_eviction_attrs(
         );
     }
     attrs
+}
+
+pub(crate) fn resident_record_eviction_attrs(
+    record: &ResidentPrefixRecord,
+) -> BTreeMap<String, Value> {
+    if record.evicted_victims.is_empty() {
+        return BTreeMap::new();
+    }
+    BTreeMap::from([
+        (
+            "skippy.kv.record_eviction_reason".to_string(),
+            json!("resident_index_capacity"),
+        ),
+        (
+            "skippy.kv.evicted_page_ids".to_string(),
+            json!(
+                record
+                    .evicted_victims
+                    .iter()
+                    .map(|victim| victim.page_id.as_str())
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "skippy.kv.evicted_seq_ids".to_string(),
+            json!(
+                record
+                    .evicted_victims
+                    .iter()
+                    .map(|victim| victim.seq_id)
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "skippy.kv.evicted_token_counts".to_string(),
+            json!(
+                record
+                    .evicted_victims
+                    .iter()
+                    .map(|victim| victim.token_count)
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "skippy.kv.evicted_recompute_costs".to_string(),
+            json!(
+                record
+                    .evicted_victims
+                    .iter()
+                    .map(|victim| victim.recompute_cost)
+                    .collect::<Vec<_>>()
+            ),
+        ),
+    ])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1045,7 +1099,11 @@ mod exact_state_record_queue_tests {
 
 #[cfg(test)]
 mod telemetry_error_class_tests {
-    use super::telemetry_error_class_from_message;
+    use super::{
+        ResidentPrefixEvictionVictim, ResidentPrefixRecord, resident_record_eviction_attrs,
+        telemetry_error_class_from_message,
+    };
+    use serde_json::json;
 
     #[test]
     fn maps_detailed_errors_to_bounded_classes() {
@@ -1060,6 +1118,46 @@ mod telemetry_error_class_tests {
         assert_eq!(
             telemetry_error_class_from_message("arbitrary secret detail 123"),
             "internal"
+        );
+    }
+
+    #[test]
+    fn resident_record_eviction_attrs_identify_bounded_capacity_victims() {
+        let record = ResidentPrefixRecord {
+            page_id: "new-page".to_string(),
+            token_count: 128,
+            seq_id: 7,
+            stored: true,
+            evicted_entries: 1,
+            evicted_tokens: 64,
+            evicted_victims: vec![ResidentPrefixEvictionVictim {
+                page_id: "old-page".to_string(),
+                seq_id: 3,
+                token_count: 64,
+                recompute_cost: 256,
+            }],
+            entries: 16,
+            resident_tokens: 1_024,
+        };
+
+        let attrs = resident_record_eviction_attrs(&record);
+
+        assert_eq!(
+            attrs.get("skippy.kv.record_eviction_reason"),
+            Some(&json!("resident_index_capacity"))
+        );
+        assert_eq!(
+            attrs.get("skippy.kv.evicted_page_ids"),
+            Some(&json!(["old-page"]))
+        );
+        assert_eq!(attrs.get("skippy.kv.evicted_seq_ids"), Some(&json!([3])));
+        assert_eq!(
+            attrs.get("skippy.kv.evicted_token_counts"),
+            Some(&json!([64]))
+        );
+        assert_eq!(
+            attrs.get("skippy.kv.evicted_recompute_costs"),
+            Some(&json!([256]))
         );
     }
 }

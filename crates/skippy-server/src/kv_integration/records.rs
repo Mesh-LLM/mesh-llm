@@ -39,6 +39,14 @@ pub struct ResidentPrefixRestore {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResidentPrefixEvictionVictim {
+    pub page_id: String,
+    pub seq_id: i32,
+    pub token_count: u64,
+    pub recompute_cost: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct ResidentPrefixRecord {
     pub page_id: String,
     pub token_count: usize,
@@ -46,6 +54,7 @@ pub struct ResidentPrefixRecord {
     pub stored: bool,
     pub evicted_entries: usize,
     pub evicted_tokens: u64,
+    pub evicted_victims: Vec<ResidentPrefixEvictionVictim>,
     pub entries: usize,
     pub resident_tokens: u64,
 }

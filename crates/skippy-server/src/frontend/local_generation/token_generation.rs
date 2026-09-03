@@ -22,6 +22,7 @@ use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::saturating_u32;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
+use crate::kv_integration::resident_record_eviction_attrs;
 use crate::kv_integration::{KvStageIntegration, PrefillKvIdentity, StagePrefixCachePayload};
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
 use axum::http::StatusCode;
@@ -1591,6 +1592,7 @@ impl StageOpenAiBackend {
                 {
                     resident_recorded_pages = resident_recorded_pages.saturating_add(1);
                     let mut attrs = self.openai_attrs(ids);
+                    attrs.extend(resident_record_eviction_attrs(&record));
                     attrs.insert(
                         "skippy.kv.recorded_page_id".to_string(),
                         json!(record.page_id),
