@@ -158,6 +158,48 @@ class AgenticReplayTest(unittest.TestCase):
             "stream failed with server error: cache operation deadline exceeded",
         )
 
+    def test_stream_request_rejects_truncated_stream_without_done(self) -> None:
+        class TruncatedResponse:
+            status = 200
+
+            def __iter__(self):
+                return iter(
+                    [
+                        b'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+                        b'data: {"choices":[],"usage":{"completion_tokens":1,"prompt_tokens":10}}\n',
+                    ]
+                )
+
+        class TruncatedConnection:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return TruncatedResponse()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(
+            BENCH.http.client, "HTTPConnection", TruncatedConnection
+        ):
+            result = BENCH.stream_request(
+                "request-1",
+                [{"role": "user", "content": "task"}],
+                [],
+                {"session_id": "session-1"},
+                "model",
+                128,
+                10,
+            )
+
+        self.assertEqual(
+            result["error"], "stream ended without terminal [DONE] marker"
+        )
+
     def test_output_hash_ignores_tool_call_chunking_and_generated_ids(self) -> None:
         chunked = {}
         BENCH.merge_tool_call_delta(
@@ -308,15 +350,38 @@ class AgenticReplayTest(unittest.TestCase):
 
         self.assertEqual(BENCH.trajectory_tools({"tools": captured}), captured)
 
-    def test_captured_message_preserves_openai_name_and_tool_calls(self) -> None:
+    def test_captured_message_preserves_openai_fields_and_tool_calls(self) -> None:
         recorded = {
             "role": "assistant",
             "content": "",
             "name": "agent",
+            "reasoning_content": "private reasoning",
+            "provider_extension": {"cache_control": "ephemeral"},
             "tool_calls": [{"id": "call-1", "type": "function"}],
         }
 
         self.assertEqual(BENCH.openai_message(recorded), recorded)
+
+    def test_captured_message_decodes_legacy_tool_calls_without_forwarding_alias(
+        self,
+    ) -> None:
+        tool_calls = [{"id": "call-1", "type": "function"}]
+        recorded = {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "private reasoning",
+            "tool_calls_json": json.dumps(tool_calls),
+        }
+
+        self.assertEqual(
+            BENCH.openai_message(recorded),
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "private reasoning",
+                "tool_calls": tool_calls,
+            },
+        )
 
     def test_captured_tool_call_sizes_the_generated_output_budget(self) -> None:
         recorded = {

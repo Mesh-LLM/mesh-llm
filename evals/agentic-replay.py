@@ -635,6 +635,7 @@ def stream_request(
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     tool_call_parts: dict[int, dict[str, Any]] = {}
+    saw_done = False
     connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=timeout)
     payload = {
         "model": model_id,
@@ -668,6 +669,7 @@ def stream_request(
                 continue
             event_bytes = line[6:]
             if event_bytes == b"[DONE]":
+                saw_done = True
                 break
             try:
                 event = json.loads(event_bytes)
@@ -724,6 +726,12 @@ def stream_request(
         }
     finally:
         connection.close()
+    if not saw_done:
+        return {
+            "request_id": request_id,
+            **metadata,
+            "error": "stream ended without terminal [DONE] marker",
+        }
     if first_token_at is None:
         return {
             "request_id": request_id,
@@ -756,18 +764,14 @@ def stream_request(
 
 
 def openai_message(recorded: dict[str, Any]) -> dict[str, Any]:
-    message: dict[str, Any] = {
-        key: recorded[key]
-        for key in ("role", "content", "name", "tool_calls", "tool_call_id")
-        if key in recorded
+    # ChatMessage preserves arbitrary OpenAI-compatible fields, so retain the
+    # captured object verbatim apart from the dataset-only JSON encoding below.
+    message = {
+        key: value for key, value in recorded.items() if key != "tool_calls_json"
     }
-    message.setdefault("content", "")
     tool_calls_json = recorded.get("tool_calls_json")
     if tool_calls_json:
         message["tool_calls"] = json.loads(tool_calls_json)
-    tool_call_id = recorded.get("tool_call_id")
-    if tool_call_id:
-        message["tool_call_id"] = tool_call_id
     return message
 
 
