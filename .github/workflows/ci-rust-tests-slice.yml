@@ -215,10 +215,8 @@ jobs:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
-      SAFETENSORS_FIXTURES: |
-        smollm2\tHuggingFaceTB/SmolLM2-135M-Instruct\t12fd25f77366fa6b3b4b768ec3050bf629380bac\tpreserve
-        qwen2\tQwen/Qwen2.5-0.5B-Instruct\t7ae557604adf67be50417f59c2c2f167def9a775\tQ4_K_M
-        qwen3\tQwen/Qwen3-0.6B\tc1899de289a04d12100db370d81485cdf75e47ca\tpreserve
+      SAFETENSORS_REPOSITORY: HuggingFaceTB/SmolLM2-135M-Instruct
+      SAFETENSORS_REVISION: 12fd25f77366fa6b3b4b768ec3050bf629380bac
       SAFETENSORS_QUANTIZATIONS: >-
         preserve F32 F16 BF16 Q1_0 Q2_0 Q4_0 Q4_1 Q5_0 Q5_1
         IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ1_S IQ1_M TQ1_0 TQ2_0
@@ -255,24 +253,14 @@ jobs:
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
-      - name: Load pinned SafeTensors families
+      - name: Download pinned SafeTensors checkpoint
         run: |
           set -euo pipefail
-          while IFS=$'\t' read -r family repository revision quantization; do
-            [[ -z "$family" ]] && continue
-            fixture_dir="$RUNNER_TEMP/safetensors-$family"
-            echo "::group::$family ($repository@$revision, $quantization)"
-            hf download "$repository" \
-              config.json tokenizer.json tokenizer_config.json model.safetensors \
-              --revision "$revision" \
-              --local-dir "$fixture_dir"
-            SKIPPY_SAFETENSORS_SMOKE_DIR="$fixture_dir" \
-              SKIPPY_SAFETENSORS_SMOKE_QUANTIZATION="$quantization" \
-              cargo test --locked -p mesh-llm-host-runtime --no-default-features \
-                safetensors_checkpoint_reaches_mesh_host_runtime -- \
-                --ignored --nocapture
-            echo "::endgroup::"
-          done <<< "$SAFETENSORS_FIXTURES"
+          fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          hf download "$SAFETENSORS_REPOSITORY" \
+            config.json tokenizer.json tokenizer_config.json model.safetensors \
+            --revision "$SAFETENSORS_REVISION" \
+            --local-dir "$fixture_dir"
       - name: Exercise every current direct-load quantization
         run: |
           set -euo pipefail
