@@ -1377,6 +1377,15 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Task 9: the runtime-event engine is installed here too (not only for
+    // `--local-model-only`) so `LoadOperation`/`UnloadOperation` in
+    // `runtime/model_lifecycle/{load,unload}.rs` are live on the mesh path.
+    // No subscriber attaches here -- that is Task 13's route -- so this
+    // start alone does not change observable behavior on this path either.
+    crate::runtime_events::install_runtime_event_engine(
+        crate::runtime_events::engine::RuntimeEventEngine::new(),
+    );
+    super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
     // legacy/profile-unaware request cannot bypass local-required policy in

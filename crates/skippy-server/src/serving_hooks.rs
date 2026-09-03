@@ -3,14 +3,23 @@ use std::{fmt, sync::Arc};
 use anyhow::Result;
 
 use crate::{
-    frontend::{GenerationReceiptConfig, LinearProposalIngressConfig},
+    frontend::{GenerationLifecycleIngress, GenerationReceiptConfig, LinearProposalIngressConfig},
+    kv_integration::KvLifecycleObserver,
     tokenizer::TokenizerCapability,
 };
 
 /// Constructs product-neutral serving hooks after Skippy has loaded the model
-/// and can expose its authoritative tokenizer capability.
+/// and can expose its authoritative tokenizer capability. `extra_generation_sink`
+/// is an optional host-owned generation lifecycle sink (for example a runtime-event
+/// adapter) that the implementation must fan generation observations out to
+/// alongside its own sink, since `ModelServingHooks` has a single
+/// `generation_receipt` slot.
 pub trait ModelServingHooksFactory: Send + Sync {
-    fn create(&self, tokenizer: TokenizerCapability) -> Result<ModelServingHooks>;
+    fn create(
+        &self,
+        tokenizer: TokenizerCapability,
+        extra_generation_sink: Option<Arc<dyn GenerationLifecycleIngress>>,
+    ) -> Result<ModelServingHooks>;
 }
 
 impl fmt::Debug for dyn ModelServingHooksFactory {
@@ -26,6 +35,7 @@ pub type SharedModelServingHooksFactory = Arc<dyn ModelServingHooksFactory>;
 pub struct ModelServingHooks {
     generation_receipt: Option<GenerationReceiptConfig>,
     linear_proposal_ingress: Option<LinearProposalIngressConfig>,
+    kv_lifecycle_observer: Option<Arc<dyn KvLifecycleObserver>>,
 }
 
 impl ModelServingHooks {
@@ -38,6 +48,12 @@ impl ModelServingHooks {
     #[must_use]
     pub fn with_linear_proposal_ingress(mut self, config: LinearProposalIngressConfig) -> Self {
         self.linear_proposal_ingress = Some(config);
+        self
+    }
+
+    #[must_use]
+    pub fn with_kv_lifecycle_observer(mut self, observer: Arc<dyn KvLifecycleObserver>) -> Self {
+        self.kv_lifecycle_observer = Some(observer);
         self
     }
 
@@ -58,6 +74,10 @@ impl ModelServingHooks {
     pub fn linear_proposal_ingress(&self) -> Option<LinearProposalIngressConfig> {
         self.linear_proposal_ingress.clone()
     }
+
+    pub fn kv_lifecycle_observer(&self) -> Option<Arc<dyn KvLifecycleObserver>> {
+        self.kv_lifecycle_observer.clone()
+    }
 }
 
 impl fmt::Debug for ModelServingHooks {
@@ -71,6 +91,10 @@ impl fmt::Debug for ModelServingHooks {
             .field(
                 "linear_proposal_ingress",
                 &self.linear_proposal_ingress.as_ref().map(|_| "configured"),
+            )
+            .field(
+                "kv_lifecycle_observer",
+                &self.kv_lifecycle_observer.as_ref().map(|_| "configured"),
             )
             .finish()
     }

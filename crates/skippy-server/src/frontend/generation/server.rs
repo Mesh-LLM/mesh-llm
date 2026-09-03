@@ -243,6 +243,7 @@ pub struct EmbeddedOpenAiArgs {
     pub generation_receipt: Option<GenerationReceiptConfig>,
     pub linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+    pub kv_lifecycle_observer: Option<Arc<dyn crate::kv_integration::KvLifecycleObserver>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -497,7 +498,11 @@ fn embedded_openai_backend_with_scheduler(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
+    let kv = KvStageIntegration::from_config_with_observer(
+        &args.config,
+        args.kv_lifecycle_observer.clone(),
+    )?
+    .map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,

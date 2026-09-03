@@ -13,8 +13,9 @@ use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKv
 use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
-    EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
-    ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
+    EXACT_STATE_RECORD_CAPACITY, KvLifecycleEvent, KvLifecycleObserver, KvStageIntegration,
+    PendingExactStateRecord, RadixExactEntry, ResidentSequencePool, StageKvMode,
+    StagePrefixCachePayload,
     model_capability::{ModelKvCapability, inspect_model_kv_capability},
     output_tokens::OutputTokenCache,
 };
@@ -26,6 +27,20 @@ use super::model_capability::{
 
 impl KvStageIntegration {
     pub fn from_config(config: &StageConfig) -> Result<Option<Self>> {
+        Self::from_config_with_observer(config, None)
+    }
+
+    /// Identical to [`Self::from_config`], but accepts the lifecycle
+    /// observer at CONSTRUCTION time -- before any real initialization
+    /// work happens -- so `KvInitStarted`/`KvInitCompleted`/`KvInitFailed`
+    /// can be observed. Every disabled/unsupported/not-applicable early
+    /// `Ok(None)` return above the real-initialization point never calls
+    /// the observer at all: those are deliberate non-attempts, not
+    /// failures, and this function does not misreport them as either.
+    pub fn from_config_with_observer(
+        config: &StageConfig,
+        observer: Option<Arc<dyn KvLifecycleObserver>>,
+    ) -> Result<Option<Self>> {
         let Some(cache_config) = effective_cache_config(config) else {
             return Ok(None);
         };
@@ -61,6 +76,12 @@ impl KvStageIntegration {
         if resident_config.max_entries == 0 {
             return Ok(None);
         }
+        // Past this point every remaining early return is a genuine failure,
+        // never a disabled/unsupported non-attempt -- this is where real
+        // initialization (radix cache, blob store, worker thread) begins.
+        if let Some(observer) = observer.as_ref() {
+            observer.observe(KvLifecycleEvent::KvInitStarted);
+        }
         // Activation checkpoints still use their own sparse policy; serving KV
         // contributes one full token path to the radix tree.
         checkpoint_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
@@ -83,7 +104,8 @@ impl KvStageIntegration {
         let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
         let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
-        std::thread::Builder::new()
+        let worker_observer = observer.clone();
+        let spawned = std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
@@ -93,6 +115,7 @@ impl KvStageIntegration {
                         &worker_exact_state_records_pending,
                         &worker_exact_state_record_worker_healthy,
                         &worker_exact_state_record_worker_panics,
+                        worker_observer.as_ref(),
                         pending,
                         |pending| {
                             store_exact_radix_record(
@@ -105,7 +128,16 @@ impl KvStageIntegration {
                         },
                     );
                 }
-            })?;
+            });
+        if spawned.is_err() {
+            if let Some(observer) = observer.as_ref() {
+                observer.observe(KvLifecycleEvent::KvInitFailed);
+            }
+        }
+        spawned?;
+        if let Some(observer) = observer.as_ref() {
+            observer.observe(KvLifecycleEvent::KvInitCompleted);
+        }
         Ok(Some(Self {
             mode,
             payload,
@@ -132,6 +164,7 @@ impl KvStageIntegration {
             cache_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             output_tokens: Arc::new(Mutex::new(OutputTokenCache::new(exact_max_entries))),
             split_prefill_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            kv_lifecycle_observer: observer,
         }))
     }
 }

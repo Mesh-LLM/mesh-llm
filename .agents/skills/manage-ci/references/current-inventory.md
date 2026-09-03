@@ -417,6 +417,9 @@ source commit.
 - `scripts/plan-ci.py` is the only routing implementation.
 - `ci/ownership.yml` maps paths and direct crates to semantic domains; unknown
   paths fail closed.
+- Runtime-event contracts and the future host `api/routes/runtime_events/` and
+  `runtime_events/` directories map directly to `protocol`; the workspace-wide
+  crate rule also maps the contract crate to `rust`.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
   cache modes and worker budgets.
 - `ci/ci-plan.schema.json` versions the machine-readable output.

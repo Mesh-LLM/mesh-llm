@@ -272,6 +272,7 @@ impl StageOpenAiBackend {
                 session_id: ids.session_id,
                 agent_session_id: ids.agent_session_id.clone(),
                 prompt_token_ids: Arc::clone(prompt_token_ids),
+                frontend_request_id: ids.frontend_request_id,
             });
         }
 
@@ -465,6 +466,7 @@ impl StageOpenAiBackend {
                         observation: receipt_observation,
                         cancelled: receipt_cancelled,
                         model_generation_elapsed: receipt_model_generation_elapsed,
+                        frontend_request_id: ids.frontend_request_id,
                     },
                     generation_succeeded,
                 )
@@ -509,6 +511,7 @@ impl StageOpenAiBackend {
                 session_id,
                 agent_session_id: request.ids.agent_session_id.clone(),
                 prompt_token_ids: Arc::clone(prompt_token_ids),
+                frontend_request_id: request.ids.frontend_request_id,
             });
         }
 
@@ -919,6 +922,7 @@ impl StageOpenAiBackend {
                 observation: receipt_observation,
                 cancelled: receipt_cancelled,
                 model_generation_elapsed: receipt_model_generation_elapsed,
+                frontend_request_id: request.ids.frontend_request_id,
             },
             generation_succeeded,
         );

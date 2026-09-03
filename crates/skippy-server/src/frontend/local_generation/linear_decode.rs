@@ -443,7 +443,8 @@ mod tests {
             iteration_scheduler,
         };
         let sampling = SamplingConfig::default();
-        let ids = OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false);
+        let ids =
+            OpenAiGenerationIds::new_with_trust(OpenAiCacheHints::default(), None, false, None);
         let prompt_token_ids = [1, 2];
         let request = LocalGeneration {
             prompt_token_ids: &prompt_token_ids,

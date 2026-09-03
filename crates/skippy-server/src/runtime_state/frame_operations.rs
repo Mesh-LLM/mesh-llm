@@ -533,6 +533,9 @@ impl RuntimeState {
         session.trim_session(token_count)?;
         self.session_token_counts
             .insert(session_id.to_string(), token_count);
+        self.notify_session_lifecycle(super::lifecycle::SessionLifecycleEvent::SessionTrimmed {
+            token_count,
+        });
         Ok(())
     }
 

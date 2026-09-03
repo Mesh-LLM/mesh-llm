@@ -69,6 +69,13 @@ mod dynamic {
         if skippy_runtime::native_runtime_loaded() {
             return Ok(None);
         }
+        // Reserved before any discovery/load work begins. A `?` failure
+        // below drops the guard unresolved, which synthesizes
+        // `RuntimeResolutionFailed`/`terminal_not_delivered` through the
+        // engine's own Drop mechanism -- acceptable here since the actual
+        // failure reason is already captured by the returned `anyhow::Error`
+        // and the tracing/audit surfaces this function's callers already use.
+        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
         let cache = default_native_runtime_cache()?;
         let local_runtimes =
             crate::system::native_runtime_install::discover_local_native_runtimes(&[], &cache)?;
@@ -81,6 +88,12 @@ mod dynamic {
             &RuntimeSelection::Recommended,
         )?
         else {
+            // No compatible plan found at all -- a real
+            // `NativeLibraryUnavailable`/`RuntimeResolutionFailed`, not a
+            // no-op (the earlier `native_runtime_loaded()` check above is
+            // the ONLY genuine "not needed" case in this function, and it
+            // returns before `resolution` is even constructed).
+            resolution.unavailable(mesh_llm_runtime_event_contracts::ReasonCode::MissingArtifact);
             return Ok(None);
         };
         unsafe { skippy_runtime::load_native_runtime_libraries(&plan.libraries) }
@@ -92,6 +105,10 @@ mod dynamic {
                     plan.root.display()
                 )
             })?;
+        resolution.library_loaded();
+        install_runtime_scoped_event_reporter();
+        resolution.initialized();
+        resolution.completed();
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
             libraries: plan.libraries,
@@ -101,7 +118,8 @@ mod dynamic {
     pub(crate) async fn try_load_installed_native_runtime(
         startup_selection: NativeRuntimeStartupSelection,
     ) -> Result<Option<LoadedNativeRuntime>> {
-        try_load_installed_native_runtime_with(
+        let resolution = crate::system::native_runtime_events::NativeRuntimeResolution::begin();
+        let outcome = try_load_installed_native_runtime_with(
             skippy_runtime::native_runtime_loaded,
             default_native_runtime_cache,
             host_runtime_profile,
@@ -109,11 +127,38 @@ mod dynamic {
             default_install_executor,
             startup_selection,
             |libraries| {
-                unsafe { skippy_runtime::load_native_runtime_libraries(libraries) }
-                    .map_err(anyhow::Error::from)
+                let result = unsafe { skippy_runtime::load_native_runtime_libraries(libraries) }
+                    .map_err(anyhow::Error::from);
+                if result.is_ok() {
+                    install_runtime_scoped_event_reporter();
+                }
+                result
             },
         )
-        .await
+        .await;
+        match &outcome {
+            Ok(Some(_)) => {
+                resolution.initialized();
+                resolution.completed();
+            }
+            Ok(None) => resolution.not_needed(),
+            Err(_) => {
+                resolution.failed(mesh_llm_runtime_event_contracts::ReasonCode::ArtifactIoFailure)
+            }
+        }
+        outcome
+    }
+
+    /// Installs the process-global runtime-scoped event reporter right after
+    /// a native runtime library loads. A no-op on a runtime that doesn't
+    /// advertise the `runtime_event_reporter` family (probed by
+    /// `skippy_runtime::probe_capabilities` internally) — older or
+    /// differently-composed runtimes simply keep operating without this
+    /// reporter, matching the model-open feature-probe fallback contract.
+    fn install_runtime_scoped_event_reporter() {
+        skippy_runtime::install_runtime_event_reporter(|event| {
+            skippy_runtime::write_native_log_note(format!("runtime event: {event:?}"));
+        });
     }
 
     async fn try_load_installed_native_runtime_with<

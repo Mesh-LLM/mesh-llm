@@ -26,11 +26,13 @@ mod cache_affinity;
 mod config;
 mod exact_state;
 mod identity;
+pub mod lifecycle;
 mod model_capability;
 mod output_tokens;
 mod records;
 mod resident_prefix;
 
+pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
 pub use records::{
     AttachedPage, ExactStateRecord, ExactStateRestore, LookupBatchOutcome, PrefillKvIdentity,
     RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
@@ -155,6 +157,7 @@ pub struct KvStageIntegration {
     pub(crate) cache_healthy: Arc<AtomicBool>,
     pub(crate) output_tokens: Arc<Mutex<output_tokens::OutputTokenCache>>,
     pub(crate) split_prefill_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
+    pub(crate) kv_lifecycle_observer: Option<Arc<dyn KvLifecycleObserver>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,25 +313,34 @@ fn run_exact_state_record_job(
     pending_count: &AtomicUsize,
     worker_healthy: &AtomicBool,
     worker_panics: &AtomicU64,
+    observer: Option<&Arc<dyn KvLifecycleObserver>>,
     pending: PendingExactStateRecord,
     work: impl FnOnce(PendingExactStateRecord) -> Result<()>,
 ) {
+    let notify = |event: KvLifecycleEvent| {
+        if let Some(observer) = observer {
+            observer.observe(event);
+        }
+    };
     let page_id = pending.page_id.clone();
     if !worker_healthy.load(std::sync::atomic::Ordering::Acquire) {
         dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        notify(KvLifecycleEvent::ExactStateRecordFailed);
         finish_exact_state_record(inflight_records, pending_count, &page_id);
         return;
     }
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(pending))) {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => notify(KvLifecycleEvent::ExactStateRecordCompleted),
         Ok(Err(_)) => {
             dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            notify(KvLifecycleEvent::ExactStateRecordFailed);
         }
         Err(_) => {
             dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             worker_panics.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             worker_healthy.store(false, std::sync::atomic::Ordering::Release);
+            notify(KvLifecycleEvent::ExactStateRecordFailed);
         }
     }
     finish_exact_state_record(inflight_records, pending_count, &page_id);
@@ -405,6 +417,20 @@ fn verify_resident_ownership(
 }
 
 impl KvStageIntegration {
+    /// Attaches an optional resident-prefix cache lifecycle observer.
+    /// Never required; a stage with no observer behaves identically.
+    #[must_use]
+    pub fn with_kv_lifecycle_observer(mut self, observer: Arc<dyn KvLifecycleObserver>) -> Self {
+        self.kv_lifecycle_observer = Some(observer);
+        self
+    }
+
+    pub(crate) fn notify_kv_lifecycle(&self, event: KvLifecycleEvent) {
+        if let Some(observer) = self.kv_lifecycle_observer.as_ref() {
+            observer.observe(event);
+        }
+    }
+
     pub fn mode(&self) -> StageKvMode {
         self.mode
     }
@@ -473,7 +499,7 @@ impl KvStageIntegration {
         &self,
         pending: PendingExactStateRecord,
     ) -> ExactStateRecordAdmission {
-        enqueue_exact_state_record(
+        let admission = enqueue_exact_state_record(
             &self.exact_state_record_tx,
             &self.inflight_records,
             &self.exact_state_records_queued,
@@ -481,7 +507,14 @@ impl KvStageIntegration {
             &self.exact_state_records_pending,
             &self.exact_state_record_worker_healthy,
             pending,
-        )
+        );
+        if matches!(
+            admission,
+            ExactStateRecordAdmission::DroppedFull | ExactStateRecordAdmission::WorkerStopped
+        ) {
+            self.notify_kv_lifecycle(KvLifecycleEvent::ExactStateRecordFailed);
+        }
+        admission
     }
 
     pub async fn hello(&self) -> Result<()> {
@@ -881,9 +914,17 @@ mod exact_state_record_queue_tests {
 
     use super::{
         BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
-        PendingExactStateRecord, enqueue_exact_state_record, has_exact_state_record_capacity,
-        run_exact_state_record_job,
+        KvLifecycleEvent, KvLifecycleObserver, PendingExactStateRecord, enqueue_exact_state_record,
+        has_exact_state_record_capacity, run_exact_state_record_job,
     };
+
+    struct RecordingObserver(Arc<Mutex<Vec<KvLifecycleEvent>>>);
+
+    impl KvLifecycleObserver for RecordingObserver {
+        fn observe(&self, event: KvLifecycleEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
 
     fn pending(page_id: &str) -> PendingExactStateRecord {
         PendingExactStateRecord {
@@ -999,6 +1040,62 @@ mod exact_state_record_queue_tests {
     }
 
     #[test]
+    fn worker_success_notifies_completed_not_mere_admission() {
+        let inflight = Mutex::new(BTreeSet::from(["written".to_string()]));
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(1);
+        let worker_healthy = AtomicBool::new(true);
+        let worker_panics = AtomicU64::new(0);
+        let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
+        let observer: Arc<dyn KvLifecycleObserver> = Arc::new(RecordingObserver(events.clone()));
+
+        run_exact_state_record_job(
+            &inflight,
+            &dropped,
+            &pending_count,
+            &worker_healthy,
+            &worker_panics,
+            Some(&observer),
+            pending("written"),
+            |_| Ok(()),
+        );
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![KvLifecycleEvent::ExactStateRecordCompleted]
+        );
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn worker_write_error_notifies_failed_not_completed() {
+        let inflight = Mutex::new(BTreeSet::from(["broken".to_string()]));
+        let dropped = AtomicU64::new(0);
+        let pending_count = AtomicUsize::new(1);
+        let worker_healthy = AtomicBool::new(true);
+        let worker_panics = AtomicU64::new(0);
+        let events: Arc<Mutex<Vec<KvLifecycleEvent>>> = Arc::default();
+        let observer: Arc<dyn KvLifecycleObserver> = Arc::new(RecordingObserver(events.clone()));
+
+        run_exact_state_record_job(
+            &inflight,
+            &dropped,
+            &pending_count,
+            &worker_healthy,
+            &worker_panics,
+            Some(&observer),
+            pending("broken"),
+            |_| anyhow::bail!("simulated write failure"),
+        );
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![KvLifecycleEvent::ExactStateRecordFailed]
+        );
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn worker_panic_fails_closed_and_releases_all_record_bookkeeping() {
         let (sender, _receiver) = sync_channel(1);
         let inflight = Mutex::new(BTreeSet::from(["panicked".to_string()]));
@@ -1014,6 +1111,7 @@ mod exact_state_record_queue_tests {
             &pending_count,
             &worker_healthy,
             &worker_panics,
+            None,
             pending("panicked"),
             |_| panic!("injected exact-record worker failure"),
         );

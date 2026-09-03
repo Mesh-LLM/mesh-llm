@@ -384,6 +384,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         dashboard_context_usage,
         runtime,
     } = ctx;
+    super::node_lifecycle_events::emit_node_draining();
     node.broadcast_leaving().await;
 
     unpublish_run_auto_nostr_listing(options).await;
@@ -430,6 +431,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     node.close_endpoint().await;
 
     cleanup_run_auto_runtime_dir(runtime);
+    super::node_lifecycle_events::emit_node_stopped();
 }
 
 pub(super) async fn run_auto_handle_control_request(

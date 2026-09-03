@@ -48,10 +48,12 @@ pub(super) fn runtime_model_audit_context(
     }
 }
 
+mod events;
 mod load;
 pub(crate) mod reconciliation;
 mod unload;
 
+pub(super) use events::{LoadOperation, UnloadOperation, reconcile_process_crash};
 pub(crate) use load::{normalize_runtime_model_request_for_config, run_auto_load_runtime_model};
 pub(crate) use unload::{run_auto_handle_runtime_exit, run_auto_unload_runtime_model};
 

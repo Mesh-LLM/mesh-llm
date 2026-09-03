@@ -1,0 +1,598 @@
+schema_version = 1
+spec_path = ".omo/specs/event-system.md"
+spec_sha256 = "0ffa4233627e7f41a65e6d80b4b25f9b3065e3f936683c15e2f52a9c1095298a"
+amendment_procedure = "Change the inventory, generated manifest/docs/fixtures, exhaustive Rust tests, and schema-version review atomically."
+
+privacy_classes = ["internal", "trusted_local", "aggregate"]
+delivery_classes = ["terminal", "state_transition", "progress", "diagnostic"]
+native_callback_kinds = ["ModelOpenStarted", "ModelOpenProgress", "BackendDeviceSelected", "ModelOpenFinished", "ModelOpenFailedHandled"]
+reason_codes = [
+  "invalid_configuration", "unsupported_capability", "missing_artifact",
+  "artifact_io_failure", "model_format_or_load_failure",
+  "backend_initialization_failure", "device_unavailable",
+  "resource_allocation_failure", "out_of_memory", "context_exhausted",
+  "stage_unavailable", "timeout", "cancellation", "process_crash",
+  "incompatible_abi_or_feature_set", "internal_runtime_failure",
+  "unknown_failure", "terminal_not_delivered", "reservation_exhausted",
+]
+
+projected_envelope_keys = [
+  "version", "cursor", "process_instance_id", "sequence", "rebuild_generation",
+]
+projected_event_keys = [
+  "category", "kind", "producer", "severity", "summary", "scope", "state",
+  "progress", "outcome", "reason_code", "duration_ms", "numeric_summaries",
+]
+base_projected_event_keys = ["category", "kind", "producer", "severity"]
+forbidden_projection_keys = [
+  "prompt", "completion", "tool_arguments", "tool_results", "media_content",
+  "token_ids", "token_text", "logits", "absolute_path", "private_url",
+  "credential", "native_pointer", "hardware_identifier", "cache_key",
+]
+
+[[projection_profiles]]
+name = "state"
+keys = ["scope", "state", "summary"]
+[[projection_profiles]]
+name = "progress"
+keys = ["scope", "progress", "numeric_summaries"]
+[[projection_profiles]]
+name = "success"
+keys = ["scope", "state", "outcome", "duration_ms", "numeric_summaries"]
+[[projection_profiles]]
+name = "failure"
+keys = ["scope", "state", "outcome", "reason_code", "duration_ms", "summary"]
+[[projection_profiles]]
+name = "capacity"
+keys = ["scope", "state", "numeric_summaries"]
+[[projection_profiles]]
+name = "diagnostic"
+keys = ["scope", "state", "summary", "reason_code"]
+[[projection_profiles]]
+name = "health"
+keys = ["scope", "state", "numeric_summaries", "summary"]
+[[projection_profiles]]
+name = "selection"
+keys = ["scope", "state", "numeric_summaries"]
+
+[[carriers]]
+name = "schema_version"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "category_kind"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "producer"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "severity"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "wall_clock_time"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "process_monotonic_time"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "native_monotonic_time"
+location = "NativeSourceEnvelope"
+[[carriers]]
+name = "native_sequence"
+location = "NativeSourceEnvelope"
+[[carriers]]
+name = "process_instance_id"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "event_sequence"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "root_operation_id"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "child_operation_id"
+location = "RuntimeEventEnvelope"
+[[carriers]]
+name = "emitter_identity"
+location = "NativeSourceEnvelope"
+[[carriers]]
+name = "scope_identities"
+location = "FamilyFact"
+[[carriers]]
+name = "previous_current_state"
+location = "FamilyFact"
+[[carriers]]
+name = "progress"
+location = "FamilyFact"
+[[carriers]]
+name = "outcome_reason"
+location = "FamilyFact"
+[[carriers]]
+name = "duration"
+location = "FamilyFact"
+[[carriers]]
+name = "bounded_summaries"
+location = "FamilyFact"
+
+[[terminal_outcome_mappings]]
+variant = "Completed"
+event_id = "request_completed"
+outcome = "success"
+[[terminal_outcome_mappings]]
+variant = "CompletedWithStatus"
+event_id = "request_completed"
+outcome = "success"
+[[terminal_outcome_mappings]]
+variant = "CompletedWithUsage"
+event_id = "request_completed"
+outcome = "success"
+[[terminal_outcome_mappings]]
+variant = "Failed"
+event_id = "request_failed"
+outcome = "failure"
+[[terminal_outcome_mappings]]
+variant = "FailedWithStatus"
+event_id = "request_failed"
+outcome = "failure"
+[[terminal_outcome_mappings]]
+variant = "Rejected"
+event_id = "request_rejected"
+outcome = "rejected"
+[[terminal_outcome_mappings]]
+variant = "RejectedWithStatus"
+event_id = "request_rejected"
+outcome = "rejected"
+[[terminal_outcome_mappings]]
+variant = "Cancelled"
+event_id = "request_cancelled"
+outcome = "cancelled"
+[[terminal_outcome_mappings]]
+variant = "Dropped"
+event_id = "request_failed"
+outcome = "unknown"
+
+[[same_fact_rulings]]
+ids = ["model_preparation_completed"]
+ruling = "Section 8.2 bullets 4 and 5 name one completion fact; emit it once."
+[[same_fact_rulings]]
+ids = ["native_model_load_completed", "native_model_loaded"]
+ruling = "The callback fact derives the Rust availability input but does not imply availability."
+[[same_fact_rulings]]
+ids = ["backend_device_selected", "device_selected"]
+ruling = "Model-open selection and node-local device health are separate projections of one native observation."
+
+[[families]]
+section = "8.1"
+enum_name = "NativeRuntimeEventKind"
+owning_crates = ["mesh-llm-host-runtime", "skippy-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/system/native_runtime.rs", "crates/skippy-runtime/src/native.rs"]
+producer_symbols = ["system::native_runtime::try_load_installed_native_runtime", "skippy_runtime::native"]
+authoritative_outcome = "runtime resolution and process supervision"
+reducer_effect = "native runtime compatibility and health"
+projection = "runtime_state.runtime and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.2"
+enum_name = "ModelPreparationEventKind"
+owning_crates = ["mesh-llm-host-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/models/catalog.rs", "crates/mesh-llm-host-runtime/src/inference/skippy/materialization.rs"]
+producer_symbols = ["models::catalog", "inference::skippy::materialization"]
+authoritative_outcome = "catalog, resolver, download, and materialization returns"
+reducer_effect = "model preparation state"
+projection = "runtime_state.models and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.3"
+enum_name = "ModelLoadingEventKind"
+owning_crates = ["mesh-llm-host-runtime", "skippy-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/runtime/local.rs", "crates/skippy-runtime/src/runtime_events.rs"]
+producer_symbols = ["runtime::local", "skippy_runtime::runtime_events::model_open_event_trampoline"]
+authoritative_outcome = "native model-open return"
+reducer_effect = "model load operation state"
+projection = "runtime_state.models and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.4"
+enum_name = "ModelAvailabilityEventKind"
+owning_crates = ["mesh-llm-host-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/runtime/serving_surface.rs", "crates/mesh-llm-host-runtime/src/runtime/model_reconciliation/mod.rs"]
+producer_symbols = ["runtime::serving_surface", "runtime::model_reconciliation"]
+authoritative_outcome = "Rust serving-surface readiness"
+reducer_effect = "backend-neutral model availability"
+projection = "runtime_state.models and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.5"
+enum_name = "ModelUnloadingEventKind"
+owning_crates = ["mesh-llm-host-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/runtime/local.rs", "crates/mesh-llm-host-runtime/src/runtime/model_reconciliation/mod.rs"]
+producer_symbols = ["runtime::local", "runtime::model_reconciliation"]
+authoritative_outcome = "Rust teardown and process supervision"
+reducer_effect = "model draining and removal"
+projection = "runtime_state.models and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.6"
+enum_name = "StageTopologyEventKind"
+owning_crates = ["mesh-llm-host-runtime", "skippy-topology"]
+source_paths = ["crates/mesh-llm-host-runtime/src/inference/skippy/stage/mod.rs", "crates/mesh-llm-host-runtime/src/runtime/local_split/loading.rs"]
+producer_symbols = ["inference::skippy::stage", "runtime::local_split::loading"]
+authoritative_outcome = "stage processes and topology coordinator"
+reducer_effect = "stage and topology readiness"
+projection = "runtime_state.stages and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 10
+[[families]]
+section = "8.7"
+enum_name = "SessionEventKind"
+owning_crates = ["skippy-runtime", "skippy-server"]
+source_paths = ["crates/skippy-runtime/src/lib.rs", "crates/skippy-server/src/runtime_state.rs"]
+producer_symbols = ["skippy_runtime", "skippy_server::runtime_state"]
+authoritative_outcome = "session and lane state machine"
+reducer_effect = "session counts, state, and capacity"
+projection = "runtime_state.sessions and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 12
+[[families]]
+section = "8.8"
+enum_name = "RequestEventKind"
+owning_crates = ["mesh-llm-host-runtime", "openai-frontend"]
+source_paths = ["crates/mesh-llm-host-runtime/src/logging/openai_lifecycle.rs", "crates/openai-frontend/src/router.rs"]
+producer_symbols = ["logging::openai_lifecycle", "openai_frontend::router"]
+authoritative_outcome = "OpenAI request result and TerminalOutcome"
+reducer_effect = "request admission and inflight state"
+projection = "runtime_state.requests and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 11
+[[families]]
+section = "8.9"
+enum_name = "PrefillEventKind"
+owning_crates = ["skippy-server", "mesh-llm-host-runtime"]
+source_paths = ["crates/skippy-server/src/frontend/generation_receipt.rs", "crates/mesh-llm-host-runtime/src/inference/pipeline.rs"]
+producer_symbols = ["skippy_server::frontend::generation_receipt", "inference::pipeline"]
+authoritative_outcome = "prefill and tokenization returns"
+reducer_effect = "request prefill state"
+projection = "runtime_event and aggregate telemetry"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 12
+[[families]]
+section = "8.10"
+enum_name = "GenerationEventKind"
+owning_crates = ["skippy-server", "openai-frontend"]
+source_paths = ["crates/skippy-server/src/frontend.rs", "crates/openai-frontend/src/sse.rs"]
+producer_symbols = ["skippy_server::frontend", "openai_frontend::sse"]
+authoritative_outcome = "generation receipt and response stream outcome"
+reducer_effect = "request generation state"
+projection = "runtime_event and aggregate telemetry"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 12
+[[families]]
+section = "8.11"
+enum_name = "KvRuntimeStateEventKind"
+owning_crates = ["skippy-server", "mesh-llm-host-runtime", "skippy-cache"]
+source_paths = ["crates/skippy-server/src/runtime_state.rs", "crates/mesh-llm-host-runtime/src/inference/skippy/kv_cache.rs"]
+producer_symbols = ["skippy_server::runtime_state", "inference::skippy::kv_cache"]
+authoritative_outcome = "KV and cache operation returns"
+reducer_effect = "cache occupancy, pressure, and context state"
+projection = "runtime_state.cache and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 12
+[[families]]
+section = "8.12"
+enum_name = "ResourceHealthEventKind"
+owning_crates = ["mesh-llm-host-runtime", "skippy-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/system/native_runtime.rs", "crates/skippy-runtime/src/devices.rs"]
+producer_symbols = ["system::native_runtime", "skippy_runtime::devices"]
+authoritative_outcome = "backend and resource operation returns"
+reducer_effect = "device and resource health"
+projection = "runtime_state.devices and runtime_event"
+privacy_class = "trusted_local"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.13"
+enum_name = "DiagnosticEventKind"
+owning_crates = ["mesh-llm-host-runtime", "skippy-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/logging/lifecycle.rs", "crates/skippy-runtime/src/runtime_events.rs"]
+producer_symbols = ["logging::lifecycle", "skippy_runtime::runtime_events"]
+authoritative_outcome = "underlying operation return"
+reducer_effect = "degraded state and diagnostic counters"
+projection = "runtime_event and runtime_health"
+privacy_class = "trusted_local"
+default_delivery_class = "diagnostic"
+default_projection_profile = "diagnostic"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.14"
+enum_name = "NodeAvailabilityEventKind"
+owning_crates = ["mesh-llm-host-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/runtime/serving_surface.rs", "crates/mesh-llm-host-runtime/src/runtime_data/snapshots.rs"]
+producer_symbols = ["runtime::serving_surface", "runtime_data::snapshots"]
+authoritative_outcome = "host reducer state"
+reducer_effect = "node serving availability"
+projection = "runtime_state.node and existing routing projection"
+privacy_class = "aggregate"
+default_delivery_class = "state_transition"
+default_projection_profile = "state"
+test = "inventory_contract"
+migration_task = 9
+[[families]]
+section = "8.15"
+enum_name = "EventSystemHealthEventKind"
+owning_crates = ["mesh-llm-host-runtime"]
+source_paths = ["crates/mesh-llm-host-runtime/src/runtime_data/metrics.rs", "crates/mesh-llm-host-runtime/src/api/routes/logs/events/mod.rs"]
+producer_symbols = ["runtime_data::metrics", "api::routes::logs::events"]
+authoritative_outcome = "event engine counters"
+reducer_effect = "coalesced runtime health"
+projection = "runtime_health"
+privacy_class = "aggregate"
+default_delivery_class = "state_transition"
+default_projection_profile = "health"
+test = "inventory_contract"
+migration_task = 3
+
+[[event_projection_overrides]]
+profile = "progress"
+event_ids = [
+  "model_download_progress", "model_preparation_progress", "model_load_progress",
+  "prefill_progress", "generation_progress",
+]
+
+[[event_projection_overrides]]
+profile = "success"
+event_ids = [
+  "runtime_resolution_completed", "native_library_loaded",
+  "abi_feature_compatibility_established", "runtime_initialized", "runtime_stopped",
+  "model_resolution_completed", "model_download_completed", "model_preparation_completed",
+  "native_model_load_completed", "native_model_loaded", "model_available",
+  "model_recovery_completed", "unload_completed", "stage_ready", "stage_stopped",
+  "topology_ready", "stage_connection_established", "stage_connection_recovered",
+  "session_created", "session_closed", "session_reclaimed", "request_admitted",
+  "request_completed", "tokenization_completed", "prefill_completed",
+  "media_prefill_completed", "prompt_cache_restore_hit", "prompt_cache_restore_miss",
+  "prompt_cache_restore_partial", "first_token_produced", "generation_completed",
+  "stop_condition_reached", "kv_cache_initialization_completed", "cache_lookup_hit",
+  "cache_lookup_miss", "cache_lookup_partial", "prefix_restored", "checkpoint_restored",
+  "cache_record_completed", "runtime_state_import_completed",
+  "runtime_state_export_completed", "backend_initialization_completed", "device_ready",
+  "device_recovered", "resource_allocation_completed", "memory_pressure_cleared",
+  "backend_fallback_activated", "cpu_fallback_activated", "warning_cleared",
+  "fallback_applied", "degraded_operation_exited", "node_accepting_requests",
+  "node_stopped", "telemetry_exporter_recovered",
+]
+
+[[event_projection_overrides]]
+profile = "failure"
+event_ids = [
+  "runtime_resolution_failed", "native_library_rejected", "native_library_unavailable",
+  "abi_feature_compatibility_failed", "runtime_crashed", "model_resolution_failed",
+  "model_download_failed", "model_download_cancelled", "model_preparation_failed",
+  "model_preparation_cancelled", "model_load_failed", "model_load_cancelled",
+  "model_degraded", "model_unavailable", "model_recovery_failed", "unload_failed",
+  "forced_unload", "stage_degraded", "stage_unavailable", "stage_failed",
+  "topology_degraded", "topology_unavailable", "stage_connection_lost", "session_failed",
+  "session_abandoned", "request_rejected", "request_cancelled", "request_timed_out",
+  "request_failed", "tokenization_failed", "prefill_cancelled", "prefill_failed",
+  "media_prefill_failed", "prompt_cache_restore_error", "generation_cancelled",
+  "generation_timed_out", "generation_failed", "kv_cache_initialization_failed",
+  "cache_lookup_error", "cache_record_failed", "context_exhausted",
+  "runtime_state_import_failed", "runtime_state_export_failed",
+  "backend_initialization_failed", "device_degraded", "device_unavailable",
+  "resource_allocation_failed", "memory_pressure_crossed", "out_of_memory_condition",
+  "compute_failure", "device_lost", "recoverable_native_failure",
+  "degraded_operation_entered", "fatal_native_failure", "invariant_protocol_violation",
+  "node_degraded", "node_unavailable", "subscriber_lagging", "subscriber_disconnected",
+  "reducer_error", "telemetry_exporter_degraded", "event_schema_incompatibility",
+  "unknown_native_event_received",
+]
+
+[[event_projection_overrides]]
+profile = "capacity"
+event_ids = [
+  "model_memory_allocation_summary", "model_memory_pressure", "model_capacity_changed",
+  "cache_trim", "cache_eviction", "cache_pressure_crossed", "cache_pressure_cleared",
+  "context_capacity_approaching_limit", "request_capacity_changed", "lane_capacity_changed",
+  "session_capacity_changed", "resource_pressure_changed",
+]
+
+[[event_projection_overrides]]
+profile = "selection"
+event_ids = ["backend_device_selected", "device_selected"]
+
+[catalog]
+terminal_event_ids = [
+  "runtime_resolution_completed", "runtime_resolution_failed", "runtime_stopped", "runtime_crashed",
+  "model_resolution_completed", "model_resolution_failed", "model_download_completed", "model_download_failed",
+  "model_download_cancelled", "model_preparation_completed", "model_preparation_failed", "model_preparation_cancelled",
+  "native_model_load_completed", "model_load_failed", "model_load_cancelled", "model_available", "model_unavailable",
+  "model_recovery_completed", "model_recovery_failed", "unload_completed", "unload_failed", "stage_ready", "stage_stopped",
+  "stage_failed", "topology_ready", "topology_unavailable", "session_closed", "session_failed", "request_rejected",
+  "request_completed", "request_cancelled", "request_timed_out", "request_failed", "tokenization_completed",
+  "tokenization_failed", "prefill_completed", "prefill_cancelled", "prefill_failed", "media_prefill_completed",
+  "media_prefill_failed", "generation_completed", "generation_cancelled", "generation_timed_out", "generation_failed",
+  "context_exhausted", "backend_initialization_failed", "resource_allocation_failed", "out_of_memory_condition",
+  "fatal_native_failure", "node_stopped",
+]
+progress_event_ids = [
+  "model_download_progress", "model_preparation_progress", "model_load_progress", "prefill_progress", "generation_progress",
+]
+
+spec_bullets = [
+  { section = "8.1", ordinal = 1, event_ids = ["runtime_resolution_started"] },
+  { section = "8.1", ordinal = 2, event_ids = ["runtime_resolution_completed", "runtime_resolution_failed"] },
+  { section = "8.1", ordinal = 3, event_ids = ["native_library_loaded", "native_library_rejected", "native_library_unavailable"] },
+  { section = "8.1", ordinal = 4, event_ids = ["abi_feature_compatibility_established", "abi_feature_compatibility_failed"] },
+  { section = "8.1", ordinal = 5, event_ids = ["runtime_initialized"] },
+  { section = "8.1", ordinal = 6, event_ids = ["runtime_stopping"] },
+  { section = "8.1", ordinal = 7, event_ids = ["runtime_stopped"] },
+  { section = "8.1", ordinal = 8, event_ids = ["runtime_crashed"] },
+  { section = "8.2", ordinal = 1, event_ids = ["model_queued"] },
+  { section = "8.2", ordinal = 2, event_ids = ["model_resolution_started", "model_resolution_completed", "model_resolution_failed"] },
+  { section = "8.2", ordinal = 3, event_ids = ["model_download_started", "model_download_progress", "model_download_completed", "model_download_failed", "model_download_cancelled"] },
+  { section = "8.2", ordinal = 4, event_ids = ["model_preparation_started", "model_preparation_progress", "model_preparation_completed", "model_preparation_failed", "model_preparation_cancelled"] },
+  { section = "8.2", ordinal = 5, event_ids = ["model_preparation_completed"] },
+  { section = "8.3", ordinal = 1, event_ids = ["model_load_requested"] },
+  { section = "8.3", ordinal = 2, event_ids = ["model_load_started"] },
+  { section = "8.3", ordinal = 3, event_ids = ["model_load_phase_changed"] },
+  { section = "8.3", ordinal = 4, event_ids = ["model_load_progress"] },
+  { section = "8.3", ordinal = 5, event_ids = ["backend_device_selected"] },
+  { section = "8.3", ordinal = 6, event_ids = ["model_memory_allocation_summary", "model_memory_pressure"] },
+  { section = "8.3", ordinal = 7, event_ids = ["native_model_load_completed"] },
+  { section = "8.3", ordinal = 8, event_ids = ["model_load_failed"] },
+  { section = "8.3", ordinal = 9, event_ids = ["model_load_cancelled"] },
+  { section = "8.4", ordinal = 1, event_ids = ["native_model_loaded"] },
+  { section = "8.4", ordinal = 2, event_ids = ["rust_backend_initialization_started"] },
+  { section = "8.4", ordinal = 3, event_ids = ["model_available"] },
+  { section = "8.4", ordinal = 4, event_ids = ["model_degraded"] },
+  { section = "8.4", ordinal = 5, event_ids = ["model_unavailable"] },
+  { section = "8.4", ordinal = 6, event_ids = ["model_recovery_started", "model_recovery_completed", "model_recovery_failed"] },
+  { section = "8.4", ordinal = 7, event_ids = ["model_capacity_changed"] },
+  { section = "8.5", ordinal = 1, event_ids = ["unload_requested"] },
+  { section = "8.5", ordinal = 2, event_ids = ["unload_started"] },
+  { section = "8.5", ordinal = 3, event_ids = ["session_draining_started", "session_draining_completed"] },
+  { section = "8.5", ordinal = 4, event_ids = ["unload_completed"] },
+  { section = "8.5", ordinal = 5, event_ids = ["unload_failed"] },
+  { section = "8.5", ordinal = 6, event_ids = ["forced_unload"] },
+  { section = "8.6", ordinal = 1, event_ids = ["stage_starting"] },
+  { section = "8.6", ordinal = 2, event_ids = ["stage_loading"] },
+  { section = "8.6", ordinal = 3, event_ids = ["stage_ready"] },
+  { section = "8.6", ordinal = 4, event_ids = ["stage_degraded"] },
+  { section = "8.6", ordinal = 5, event_ids = ["stage_unavailable"] },
+  { section = "8.6", ordinal = 6, event_ids = ["stage_stopping"] },
+  { section = "8.6", ordinal = 7, event_ids = ["stage_stopped"] },
+  { section = "8.6", ordinal = 8, event_ids = ["stage_failed"] },
+  { section = "8.6", ordinal = 9, event_ids = ["topology_assembling"] },
+  { section = "8.6", ordinal = 10, event_ids = ["topology_ready"] },
+  { section = "8.6", ordinal = 11, event_ids = ["topology_degraded"] },
+  { section = "8.6", ordinal = 12, event_ids = ["topology_unavailable"] },
+  { section = "8.6", ordinal = 13, event_ids = ["stage_connection_established", "stage_connection_lost", "stage_connection_recovered"] },
+  { section = "8.7", ordinal = 1, event_ids = ["session_requested"] },
+  { section = "8.7", ordinal = 2, event_ids = ["session_created"] },
+  { section = "8.7", ordinal = 3, event_ids = ["session_active"] },
+  { section = "8.7", ordinal = 4, event_ids = ["session_idle", "session_reusable"] },
+  { section = "8.7", ordinal = 5, event_ids = ["session_reset"] },
+  { section = "8.7", ordinal = 6, event_ids = ["session_trimmed"] },
+  { section = "8.7", ordinal = 7, event_ids = ["session_restored_from_prefix_cache", "session_restored_from_checkpoint"] },
+  { section = "8.7", ordinal = 8, event_ids = ["session_draining"] },
+  { section = "8.7", ordinal = 9, event_ids = ["session_closed"] },
+  { section = "8.7", ordinal = 10, event_ids = ["session_failed"] },
+  { section = "8.7", ordinal = 11, event_ids = ["session_abandoned", "session_reclaimed"] },
+  { section = "8.8", ordinal = 1, event_ids = ["request_received"] },
+  { section = "8.8", ordinal = 2, event_ids = ["request_queued"] },
+  { section = "8.8", ordinal = 3, event_ids = ["request_admitted"] },
+  { section = "8.8", ordinal = 4, event_ids = ["request_rejected"] },
+  { section = "8.8", ordinal = 5, event_ids = ["request_execution_started"] },
+  { section = "8.8", ordinal = 6, event_ids = ["request_completed"] },
+  { section = "8.8", ordinal = 7, event_ids = ["request_cancelled"] },
+  { section = "8.8", ordinal = 8, event_ids = ["request_timed_out"] },
+  { section = "8.8", ordinal = 9, event_ids = ["request_failed"] },
+  { section = "8.9", ordinal = 1, event_ids = ["prompt_processing_started"] },
+  { section = "8.9", ordinal = 2, event_ids = ["tokenization_completed", "tokenization_failed"] },
+  { section = "8.9", ordinal = 3, event_ids = ["prefill_started"] },
+  { section = "8.9", ordinal = 4, event_ids = ["prefill_progress"] },
+  { section = "8.9", ordinal = 5, event_ids = ["prefill_completed"] },
+  { section = "8.9", ordinal = 6, event_ids = ["prefill_cancelled"] },
+  { section = "8.9", ordinal = 7, event_ids = ["prefill_failed"] },
+  { section = "8.9", ordinal = 8, event_ids = ["media_prefill_started", "media_prefill_completed", "media_prefill_failed"] },
+  { section = "8.9", ordinal = 9, event_ids = ["prompt_cache_restore_hit", "prompt_cache_restore_miss", "prompt_cache_restore_partial", "prompt_cache_restore_error"] },
+  { section = "8.10", ordinal = 1, event_ids = ["generation_started"] },
+  { section = "8.10", ordinal = 2, event_ids = ["first_token_produced"] },
+  { section = "8.10", ordinal = 3, event_ids = ["generation_progress"] },
+  { section = "8.10", ordinal = 4, event_ids = ["generation_completed"] },
+  { section = "8.10", ordinal = 5, event_ids = ["generation_cancelled"] },
+  { section = "8.10", ordinal = 6, event_ids = ["generation_timed_out"] },
+  { section = "8.10", ordinal = 7, event_ids = ["generation_failed"] },
+  { section = "8.10", ordinal = 8, event_ids = ["stop_condition_reached"] },
+  { section = "8.11", ordinal = 1, event_ids = ["kv_cache_initialization_started", "kv_cache_initialization_completed", "kv_cache_initialization_failed"] },
+  { section = "8.11", ordinal = 2, event_ids = ["cache_lookup_hit", "cache_lookup_miss", "cache_lookup_partial", "cache_lookup_error"] },
+  { section = "8.11", ordinal = 3, event_ids = ["prefix_restored", "checkpoint_restored"] },
+  { section = "8.11", ordinal = 4, event_ids = ["cache_record_completed", "cache_record_failed"] },
+  { section = "8.11", ordinal = 5, event_ids = ["cache_trim", "cache_eviction"] },
+  { section = "8.11", ordinal = 6, event_ids = ["cache_reset"] },
+  { section = "8.11", ordinal = 7, event_ids = ["cache_pressure_crossed", "cache_pressure_cleared"] },
+  { section = "8.11", ordinal = 8, event_ids = ["context_capacity_approaching_limit"] },
+  { section = "8.11", ordinal = 9, event_ids = ["context_exhausted"] },
+  { section = "8.11", ordinal = 10, event_ids = ["runtime_state_import_completed", "runtime_state_import_failed", "runtime_state_export_completed", "runtime_state_export_failed"] },
+  { section = "8.12", ordinal = 1, event_ids = ["backend_initialization_started", "backend_initialization_completed", "backend_initialization_failed"] },
+  { section = "8.12", ordinal = 2, event_ids = ["device_selected"] },
+  { section = "8.12", ordinal = 3, event_ids = ["device_ready"] },
+  { section = "8.12", ordinal = 4, event_ids = ["device_degraded"] },
+  { section = "8.12", ordinal = 5, event_ids = ["device_unavailable"] },
+  { section = "8.12", ordinal = 6, event_ids = ["device_recovered"] },
+  { section = "8.12", ordinal = 7, event_ids = ["resource_allocation_completed", "resource_allocation_failed"] },
+  { section = "8.12", ordinal = 8, event_ids = ["memory_pressure_crossed", "memory_pressure_cleared"] },
+  { section = "8.12", ordinal = 9, event_ids = ["out_of_memory_condition"] },
+  { section = "8.12", ordinal = 10, event_ids = ["backend_fallback_activated"] },
+  { section = "8.12", ordinal = 11, event_ids = ["cpu_fallback_activated"] },
+  { section = "8.12", ordinal = 12, event_ids = ["compute_failure"] },
+  { section = "8.12", ordinal = 13, event_ids = ["device_lost", "device_reset"] },
+  { section = "8.13", ordinal = 1, event_ids = ["warning_raised"] },
+  { section = "8.13", ordinal = 2, event_ids = ["warning_cleared"] },
+  { section = "8.13", ordinal = 3, event_ids = ["recoverable_native_failure"] },
+  { section = "8.13", ordinal = 4, event_ids = ["fallback_applied"] },
+  { section = "8.13", ordinal = 5, event_ids = ["degraded_operation_entered"] },
+  { section = "8.13", ordinal = 6, event_ids = ["degraded_operation_exited"] },
+  { section = "8.13", ordinal = 7, event_ids = ["fatal_native_failure"] },
+  { section = "8.13", ordinal = 8, event_ids = ["invariant_protocol_violation"] },
+  { section = "8.14", ordinal = 1, event_ids = ["node_starting"] },
+  { section = "8.14", ordinal = 2, event_ids = ["node_accepting_requests"] },
+  { section = "8.14", ordinal = 3, event_ids = ["node_degraded"] },
+  { section = "8.14", ordinal = 4, event_ids = ["node_unavailable"] },
+  { section = "8.14", ordinal = 5, event_ids = ["node_draining"] },
+  { section = "8.14", ordinal = 6, event_ids = ["node_stopped"] },
+  { section = "8.14", ordinal = 7, event_ids = ["available_model_set_changed"] },
+  { section = "8.14", ordinal = 8, event_ids = ["available_stage_set_changed"] },
+  { section = "8.14", ordinal = 9, event_ids = ["request_capacity_changed"] },
+  { section = "8.14", ordinal = 10, event_ids = ["lane_capacity_changed", "session_capacity_changed"] },
+  { section = "8.14", ordinal = 11, event_ids = ["resource_pressure_changed"] },
+  { section = "8.15", ordinal = 1, event_ids = ["ingress_queue_pressure"] },
+  { section = "8.15", ordinal = 2, event_ids = ["events_coalesced"] },
+  { section = "8.15", ordinal = 3, event_ids = ["events_sampled"] },
+  { section = "8.15", ordinal = 4, event_ids = ["events_dropped_by_class"] },
+  { section = "8.15", ordinal = 5, event_ids = ["subscriber_lagging"] },
+  { section = "8.15", ordinal = 6, event_ids = ["subscriber_disconnected"] },
+  { section = "8.15", ordinal = 7, event_ids = ["reducer_error"] },
+  { section = "8.15", ordinal = 8, event_ids = ["telemetry_exporter_degraded", "telemetry_exporter_recovered"] },
+  { section = "8.15", ordinal = 9, event_ids = ["event_schema_incompatibility"] },
+  { section = "8.15", ordinal = 10, event_ids = ["unknown_native_event_received"] },
+]

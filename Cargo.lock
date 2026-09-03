@@ -3995,6 +3995,7 @@ dependencies = [
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
  "mesh-llm-routing",
+ "mesh-llm-runtime-event-contracts",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-types",
@@ -4189,6 +4190,17 @@ dependencies = [
  "iroh",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "mesh-llm-runtime-event-contracts"
+version = "0.76.0-rc9"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "toml 0.9.12+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]

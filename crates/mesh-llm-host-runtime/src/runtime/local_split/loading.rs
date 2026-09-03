@@ -162,6 +162,8 @@ fn model_skippy_config<'a>(
 pub(super) async fn load_split_runtime_generation(
     spec: SplitGenerationLoadSpec<'_>,
 ) -> Result<SplitRuntimeGenerationHandle> {
+    let topology_op =
+        super::topology_events::TopologyAssemblyOperation::begin(&spec.generation.topology_id);
     let mut cleanup_on_error = false;
     let result = Box::pin(load_split_runtime_generation_inner(
         &spec,
@@ -180,6 +182,12 @@ pub(super) async fn load_split_runtime_generation(
             "cleaning up split runtime generation after failed load"
         );
         stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
+    }
+    match &result {
+        Ok(_) => topology_op.ready(),
+        Err(_) => {
+            topology_op.unavailable(mesh_llm_runtime_event_contracts::ReasonCode::StageUnavailable)
+        }
     }
     result
 }
@@ -494,6 +502,10 @@ pub(super) async fn load_downstream_split_runtime_stages(
             endpoint: ready.status.bind_addr.clone(),
             node_id: Some(stage.node_id),
         });
+        super::topology_events::emit_stage_connection_established(
+            &spec.generation.topology_id,
+            &stage.stage_id,
+        );
         ready_by_stage.insert(stage.stage_id.clone(), ready.status);
     }
 

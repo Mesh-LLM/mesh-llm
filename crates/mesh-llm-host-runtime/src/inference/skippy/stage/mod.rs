@@ -19,6 +19,7 @@ use tokio::{
 };
 
 mod inventory;
+mod runtime_events;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -466,6 +467,12 @@ impl StageControlState {
                 error: Some(error),
             });
         }
+        let stage_op = runtime_events::StageLoadOperation::begin(
+            &load.topology_id,
+            &load.stage_id,
+            load.layer_start,
+            load.layer_end,
+        );
         load = tokio::task::spawn_blocking(move || {
             crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
         })
@@ -567,6 +574,7 @@ impl StageControlState {
                 last_error.as_deref(),
             );
             let _ = stage.server.shutdown().await;
+            stage_op.failed(mesh_llm_runtime_event_contracts::ReasonCode::ModelFormatOrLoadFailure);
             return Err(error.context(context));
         }
 
@@ -579,6 +587,7 @@ impl StageControlState {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("stage status missing after load"))?;
+        stage_op.ready(effective_load.lane_count);
         Ok(StageReadyResponse {
             accepted: true,
             status,
@@ -618,11 +627,13 @@ impl StageControlState {
                 error: Some("stale shutdown generation".to_string()),
             });
         }
+        let stage_op = runtime_events::StageStopOperation::begin(&stop.topology_id, &stop.stage_id);
         let mut status = status_from_running(&existing);
         status.state = StageRuntimeState::Stopping;
         existing.server.shutdown().await?;
         status.state = StageRuntimeState::Stopped;
         status.shutdown_generation = stop.shutdown_generation;
+        stage_op.stopped();
         Ok(StageReadyResponse {
             accepted: true,
             status,

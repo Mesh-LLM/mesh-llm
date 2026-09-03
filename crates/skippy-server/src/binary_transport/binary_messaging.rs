@@ -245,6 +245,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             mtp_source,
             ..RuntimeLaunchOverrides::default()
         },
+        None,
     )?
     .context("binary stage server requires model_path")?;
     if max_inflight > 0 {
@@ -341,6 +342,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         hook_policy: None,
                         generation_receipt: None,
                         linear_proposal_ingress: None,
+                        kv_lifecycle_observer: None,
                         openai_guardrails: Some(
                             frontend::OpenAiGuardrailsConfig::disabled_for_skippy(),
                         ),

@@ -20,11 +20,12 @@ use libloading::Library;
 use mesh_native_serving_plugin_api as abi;
 use plugin_dispatch::{PluginCommand, PluginDriver};
 use skippy_server::frontend::{
-    GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,
-    GenerationReceipt, GenerationReceiptConfig, GenerationStart, LinearProposal,
-    LinearProposalDiscardReason, LinearProposalDisposition, LinearProposalIngress,
-    LinearProposalIngressConfig, LinearProposalQuery, LinearProposalReceipt,
-    LinearProposalSourceResponse, OpaqueProposalDecisionId,
+    CompositeGenerationLifecycleIngress, GenerationAbort, GenerationCommit,
+    GenerationLifecycleIngress, GenerationLifecycleObservation, GenerationReceipt,
+    GenerationReceiptConfig, GenerationStart, LinearProposal, LinearProposalDiscardReason,
+    LinearProposalDisposition, LinearProposalIngress, LinearProposalIngressConfig,
+    LinearProposalQuery, LinearProposalReceipt, LinearProposalSourceResponse,
+    OpaqueProposalDecisionId,
 };
 use skippy_server::serving_hooks::{ModelServingHooks, ModelServingHooksFactory};
 use skippy_server::tokenizer::TokenizerCapability;
@@ -91,7 +92,11 @@ impl NativeServingPluginFactory {
 }
 
 impl ModelServingHooksFactory for NativeServingPluginFactory {
-    fn create(&self, tokenizer: TokenizerCapability) -> Result<ModelServingHooks> {
+    fn create(
+        &self,
+        tokenizer: TokenizerCapability,
+        extra_generation_sink: Option<Arc<dyn GenerationLifecycleIngress>>,
+    ) -> Result<ModelServingHooks> {
         let tokenizer_capability = HostTokenizerCapability::new(tokenizer)?;
         let identity = tokenizer_capability.tokenizer.identity();
         let context = abi::ActivationContext {
@@ -131,9 +136,17 @@ impl ModelServingHooksFactory for NativeServingPluginFactory {
             committed_generated_tokens: Mutex::new(HashMap::new()),
         };
         let driver = Arc::new(PluginDriver::spawn(active)?);
-        let lifecycle: Arc<dyn GenerationLifecycleIngress> = Arc::new(NativeLifecycleIngress {
-            driver: Arc::clone(&driver),
-        });
+        let native_lifecycle: Arc<dyn GenerationLifecycleIngress> =
+            Arc::new(NativeLifecycleIngress {
+                driver: Arc::clone(&driver),
+            });
+        let lifecycle: Arc<dyn GenerationLifecycleIngress> = match extra_generation_sink {
+            Some(extra) => Arc::new(CompositeGenerationLifecycleIngress::new(vec![
+                native_lifecycle,
+                extra,
+            ])),
+            None => native_lifecycle,
+        };
         let proposals: Arc<dyn LinearProposalIngress> = Arc::new(NativeProposalIngress { driver });
         Ok(ModelServingHooks::new(
             GenerationReceiptConfig::from_lifecycle_ingress(lifecycle),
@@ -857,6 +870,7 @@ mod tests {
                 session_id: 2,
                 agent_session_id: None,
                 prompt_token_ids: Arc::from([3]),
+                frontend_request_id: None,
             })
             .unwrap();
         active
@@ -891,6 +905,7 @@ mod tests {
                 session_id: 2,
                 agent_session_id: None,
                 prompt_token_ids: Arc::from([3]),
+                frontend_request_id: None,
             })
             .unwrap();
         active
@@ -963,6 +978,7 @@ mod tests {
                 session_id: 2,
                 agent_session_id: None,
                 prompt_token_ids: Arc::from([3]),
+                frontend_request_id: None,
             })
             .unwrap();
         active

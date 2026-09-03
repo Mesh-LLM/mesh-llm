@@ -68,6 +68,51 @@ pub struct GenerationReceipt {
     pub request_to_token_emission_us: Box<[u64]>,
     /// Optional digest of the target runtime's full exported state.
     pub full_state: Option<GenerationStateDigest>,
+    /// See [`GenerationStart::frontend_request_id`].
+    pub frontend_request_id: Option<[u8; 16]>,
+}
+
+impl GenerationReceipt {
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_fixture(
+        request_id: u64,
+        session_id: u64,
+        termination: GenerationTermination,
+    ) -> Self {
+        Self {
+            request_id,
+            session_id,
+            agent_session_id: None,
+            prompt_token_count: 1,
+            prompt_token_digest: [0; 32],
+            prompt_token_ids: Arc::from([1]),
+            generated_token_ids: vec![1].into_boxed_slice(),
+            final_session_position: 1,
+            termination,
+            model_generation_elapsed_us: 1,
+            request_to_first_token_us: Some(1),
+            request_to_token_emission_us: vec![1].into_boxed_slice(),
+            full_state: None,
+            frontend_request_id: None,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_fixture_with_full_state(
+        request_id: u64,
+        session_id: u64,
+        termination: GenerationTermination,
+        byte_length: u64,
+    ) -> Self {
+        let mut receipt = Self::test_fixture(request_id, session_id, termination);
+        receipt.full_state = Some(GenerationStateDigest {
+            byte_length,
+            blake3_digest: [0; 32],
+        });
+        receipt
+    }
 }
 
 /// Target-authoritative beginning of one local generation lifecycle.
@@ -78,6 +123,11 @@ pub struct GenerationStart {
     /// Stable caller-supplied agent session admitted at the OpenAI boundary.
     pub agent_session_id: Option<Box<str>>,
     pub prompt_token_ids: Arc<[i32]>,
+    /// Byte-equal to the OpenAI request root `OperationId`
+    /// (`OpenAiLifecycleContext.request_id`'s raw UUID bytes) when this
+    /// generation was admitted through the OpenAI boundary. `None` for
+    /// non-frontend callers. Never projected across the native plugin ABI.
+    pub frontend_request_id: Option<[u8; 16]>,
 }
 
 /// Target-authoritative termination of a generation that produced no final
@@ -165,6 +215,37 @@ pub trait GenerationLifecycleIngress: Send + Sync {
     /// Asynchronous delivery failures observed after a successful submission.
     fn delivery_failures(&self) -> u64 {
         0
+    }
+}
+
+/// Fans one generation-lifecycle observation out to every installed sink,
+/// because [`crate::serving_hooks::ModelServingHooks`] has a single
+/// `generation_receipt` slot. One sink failing to accept an observation
+/// never prevents delivery to the other sinks.
+pub struct CompositeGenerationLifecycleIngress {
+    sinks: Vec<Arc<dyn GenerationLifecycleIngress>>,
+}
+
+impl CompositeGenerationLifecycleIngress {
+    #[must_use]
+    pub fn new(sinks: Vec<Arc<dyn GenerationLifecycleIngress>>) -> Self {
+        Self { sinks }
+    }
+}
+
+impl GenerationLifecycleIngress for CompositeGenerationLifecycleIngress {
+    fn try_submit(&self, observation: GenerationLifecycleObservation) -> Result<()> {
+        let mut first_error = None;
+        for sink in &self.sinks {
+            if let Err(error) = sink.try_submit(observation.clone()) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn delivery_failures(&self) -> u64 {
+        self.sinks.iter().map(|sink| sink.delivery_failures()).sum()
     }
 }
 
@@ -334,6 +415,7 @@ pub(crate) struct LocalGenerationReceiptDelivery<'a> {
     pub(crate) agent_session_id: Option<&'a str>,
     pub(crate) prompt_token_ids: Arc<[i32]>,
     pub(crate) observation: GenerationReceiptObservation,
+    pub(crate) frontend_request_id: Option<[u8; 16]>,
 }
 
 trait GenerationReceiptRuntime {
@@ -482,6 +564,7 @@ fn build_generation_receipt(
         request_to_first_token_us: observation.request_to_first_token_us,
         request_to_token_emission_us: observation.request_to_token_emission_us,
         full_state,
+        frontend_request_id: delivery.frontend_request_id,
     })
 }
 
@@ -621,6 +704,7 @@ mod tests {
             session_id: 2,
             agent_session_id: None,
             prompt_token_ids: Arc::from([3, 4]),
+            frontend_request_id: None,
         });
         config.committed(GenerationCommit {
             request_id: 1,
@@ -676,6 +760,7 @@ mod tests {
             request_to_first_token_us: Some(1),
             request_to_token_emission_us: vec![1].into_boxed_slice(),
             full_state: None,
+            frontend_request_id: None,
         };
         assert_eq!(receipt.prompt_token_ids.as_ref(), prompt);
         assert_eq!(receipt.prompt_token_count, receipt.prompt_token_ids.len());
@@ -781,6 +866,7 @@ mod tests {
                 agent_session_id: Some("agent-session"),
                 prompt_token_ids: Arc::from([4, 5, 6]),
                 observation,
+                frontend_request_id: None,
             },
         )
         .unwrap();
@@ -817,6 +903,7 @@ mod tests {
                     observation.set_model_generation_elapsed(Duration::ZERO);
                     observation
                 },
+                frontend_request_id: None,
             },
         )
         .unwrap_err();
@@ -839,6 +926,7 @@ mod tests {
                 agent_session_id: None,
                 prompt_token_ids: Arc::from([]),
                 observation,
+                frontend_request_id: None,
             },
         )
         .unwrap();
@@ -908,6 +996,7 @@ mod tests {
             session_id: 2,
             agent_session_id: None,
             prompt_token_ids: Arc::from([3]),
+            frontend_request_id: None,
         });
         config.committed(GenerationCommit {
             request_id: 1,

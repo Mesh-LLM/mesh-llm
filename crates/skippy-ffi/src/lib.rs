@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 44;
+pub const ABI_VERSION_PATCH: u32 = 45;
 
 mod abi;
 mod activation;
@@ -26,14 +26,16 @@ pub use abi::{
     AbiVersion, ActivationDType, ActivationLayout, BACKEND_DEVICE_CAP_ASYNC,
     BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
     BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
-    FEATURE_BACKEND_DEVICES, FEATURE_INKLING_MTP_MM, FEATURE_ITERATION_BATCH,
-    FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT, FEATURE_RUNTIME_EVENTS, IterationRequest,
-    LlamaLogCallback, LoadMode, Model, ModelInfo, MtmdProgressCallback, MtpSource, NgramCache,
-    Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
-    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan, Status, TRISTATE_AUTO,
-    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
+    FEATURE_BACKEND_DEVICES, FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS,
+    FEATURE_INKLING_MTP_MM, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
+    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT,
+    FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_UNLOAD_EVENTS,
+    IterationRequest, LlamaLogCallback, LoadMode, Model, ModelInfo, MtmdProgressCallback,
+    MtpSource, NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback, SkippyRuntimeEventCategory,
+    SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind,
+    SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SlicePlan,
+    Status, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, runtime_abi_supported,
 };
 pub use activation::{ACTIVATION_FLAG_INKLING_MTP_EMBD, ActivationDesc, LogitBias, TensorInfo};
 pub use model::{
@@ -103,6 +105,11 @@ pub use dynamic::{
     skippy_slice_plan_create, skippy_slice_plan_free, skippy_token_is_eog, skippy_tokenize,
     skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
     skippy_write_gguf_from_parts, skippy_write_slice_gguf,
+};
+
+#[cfg(feature = "dynamic-runtime")]
+pub use dynamic::{
+    skippy_clear_runtime_event_reporter_fn, skippy_set_runtime_event_reporter_fn, symbol_present,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]

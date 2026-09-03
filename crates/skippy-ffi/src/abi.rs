@@ -10,6 +10,12 @@ pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
 pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
 pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
 pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
+pub const FEATURE_RUNTIME_EVENT_REPORTER: u64 = 1 << 29;
+pub const FEATURE_MODEL_LOAD_EVENTS_V2: u64 = 1 << 30;
+pub const FEATURE_KV_EVENTS: u64 = 1 << 31;
+pub const FEATURE_DEVICE_EVENTS: u64 = 1 << 32;
+pub const FEATURE_DIAGNOSTIC_EVENTS: u64 = 1 << 33;
+pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 34;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -132,6 +138,14 @@ pub struct SkippyRuntimeEventV1 {
     pub reserved1: u32,
     pub detail_ptr: *const c_char,
     pub detail_len: u64,
+    // Append-only extension (native ABI 0.1.45+, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER`).
+    // Advertised by `struct_size` under the unchanged
+    // `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION`; a caller reads these only when
+    // `struct_size` covers them (see `skippy-runtime`'s `wire_types::from_raw_ptr`).
+    pub numeric_summary_0: u64,
+    pub numeric_summary_1: u64,
+    pub numeric_summary_2: u64,
+    pub numeric_summary_3: u64,
 }
 
 #[repr(C)]

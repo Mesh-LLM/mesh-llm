@@ -32,6 +32,7 @@ pub(super) struct LocalGenerationReceiptFinalization<'a> {
     pub(super) observation: Option<GenerationReceiptObservation>,
     pub(super) cancelled: bool,
     pub(super) model_generation_elapsed: Option<Duration>,
+    pub(super) frontend_request_id: Option<[u8; 16]>,
 }
 
 impl StageOpenAiBackend {
@@ -79,6 +80,7 @@ impl StageOpenAiBackend {
                     agent_session_id: finalization.agent_session_id,
                     prompt_token_ids: finalization.prompt_token_ids,
                     observation,
+                    frontend_request_id: finalization.frontend_request_id,
                 })
             }
             None => Ok(()),

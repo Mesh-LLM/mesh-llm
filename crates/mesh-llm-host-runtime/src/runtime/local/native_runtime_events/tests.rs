@@ -145,6 +145,23 @@ fn native_model_open_reporter_emits_visibility_only_events() {
             },
             status: skippy_runtime::Status::Ok,
             detail_bytes: b"prompt=private native detail".to_vec(),
+            // Only ModelOpenProgress has a natural numeric summary to
+            // report (e.g. bytes-processed alongside progress_current/
+            // progress_total); Started/Finished/FailedHandled legitimately
+            // carry none here, mirroring the existing per-kind
+            // `failure_code` branch above. This exercises both the
+            // `Some(..)` and `None` construction paths of the widened
+            // struct within one test, proving neither shape breaks the
+            // reporter/translate pipeline (translate does not read these
+            // fields yet -- that is Task 9's producer-migration scope).
+            numeric_summary_0: (kind == SkippyNativeRuntimeEventKind::ModelOpenProgress)
+                .then_some(4096),
+            numeric_summary_1: (kind == SkippyNativeRuntimeEventKind::ModelOpenProgress)
+                .then_some(8192),
+            numeric_summary_2: (kind == SkippyNativeRuntimeEventKind::ModelOpenProgress)
+                .then_some(0),
+            numeric_summary_3: (kind == SkippyNativeRuntimeEventKind::ModelOpenProgress)
+                .then_some(0),
         });
     }
 
@@ -268,6 +285,17 @@ async fn native_reporter_keeps_rich_presentation_while_audit_stays_static() {
             failure_code: skippy_runtime::RuntimeEventFailureCode::None,
             status: skippy_runtime::Status::Ok,
             detail_bytes: b"prompt=private native detail".to_vec(),
+            // None here, deliberately: this test's own concern is that the
+            // audit trail stays static while presentation is rich -- an
+            // invariant about rich vs. static rendering, not about the
+            // struct extension. The extension's `Some(..)` construction
+            // path is already exercised (for ModelOpenProgress) by the
+            // sibling test above; duplicating that here would not add
+            // coverage, only noise unrelated to what this test asserts.
+            numeric_summary_0: None,
+            numeric_summary_1: None,
+            numeric_summary_2: None,
+            numeric_summary_3: None,
         });
     }
 

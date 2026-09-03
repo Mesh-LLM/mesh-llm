@@ -228,6 +228,8 @@ impl ResolvedSkippyConfig {
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
+            operation_id: None,
+            session_lifecycle_observer: None,
         })
     }
 
@@ -680,6 +682,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             hook_policy,
             generation_receipt: None,
             linear_proposal_ingress: None,
+            kv_lifecycle_observer: None,
             openai_guardrails: None,
         }
     }

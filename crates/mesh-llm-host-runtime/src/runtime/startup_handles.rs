@@ -926,6 +926,7 @@ impl StartupReadyReporter {
         };
         let _ = emit_event(event);
         record_runtime_operational_event(RuntimeOperationalEvent::Ready);
+        super::node_lifecycle_events::emit_node_accepting_requests();
         let _ = schedule_ready_prompt();
     }
 }

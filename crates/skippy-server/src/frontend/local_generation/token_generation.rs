@@ -384,6 +384,7 @@ impl StageOpenAiBackend {
                         .as_ref()
                         .expect("receipt prompt exists when receipt config exists"),
                 ),
+                frontend_request_id: request.ids.frontend_request_id,
             });
         }
         let receipt_observation = self.generation_receipt.as_ref().map(|config| {
@@ -471,6 +472,7 @@ impl StageOpenAiBackend {
                         observation: receipt_observation,
                         cancelled: receipt_cancelled,
                         model_generation_elapsed: receipt_model_generation_elapsed,
+                        frontend_request_id: request.ids.frontend_request_id,
                     },
                     generation_succeeded,
                 )

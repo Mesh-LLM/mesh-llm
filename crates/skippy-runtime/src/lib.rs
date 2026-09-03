@@ -3,6 +3,7 @@ pub use skippy_ffi::Status;
 pub(crate) use skippy_ffi::TensorRole;
 
 mod activation;
+mod capability_probe;
 mod config;
 mod devices;
 mod error;
@@ -15,11 +16,13 @@ mod native_mtp;
 mod ngram;
 pub mod package;
 mod path_cstring;
+mod runtime_event_reporter;
 mod runtime_events;
 mod session;
 mod types;
 
 pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
+pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GlmDsaPolicy,
     LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,
@@ -37,9 +40,10 @@ pub use logging::{
 pub use native::{StageModel, StageModelReader};
 pub use native_mtp::NativeMtpDraft;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
+pub use runtime_event_reporter::{clear_runtime_event_reporter, install_runtime_event_reporter};
 pub use runtime_events::{
-    RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
-    RuntimeEventKind, RuntimeEventProgressUnit,
+    OperationId, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
+    RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
 pub use session::{DecodeBatchRequest, StageSession};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;

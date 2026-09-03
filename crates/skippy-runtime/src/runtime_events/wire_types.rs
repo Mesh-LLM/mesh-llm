@@ -1,0 +1,266 @@
+use std::mem;
+use std::ptr;
+
+use skippy_ffi::{
+    SkippyRuntimeEventCategory as RawRuntimeEventCategory,
+    SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
+    SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
+    SkippyRuntimeEventKind as RawRuntimeEventKind,
+    SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
+    SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
+};
+
+/// Safety bound on a native event's `detail_len`. A malformed or hostile
+/// value here must never drive an unbounded copy; anything past this is
+/// rejected rather than trusted.
+const MAX_DETAIL_BYTES: usize = 1 << 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventCategory {
+    ModelOpen,
+    Backend,
+    Session,
+    Kv,
+    Warning,
+    Unknown(u32),
+}
+
+impl From<RawRuntimeEventCategory> for RuntimeEventCategory {
+    fn from(value: RawRuntimeEventCategory) -> Self {
+        match value {
+            RawRuntimeEventCategory::MODEL_OPEN => Self::ModelOpen,
+            RawRuntimeEventCategory::BACKEND => Self::Backend,
+            RawRuntimeEventCategory::SESSION => Self::Session,
+            RawRuntimeEventCategory::KV => Self::Kv,
+            RawRuntimeEventCategory::WARNING => Self::Warning,
+            RawRuntimeEventCategory(raw) => Self::Unknown(raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventKind {
+    ModelOpenStarted,
+    ModelOpenProgress,
+    BackendDeviceSelected,
+    ModelOpenFinished,
+    ModelOpenFailedHandled,
+    Unknown(u32),
+}
+
+impl From<RawRuntimeEventKind> for RuntimeEventKind {
+    fn from(value: RawRuntimeEventKind) -> Self {
+        match value {
+            RawRuntimeEventKind::MODEL_OPEN_STARTED => Self::ModelOpenStarted,
+            RawRuntimeEventKind::MODEL_OPEN_PROGRESS => Self::ModelOpenProgress,
+            RawRuntimeEventKind::BACKEND_DEVICE_SELECTED => Self::BackendDeviceSelected,
+            RawRuntimeEventKind::MODEL_OPEN_FINISHED => Self::ModelOpenFinished,
+            RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED => Self::ModelOpenFailedHandled,
+            RawRuntimeEventKind(raw) => Self::Unknown(raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventEmitterKind {
+    Unknown,
+    OpenThread,
+    WorkerThread,
+    Other(u32),
+}
+
+impl From<RawRuntimeEventEmitterKind> for RuntimeEventEmitterKind {
+    fn from(value: RawRuntimeEventEmitterKind) -> Self {
+        match value {
+            RawRuntimeEventEmitterKind::UNKNOWN => Self::Unknown,
+            RawRuntimeEventEmitterKind::OPEN_THREAD => Self::OpenThread,
+            RawRuntimeEventEmitterKind::WORKER_THREAD => Self::WorkerThread,
+            RawRuntimeEventEmitterKind(raw) => Self::Other(raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventProgressUnit {
+    None,
+    Bytes,
+    Items,
+    Tensors,
+    Steps,
+    Unknown(u32),
+}
+
+impl From<RawRuntimeEventProgressUnit> for RuntimeEventProgressUnit {
+    fn from(value: RawRuntimeEventProgressUnit) -> Self {
+        match value {
+            RawRuntimeEventProgressUnit::NONE => Self::None,
+            RawRuntimeEventProgressUnit::BYTES => Self::Bytes,
+            RawRuntimeEventProgressUnit::ITEMS => Self::Items,
+            RawRuntimeEventProgressUnit::TENSORS => Self::Tensors,
+            RawRuntimeEventProgressUnit::STEPS => Self::Steps,
+            RawRuntimeEventProgressUnit(raw) => Self::Unknown(raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEventFailureCode {
+    None,
+    InvalidArgument,
+    IoError,
+    ModelError,
+    RuntimeError,
+    BackendError,
+    Cancelled,
+    InternalError,
+    Unknown(u32),
+}
+
+impl From<RawRuntimeEventFailureCode> for RuntimeEventFailureCode {
+    fn from(value: RawRuntimeEventFailureCode) -> Self {
+        match value {
+            RawRuntimeEventFailureCode::NONE => Self::None,
+            RawRuntimeEventFailureCode::INVALID_ARGUMENT => Self::InvalidArgument,
+            RawRuntimeEventFailureCode::IO_ERROR => Self::IoError,
+            RawRuntimeEventFailureCode::MODEL_ERROR => Self::ModelError,
+            RawRuntimeEventFailureCode::RUNTIME_ERROR => Self::RuntimeError,
+            RawRuntimeEventFailureCode::BACKEND_ERROR => Self::BackendError,
+            RawRuntimeEventFailureCode::CANCELLED => Self::Cancelled,
+            RawRuntimeEventFailureCode::INTERNAL_ERROR => Self::InternalError,
+            RawRuntimeEventFailureCode(raw) => Self::Unknown(raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeEvent {
+    pub abi_version: u32,
+    pub category: RuntimeEventCategory,
+    pub kind: RuntimeEventKind,
+    pub emitter: RuntimeEventEmitterKind,
+    pub sequence: u64,
+    pub timestamp_mono_ns: u64,
+    pub model_id: u64,
+    pub stage_id: u64,
+    pub session_id: u64,
+    pub progress_current: u64,
+    pub progress_total: u64,
+    pub progress_unit: RuntimeEventProgressUnit,
+    pub failure_code: RuntimeEventFailureCode,
+    pub status: Status,
+    pub detail_bytes: Vec<u8>,
+    // `None` when the emitting native runtime's `struct_size` did not cover
+    // these append-only fields (native ABI 0.1.44 or earlier, or a build
+    // without SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER) -- never read as zero.
+    pub numeric_summary_0: Option<u64>,
+    pub numeric_summary_1: Option<u64>,
+    pub numeric_summary_2: Option<u64>,
+    pub numeric_summary_3: Option<u64>,
+}
+
+/// Mirrors `RawRuntimeEvent`'s original (pre-extension) prefix exactly, field
+/// for field. Used only to bound how much of the allocation is safe to read
+/// as a full struct reference when `struct_size` covers the base layout but
+/// not the four appended `numeric_summary_*` fields: casting to this type's
+/// reference reads only the common initial sequence, never past what
+/// `struct_size` proved is allocated.
+#[repr(C)]
+struct BaseRawRuntimeEvent {
+    abi_version: u32,
+    struct_size: u32,
+    category: RawRuntimeEventCategory,
+    kind: RawRuntimeEventKind,
+    emitter: RawRuntimeEventEmitterKind,
+    reserved0: u32,
+    sequence: u64,
+    timestamp_mono_ns: u64,
+    model_id: u64,
+    stage_id: u64,
+    session_id: u64,
+    progress_current: u64,
+    progress_total: u64,
+    progress_unit: RawRuntimeEventProgressUnit,
+    failure_code: RawRuntimeEventFailureCode,
+    status: Status,
+    reserved1: u32,
+    detail_ptr: *const std::ffi::c_char,
+    detail_len: u64,
+}
+
+impl RuntimeEvent {
+    pub(crate) fn from_raw_ptr(event: *const RawRuntimeEvent) -> Option<Self> {
+        if event.is_null() {
+            return None;
+        }
+        // SAFETY: prefix-validate before any other field read. The
+        // versioned-struct ABI contract guarantees every allocation covers
+        // at least `struct_size`'s own offset; we read only that field via
+        // `read_unaligned` and refuse to form a full struct reference until
+        // it proves the allocation covers at least the base (pre-extension)
+        // known layout.
+        let struct_size = unsafe { ptr::read_unaligned(ptr::addr_of!((*event).struct_size)) };
+        let base_size = mem::size_of::<BaseRawRuntimeEvent>();
+        if (struct_size as usize) < base_size {
+            return None;
+        }
+        let covers_extension = (struct_size as usize) >= mem::size_of::<RawRuntimeEvent>();
+
+        // SAFETY: struct_size was just validated to cover at least
+        // `base_size`, and `BaseRawRuntimeEvent` is `repr(C)` with the exact
+        // same field prefix as `RawRuntimeEvent` (the C "common initial
+        // sequence" pattern) -- reading through this narrower reference
+        // never touches bytes past what struct_size proved is allocated,
+        // regardless of whether the extension fields exist.
+        let base = unsafe { &*event.cast::<BaseRawRuntimeEvent>() };
+        let detail_len = usize::try_from(base.detail_len).ok()?;
+        if detail_len > MAX_DETAIL_BYTES {
+            return None;
+        }
+        let detail_bytes = if detail_len == 0 || base.detail_ptr.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: detail_len is bound-checked above and detail_ptr is
+            // non-null; the reporter contract guarantees this byte range is
+            // valid and immutable for the callback's duration.
+            unsafe { std::slice::from_raw_parts(base.detail_ptr.cast::<u8>(), detail_len) }.to_vec()
+        };
+
+        let (numeric_summary_0, numeric_summary_1, numeric_summary_2, numeric_summary_3) =
+            if covers_extension {
+                // SAFETY: struct_size covers the full extended layout, so
+                // the caller's ABI contract guarantees this range is
+                // initialized and in-bounds.
+                let full = unsafe { &*event };
+                (
+                    Some(full.numeric_summary_0),
+                    Some(full.numeric_summary_1),
+                    Some(full.numeric_summary_2),
+                    Some(full.numeric_summary_3),
+                )
+            } else {
+                (None, None, None, None)
+            };
+
+        Some(Self {
+            abi_version: base.abi_version,
+            category: base.category.into(),
+            kind: base.kind.into(),
+            emitter: base.emitter.into(),
+            sequence: base.sequence,
+            timestamp_mono_ns: base.timestamp_mono_ns,
+            model_id: base.model_id,
+            stage_id: base.stage_id,
+            session_id: base.session_id,
+            progress_current: base.progress_current,
+            progress_total: base.progress_total,
+            progress_unit: base.progress_unit.into(),
+            failure_code: base.failure_code.into(),
+            status: base.status,
+            detail_bytes,
+            numeric_summary_0,
+            numeric_summary_1,
+            numeric_summary_2,
+            numeric_summary_3,
+        })
+    }
+}

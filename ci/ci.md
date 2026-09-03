@@ -214,6 +214,9 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 `scripts/plan-ci.py` is the only source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
 their schema and dependency graph, and emits `ci/ci-plan.schema.json` output.
+Runtime-event contracts and their future host route/engine directories are
+owned by the `protocol` domain, while the wildcard crate rule keeps the new
+contract crate in Rust validation.
 Its optional manifest root changes only those two reads. All workspace and
 Cargo operations use the planner's workspace root. PR callers pass the
 runner-temp source-manifest root; push and manual callers use

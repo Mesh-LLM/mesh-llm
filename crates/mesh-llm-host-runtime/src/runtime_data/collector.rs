@@ -3,6 +3,7 @@
 //! Keep mutation local, drop locks before publish, and let readers observe
 //! shared snapshots through this boundary.
 
+use super::event_cutover::{ShadowHealth, field_of_dirty, should_apply_legacy_write};
 use super::inventory::{
     InventoryScanCoordinator, InventoryScanDisposition, InventoryScanError, InventoryScanOutcome,
     InventoryScanResult, replace_local_instances_snapshot, replace_local_inventory_snapshot,
@@ -47,6 +48,7 @@ struct RuntimeDataSharedState {
     snapshots: RwLock<RuntimeDataSnapshots>,
     subscriptions: RuntimeDataSubscriptions,
     inventory_scan: Mutex<InventoryScanCoordinator>,
+    event_cutover_health: ShadowHealth,
 }
 
 #[derive(Clone, Default)]
@@ -496,10 +498,25 @@ impl RuntimeDataCollector {
         })
     }
 
+    /// Generation-tagged field-level merge gate for the collector's
+    /// publish path (task 5). A legacy whole-snapshot write for a field
+    /// still at `Legacy` generation applies exactly as before. A field
+    /// that has cut over to `Reducer` generation never runs `update` at
+    /// all: the legacy write is ignored (never merged and reverted) and
+    /// counted as stale, and the reducer projection remains authoritative.
+    /// Every field is `Legacy` today (see `event_cutover::CUTOVER_MATRIX`),
+    /// so this preserves existing behavior exactly while being the real
+    /// integration point once a producer task lands a reducer projection.
     fn update_snapshots<F>(&self, dirty: RuntimeDataDirty, update: F) -> bool
     where
         F: FnOnce(&mut RuntimeDataSnapshots) -> bool,
     {
+        if let Some(field) = field_of_dirty(dirty)
+            && !should_apply_legacy_write(field, &self.shared.event_cutover_health)
+        {
+            return false;
+        }
+
         let changed = {
             let mut snapshots = self
                 .shared

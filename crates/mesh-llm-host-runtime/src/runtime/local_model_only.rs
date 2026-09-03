@@ -109,6 +109,14 @@ pub(super) fn validate_local_model_only_options(options: &RuntimeOptions) -> Res
 
 pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<()> {
     validate_local_model_only_options(&options)?;
+    // Local-model-only serving starts the runtime-event engine with zero
+    // management subscribers attached: nothing here calls `.subscribers()`,
+    // matching the plan's "zero management subscribers" requirement for
+    // this mode without needing a separate no-op engine variant.
+    crate::runtime_events::install_runtime_event_engine(
+        crate::runtime_events::engine::RuntimeEventEngine::new(),
+    );
+    super::node_lifecycle_events::emit_node_starting();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
@@ -273,13 +281,16 @@ async fn run_loaded_local_model(
         pi_command: None,
         goose_command: None,
     });
+    super::node_lifecycle_events::emit_node_accepting_requests();
 
     let outcome = wait_for_openai_exit_or_shutdown(&model).await;
     let reason = outcome
         .as_ref()
         .map_or_else(|error| error.to_string(), |signal| signal.to_string());
+    super::node_lifecycle_events::emit_node_draining();
     emit_shutdown(Some(reason)).await;
     model.shutdown().await;
+    super::node_lifecycle_events::emit_node_stopped();
     outcome.map(|_| ())
 }
 

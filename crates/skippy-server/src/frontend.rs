@@ -44,9 +44,10 @@ pub(crate) use self::generation::{
     serve_embedded_openai_with_scheduler,
 };
 pub use self::generation_receipt::{
-    GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,
-    GenerationReceipt, GenerationReceiptConfig, GenerationReceiptSink, GenerationStart,
-    GenerationStateDigest, GenerationTermination, generation_token_id_digest,
+    CompositeGenerationLifecycleIngress, GenerationAbort, GenerationCommit,
+    GenerationLifecycleIngress, GenerationLifecycleObservation, GenerationReceipt,
+    GenerationReceiptConfig, GenerationReceiptSink, GenerationStart, GenerationStateDigest,
+    GenerationTermination, generation_token_id_digest,
 };
 pub use self::guardrails::{
     OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget,

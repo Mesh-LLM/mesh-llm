@@ -159,9 +159,12 @@
     {
       "domain": "protocol",
       "patterns": [
+        "crates/mesh-llm-runtime-event-contracts/**",
         "crates/mesh-llm-protocol/**",
         "crates/mesh-llm-routing/**",
         "crates/mesh-llm-types/**",
+        "crates/mesh-llm-host-runtime/src/api/routes/runtime_events/**",
+        "crates/mesh-llm-host-runtime/src/runtime_events/**",
         "crates/skippy-protocol/**"
       ]
     },
