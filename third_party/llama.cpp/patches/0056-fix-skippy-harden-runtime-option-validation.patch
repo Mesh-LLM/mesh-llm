@@ -1,0 +1,111 @@
+From 7db7d479a74c9705f85f7b7d2a8c77ae8727665d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 3 Sep 2026 09:10:41 -0400
+Subject: [PATCH 56/57] fix(skippy): harden runtime option validation
+
+---
+ src/skippy/environment.h     | 46 +++++++++++++++++++++++-------------
+ src/skippy/model_loading.cpp |  6 ++---
+ 2 files changed, 33 insertions(+), 19 deletions(-)
+
+diff --git a/src/skippy/environment.h b/src/skippy/environment.h
+index f22af9c5a..eb8763650 100644
+--- a/src/skippy/environment.h
++++ b/src/skippy/environment.h
+@@ -1,20 +1,35 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <cctype>
+ #include <cerrno>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
+ 
++inline bool skippy_env_value_equals(const char * value, const char * expected) {
++    while (*value != '\0' && *expected != '\0') {
++        const unsigned char lhs = static_cast<unsigned char>(*value);
++        const unsigned char rhs = static_cast<unsigned char>(*expected);
++        if (std::tolower(lhs) != std::tolower(rhs)) {
++            return false;
++        }
++        ++value;
++        ++expected;
++    }
++    return *value == '\0' && *expected == '\0';
++}
++
++inline bool skippy_env_value_is_false(const char * value) {
++    return skippy_env_value_equals(value, "0") ||
++           skippy_env_value_equals(value, "false") ||
++           skippy_env_value_equals(value, "off") ||
++           skippy_env_value_equals(value, "no");
++}
++
+ inline bool skippy_env_enabled(const char * name) {
+     const char * value = std::getenv(name);
+-    if (value == nullptr || value[0] == '\0') {
+-        return false;
+-    }
+-    return std::strcmp(value, "0") != 0 &&
+-           std::strcmp(value, "false") != 0 &&
+-           std::strcmp(value, "off") != 0 &&
+-           std::strcmp(value, "no") != 0;
++    return value != nullptr && value[0] != '\0' && !skippy_env_value_is_false(value);
+ }
+ 
+ inline bool skippy_env_disabled(const char * name) {
+@@ -22,13 +37,7 @@ inline bool skippy_env_disabled(const char * name) {
+     if (value == nullptr || value[0] == '\0') {
+         return false;
+     }
+-    return std::strcmp(value, "0") == 0 ||
+-           std::strcmp(value, "false") == 0 ||
+-           std::strcmp(value, "FALSE") == 0 ||
+-           std::strcmp(value, "off") == 0 ||
+-           std::strcmp(value, "OFF") == 0 ||
+-           std::strcmp(value, "no") == 0 ||
+-           std::strcmp(value, "NO") == 0;
++    return skippy_env_value_is_false(value);
+ }
+ 
+ inline uint32_t skippy_env_u32(const char * name, uint32_t fallback, uint32_t min_value, uint32_t max_value) {
+@@ -44,6 +53,11 @@ inline uint32_t skippy_env_u32(const char * name, uint32_t fallback, uint32_t mi
+         return fallback;
+     }
+ 
+-    return std::min<uint32_t>(max_value, std::max<uint32_t>(min_value, static_cast<uint32_t>(parsed)));
++    if (parsed < static_cast<unsigned long>(min_value)) {
++        return min_value;
++    }
++    if (parsed > static_cast<unsigned long>(max_value)) {
++        return max_value;
++    }
++    return static_cast<uint32_t>(parsed);
+ }
+-
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index b573780a4..ef2608438 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -592,14 +592,14 @@ static enum skippy_status skippy_finish_model_open(
+ 
+     const auto fail_boundary_load = [&](const char * message) {
+         if (event_scope != nullptr) {
+-            event_scope->emit_failure(SKIPPY_STATUS_RUNTIME_ERROR, message);
++            event_scope->emit_failure(SKIPPY_STATUS_UNSUPPORTED, message);
+         }
+         llama_free(stage_model->ctx);
+         stage_model->ctx = nullptr;
+         llama_model_free(model);
+         delete stage_model;
+-        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, message);
+-        return SKIPPY_STATUS_RUNTIME_ERROR;
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, message);
++        return SKIPPY_STATUS_UNSUPPORTED;
+     };
+ 
+     if (config != nullptr && config->filter_tensors_on_load && !config->include_output) {
+-- 
+2.50.1 (Apple Git-155)
+

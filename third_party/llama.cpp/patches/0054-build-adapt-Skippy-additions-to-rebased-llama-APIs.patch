@@ -1,0 +1,48 @@
+From 669f2dfeb852bb87673c136f934116c38952d3d6 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 3 Sep 2026 09:10:41 -0400
+Subject: [PATCH 54/57] build: adapt Skippy additions to rebased llama APIs
+
+---
+ src/models/inkling.cpp                        | 4 ++--
+ tests/test-skippy-model-loader-accounting.cpp | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/models/inkling.cpp b/src/models/inkling.cpp
+index 619bc3e73..e442e398d 100644
+--- a/src/models/inkling.cpp
++++ b/src/models/inkling.cpp
+@@ -16,7 +16,7 @@ void llama_model_inkling::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
+     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all);
+ 
+-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
++    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
+     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale);
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func, false);
+@@ -67,7 +67,7 @@ void llama_model_inkling::load_arch_tensors(llama_model_loader & ml) {
+     const int64_t head_dim = hparams.n_embd_head_k();
+     const int64_t d_rel    = hparams.inkling_d_rel;
+     const int64_t K        = hparams.n_shortconv_l_cache;
+-    const int64_t n_ff_exp = hparams.n_ff_exp;
++    const int64_t n_ff_exp = hparams.n_ff_exp();
+     const int64_t n_shexp  = hparams.n_expert_shared;
+ 
+     tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab}, mtp_only ? TENSOR_NOT_REQUIRED : 0);
+diff --git a/tests/test-skippy-model-loader-accounting.cpp b/tests/test-skippy-model-loader-accounting.cpp
+index c8ad5f1b2..7c1c43e05 100644
+--- a/tests/test-skippy-model-loader-accounting.cpp
++++ b/tests/test-skippy-model-loader-accounting.cpp
+@@ -125,7 +125,7 @@ static bool check_context_load_lifecycle(const char * model_path) {
+     ggml_context * accounting_ctx_raw = accounting_ctx.get();
+     ggml_context * synthetic_ctx_raw = synthetic_ctx.get();
+     const auto cpu_buft = ggml_backend_cpu_buffer_type();
+-    loader.ctx_map.emplace(cpu_buft, std::move(accounting_ctx));
++    loader.ctx_map.emplace(llama_model_loader::ctx_key { cpu_buft, false }, std::move(accounting_ctx));
+     loader.init_mappings(false);
+ 
+     const size_t weight_size = ggml_nbytes(weight);
+-- 
+2.50.1 (Apple Git-155)
+

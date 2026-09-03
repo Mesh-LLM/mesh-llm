@@ -1,0 +1,63 @@
+From 7b1c40f9503f8a51bddb2dbd97646d63f639fe67 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 3 Sep 2026 09:10:41 -0400
+Subject: [PATCH 57/57] fix(skippy): preserve effective request sampling policy
+
+---
+ common/stage-chat.cpp | 33 +++++++++++++++------------------
+ 1 file changed, 15 insertions(+), 18 deletions(-)
+
+diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
+index 180c0a884..e5c5d8452 100644
+--- a/common/stage-chat.cpp
++++ b/common/stage-chat.cpp
+@@ -219,22 +219,6 @@ extern "C" SKIPPY_COMMON_API enum skippy_status skippy_apply_chat_template_json(
+         inputs.add_generation_prompt = add_assistant;
+         inputs.use_jinja             = use_jinja;
+         inputs.parallel_tool_calls   = parallel_tool_calls;
+-        if (override_enable_thinking) {
+-            const char * value = enable_thinking ? "true" : "false";
+-            inputs.enable_thinking = enable_thinking;
+-            inputs.chat_template_kwargs["enable_thinking"] = value;
+-            inputs.chat_template_kwargs["enableThinking"] = value;
+-            inputs.chat_template_kwargs["enable_reasoning"] = value;
+-            inputs.chat_template_kwargs["use_reasoning"] = value;
+-            inputs.chat_template_kwargs["reasoning_enabled"] = value;
+-            inputs.chat_template_kwargs["use_thinking"] = value;
+-            inputs.chat_template_kwargs["thinking_enabled"] = value;
+-            inputs.chat_template_kwargs["enable_think"] = value;
+-            inputs.chat_template_kwargs["think_enabled"] = value;
+-            if (!enable_thinking) {
+-                inputs.chat_template_kwargs["reasoning_effort"] = "0";
+-            }
+-        }
+         if (reasoning_format_name != nullptr && reasoning_format_name[0] != '\0') {
+             inputs.reasoning_format = common_reasoning_format_from_name(reasoning_format_name);
+         }
+@@ -250,8 +234,21 @@ extern "C" SKIPPY_COMMON_API enum skippy_status skippy_apply_chat_template_json(
+                 inputs.chat_template_kwargs[key] = value.dump();
+             }
+         }
+-        if (override_enable_thinking && !enable_thinking) {
+-            inputs.chat_template_kwargs["reasoning_effort"] = "0";
++        if (override_enable_thinking) {
++            const char * value = enable_thinking ? "true" : "false";
++            inputs.enable_thinking = enable_thinking;
++            inputs.chat_template_kwargs["enable_thinking"] = value;
++            inputs.chat_template_kwargs["enableThinking"] = value;
++            inputs.chat_template_kwargs["enable_reasoning"] = value;
++            inputs.chat_template_kwargs["use_reasoning"] = value;
++            inputs.chat_template_kwargs["reasoning_enabled"] = value;
++            inputs.chat_template_kwargs["use_thinking"] = value;
++            inputs.chat_template_kwargs["thinking_enabled"] = value;
++            inputs.chat_template_kwargs["enable_think"] = value;
++            inputs.chat_template_kwargs["think_enabled"] = value;
++            if (!enable_thinking) {
++                inputs.chat_template_kwargs["reasoning_effort"] = "0";
++            }
+         }
+ 
+         common_chat_templates_ptr custom_tmpls;
+-- 
+2.50.1 (Apple Git-155)
+
