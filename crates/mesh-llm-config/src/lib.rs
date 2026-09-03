@@ -22,7 +22,7 @@ pub use authoring::{
 };
 pub use env_overrides::{
     CONFIG_OVERRIDE_ENV_NAMES, ConfigValueSource, LifecycleLogParserSelection, MESH_LLM_CONFIG_ENV,
-    MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, resolve_lifecycle_log_parser_override,
+    MESH_LLM_LIFECYCLE_LOG_PARSER_ENV, apply_env_overrides, resolve_lifecycle_log_parser_override,
 };
 pub use model::*;
 pub use plugin_validation::control_behavior::{

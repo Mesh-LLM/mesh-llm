@@ -16,7 +16,7 @@ pub use mesh_llm_config::{
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry,
     PluginStartupConfig, PluginWebUiPreference, ReasoningBudget, ReasoningEnabled,
     RequestDefaultsConfig, SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
-    TelemetryMetricsConfig, ThroughputConfig, config_path, config_to_toml,
+    TelemetryMetricsConfig, ThroughputConfig, apply_env_overrides, config_path, config_to_toml,
     parse_config_toml as base_parse_config_toml, validate_config_with_plugin_schemas,
 };
 #[cfg(test)]
@@ -33,12 +33,15 @@ pub struct ConfigFileValidation {
 
 pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
     let path = config_path(override_path)?;
-    if !path.exists() {
-        return Ok(MeshConfig::default());
-    }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read config {}", path.display()))?;
-    parse_config_toml(&raw).with_context(|| format!("Invalid config {}", path.display()))
+    let mut config = if path.exists() {
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read config {}", path.display()))?;
+        parse_config_toml(&raw).with_context(|| format!("Invalid config {}", path.display()))?
+    } else {
+        MeshConfig::default()
+    };
+    apply_env_overrides(&mut config)?;
+    Ok(config)
 }
 
 pub fn parse_config_toml(raw: &str) -> Result<MeshConfig> {
@@ -57,8 +60,9 @@ pub fn validate_config_file(override_path: Option<&Path>) -> Result<ConfigFileVa
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config {}", path.display()))?;
-    let config = base_parse_config_toml(&raw)
+    let mut config = base_parse_config_toml(&raw)
         .with_context(|| format!("Invalid config {}", path.display()))?;
+    apply_env_overrides(&mut config)?;
     let diagnostics =
         validate_config_diagnostics_with_installed_plugin_schemas(&config, Some(&raw));
     Ok(ConfigFileValidation { path, diagnostics })
@@ -378,6 +382,105 @@ mod tests {
         include_str!("../../tests/fixtures/skippy_full_surface_valid.toml");
     const FULL_SURFACE_INVALID_FIXTURE: &str =
         include_str!("../../tests/fixtures/skippy_full_surface_invalid.toml");
+
+    // Every name in `mesh_llm_config::CONFIG_OVERRIDE_ENV_NAMES` must reach a
+    // production caller through THIS crate's plugin-aware `load_config` /
+    // `validate_config_file` wrappers -- not just through the base
+    // `mesh_llm_config::load_config` the wrappers wrap. Update this list (and
+    // add a dedicated wrapper-path test below) whenever env_overrides.rs
+    // grows, so a new override can never silently regress into the same
+    // bypass IT-plan Task 17 found here.
+    #[test]
+    fn config_override_env_names_owner_totality_is_unchanged() {
+        assert_eq!(
+            mesh_llm_config::CONFIG_OVERRIDE_ENV_NAMES,
+            &["MESH_LLM_CONFIG", "MESH_LLM_LIFECYCLE_LOG_PARSER"]
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn load_config_through_production_wrapper_applies_lifecycle_log_parser_env_override() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "version = 1\n").unwrap();
+
+        // SAFETY: `#[serial_test::serial]` serializes every bare-annotated
+        // test in this binary; the var is cleared before the next test runs.
+        unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled") };
+        let result = load_config(Some(&config_path));
+        unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
+
+        let config = result.expect("config should load through the production wrapper");
+        assert_eq!(
+            config.runtime.lifecycle_log_parser,
+            mesh_llm_config::LifecycleLogParserMode::Enabled,
+            "the plugin-aware production load_config wrapper must honor \
+             MESH_LLM_LIFECYCLE_LOG_PARSER the same way mesh_llm_config::load_config does"
+        );
+        assert_eq!(
+            config.runtime.lifecycle_log_parser_source,
+            mesh_llm_config::ConfigValueSource::Env
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn load_config_through_production_wrapper_applies_env_override_when_file_absent() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("does-not-exist.toml");
+
+        // SAFETY: see above.
+        unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled") };
+        let result = load_config(Some(&config_path));
+        unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
+
+        let config =
+            result.expect("a default config (no file on disk) must still honor the env override");
+        assert_eq!(
+            config.runtime.lifecycle_log_parser,
+            mesh_llm_config::LifecycleLogParserMode::Enabled
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn load_config_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "version = 1\n").unwrap();
+
+        // SAFETY: see above.
+        unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode") };
+        let result = load_config(Some(&config_path));
+        unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
+
+        let err = result.expect_err(
+            "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must fail startup through the \
+             production plugin-aware wrapper, never be silently dropped or defaulted",
+        );
+        assert!(format!("{err:#}").contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn validate_config_file_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override()
+     {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "version = 1\n").unwrap();
+
+        // SAFETY: see above.
+        unsafe { std::env::set_var("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode") };
+        let result = validate_config_file(Some(&config_path));
+        unsafe { std::env::remove_var("MESH_LLM_LIFECYCLE_LOG_PARSER") };
+
+        let err = result.expect_err(
+            "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must fail `mesh-llm config validate` \
+             through the production plugin-aware wrapper, never be silently dropped",
+        );
+        assert!(format!("{err:#}").contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
+    }
 
     fn documented_matrix_key_paths() -> BTreeSet<String> {
         let matrix = include_str!(concat!(

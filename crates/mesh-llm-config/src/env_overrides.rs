@@ -63,7 +63,13 @@ pub(crate) fn config_path_override() -> Option<std::path::PathBuf> {
     std::env::var_os(MESH_LLM_CONFIG_ENV).map(std::path::PathBuf::from)
 }
 
-pub(crate) fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
+/// Applies every declared `MESH_LLM_*` config environment override to
+/// `config` in place. This is the SINGLE typed entry point every config
+/// loader — including plugin-aware wrappers outside this crate — must call
+/// so environment overrides take effect consistently. An invalid override
+/// value is a hard `Err`, never a silent fallback to the configured/default
+/// value.
+pub fn apply_env_overrides(config: &mut MeshConfig) -> Result<()> {
     let environment = std::env::var_os(MESH_LLM_LIFECYCLE_LOG_PARSER_ENV);
     if environment.is_none() {
         return Ok(());
