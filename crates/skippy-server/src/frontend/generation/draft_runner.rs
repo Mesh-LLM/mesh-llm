@@ -199,6 +199,15 @@ pub(in crate::frontend) fn draft_runtime_config(
         include_output: true,
         mtp_source,
         filter_tensors_on_load: false,
+        checkpoint_quantization: config
+            .checkpoint_quantization
+            .as_deref()
+            .unwrap_or("preserve")
+            .parse()
+            .map_err(anyhow::Error::msg)
+            .context("parse checkpoint_quantization for draft model")?,
+        checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
+        checkpoint_imatrix_sha256: config.checkpoint_imatrix_sha256.clone(),
         kv_offload: config.kv_offload,
         kv_unified: config.kv_unified,
         swa_full: config.swa_full,

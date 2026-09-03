@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **13 headers** and **79 exported functions**.
+Current generated surface: **14 headers** and **80 exported functions**.
 
 ## Quick navigation
 
@@ -73,6 +73,12 @@ Current generated surface: **13 headers** and **79 exported functions**.
         <a href="#skippy-fn-skippy-slice-plan-add-layer-range"><code>skippy_slice_plan_add_layer_range</code></a>
         <a href="#skippy-fn-skippy-write-slice-gguf"><code>skippy_write_slice_gguf</code></a>
         <a href="#skippy-fn-skippy-write-gguf-from-parts"><code>skippy_write_gguf_from_parts</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-model-source-h"><code>model_source.h</code><span>1 function</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-model-open-from-source"><code>skippy_model_open_from_source</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -173,6 +179,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
 | `include/skippy/execution.h` | Prefill, decode, verification, activation-frame, and batched execution. |
 | `include/skippy/model_package.h` | Inspects GGUF tensors and writes layer-range or multi-part packages. |
+| `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
 | `include/skippy/sampling.h` | Sampling parameters shared by single-token and batched decode calls. |
 | `include/skippy/signals.h` | Generation uncertainty and repetition signals for routing or policy. |
@@ -669,6 +676,27 @@ LLAMA_API enum skippy_status skippy_write_gguf_from_parts(
          const char * const * input_paths,
         size_t input_count,
         const char * output_path,
+        struct skippy_error ** out_error);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
+<a id="skippy-header-model-source-h"></a>
+### `model_source.h`
+
+<a id="skippy-fn-skippy-model-open-from-source"></a>
+#### `skippy_model_open_from_source`
+
+Opens a model from metadata-only GGUF and callback-supplied tensor values. `metadata_gguf`, `source`, and `source->user_data` must remain valid for this synchronous call and are not retained; tensor callbacks execute synchronously before the function returns. `quantization_ftype` is a llama_ftype value, or -1 to preserve the tensor types declared by `metadata_gguf`. On success, `out_model` owns the resulting model and must be released with `skippy_model_free`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_open_from_source(
+         const void * metadata_gguf,
+        size_t metadata_gguf_size,
+        const struct skippy_model_tensor_source_v1 * source,
+        int32_t quantization_ftype,
+        const struct skippy_runtime_config * config,
+        struct skippy_model ** out_model,
         struct skippy_error ** out_error);
 ```
 
@@ -1368,11 +1396,12 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 The headers also define the following enums, structs, opaque handles, and ABI constants:
 
 - `activation.h`: `skippy_activation_dtype`, `skippy_activation_layout`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 1`, `SKIPPY_ACTIVATION_SIDEBAND_TOKEN_IDS = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_RWKV7_V_FIRST = (UINT64_C(1) << 0)`, `SKIPPY_ACTIVATION_FLAG_GEMMA3N_ALTUP = (UINT64_C(1) << 1)`, `SKIPPY_ACTIVATION_FLAG_INKLING_MTP_EMBD = (UINT64_C(1) << 2)`, `SKIPPY_ACTIVATION_FLAG_GLM_DSA_TOP_K = (UINT64_C(1) << 3)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 48`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 49`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_iteration_request`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_slice_plan`, `skippy_tensor_info`
+- `model_source.h`: `skippy_model`, `skippy_runtime_config`, `skippy_model_imatrix_entry_v1`, `skippy_model_tensor_source_v1`, `SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION = 1`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
 - `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`

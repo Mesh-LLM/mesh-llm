@@ -1,3 +1,4 @@
+// Conversion coverage lives with the shared checkpoint library.
 #[test]
 fn writes_raw_gguf_from_safetensors_with_streamed_payloads() {
     let root = unique_temp_dir();
@@ -78,6 +79,107 @@ fn writes_mapped_hf_tensor_names_when_requested() {
     let parsed = parse_test_gguf(&bytes);
     assert_eq!(parsed.tensors[0].name, "blk.0.attn_norm.weight");
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn writes_granite_hybrid_canonical_tensor_transforms() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("config.json"),
+        r#"{
+          "model_type": "granitemoehybrid",
+          "num_attention_heads": 2,
+          "num_key_value_heads": 1,
+          "mamba_n_groups": 1
+        }"#,
+    )
+    .unwrap();
+    let q = f32_bytes(&(1..=8).map(|value| value as f32).collect::<Vec<_>>());
+    let k = f32_bytes(&(11..=14).map(|value| value as f32).collect::<Vec<_>>());
+    let a_log = f32_bytes(&[0.0, std::f32::consts::LN_2]);
+    let d = f32_bytes(&[21.0, 22.0]);
+    let conv = f32_bytes(&[31.0, 32.0, 33.0, 34.0]);
+    let norm = f32_bytes(&[41.0, 42.0, 43.0, 44.0]);
+    let shared = f32_bytes(&(51..=58).map(|value| value as f32).collect::<Vec<_>>());
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[
+            (
+                "model.layers.0.self_attn.q_proj.weight",
+                "F32",
+                &[8, 1],
+                &q,
+            ),
+            (
+                "model.layers.0.self_attn.k_proj.weight",
+                "F32",
+                &[4, 1],
+                &k,
+            ),
+            ("model.layers.1.mamba.A_log", "F32", &[2], &a_log),
+            ("model.layers.1.mamba.D", "F32", &[2], &d),
+            (
+                "model.layers.1.mamba.conv1d.weight",
+                "F32",
+                &[2, 1, 2],
+                &conv,
+            ),
+            (
+                "model.layers.1.mamba.norm.weight",
+                "F32",
+                &[4],
+                &norm,
+            ),
+            (
+                "model.layers.1.shared_mlp.input_linear.weight",
+                "F32",
+                &[4, 2],
+                &shared,
+            ),
+        ],
+    );
+    let output = root.join("granite-hybrid.gguf");
+
+    write_raw_safetensors_gguf(
+        &root,
+        &output,
+        RawGgufWriteOptions {
+            buffer_size: 9,
+            metadata: None,
+            tensor_name_map: TensorNameMap::HfToGguf,
+            split: None,
+            output_type: None,
+            tensor_selection: TensorSelection::All,
+        },
+    )
+    .unwrap();
+
+    let bytes = fs::read(&output).unwrap();
+    let parsed = parse_test_gguf(&bytes);
+    assert_eq!(parsed.tensor_count, 8);
+    assert_f32_tensor(&bytes, &parsed, "blk.0.attn_q.weight", &[1., 3., 2., 4., 5., 7., 6., 8.]);
+    assert_f32_tensor(&bytes, &parsed, "blk.0.attn_k.weight", &[11., 13., 12., 14.]);
+    assert_f32_tensor(&bytes, &parsed, "blk.1.ssm_a", &[-1., -2.]);
+    assert_f32_tensor(&bytes, &parsed, "blk.1.ssm_d", &[21., 22.]);
+    assert_f32_tensor(&bytes, &parsed, "blk.1.ffn_gate.weight", &[51., 52., 53., 54.]);
+    assert_f32_tensor(&bytes, &parsed, "blk.1.ffn_up.weight", &[55., 56., 57., 58.]);
+    assert_eq!(parsed.tensor("blk.1.ssm_a").dims, vec![1, 2]);
+    assert_eq!(parsed.tensor("blk.1.ssm_d").dims, vec![1, 2]);
+    assert_eq!(parsed.tensor("blk.1.ssm_conv1d.weight").dims, vec![2, 2]);
+    assert_eq!(parsed.tensor("blk.1.ssm_norm.weight").dims, vec![4, 1]);
+    assert_eq!(parsed.tensor("blk.1.ffn_gate.weight").dims, vec![2, 2]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn assert_f32_tensor(bytes: &[u8], parsed: &ParsedGguf, name: &str, expected: &[f32]) {
+    let tensor = parsed.tensor(name);
+    assert_eq!(tensor.ggml_type, GGML_TYPE_F32);
+    let actual = bytes[tensor.absolute_offset..tensor.absolute_offset + expected.len() * 4]
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
 }
 
 #[test]

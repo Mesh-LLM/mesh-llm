@@ -81,6 +81,7 @@ pub fn example_config() -> Value {
         "topology_id": "single-stage-fixture",
         "model_id": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "model_path": null,
+        "checkpoint_quantization": null,
         "projector_path": null,
         "stage_id": "stage-0",
         "stage_index": 0,

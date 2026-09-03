@@ -369,6 +369,7 @@ publish_crates=(
     mesh-llm-skills
     mesh-llm-gpu-bench
     skippy-ffi
+    skippy-model
     skippy-protocol
     skippy-coordinator
     skippy-topology

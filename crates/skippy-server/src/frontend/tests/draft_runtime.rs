@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn draft_loader_controls_reach_the_native_runtime_config() {
-    let stage = support::prefix_cache_test_config();
+    let mut stage = support::prefix_cache_test_config();
+    stage.checkpoint_quantization = Some("Q4_K_M".to_string());
     let speculative = SpeculativeDecodeConfig {
         draft_device: Some("CUDA1".to_string()),
         draft_threads: Some(6),
@@ -27,4 +28,8 @@ fn draft_loader_controls_reach_the_native_runtime_config() {
     assert_eq!(runtime.cache_type_v, skippy_runtime::GGML_TYPE_Q4_0);
     assert_eq!(runtime.n_gpu_layers, 12);
     assert_eq!(runtime.mtp_source, skippy_runtime::MtpSource::External);
+    assert_eq!(
+        runtime.checkpoint_quantization,
+        skippy_runtime::CheckpointQuantization::Q4KM
+    );
 }

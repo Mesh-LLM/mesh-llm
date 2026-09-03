@@ -7,12 +7,12 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
-    MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo,
-    MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError,
-    NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, SlicePlan, Status, TensorInfo,
-    TokenSignal, runtime_abi_supported,
+    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, ModelTensorSourceV1, MtmdBitmap,
+    MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperBitmapWrapper, MtmdHelperInitOpt,
+    MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText, NativeMtpDraft,
+    NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session,
+    SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1,
+    SlicePlan, Status, TensorInfo, TokenSignal, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -176,6 +176,7 @@ dynamic_symbols! {
     skippy_backend_device_at(index: usize, out_device: *mut BackendDevice, out_error: *mut *mut Error) -> Status;
     skippy_model_open(path: *const c_char, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_open_from_source(metadata_gguf: *const c_void, metadata_gguf_size: usize, source: *const ModelTensorSourceV1, quantization_ftype: i32, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
     skippy_model_llama_model(model: *const Model) -> *const Opaque;
     skippy_model_output_activation_boundary(model: *const Model, out_desc: *mut ActivationBoundaryDesc) -> bool;

@@ -7,8 +7,8 @@ use crate::{
 
 #[cfg(target_pointer_width = "64")]
 use crate::{
-    MtmdContextParams, MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideoInitParams,
-    MtmdInputText,
+    ModelImatrixEntryV1, ModelTensorSourceV1, MtmdContextParams, MtmdHelperBitmapWrapper,
+    MtmdHelperInitOpt, MtmdHelperVideoInitParams, MtmdInputText,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -72,6 +72,23 @@ fn activation_boundary_descriptor_matches_native_layout() {
     assert_eq!(offset_of!(ActivationBoundaryDesc, bytes_per_token), 24);
     assert_eq!(offset_of!(ActivationBoundaryDesc, required_frame_flags), 32);
     assert_eq!(offset_of!(ActivationBoundaryDesc, required_sidebands), 40);
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn model_tensor_source_types_match_native_layout() {
+    assert_eq!(size_of::<ModelImatrixEntryV1>(), 24);
+    assert_eq!(offset_of!(ModelImatrixEntryV1, tensor_name), 0);
+    assert_eq!(offset_of!(ModelImatrixEntryV1, values), 8);
+    assert_eq!(offset_of!(ModelImatrixEntryV1, value_count), 16);
+
+    assert_eq!(size_of::<ModelTensorSourceV1>(), 40);
+    assert_eq!(offset_of!(ModelTensorSourceV1, abi_version), 0);
+    assert_eq!(offset_of!(ModelTensorSourceV1, struct_size), 4);
+    assert_eq!(offset_of!(ModelTensorSourceV1, read_tensor_f32), 8);
+    assert_eq!(offset_of!(ModelTensorSourceV1, user_data), 16);
+    assert_eq!(offset_of!(ModelTensorSourceV1, imatrix), 24);
+    assert_eq!(offset_of!(ModelTensorSourceV1, imatrix_count), 32);
 }
 
 #[test]

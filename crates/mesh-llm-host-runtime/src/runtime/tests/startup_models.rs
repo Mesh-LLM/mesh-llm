@@ -218,6 +218,61 @@ ngram_max_proposal_tokens = 6
     assert_eq!(model.verify_window_pipeline_depth, Some(3));
 }
 
+#[test]
+fn cli_checkpoint_overrides_are_canonical_and_take_precedence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let imatrix = temp.path().join("test.imatrix");
+    std::fs::write(&imatrix, b"fixture").expect("write fixture");
+    let mut config: plugin::MeshConfig = toml::from_str(
+        r#"
+[defaults.hardware]
+checkpoint_quantization = "F16"
+checkpoint_imatrix = "old-default.dat"
+
+[[models]]
+model = "test/model"
+
+[models.hardware]
+checkpoint_quantization = "Q8_0"
+checkpoint_imatrix = "old-model.dat"
+"#,
+    )
+    .expect("config parses");
+
+    apply_runtime_cli_checkpoint_overrides(&mut config, Some("q4-k"), Some(&imatrix))
+        .expect("CLI overrides apply");
+
+    let canonical_imatrix = std::fs::canonicalize(&imatrix)
+        .expect("canonical imatrix")
+        .to_string_lossy()
+        .into_owned();
+    let defaults = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .expect("default hardware");
+    assert_eq!(defaults.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
+    assert_eq!(
+        defaults.checkpoint_imatrix.as_deref(),
+        Some(canonical_imatrix.as_str())
+    );
+    let model = config.models[0].hardware.as_ref().expect("model hardware");
+    assert_eq!(model.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
+    assert_eq!(
+        model.checkpoint_imatrix.as_deref(),
+        Some(canonical_imatrix.as_str())
+    );
+}
+
+#[test]
+fn cli_checkpoint_override_rejects_unknown_recipe() {
+    let mut config = plugin::MeshConfig::default();
+    let error = apply_runtime_cli_checkpoint_overrides(&mut config, Some("Q4_FANTASY"), None)
+        .expect_err("unknown recipe must fail");
+
+    assert!(error.to_string().contains("invalid --quant"));
+}
+
 fn remote_catalog_layer_entry(
     variant_name: &str,
     curated_name: &str,

@@ -56,6 +56,7 @@ COPY crates/skippy-cache/ crates/skippy-cache/
 COPY crates/skippy-metrics/ crates/skippy-metrics/
 COPY crates/openai-frontend/ crates/openai-frontend/
 COPY crates/skippy-ffi/ crates/skippy-ffi/
+COPY crates/skippy-model/ crates/skippy-model/
 COPY crates/skippy-runtime/ crates/skippy-runtime/
 COPY crates/skippy-server/ crates/skippy-server/
 COPY crates/metrics-server/ crates/metrics-server/

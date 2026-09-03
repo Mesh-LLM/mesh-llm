@@ -4,14 +4,6 @@ use anyhow::{Context, Result, ensure};
 
 use crate::ConvertRunnerArgs;
 use crate::backend::BackendRunStatus;
-use crate::gguf_template::{
-    MetadataOptions, metadata_from_hf_config_with_options, mtp_layer_start_from_hf_config,
-};
-use crate::gguf_writer::{
-    GgufSplit, RawGgufWriteOptions, TensorSelection, recommended_raw_safetensors_gguf_split_count,
-    write_raw_safetensors_gguf,
-};
-use crate::hf_checkpoint::{inspect_hf_checkpoint, resolve_auto_output_type};
 use crate::manifest::Manifest;
 use crate::memory_budget::{
     MemorySize, effective_stream_buffer_bytes, enforce_memory_budget,
@@ -19,8 +11,16 @@ use crate::memory_budget::{
 };
 use crate::output::{format_bytes, print_info};
 use crate::splits::SplitWindow;
-use crate::tensor_map::TensorNameMap;
-use crate::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
+use skippy_model::gguf_template::{
+    MetadataOptions, metadata_from_hf_config_with_options, mtp_layer_start_from_hf_config,
+};
+use skippy_model::gguf_writer::{
+    GgufSplit, RawGgufWriteOptions, TensorSelection, recommended_raw_safetensors_gguf_split_count,
+    write_raw_safetensors_gguf,
+};
+use skippy_model::hf_checkpoint::{inspect_hf_checkpoint, resolve_auto_output_type};
+use skippy_model::tensor_map::TensorNameMap;
+use skippy_model::tokenizer_metadata::ensure_native_tokenizer_metadata_supported;
 
 pub(crate) fn build_native_convert_command(
     runner: &ConvertRunnerArgs,
@@ -69,7 +69,11 @@ pub(crate) fn apply_native_convert_split_max_size(
         .output_type
         .map(|kind| resolve_auto_output_type(&manifest.source, kind))
         .transpose()?;
-    let plan = inspect_hf_checkpoint(&manifest.source, runner.max_memory, 0.60)?;
+    let plan = inspect_hf_checkpoint(
+        &manifest.source,
+        runner.max_memory.map(|memory| memory.bytes()),
+        0.60,
+    )?;
     let mtp_layer_start = mtp_layer_start_from_hf_config(&manifest.source)?;
     let recommended = recommended_raw_safetensors_gguf_split_count(
         &manifest.source,
@@ -133,7 +137,11 @@ pub(crate) fn run_native_convert(
         runner.max_memory,
         runner.memory_policy,
     )?;
-    let plan = inspect_hf_checkpoint(&manifest.source, runner.max_memory, 0.60)?;
+    let plan = inspect_hf_checkpoint(
+        &manifest.source,
+        runner.max_memory.map(|memory| memory.bytes()),
+        0.60,
+    )?;
     ensure_native_tokenizer_metadata_supported(&manifest.source)?;
     let mtp_layer_start = mtp_layer_start_from_hf_config(&manifest.source)?;
     let tensor_selection = native_tensor_selection(runner, mtp_layer_start)?;

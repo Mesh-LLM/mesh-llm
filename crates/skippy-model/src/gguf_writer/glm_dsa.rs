@@ -1,14 +1,15 @@
+//! GLM-DSA tensor transforms.
+
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
 
+use crate::ConvertOutputType;
 use crate::float_convert::{
     FloatDType, read_float_element, target_dtype_for_tensor, write_float_element,
 };
 use crate::hf_checkpoint::{SafetensorFile, SafetensorTensorInfo};
-use crate::types::ConvertOutputType;
 
 use super::{
     GgufKv, TensorSegment, TensorSource, ggml_type_for_dtype, tensor_byte_len, tensor_element_count,
@@ -215,8 +216,8 @@ impl TensorSource {
     }
 }
 
-pub(super) fn stream_transformed_segment(
-    writer: &mut File,
+pub(super) fn stream_transformed_segment<W: Write>(
+    writer: &mut W,
     file: &SafetensorFile,
     segment: &TensorSegment,
     buffer_size: usize,
@@ -227,8 +228,8 @@ pub(super) fn stream_transformed_segment(
     stream_glm_dsa_kv_b_split(writer, file, segment, buffer_size, split, part).map(Some)
 }
 
-fn stream_glm_dsa_kv_b_split(
-    writer: &mut File,
+fn stream_glm_dsa_kv_b_split<W: Write>(
+    writer: &mut W,
     file: &SafetensorFile,
     segment: &TensorSegment,
     buffer_size: usize,
@@ -308,8 +309,8 @@ fn stream_glm_dsa_kv_b_split(
     Ok(output_bytes)
 }
 
-fn push_transformed_float(
-    writer: &mut File,
+fn push_transformed_float<W: Write>(
+    writer: &mut W,
     source: &[u8],
     source_dtype: FloatDType,
     target_dtype: FloatDType,
@@ -366,7 +367,7 @@ fn metadata_u32(metadata: &[GgufKv], key: &str) -> Option<u32> {
 }
 
 impl GgufKv {
-    pub(crate) fn key(&self) -> &str {
+    pub fn key(&self) -> &str {
         match self {
             Self::ArrayBool { key, .. }
             | Self::ArrayF32 { key, .. }
@@ -395,6 +396,21 @@ pub(super) enum TensorTransform {
         parity: u64,
         row_elements: u64,
     },
+    /// Select a contiguous row range from a fused row-major matrix.
+    ContiguousRows {
+        row_start: u64,
+        row_count: u64,
+        row_elements: u64,
+    },
+    /// Convert Hugging Face's split-half RoPE row ordering to llama.cpp's
+    /// interleaved NORM ordering, independently within each attention head.
+    RopePermutation {
+        head_count: u64,
+        row_count: u64,
+        row_elements: u64,
+    },
+    /// Fold a Mamba A_log tensor into the runtime A representation.
+    NegativeExp,
     GlmDsaKvB {
         split: GlmDsaKvBSplitConfig,
         part: GlmDsaKvBPart,

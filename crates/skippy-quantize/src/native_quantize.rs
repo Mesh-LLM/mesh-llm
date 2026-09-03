@@ -6,7 +6,6 @@ use anyhow::{Context, Result, anyhow, ensure};
 
 use crate::QuantRunnerArgs;
 use crate::backend::BackendRunStatus;
-use crate::imatrix::NativeImatrix;
 use crate::manifest::Manifest;
 use crate::quantize::normalize_tensor_type_entry;
 use crate::splits::SplitWindow;
@@ -16,6 +15,63 @@ const KV_QUANTIZE_IMATRIX_FILE: &str = "quantize.imatrix.file";
 const KV_QUANTIZE_IMATRIX_DATASET: &str = "quantize.imatrix.dataset";
 const KV_QUANTIZE_IMATRIX_N_ENTRIES: &str = "quantize.imatrix.entries_count";
 const KV_QUANTIZE_IMATRIX_N_CHUNKS: &str = "quantize.imatrix.chunks_count";
+
+struct NativeImatrix {
+    imatrix: skippy_model::imatrix::Imatrix,
+    names: Vec<CString>,
+    entries: Vec<llama_quant_ffi::LlamaModelImatrixData>,
+}
+
+impl NativeImatrix {
+    fn load(path: &Path, include_weights: &[String], exclude_weights: &[String]) -> Result<Self> {
+        let imatrix = skippy_model::imatrix::Imatrix::load(path, include_weights, exclude_weights)?;
+        let names = imatrix
+            .entries()
+            .iter()
+            .map(|entry| CString::new(entry.name.as_str()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut entries = names
+            .iter()
+            .zip(imatrix.entries())
+            .map(|(name, entry)| llama_quant_ffi::LlamaModelImatrixData {
+                name: name.as_ptr(),
+                data: entry.values.as_ptr(),
+                size: entry.values.len(),
+            })
+            .collect::<Vec<_>>();
+        entries.push(llama_quant_ffi::LlamaModelImatrixData {
+            name: std::ptr::null(),
+            data: std::ptr::null(),
+            size: 0,
+        });
+        Ok(Self {
+            imatrix,
+            names,
+            entries,
+        })
+    }
+
+    fn as_ptr(&self) -> *const llama_quant_ffi::LlamaModelImatrixData {
+        debug_assert_eq!(self.names.len() + 1, self.entries.len());
+        self.entries.as_ptr()
+    }
+
+    fn source_path(&self) -> &Path {
+        self.imatrix.source_path()
+    }
+
+    fn dataset(&self) -> Option<&str> {
+        self.imatrix.dataset()
+    }
+
+    fn chunk_count(&self) -> i32 {
+        self.imatrix.chunk_count()
+    }
+
+    fn entry_count(&self) -> usize {
+        self.imatrix.entry_count()
+    }
+}
 
 pub(crate) fn build_native_quantize_command(
     args: &QuantRunnerArgs,
