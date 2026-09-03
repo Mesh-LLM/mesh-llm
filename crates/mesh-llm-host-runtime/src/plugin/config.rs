@@ -397,7 +397,8 @@ mod tests {
             &[
                 "MESH_LLM_CONFIG",
                 "MESH_LLM_LIFECYCLE_LOG_PARSER",
-                "MESH_LLM_BENCHMARK_TUNE_TRIAL"
+                "MESH_LLM_BENCHMARK_TUNE_TRIAL",
+                "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
             ]
         );
     }

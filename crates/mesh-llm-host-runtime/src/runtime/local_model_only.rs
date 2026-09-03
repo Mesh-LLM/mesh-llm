@@ -115,6 +115,12 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     // this mode without needing a separate no-op engine variant.
     let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    // Task 19: same hidden, TEST-ONLY `event-disabled` A/B certification
+    // selector as the mesh-serve path in `run_auto.rs` -- see its comment
+    // for the gate/selector relationship; a no-op on every normal startup.
+    runtime_event_engine.set_progress_diagnostic_class_bypass(
+        mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
+    );
     super::node_lifecycle_events::emit_node_starting();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;

@@ -5,6 +5,7 @@
 mod cancellation;
 mod capacity;
 mod children;
+mod class_bypass;
 mod fixtures;
 mod lanes;
 mod ordering;

@@ -8,6 +8,8 @@ pub const MESH_LLM_LIFECYCLE_LOG_PARSER_ENV: &str = "MESH_LLM_LIFECYCLE_LOG_PARS
 pub const MESH_LLM_CONFIG_ENV: &str = "MESH_LLM_CONFIG";
 /// Hidden, undocumented, TEST-ONLY gate -- see [`benchmark_tune_trial_enabled`].
 pub const MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV: &str = "MESH_LLM_BENCHMARK_TUNE_TRIAL";
+/// Hidden, undocumented, TEST-ONLY selector -- see [`event_system_trial_mode`].
+pub const MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV: &str = "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE";
 
 /// Every `MESH_LLM_*` environment variable this crate owns: both true
 /// `MeshConfig` overrides applied by [`apply_env_overrides`] and hidden
@@ -22,6 +24,7 @@ pub const CONFIG_OVERRIDE_ENV_NAMES: &[&str] = &[
     MESH_LLM_CONFIG_ENV,
     MESH_LLM_LIFECYCLE_LOG_PARSER_ENV,
     MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV,
+    MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV,
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -160,6 +163,79 @@ pub fn resolve_benchmark_tune_trial_gate(environment: Option<&OsStr>) -> Result<
     }
 }
 
+/// The event-system A/B certification trial selector. Hidden, undocumented,
+/// TEST-ONLY -- see [`event_system_trial_mode`]. `production` runs the
+/// complete event pipeline; `event-disabled` bypasses ONLY Progress and
+/// Diagnostic class submissions at the host engine's single contract
+/// boundary (`RuntimeEventEngine::submit`) and detaches every downstream
+/// consumer for those two classes, while terminals, state transitions,
+/// reservations, and the reducer remain fully active. These are the exact
+/// two `--mode` values `scripts/run-event-benchmark-matrix.py` accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventSystemTrialMode {
+    Production,
+    EventDisabled,
+}
+
+/// Pure resolver behind [`event_system_trial_mode`]. `trial_gate_enabled`
+/// is the caller's already-resolved [`resolve_benchmark_tune_trial_gate`]
+/// value. Accepts exactly `"production"` or `"event-disabled"` when the
+/// gate is on; setting this selector while the gate is OFF is a hard
+/// `Err`, never a silent fallback to `Production` -- the selector only
+/// exists inside a controlled trial, matching this crate's existing
+/// precedent of never silently falling back on an invalid override.
+pub fn resolve_event_system_trial_mode(
+    trial_gate_enabled: bool,
+    environment: Option<&OsStr>,
+) -> Result<Option<EventSystemTrialMode>> {
+    let Some(environment) = environment else {
+        return Ok(None);
+    };
+    if !trial_gate_enabled {
+        bail!(
+            "{MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV} requires {MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV}=1"
+        );
+    }
+    let Some(environment) = environment.to_str() else {
+        bail!(
+            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; expected production or event-disabled"
+        );
+    };
+    let mode = match environment {
+        "production" => EventSystemTrialMode::Production,
+        "event-disabled" => EventSystemTrialMode::EventDisabled,
+        _ => bail!(
+            "invalid {MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV}; expected production or event-disabled"
+        ),
+    };
+    Ok(Some(mode))
+}
+
+/// Hidden, undocumented, TEST-ONLY selector. This is NOT a user-facing
+/// config setting: do not document it, expose it as a CLI flag, or read
+/// `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE` via an ad hoc `std::env::var`
+/// anywhere outside this function. Composes [`benchmark_tune_trial_enabled`]
+/// with [`resolve_event_system_trial_mode`], so a caller never has to
+/// re-derive the gate/selector relationship itself.
+pub fn event_system_trial_mode() -> Result<Option<EventSystemTrialMode>> {
+    let gate = benchmark_tune_trial_enabled()?;
+    resolve_event_system_trial_mode(
+        gate,
+        std::env::var_os(MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV).as_deref(),
+    )
+}
+
+/// Convenience boolean for the host engine's single class-bypass contract
+/// boundary: `true` only when the trial gate is on AND the trial mode
+/// selector is explicitly `event-disabled`. Every other state (gate off,
+/// selector unset, selector `production`) resolves to `false`.
+pub fn event_system_progress_diagnostic_bypass_enabled() -> Result<bool> {
+    Ok(matches!(
+        event_system_trial_mode()?,
+        Some(EventSystemTrialMode::EventDisabled)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,9 +247,99 @@ mod tests {
             &[
                 "MESH_LLM_CONFIG",
                 "MESH_LLM_LIFECYCLE_LOG_PARSER",
-                "MESH_LLM_BENCHMARK_TUNE_TRIAL"
+                "MESH_LLM_BENCHMARK_TUNE_TRIAL",
+                "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod event_system_trial_mode_tests {
+    use super::*;
+
+    #[test]
+    fn none_when_unset_regardless_of_gate() {
+        assert_eq!(resolve_event_system_trial_mode(false, None).unwrap(), None);
+        assert_eq!(resolve_event_system_trial_mode(true, None).unwrap(), None);
+    }
+
+    #[test]
+    fn errors_hard_when_selector_set_but_gate_is_off() {
+        let error = resolve_event_system_trial_mode(false, Some(OsStr::new("production")))
+            .expect_err(
+                "selector without the trial gate must be a hard error, never a silent fallback",
+            );
+        assert!(
+            error
+                .to_string()
+                .contains(MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(MESH_LLM_BENCHMARK_TUNE_TRIAL_ENV)
+        );
+    }
+
+    #[test]
+    fn accepts_production_when_gate_is_on() {
+        assert_eq!(
+            resolve_event_system_trial_mode(true, Some(OsStr::new("production"))).unwrap(),
+            Some(EventSystemTrialMode::Production)
+        );
+    }
+
+    #[test]
+    fn accepts_event_disabled_when_gate_is_on() {
+        assert_eq!(
+            resolve_event_system_trial_mode(true, Some(OsStr::new("event-disabled"))).unwrap(),
+            Some(EventSystemTrialMode::EventDisabled)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_value_as_hard_error_even_with_gate_on() {
+        let error = resolve_event_system_trial_mode(true, Some(OsStr::new("bogus")))
+            .expect_err("non production/event-disabled value must be a hard error");
+        assert!(
+            error
+                .to_string()
+                .contains(MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV)
+        );
+    }
+
+    #[test]
+    fn bypass_enabled_helper_is_true_only_for_event_disabled() {
+        assert!(matches!(
+            resolve_event_system_trial_mode(true, Some(OsStr::new("event-disabled"))).unwrap(),
+            Some(EventSystemTrialMode::EventDisabled)
+        ));
+        assert!(!matches!(
+            resolve_event_system_trial_mode(true, Some(OsStr::new("production"))).unwrap(),
+            Some(EventSystemTrialMode::EventDisabled)
+        ));
+        assert!(!matches!(
+            resolve_event_system_trial_mode(true, None).unwrap(),
+            Some(EventSystemTrialMode::EventDisabled)
+        ));
+    }
+
+    #[test]
+    fn env_reading_wrapper_defaults_to_none_when_unset() {
+        // Exercises the real env-reading wrapper (not just the pure
+        // resolver) so a future refactor cannot silently detach it from
+        // `std::env::var_os`. Does not mutate the environment, so it needs
+        // no serialization guard against other tests in this binary --
+        // matching `benchmark_trial_gate_env_reading_wrapper_defaults_to_disabled`'s
+        // own precedent.
+        if std::env::var_os(MESH_LLM_EVENT_SYSTEM_TRIAL_MODE_ENV).is_none() {
+            assert_eq!(event_system_trial_mode().unwrap(), None);
+            assert_eq!(
+                event_system_progress_diagnostic_bypass_enabled().unwrap(),
+                false
+            );
+        }
     }
 }
 

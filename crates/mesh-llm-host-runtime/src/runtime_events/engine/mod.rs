@@ -46,6 +46,12 @@ pub struct RuntimeEventEngine {
     reducer_state: Mutex<Arc<ReducerSnapshot>>,
     process_instance: ProcessInstanceId,
     telemetry: OnceLock<Arc<RuntimeEventTelemetryQueue>>,
+    /// The plan's `event-disabled` trial-mode class bypass (task 19).
+    /// `false` by default -- production startup sets this from
+    /// `mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()`.
+    /// See `set_progress_diagnostic_class_bypass` and `submit` below for
+    /// the single contract boundary this flag gates.
+    progress_diagnostic_class_bypass: AtomicBool,
 }
 
 impl RuntimeEventEngine {
@@ -80,6 +86,7 @@ impl RuntimeEventEngine {
             reducer_state: Mutex::new(ReducerSnapshot::empty()),
             process_instance: ProcessInstanceId::new(),
             telemetry: OnceLock::new(),
+            progress_diagnostic_class_bypass: AtomicBool::new(false),
         })
     }
 
@@ -97,6 +104,27 @@ impl RuntimeEventEngine {
     /// zero telemetry overhead.
     pub fn install_telemetry_queue(&self, queue: Arc<RuntimeEventTelemetryQueue>) {
         let _ = self.telemetry.set(queue);
+    }
+
+    /// Sets the plan's `event-disabled` trial-mode class bypass: when
+    /// `true`, `submit` below bypasses ONLY `Progress` and `Diagnostic`
+    /// class facts, at this single contract boundary, before they ever
+    /// reach a lane -- `Terminal` and `StateTransition` facts (and
+    /// therefore reservations and the reducer) are completely unaffected
+    /// regardless of this flag. Idempotent and safe to call repeatedly;
+    /// production startup calls this once from
+    /// `mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()`.
+    /// Defaults to `false` (full production pipeline).
+    pub fn set_progress_diagnostic_class_bypass(&self, enabled: bool) {
+        self.progress_diagnostic_class_bypass
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    /// Current class-bypass state (see `set_progress_diagnostic_class_bypass`).
+    #[must_use]
+    pub fn progress_diagnostic_class_bypass(&self) -> bool {
+        self.progress_diagnostic_class_bypass
+            .load(Ordering::Relaxed)
     }
 
     /// This engine's process-local identity: the first component of the
@@ -216,6 +244,28 @@ impl RuntimeEventEngine {
     ) -> SubmitOutcome {
         use mesh_llm_runtime_event_contracts::DeliveryClass;
         let class = fact.delivery_class();
+        // The task 19 `event-disabled` class bypass: the SINGLE contract
+        // boundary for it. Only `Progress`/`Diagnostic` short-circuit here,
+        // before any lane, telemetry timing, or downstream consumer ever
+        // sees the fact -- `Terminal`/`StateTransition` (reservations,
+        // terminals, the reducer) fall straight through to the normal
+        // dispatch below regardless of this flag.
+        if self
+            .progress_diagnostic_class_bypass
+            .load(Ordering::Relaxed)
+        {
+            match class {
+                DeliveryClass::Progress => {
+                    self.health.bump_dropped_progress();
+                    return SubmitOutcome::DroppedProgress;
+                }
+                DeliveryClass::Diagnostic => {
+                    self.health.bump_dropped_diagnostic();
+                    return SubmitOutcome::DroppedDiagnostic;
+                }
+                DeliveryClass::Terminal | DeliveryClass::StateTransition => {}
+            }
+        }
         let telemetry = self.telemetry.get();
         let start = telemetry.map(|_| Instant::now());
         let outcome = match class {

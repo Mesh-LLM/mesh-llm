@@ -1411,6 +1411,16 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     // degrades to no presentation rather than failing startup.
     let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    // Task 19: the hidden, TEST-ONLY `event-disabled` A/B certification
+    // selector. `event_system_progress_diagnostic_bypass_enabled()` is
+    // `false` unless BOTH `MESH_LLM_BENCHMARK_TUNE_TRIAL=1` and
+    // `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=event-disabled` are set, so this is
+    // a no-op on every normal startup; an invalid selector value is a hard
+    // startup error rather than a silent fallback (see
+    // `mesh_llm_config::env_overrides`).
+    runtime_event_engine.set_progress_diagnostic_class_bypass(
+        mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
+    );
     // Task 16: the OTLP-specific runtime-event telemetry consumer. Reuses
     // `[telemetry]` config the same way `survey::SurveyTelemetry::start`
     // does; a disabled or failed exporter degrades to a no-op instance and
