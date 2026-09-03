@@ -12,6 +12,7 @@
 pub mod config;
 pub mod engine;
 pub mod health;
+pub mod presentation;
 pub mod reducer;
 pub mod replay;
 pub mod reservation;
