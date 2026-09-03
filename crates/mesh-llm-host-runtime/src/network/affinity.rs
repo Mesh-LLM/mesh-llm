@@ -68,6 +68,7 @@ struct AffinityState {
     auto_lru: VecDeque<u64>,
     cache_leases: HashMap<CacheLeaseKey, CacheLeaseEntry>,
     cache_lease_lru: VecDeque<CacheLeaseKey>,
+    cache_lease_epoch: u64,
 }
 
 #[derive(Clone)]
@@ -211,6 +212,7 @@ impl AffinityRouter {
         Some(target)
     }
 
+    #[cfg(test)]
     pub(crate) fn remember_cache_lease(
         &self,
         model: &str,
@@ -218,33 +220,31 @@ impl AffinityRouter {
         target: &election::InferenceTarget,
     ) {
         let mut state = self.inner.lock().unwrap();
-        state.prune_cache_leases();
-        let key = CacheLeaseKey {
-            model: model.to_string(),
-            prefix_hash,
-        };
-        state.cache_leases.insert(
-            key.clone(),
-            CacheLeaseEntry {
-                target: target.clone(),
-                expires_at: Instant::now() + CACHE_LEASE_TTL,
-            },
-        );
-        if let Some(position) = state.cache_lease_lru.iter().position(|item| item == &key) {
-            state.cache_lease_lru.remove(position);
+        state.remember_cache_lease(model, prefix_hash, target);
+    }
+
+    pub(crate) fn cache_lease_epoch(&self) -> u64 {
+        self.inner.lock().unwrap().cache_lease_epoch
+    }
+
+    pub(crate) fn remember_cache_lease_if_epoch(
+        &self,
+        model: &str,
+        prefix_hash: u64,
+        target: &election::InferenceTarget,
+        expected_epoch: u64,
+    ) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        if state.cache_lease_epoch != expected_epoch {
+            return false;
         }
-        state.cache_lease_lru.push_back(key);
-        while state.cache_leases.len() > CACHE_LEASE_MAX_ENTRIES {
-            if let Some(oldest) = state.cache_lease_lru.pop_front() {
-                state.cache_leases.remove(&oldest);
-            } else {
-                break;
-            }
-        }
+        state.remember_cache_lease(model, prefix_hash, target);
+        true
     }
 
     pub(crate) fn forget_cache_lease(&self, model: &str, prefix_hash: u64) -> bool {
         let mut state = self.inner.lock().unwrap();
+        state.cache_lease_epoch = state.cache_lease_epoch.wrapping_add(1);
         let key = CacheLeaseKey {
             model: model.to_string(),
             prefix_hash,
@@ -263,6 +263,7 @@ impl AffinityRouter {
         target: &election::InferenceTarget,
     ) -> usize {
         let mut state = self.inner.lock().unwrap();
+        state.cache_lease_epoch = state.cache_lease_epoch.wrapping_add(1);
         let before = state.cache_leases.len();
         state
             .cache_leases
@@ -279,12 +280,20 @@ impl AffinityRouter {
 
 /// Compute the session-level key used to cache an auto-routed model choice.
 ///
-/// Prefers an explicit cache/session hint from the request body (e.g.
-/// OpenAI-style `prompt_cache_key` or `user` fields), then falls back to the same
-/// prefix/first-user-message hash sticky routing already uses. That way
-/// turn 2+ of a chat reliably maps to the same key.
+/// Prefers the OpenAI-style `prompt_cache_key`, then falls back to an explicit
+/// `user` or `session_id` hint. The cache key remains valid for model-choice
+/// memory without also becoming a sticky target-routing key.
 pub fn auto_model_session_key(parsed_body: Option<&Value>) -> Option<u64> {
-    routing_keys(parsed_body).sticky_hash
+    let routing = routing_keys(parsed_body);
+    if parsed_body.is_some_and(|body| {
+        body.get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .is_some()
+    }) {
+        routing.prefix_hash
+    } else {
+        routing.sticky_hash
+    }
 }
 
 impl Default for AffinityRouter {
@@ -294,6 +303,37 @@ impl Default for AffinityRouter {
 }
 
 impl AffinityState {
+    fn remember_cache_lease(
+        &mut self,
+        model: &str,
+        prefix_hash: u64,
+        target: &election::InferenceTarget,
+    ) {
+        self.prune_cache_leases();
+        let key = CacheLeaseKey {
+            model: model.to_string(),
+            prefix_hash,
+        };
+        self.cache_leases.insert(
+            key.clone(),
+            CacheLeaseEntry {
+                target: target.clone(),
+                expires_at: Instant::now() + CACHE_LEASE_TTL,
+            },
+        );
+        if let Some(position) = self.cache_lease_lru.iter().position(|item| item == &key) {
+            self.cache_lease_lru.remove(position);
+        }
+        self.cache_lease_lru.push_back(key);
+        while self.cache_leases.len() > CACHE_LEASE_MAX_ENTRIES {
+            if let Some(oldest) = self.cache_lease_lru.pop_front() {
+                self.cache_leases.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
     fn prune_auto_expired(&mut self) {
         let now = Instant::now();
         while let Some(key) = self.auto_lru.front().copied() {
@@ -636,6 +676,20 @@ mod tests {
     }
 
     #[test]
+    fn cache_lease_invalidation_fences_a_stale_selection() {
+        let affinity = AffinityRouter::with_config(true, true);
+        let target = remote(1);
+        let selection_epoch = affinity.cache_lease_epoch();
+
+        assert!(!affinity.forget_cache_lease(TEST_MODEL, 7));
+        assert!(!affinity.remember_cache_lease_if_epoch(TEST_MODEL, 7, &target, selection_epoch));
+        assert_eq!(
+            affinity.lookup_cache_lease(TEST_MODEL, 7, std::slice::from_ref(&target)),
+            None
+        );
+    }
+
+    #[test]
     fn test_routing_keys_prefix_is_shared_across_first_users() {
         let req_a = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
@@ -931,6 +985,18 @@ mod tests {
         let key = auto_model_session_key(Some(&body)).expect("expected a session key");
         let sticky = routing_keys(Some(&body)).sticky_hash.unwrap();
         assert_eq!(key, sticky);
+    }
+
+    #[test]
+    fn prompt_cache_key_remains_an_auto_model_session_key() {
+        let body = parse_body(
+            r#"{"prompt_cache_key":"cache-1","messages":[{"role":"user","content":"hi"}]}"#,
+        );
+        let routing = routing_keys(Some(&body));
+
+        assert_eq!(auto_model_session_key(Some(&body)), routing.prefix_hash);
+        assert!(routing.prefix_hash.is_some());
+        assert_eq!(routing.sticky_hash, None);
     }
 
     #[test]
