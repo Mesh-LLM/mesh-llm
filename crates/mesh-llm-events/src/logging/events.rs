@@ -52,7 +52,7 @@ impl TokenUsage {
     }
 }
 
-/// Lifecycle event payloads carried inside [`CanonicalEnvelope`].
+/// Lifecycle event payloads carried inside `CanonicalEnvelope`.
 ///
 /// Bounded metadata only — never raw request/response payloads or secrets.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

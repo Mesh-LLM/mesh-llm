@@ -1210,7 +1210,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "actions/download-artifact@"
-            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
             consumer_workflow,
         )
         self.assertIn(
@@ -1745,7 +1745,7 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertIn(
             "actions/download-artifact@"
-            "37930b1c2abaa49bbe596cd826c3c89aef350131",
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
             consumer_workflow,
         )
         self.assertIn("persist-credentials: false", consumer_workflow)

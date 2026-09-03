@@ -31,7 +31,7 @@ pub const CONTEXT_BUDGET_MAX_TOKENS: u32 = u32::MAX;
 ///
 /// When the configured context window is smaller than this value, the
 /// request is silently clamped to whatever remaining budget exists
-/// rather than rejected — see [`GenerationTokenLimit::resolve`].
+/// rather than rejected — see `GenerationTokenLimit::resolve`.
 pub const DEFAULT_EMBEDDED_MAX_TOKENS: u32 = 4096;
 pub(in crate::frontend) const GENERATION_TOKEN_BUDGET_TIMEOUT: Duration = Duration::from_secs(10);
 pub(in crate::frontend) const GENERATION_RETRY_AFTER_SECS: u64 = 1;
