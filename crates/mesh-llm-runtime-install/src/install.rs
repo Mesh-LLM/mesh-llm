@@ -23,7 +23,10 @@ pub async fn install_native_runtime(
             manifest_path: options.manifest_path.clone(),
             manifest_url: options.manifest_url.clone(),
             bundle_dirs: options.bundle_dirs.clone(),
-            allow_default_manifest_url: true,
+            // Offline installs (`allow_download: false`) must not reach out
+            // for the default catalog either; bundles and the cache are the
+            // only sources then. Explicit manifest URLs are still honoured.
+            allow_default_manifest_url: options.allow_download,
         })
         .await?;
     if manifest.artifacts.is_empty() {
