@@ -16,6 +16,7 @@
 //! derives `ConfigDiagnostic`s from [`WiringBehavior`] so `mesh-llm config
 //! validate` agrees with real runtime support instead of drifting from it.
 
+mod checkpoint;
 mod topology;
 
 /// The wiring status of one canonical config path, matching the `Status`
@@ -852,20 +853,8 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "Single-node resolution propagates it; multi-node stage constructors replace it with the disabled default",
         behavior: WiringBehavior::SilentNoOp,
     },
-    WiringEntry {
-        path: "hardware.checkpoint_quantization",
-        status: WiringStatus::Partial,
-        owner: "SafeTensors direct-load follow-up",
-        reason: "Single-node direct SafeTensors resolution propagates it; prepared GGUF and multi-node stage constructors do not consume it",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
-        path: "hardware.checkpoint_imatrix",
-        status: WiringStatus::Partial,
-        owner: "SafeTensors direct-load follow-up",
-        reason: "Single-node direct SafeTensors resolution propagates it; prepared GGUF and multi-node stage constructors do not consume it",
-        behavior: WiringBehavior::None,
-    },
+    checkpoint::QUANTIZATION,
+    checkpoint::IMATRIX,
     WiringEntry {
         path: "hardware.mmap",
         status: WiringStatus::Wired,
