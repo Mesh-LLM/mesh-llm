@@ -183,8 +183,21 @@ pub struct ImatrixTensorLayout {
 }
 
 impl DirectCheckpoint {
-    /// Open a checkpoint and prepare canonical llama.cpp metadata and names.
+    /// Open a checkpoint directory or SafeTensors file and prepare canonical
+    /// llama.cpp metadata and names.
     pub fn open(source: &Path, buffer_size: usize) -> Result<Self> {
+        let source = if source.is_file() {
+            ensure!(
+                source.extension().and_then(|value| value.to_str()) == Some("safetensors"),
+                "checkpoint file must use the .safetensors extension: {}",
+                source.display()
+            );
+            source
+                .parent()
+                .with_context(|| format!("checkpoint file has no parent: {}", source.display()))?
+        } else {
+            source
+        };
         let files = open_safetensor_files(source)?;
         ensure!(
             !files.is_empty(),

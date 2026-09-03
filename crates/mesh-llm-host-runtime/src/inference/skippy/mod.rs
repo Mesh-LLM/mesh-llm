@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod certification;
+mod checkpoint;
 mod deployment;
 mod family_policy;
 mod hash_cache;
@@ -19,8 +20,6 @@ use crate::runtime::{
 };
 use std::{
     env,
-    fs::File,
-    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -28,7 +27,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use mesh_llm_events::{OutputEvent, emit_event};
 use openai_frontend::{
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
     CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream,
@@ -36,7 +34,6 @@ use openai_frontend::{
     GuardrailTelemetrySink, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
     OpenAiResult,
 };
-use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
@@ -1269,54 +1266,7 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let family_policy = family_policy_for_model_path(&options.model_path);
-    let checkpoint_quantization = options
-        .checkpoint_quantization
-        .as_deref()
-        .unwrap_or("preserve")
-        .parse::<skippy_runtime::CheckpointQuantization>()
-        .map_err(anyhow::Error::msg)?;
-    let (checkpoint_imatrix, checkpoint_imatrix_sha256) =
-        match options.checkpoint_imatrix.as_deref() {
-            Some(configured_path) => {
-                let configured_path = PathBuf::from(configured_path);
-                let resolved = if configured_path.is_absolute() {
-                    configured_path
-                } else if options.model_path.is_dir() {
-                    options.model_path.join(configured_path)
-                } else {
-                    options
-                        .model_path
-                        .parent()
-                        .unwrap_or(&options.model_path)
-                        .join(configured_path)
-                };
-                let canonical = resolved.canonicalize().with_context(|| {
-                    format!(
-                        "resolve checkpoint importance matrix {}",
-                        resolved.display()
-                    )
-                })?;
-                let mut reader = BufReader::new(File::open(&canonical).with_context(|| {
-                    format!("open checkpoint importance matrix {}", canonical.display())
-                })?);
-                let mut hasher = Sha256::new();
-                let mut buffer = [0_u8; 64 * 1024];
-                loop {
-                    let read = reader.read(&mut buffer).with_context(|| {
-                        format!("hash checkpoint importance matrix {}", canonical.display())
-                    })?;
-                    if read == 0 {
-                        break;
-                    }
-                    hasher.update(&buffer[..read]);
-                }
-                (
-                    Some(canonical.to_string_lossy().into_owned()),
-                    Some(hex::encode(hasher.finalize())),
-                )
-            }
-            None => (None, None),
-        };
+    let checkpoint = checkpoint::prepare(options)?;
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),
@@ -1374,9 +1324,9 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         checkpoint_quantization: options
             .checkpoint_quantization
             .as_ref()
-            .map(|_| checkpoint_quantization.canonical_name().to_string()),
-        checkpoint_imatrix,
-        checkpoint_imatrix_sha256,
+            .map(|_| checkpoint.quantization.canonical_name().to_string()),
+        checkpoint_imatrix: checkpoint.imatrix,
+        checkpoint_imatrix_sha256: checkpoint.imatrix_sha256,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,
         native_mtp_enabled: options.native_mtp_enabled,
@@ -1389,28 +1339,11 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         .kv_cache
         .clone()
         .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
-    if skippy_runtime::is_safetensors_checkpoint(&options.model_path) {
-        let imatrix_status = config
-            .checkpoint_imatrix
-            .as_deref()
-            .map_or("none", |_| "configured");
-        let message = format!(
-            "SafeTensors native loader: quantization={} imatrix={imatrix_status}. Set with `mesh-llm serve --quant <RECIPE>`; see `mesh-llm serve --help-advanced` for valid recipes.",
-            checkpoint_quantization.canonical_name()
-        );
-        let event = if checkpoint_quantization == skippy_runtime::CheckpointQuantization::Preserve {
-            OutputEvent::Info {
-                message,
-                context: None,
-            }
-        } else {
-            OutputEvent::Warning {
-                message,
-                context: None,
-            }
-        };
-        let _ = emit_event(event);
-    }
+    checkpoint::emit_load_notice(
+        &options.model_path,
+        checkpoint.quantization,
+        config.checkpoint_imatrix.is_some(),
+    );
     Ok(config)
 }
 

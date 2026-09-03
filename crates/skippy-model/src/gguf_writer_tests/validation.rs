@@ -1,5 +1,23 @@
 // Family checkpoint validation coverage.
 #[test]
+fn direct_checkpoint_accepts_safetensors_file_path() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_qwen_config_and_tokenizer(&root);
+    let model = root.join("model.safetensors");
+    write_safetensor(
+        &model,
+        &[("model.embed_tokens.weight", "F32", &[1], &[1, 0, 0, 0])],
+    );
+
+    let checkpoint = DirectCheckpoint::open(&model, 4).unwrap();
+
+    assert_eq!(checkpoint.tensor_count(), 1);
+    assert!(!checkpoint.metadata_gguf().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn validates_qwen_dense_native_conversion_fixture() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();
