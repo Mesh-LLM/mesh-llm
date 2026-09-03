@@ -302,19 +302,30 @@ pub fn resolve_auto_output_type(
     if requested != ConvertOutputType::Auto {
         return Ok(requested);
     }
-    for safetensor in open_safetensor_files(source)? {
+    let files = open_safetensor_files(source)?;
+    Ok(resolve_auto_output_type_from_files(&files, requested))
+}
+
+pub(crate) fn resolve_auto_output_type_from_files(
+    files: &[SafetensorFile],
+    requested: ConvertOutputType,
+) -> ConvertOutputType {
+    if requested != ConvertOutputType::Auto {
+        return requested;
+    }
+    for safetensor in files {
         for tensor in safetensor.tensors().values() {
             if tensor.shape().len() < 2 {
                 continue;
             }
             match tensor.dtype() {
-                "BF16" => return Ok(ConvertOutputType::Bf16),
-                "F16" => return Ok(ConvertOutputType::F16),
+                "BF16" => return ConvertOutputType::Bf16,
+                "F16" => return ConvertOutputType::F16,
                 _ => {}
             }
         }
     }
-    Ok(ConvertOutputType::F16)
+    ConvertOutputType::F16
 }
 
 pub fn discover_safetensors(source: &Path) -> Result<Vec<PathBuf>> {

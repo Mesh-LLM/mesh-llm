@@ -152,6 +152,11 @@ fn update_weight_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
         "DIRECT" | "NONE" | "PRESERVE" => b"PRESERVE" as &[u8],
         _ => quantization.as_bytes(),
     });
+    hasher.update(b"checkpoint-imatrix:");
+    match config.checkpoint_imatrix_sha256.as_deref() {
+        Some(digest) => hasher.update(digest.as_bytes()),
+        None => hasher.update(b"<absent>"),
+    };
     // Layer packages and direct GGUFs assemble tensors differently even for
     // the same underlying model.
     // Matched exhaustively on purpose: a new load mode is a new way of
@@ -264,6 +269,8 @@ mod identity_completeness_tests {
             materialized_pinned: false,
             model_path: None,
             checkpoint_quantization: None,
+            checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             projector_path: None,
             projector_use_gpu: None,
             media_marker: None,
@@ -541,6 +548,8 @@ mod identity_stability_tests {
             materialized_pinned: false,
             model_path: None,
             checkpoint_quantization: None,
+            checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             projector_path: None,
             projector_use_gpu: None,
             media_marker: None,
@@ -625,6 +634,8 @@ mod identity_stability_tests {
         };
         let load_time_quantized = StageConfig {
             checkpoint_quantization: Some("Q4_K_M".to_string()),
+            checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             ..base.clone()
         };
 
@@ -655,12 +666,35 @@ mod identity_stability_tests {
         };
         let explicit = StageConfig {
             checkpoint_quantization: Some("preserve".to_string()),
+            checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
             ..absent.clone()
         };
 
         assert_eq!(
             prefix_identity(&absent, 0, &tokens).page_id,
             prefix_identity(&explicit, 0, &tokens).page_id
+        );
+    }
+
+    #[test]
+    fn identity_separates_importance_matrix_contents() {
+        let tokens = (0..128).collect::<Vec<_>>();
+        let first = StageConfig {
+            checkpoint_quantization: Some("IQ2_XXS".to_string()),
+            checkpoint_imatrix: Some("/models/calibration.gguf".to_string()),
+            checkpoint_imatrix_sha256: Some("a".repeat(64)),
+            ..config_with_topology("topology-a")
+        };
+        let second = StageConfig {
+            checkpoint_imatrix_sha256: Some("b".repeat(64)),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            prefix_identity(&first, 0, &tokens).page_id,
+            prefix_identity(&second, 0, &tokens).page_id,
+            "different calibration weights must not share cached KV pages"
         );
     }
 

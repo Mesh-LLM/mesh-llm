@@ -6,9 +6,9 @@ Subject: [PATCH 52/53] skippy: define callback-backed model source ABI
 ---
  include/skippy.h              |  1 +
  include/skippy/common.h       |  3 +-
- include/skippy/model_source.h | 68 +++++++++++++++++++++++++++++++++++
+ include/skippy/model_source.h | 84 ++++++++++++++++++++++++++++++++++++++++++
  src/skippy/abi.cpp            |  3 +-
- 4 files changed, 73 insertions(+), 2 deletions(-)
+ 4 files changed, 87 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/model_source.h
 
 diff --git a/include/skippy.h b/include/skippy.h
@@ -49,7 +49,7 @@ new file mode 100644
 index 000000000..1fd597f5c
 --- /dev/null
 +++ b/include/skippy/model_source.h
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,84 @@
 +#ifndef SKIPPY_MODEL_SOURCE_H
 +#define SKIPPY_MODEL_SOURCE_H
 +
@@ -85,6 +85,18 @@ index 000000000..1fd597f5c
 +        const char ** out_message,
 +        void * user_data);
 +
++/** @brief One tensor's importance weights for low-bit quantization.
++ *
++ * `tensor_name` identifies the canonical llama.cpp tensor. `values` contains
++ * exactly the weights expected by llama.cpp for that tensor. Both buffers are
++ * borrowed for the synchronous model-open call and are never retained.
++ */
++struct skippy_model_imatrix_entry_v1 {
++    const char * tensor_name;
++    const float * values;
++    size_t value_count;
++};
++
 +/** @brief Versioned callback source for direct checkpoint loading.
 + *
 + * The source and `user_data` are borrowed for the synchronous duration of
@@ -95,14 +107,18 @@ index 000000000..1fd597f5c
 +    uint32_t struct_size;
 +    skippy_model_read_tensor_f32_callback read_tensor_f32;
 +    void * user_data;
++    const struct skippy_model_imatrix_entry_v1 * imatrix;
++    size_t imatrix_count;
 +};
 +
 +/** @brief Opens a model from metadata-only GGUF and callback-supplied tensor values.
 + *
-+ * `metadata_gguf` must remain valid for this synchronous call and is not
-+ * retained. `quantization_ftype` is a llama_ftype value, or -1 to preserve
-+ * the tensor types declared by `metadata_gguf`. On success, `out_model` owns
-+ * the resulting model and must be released with `skippy_model_free`.
++ * `metadata_gguf`, `source`, and `source->user_data` must remain valid for
++ * this synchronous call and are not retained; tensor callbacks execute
++ * synchronously before the function returns. `quantization_ftype` is a
++ * llama_ftype value, or -1 to preserve the tensor types declared by
++ * `metadata_gguf`. On success, `out_model` owns the resulting model and must
++ * be released with `skippy_model_free`.
 + */
 +LLAMA_API enum skippy_status skippy_model_open_from_source(
 +        const void * metadata_gguf,
@@ -134,4 +150,3 @@ index 1c3574149..cba77a7af 100644
  void skippy_error_free(struct skippy_error * error) {
 -- 
 2.54.0 (Apple Git-157)
-

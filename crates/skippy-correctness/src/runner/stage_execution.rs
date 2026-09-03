@@ -455,6 +455,7 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+            checkpoint_imatrix: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: runtime_flash_attn(args.flash_attn),

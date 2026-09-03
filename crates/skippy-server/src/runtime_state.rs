@@ -431,6 +431,7 @@ fn runtime_config_from_stage_config(
             .parse()
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("parse checkpoint_quantization for {}", config.stage_id))?,
+        checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
     })
 }
 
@@ -597,21 +598,24 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_rejects_unsupported_checkpoint_quantization() {
+    fn runtime_config_accepts_importance_aware_checkpoint_quantization() {
         let config = StageConfig {
             stage_id: "stage-0".to_string(),
             layer_end: 1,
             checkpoint_quantization: Some("IQ2_XXS".to_string()),
+            checkpoint_imatrix: Some("/models/imatrix.gguf".to_string()),
             ..StageConfig::default()
         };
 
-        let error = runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
-            .expect_err("unsupported checkpoint quantization should fail before model open");
-        assert!(
-            error
-                .to_string()
-                .contains("parse checkpoint_quantization for stage-0"),
-            "unexpected error: {error:#}"
+        let runtime =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
+        assert_eq!(
+            runtime.checkpoint_quantization,
+            CheckpointQuantization::IQ2XXS
+        );
+        assert_eq!(
+            runtime.checkpoint_imatrix.as_deref(),
+            Some(std::path::Path::new("/models/imatrix.gguf"))
         );
     }
 

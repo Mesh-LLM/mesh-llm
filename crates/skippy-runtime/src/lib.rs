@@ -21,7 +21,7 @@ mod session;
 mod types;
 
 pub use activation::{DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest};
-pub use checkpoint::CheckpointQuantization;
+pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GlmDsaPolicy,
     LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, MtpSource, RuntimeConfig,

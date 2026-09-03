@@ -322,6 +322,12 @@ where
 }
 
 fn print_advanced_help() {
+    print!("{}", advanced_help_text());
+    print!("{}", mesh_llm_cli::parser::logging_help());
+    eprintln!();
+}
+
+fn advanced_help_text() -> String {
     let mut command = mesh_llm_cli::Cli::command();
     let args: Vec<clap::Id> = command
         .get_arguments()
@@ -337,9 +343,9 @@ fn print_advanced_help() {
     for name in subcommands {
         command = command.mut_subcommand(name, |subcommand| subcommand.hide(false));
     }
-    command.print_help().ok();
-    print!("{}", mesh_llm_cli::parser::logging_help());
-    eprintln!();
+    let mut bytes = Vec::new();
+    command.write_long_help(&mut bytes).ok();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn runtime_help_text() -> Option<String> {
@@ -365,6 +371,8 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         model: cli.model,
         gguf: cli.gguf,
         mmproj: cli.mmproj,
+        checkpoint_quantization: cli.checkpoint_quantization,
+        checkpoint_imatrix: cli.checkpoint_imatrix,
         port: cli.port,
         local_model_only: cli.local_model_only,
         native_serving_plugin: cli.native_serving_plugin,
@@ -593,6 +601,18 @@ mod cli_entrypoint_tests {
             OsString::from("help"),
             OsString::from("--help"),
         ]));
+    }
+
+    #[test]
+    fn advanced_help_lists_the_complete_checkpoint_quantization_surface() {
+        let help = super::advanced_help_text();
+
+        assert!(help.contains("--quant <CHECKPOINT_QUANTIZATION>"));
+        assert!(help.contains("Valid recipes: preserve, F32, F16, BF16, Q1_0, Q2_0"));
+        assert!(help.contains("IQ2_XXS"));
+        assert!(help.contains("IQ1_M"));
+        assert!(help.contains("MXFP4_MOE"));
+        assert!(help.contains("--checkpoint-imatrix"));
     }
 
     #[test]

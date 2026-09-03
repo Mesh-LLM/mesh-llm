@@ -12,6 +12,7 @@ use crate::gguf_writer::GgufKv;
 const TOKEN_TYPE_NORMAL: i32 = 1;
 const TOKEN_TYPE_UNUSED: i32 = 5;
 const TOKEN_TYPE_CONTROL: i32 = 3;
+const MAX_TOKENIZER_VOCAB_SIZE: usize = 1_048_576;
 
 pub(crate) fn push_tokenizer_metadata(
     metadata: &mut Vec<GgufKv>,
@@ -90,11 +91,15 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         .context("tokenizer.json model missing object field vocab")?;
     let added_tokens = collect_added_tokens(tokenizer);
     let tokenizer_vocab_size = tokenizer_vocab_size(raw_vocab, &added_tokens)?;
-    let configured_unpadded_vocab = inkling_text_u32(config, "unpadded_vocab_size")
+    let configured_unpadded_vocab = configured_text_u32(config, "unpadded_vocab_size")
         .and_then(|value| usize::try_from(value).ok());
     let vocab_size = configured_text_u32(config, "vocab_size")
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(tokenizer_vocab_size);
+    ensure!(
+        vocab_size <= MAX_TOKENIZER_VOCAB_SIZE,
+        "configured vocab_size {vocab_size} exceeds supported maximum {MAX_TOKENIZER_VOCAB_SIZE}"
+    );
     ensure!(
         vocab_size >= tokenizer_vocab_size,
         "configured vocab_size {vocab_size} is smaller than tokenizer vocab size {tokenizer_vocab_size}"
@@ -528,6 +533,50 @@ mod tests {
         assert_eq!(metadata.tokens[3], "[PAD3]");
         assert_eq!(metadata.tokens[7], "[PAD7]");
         assert_eq!(metadata.token_types[3], TOKEN_TYPE_UNUSED);
+    }
+
+    #[test]
+    fn rejects_non_inkling_unpadded_vocab_mismatch() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {"type": "BPE", "vocab": {"a": 0, "b": 1}, "merges": []},
+              "decoder": {"type": "ByteLevel"}
+            }"#,
+        )
+        .unwrap();
+        let config: Value = serde_json::from_str(
+            r#"{"model_type":"qwen2","vocab_size":2,"unpadded_vocab_size":1}"#,
+        )
+        .unwrap();
+
+        let error = match read_byte_level_bpe(&tokenizer, &config) {
+            Ok(_) => panic!("mismatched unpadded vocabulary must fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("configured unpadded_vocab_size 1"));
+        assert!(error.contains("tokenizer vocab size 2"));
+    }
+
+    #[test]
+    fn rejects_oversized_non_inkling_vocab_before_allocation() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {"type": "BPE", "vocab": {"a": 0}, "merges": []},
+              "decoder": {"type": "ByteLevel"}
+            }"#,
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_str(r#"{"model_type":"llama","vocab_size":4294967295}"#).unwrap();
+
+        let error = match read_byte_level_bpe(&tokenizer, &config) {
+            Ok(_) => panic!("oversized vocabulary must fail before allocation"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("configured vocab_size 4294967295"));
+        assert!(error.contains("exceeds supported maximum"));
     }
 
     #[test]

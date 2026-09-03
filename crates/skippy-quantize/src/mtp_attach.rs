@@ -204,6 +204,7 @@ fn runtime_config(
         kv_unified: None,
         swa_full: None,
         checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
     }
 }
 

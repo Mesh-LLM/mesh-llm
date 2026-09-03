@@ -401,6 +401,9 @@ pub struct HardwareConfig {
     /// Tensor type policy applied while opening a SafeTensors checkpoint.
     #[serde(default)]
     pub checkpoint_quantization: Option<String>,
+    /// Importance matrix used by low-bit SafeTensors checkpoint quantization.
+    #[serde(default)]
+    pub checkpoint_imatrix: Option<String>,
     #[serde(default)]
     pub mmap: Option<BoolOrAuto>,
     #[serde(default)]

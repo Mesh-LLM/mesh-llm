@@ -177,6 +177,10 @@ fn merge_hardware(effective: &mut ModelConfigEntry, defaults: &ModelConfigDefaul
         .checkpoint_quantization
         .clone()
         .or_else(|| default_hardware.checkpoint_quantization.clone());
+    hardware.checkpoint_imatrix = hardware
+        .checkpoint_imatrix
+        .clone()
+        .or_else(|| default_hardware.checkpoint_imatrix.clone());
     hardware.direct_io = hardware.direct_io.or(default_hardware.direct_io);
     hardware.repack = hardware.repack.or(default_hardware.repack);
     hardware.op_offload = hardware.op_offload.or(default_hardware.op_offload);

@@ -15,6 +15,9 @@ pub(crate) struct ValidateSafetensorsLoadArgs {
     /// Direct-load quantization recipe (for example BF16 or Q4_K_M).
     #[arg(long, default_value = "preserve")]
     quantization: CheckpointQuantization,
+    /// Importance matrix for IQ and other calibration-dependent recipes.
+    #[arg(long)]
+    imatrix: Option<PathBuf>,
     /// Load the complete model instead of a one-layer stage smoke test.
     #[arg(long)]
     full_model: bool,
@@ -45,6 +48,7 @@ pub(crate) fn run_validate_safetensors_load(args: ValidateSafetensorsLoadArgs) -
         n_batch: Some(128),
         n_ubatch: Some(128),
         checkpoint_quantization: args.quantization,
+        checkpoint_imatrix: args.imatrix,
         ..RuntimeConfig::default()
     };
     let model = StageModel::open(&args.source, &runtime_config)?;

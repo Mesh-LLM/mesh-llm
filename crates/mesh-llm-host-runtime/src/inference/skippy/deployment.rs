@@ -145,6 +145,8 @@ pub(crate) fn stage0_config(
         cache_idle_slots: context.runtime_settings.cache_idle_slots,
         filter_tensors_on_load: true,
         checkpoint_quantization: None,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
         selected_device,
         kv_cache: None,
         native_mtp_enabled: context.native_mtp_enabled,

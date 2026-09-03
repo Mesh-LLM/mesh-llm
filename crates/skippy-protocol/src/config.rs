@@ -72,6 +72,12 @@ pub struct StageConfig {
     /// Optional load-time quantization recipe for a SafeTensors checkpoint.
     #[serde(default)]
     pub checkpoint_quantization: Option<String>,
+    /// Optional importance matrix for low-bit checkpoint quantization.
+    #[serde(default)]
+    pub checkpoint_imatrix: Option<String>,
+    /// SHA-256 of `checkpoint_imatrix`, used in derived model/cache identity.
+    #[serde(default)]
+    pub checkpoint_imatrix_sha256: Option<String>,
     #[serde(default)]
     pub projector_path: Option<String>,
     #[serde(default)]

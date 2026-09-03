@@ -12,7 +12,6 @@ mod command_reports;
 mod compose_mtp;
 mod direct_convert;
 mod direct_quantize;
-mod imatrix;
 mod llama_load;
 mod locking;
 mod manifest;

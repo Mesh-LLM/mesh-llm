@@ -5,6 +5,7 @@ pub mod gguf_metadata;
 pub mod gguf_template;
 pub mod gguf_writer;
 pub mod hf_checkpoint;
+pub mod imatrix;
 mod inkling_metadata;
 pub mod tensor_map;
 pub mod tokenizer_metadata;

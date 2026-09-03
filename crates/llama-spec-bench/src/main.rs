@@ -255,6 +255,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
             checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+            checkpoint_imatrix: None,
             mlock: false,
             repack: false,
             op_offload: None,

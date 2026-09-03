@@ -105,6 +105,8 @@ pub struct RuntimeConfig {
     pub filter_tensors_on_load: bool,
     /// Tensor type policy used when `StageModel::open` receives a SafeTensors checkpoint.
     pub checkpoint_quantization: CheckpointQuantization,
+    /// Importance matrix used by quantization recipes that require calibration data.
+    pub checkpoint_imatrix: Option<std::path::PathBuf>,
     /// K/V cache backend offload. `None` preserves llama.cpp's derived
     /// default (offloaded); `Some` forces the value.
     pub kv_offload: Option<bool>,
@@ -352,6 +354,7 @@ impl Default for RuntimeConfig {
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
             checkpoint_quantization: CheckpointQuantization::Preserve,
+            checkpoint_imatrix: None,
             kv_offload: None,
             kv_unified: None,
             swa_full: None,

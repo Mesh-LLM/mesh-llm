@@ -95,6 +95,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-linux-runtime-slice.yml", "linux_runtime"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
+            ("ci-rust-tests-slice.yml", "safetensors_runtime_smoke"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
             ("cache-warm-sccache.yml", "warm"): "false",

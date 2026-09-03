@@ -72,7 +72,7 @@ schema row or stale manifest row from passing review:
 `hardware.main_gpu`, `hardware.cpu_moe`, `hardware.n_cpu_moe`,
 `hardware.fit_target_mib`, `hardware.safety_margin_gb`, `hardware.fit_context`,
 `hardware.lora_adapters`, `hardware.control_vectors`, `hardware.check_tensors`,
-`hardware.checkpoint_quantization`,
+`hardware.checkpoint_quantization`, `hardware.checkpoint_imatrix`,
 `hardware.mmap`, `hardware.use_mmap_prefetch`, `hardware.use_mmap_buffer`,
 `hardware.mlock`, `hardware.direct_io`, `hardware.repack`,
 `hardware.op_offload`, `hardware.no_host_buffer`, `hardware.warmup`,

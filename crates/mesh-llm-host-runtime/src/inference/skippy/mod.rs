@@ -19,6 +19,8 @@ use crate::runtime::{
 };
 use std::{
     env,
+    fs::File,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -26,6 +28,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use mesh_llm_events::{OutputEvent, emit_event};
 use openai_frontend::{
     ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompactingOpenAiBackend,
     CompactionConfig, CompletionRequest, CompletionResponse, CompletionStream,
@@ -33,6 +36,7 @@ use openai_frontend::{
     GuardrailTelemetrySink, ModelObject, OpenAiBackend, OpenAiHookPolicy, OpenAiRequestContext,
     OpenAiResult,
 };
+use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
@@ -186,6 +190,7 @@ pub(crate) struct SkippyModelLoadOptions {
     pub(crate) no_host_buffer: bool,
     pub(crate) check_tensors: bool,
     pub(crate) checkpoint_quantization: Option<String>,
+    pub(crate) checkpoint_imatrix: Option<String>,
     pub(crate) direct_io: bool,
     pub(crate) main_gpu: Option<u32>,
     pub(crate) split_mode: skippy_protocol::SplitMode,
@@ -306,6 +311,7 @@ impl SkippyModelLoadOptions {
             no_host_buffer: false,
             check_tensors: false,
             checkpoint_quantization: None,
+            checkpoint_imatrix: None,
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
@@ -1263,6 +1269,54 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let family_policy = family_policy_for_model_path(&options.model_path);
+    let checkpoint_quantization = options
+        .checkpoint_quantization
+        .as_deref()
+        .unwrap_or("preserve")
+        .parse::<skippy_runtime::CheckpointQuantization>()
+        .map_err(anyhow::Error::msg)?;
+    let (checkpoint_imatrix, checkpoint_imatrix_sha256) =
+        match options.checkpoint_imatrix.as_deref() {
+            Some(configured_path) => {
+                let configured_path = PathBuf::from(configured_path);
+                let resolved = if configured_path.is_absolute() {
+                    configured_path
+                } else if options.model_path.is_dir() {
+                    options.model_path.join(configured_path)
+                } else {
+                    options
+                        .model_path
+                        .parent()
+                        .unwrap_or(&options.model_path)
+                        .join(configured_path)
+                };
+                let canonical = resolved.canonicalize().with_context(|| {
+                    format!(
+                        "resolve checkpoint importance matrix {}",
+                        resolved.display()
+                    )
+                })?;
+                let mut reader = BufReader::new(File::open(&canonical).with_context(|| {
+                    format!("open checkpoint importance matrix {}", canonical.display())
+                })?);
+                let mut hasher = Sha256::new();
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let read = reader.read(&mut buffer).with_context(|| {
+                        format!("hash checkpoint importance matrix {}", canonical.display())
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..read]);
+                }
+                (
+                    Some(canonical.to_string_lossy().into_owned()),
+                    Some(hex::encode(hasher.finalize())),
+                )
+            }
+            None => (None, None),
+        };
     let mut config = StageConfig {
         run_id: run_id.clone(),
         topology_id: format!("topology-{run_id}"),
@@ -1317,7 +1371,12 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         swa_full: options.swa_full,
         cache_idle_slots: options.cache_idle_slots,
         filter_tensors_on_load: false,
-        checkpoint_quantization: options.checkpoint_quantization.clone(),
+        checkpoint_quantization: options
+            .checkpoint_quantization
+            .as_ref()
+            .map(|_| checkpoint_quantization.canonical_name().to_string()),
+        checkpoint_imatrix,
+        checkpoint_imatrix_sha256,
         selected_device: options.selected_device.clone().map(Into::into),
         kv_cache: None,
         native_mtp_enabled: options.native_mtp_enabled,
@@ -1330,6 +1389,28 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         .kv_cache
         .clone()
         .or_else(|| family_policy.stage_kv_cache_config_for_stage(&config));
+    if skippy_runtime::is_safetensors_checkpoint(&options.model_path) {
+        let imatrix_status = config
+            .checkpoint_imatrix
+            .as_deref()
+            .map_or("none", |_| "configured");
+        let message = format!(
+            "SafeTensors native loader: quantization={} imatrix={imatrix_status}. Set with `mesh-llm serve --quant <RECIPE>`; see `mesh-llm serve --help-advanced` for valid recipes.",
+            checkpoint_quantization.canonical_name()
+        );
+        let event = if checkpoint_quantization == skippy_runtime::CheckpointQuantization::Preserve {
+            OutputEvent::Info {
+                message,
+                context: None,
+            }
+        } else {
+            OutputEvent::Warning {
+                message,
+                context: None,
+            }
+        };
+        let _ = emit_event(event);
+    }
     Ok(config)
 }
 
@@ -1608,6 +1689,19 @@ mod tests {
         assert_eq!(config.load_mode, LoadMode::RuntimeSlice);
         assert!(config.upstream.is_none());
         assert!(config.downstream.is_none());
+    }
+
+    #[test]
+    fn single_stage_config_canonicalizes_checkpoint_quantization_aliases() {
+        let mut options =
+            SkippyModelLoadOptions::for_direct_gguf("Qwen3-8B-Q4_K_M", "/models/qwen.gguf")
+                .with_layer_end(36)
+                .with_package_identity(fake_package_identity(36));
+        options.checkpoint_quantization = Some("Q4_K".to_string());
+
+        let config = single_stage_config(&options).unwrap();
+
+        assert_eq!(config.checkpoint_quantization.as_deref(), Some("Q4_K_M"));
     }
 
     #[test]

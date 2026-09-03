@@ -89,6 +89,8 @@ fn write_local_configs(
             cache_idle_slots: None,
             filter_tensors_on_load: true,
             checkpoint_quantization: None,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
             selected_device: None,
             kv_cache,
             native_mtp_enabled: true,

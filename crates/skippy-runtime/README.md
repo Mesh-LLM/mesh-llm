@@ -59,7 +59,12 @@ Keep service lifecycle, transport, and telemetry in higher-level crates.
 its parent directory for the checkpoint metadata. Set
 `RuntimeConfig::checkpoint_quantization` to preserve the canonical checkpoint
 types or select a supported llama.cpp quantization recipe such as `Bf16`,
-`Q4KM`, or `Q8_0`.
+`Q4KM`, `IQ2XXS`, or `Q8_0`. Importance-aware recipes use
+`RuntimeConfig::checkpoint_imatrix`; relative paths resolve from the checkpoint
+directory, and required tensor entries are validated before model allocation.
+The shipped runtime exposes the same settings as
+`mesh-llm serve --quant <RECIPE>` and `--checkpoint-imatrix <PATH>`; explicit
+CLI values take precedence over both default and model-local configuration.
 
 The runtime validates immutable shards with the official Rust `safetensors`
 crate. `skippy-model` maps and transforms source tensors, while the native

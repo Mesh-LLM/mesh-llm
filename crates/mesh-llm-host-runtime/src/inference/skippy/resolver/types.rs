@@ -88,6 +88,7 @@ pub(crate) struct ResolvedHardwareConfig {
     pub(crate) no_host_buffer: bool,
     pub(crate) check_tensors: bool,
     pub(crate) checkpoint_quantization: Option<String>,
+    pub(crate) checkpoint_imatrix: Option<String>,
     pub(crate) direct_io: bool,
     pub(crate) main_gpu: Option<u32>,
     pub(crate) split_mode: skippy_protocol::SplitMode,

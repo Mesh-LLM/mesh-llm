@@ -26,11 +26,21 @@ pub type ModelReadTensorF32Callback = Option<
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct ModelImatrixEntryV1 {
+    pub tensor_name: *const c_char,
+    pub values: *const f32,
+    pub value_count: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct ModelTensorSourceV1 {
     pub abi_version: u32,
     pub struct_size: u32,
     pub read_tensor_f32: ModelReadTensorF32Callback,
     pub user_data: *mut c_void,
+    pub imatrix: *const ModelImatrixEntryV1,
+    pub imatrix_count: usize,
 }
 
 #[repr(C)]

@@ -142,6 +142,7 @@ fn write_hardware_flag_profile(buffer: &mut Vec<u8>, hardware: &HardwareConfig) 
         "checkpoint_quantization",
         hardware.checkpoint_quantization
     );
+    write_option!(buffer, "checkpoint_imatrix", hardware.checkpoint_imatrix);
     write_option!(buffer, "mmap", hardware.mmap);
     write_option!(buffer, "use_mmap_prefetch", hardware.use_mmap_prefetch);
     write_option!(buffer, "use_mmap_buffer", hardware.use_mmap_buffer);

@@ -127,6 +127,7 @@ mod tests {
             main_gpu: None,
             split_mode: SplitMode::Auto,
             checkpoint_quantization: CheckpointQuantization::Preserve,
+            checkpoint_imatrix: None,
         };
         StageModel::open(model_path, &config)
     }

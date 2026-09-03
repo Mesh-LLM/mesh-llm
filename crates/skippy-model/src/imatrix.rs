@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, ensure};
+
+type ByteReader<'a> = Cursor<&'a [u8]>;
 
 const GGUF_MAGIC: &[u8; 4] = b"GGUF";
 const GGUF_ALIGNMENT_DEFAULT: u64 = 32;
@@ -25,17 +26,22 @@ const KV_GENERAL_ALIGNMENT: &str = "general.alignment";
 const KV_IMATRIX_DATASETS: &str = "imatrix.datasets";
 const KV_IMATRIX_CHUNK_COUNT: &str = "imatrix.chunk_count";
 
-pub(crate) struct NativeImatrix {
-    _names: Vec<CString>,
-    _values: Vec<Vec<f32>>,
-    entries: Vec<llama_quant_ffi::LlamaModelImatrixData>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImatrixEntry {
+    pub name: String,
+    pub values: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Imatrix {
+    entries: Vec<ImatrixEntry>,
     source_path: PathBuf,
     dataset: Option<String>,
     chunk_count: i32,
 }
 
-impl NativeImatrix {
-    pub(crate) fn load(
+impl Imatrix {
+    pub fn load(
         path: &Path,
         include_weights: &[String],
         exclude_weights: &[String],
@@ -50,24 +56,24 @@ impl NativeImatrix {
         Self::from_loaded(path, loaded, include_weights, exclude_weights)
     }
 
-    pub(crate) fn as_ptr(&self) -> *const llama_quant_ffi::LlamaModelImatrixData {
-        self.entries.as_ptr()
+    pub fn entries(&self) -> &[ImatrixEntry] {
+        &self.entries
     }
 
-    pub(crate) fn source_path(&self) -> &Path {
+    pub fn source_path(&self) -> &Path {
         &self.source_path
     }
 
-    pub(crate) fn dataset(&self) -> Option<&str> {
+    pub fn dataset(&self) -> Option<&str> {
         self.dataset.as_deref()
     }
 
-    pub(crate) fn chunk_count(&self) -> i32 {
+    pub fn chunk_count(&self) -> i32 {
         self.chunk_count
     }
 
-    pub(crate) fn entry_count(&self) -> usize {
-        self.entries.len().saturating_sub(1)
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 
     fn from_loaded(
@@ -88,30 +94,8 @@ impl NativeImatrix {
             path.display()
         );
 
-        let mut names = Vec::with_capacity(selected.len());
-        let mut values = Vec::with_capacity(selected.len());
-        for entry in selected {
-            names.push(CString::new(entry.name)?);
-            values.push(entry.values);
-        }
-        let mut entries = names
-            .iter()
-            .zip(values.iter())
-            .map(|(name, value)| llama_quant_ffi::LlamaModelImatrixData {
-                name: name.as_ptr(),
-                data: value.as_ptr(),
-                size: value.len(),
-            })
-            .collect::<Vec<_>>();
-        entries.push(llama_quant_ffi::LlamaModelImatrixData {
-            name: std::ptr::null(),
-            data: std::ptr::null(),
-            size: 0,
-        });
         Ok(Self {
-            _names: names,
-            _values: values,
-            entries,
+            entries: selected,
             source_path: path.to_path_buf(),
             dataset: loaded.dataset,
             chunk_count: loaded.chunk_count,
@@ -125,13 +109,8 @@ struct LoadedImatrix {
     chunk_count: i32,
 }
 
-struct ImatrixEntry {
-    name: String,
-    values: Vec<f32>,
-}
-
 fn load_legacy_imatrix(bytes: &[u8], path: &Path) -> Result<LoadedImatrix> {
-    let mut reader = Cursor::new(bytes.to_vec());
+    let mut reader = Cursor::new(bytes);
     let entry_count = read_i32(&mut reader)
         .with_context(|| format!("read imatrix entry count from {}", path.display()))?;
     ensure!(
@@ -139,7 +118,12 @@ fn load_legacy_imatrix(bytes: &[u8], path: &Path) -> Result<LoadedImatrix> {
         "imatrix file has no entries: {}",
         path.display()
     );
-    let mut entries = Vec::with_capacity(entry_count as usize);
+    let entry_count = usize::try_from(entry_count).context("imatrix entry count overflow")?;
+    ensure!(
+        entry_count <= remaining_bytes(&reader) / 12,
+        "imatrix entry count exceeds the available file data"
+    );
+    let mut entries = Vec::with_capacity(entry_count);
     for index in 0..entry_count {
         entries.push(read_legacy_imatrix_entry(&mut reader, index)?);
     }
@@ -151,10 +135,15 @@ fn load_legacy_imatrix(bytes: &[u8], path: &Path) -> Result<LoadedImatrix> {
     })
 }
 
-fn read_legacy_imatrix_entry(reader: &mut Cursor<Vec<u8>>, index: i32) -> Result<ImatrixEntry> {
+fn read_legacy_imatrix_entry(reader: &mut ByteReader<'_>, index: usize) -> Result<ImatrixEntry> {
     let name_len = read_i32(reader).with_context(|| format!("read imatrix name length {index}"))?;
     ensure!(name_len > 0, "imatrix entry {index} has empty name");
-    let mut name_bytes = vec![0_u8; name_len as usize];
+    let name_len = usize::try_from(name_len).context("imatrix name length overflow")?;
+    ensure!(
+        name_len <= remaining_bytes(reader),
+        "imatrix entry {index} name extends past end of file"
+    );
+    let mut name_bytes = vec![0_u8; name_len];
     reader
         .read_exact(&mut name_bytes)
         .with_context(|| format!("read imatrix name {index}"))?;
@@ -163,6 +152,14 @@ fn read_legacy_imatrix_entry(reader: &mut Cursor<Vec<u8>>, index: i32) -> Result
     let value_count =
         read_i32(reader).with_context(|| format!("read imatrix value count for {name}"))?;
     ensure!(value_count > 0, "imatrix entry {name} has no values");
+    let value_count = usize::try_from(value_count).context("imatrix value count overflow")?;
+    let value_bytes = value_count
+        .checked_mul(std::mem::size_of::<f32>())
+        .context("imatrix value byte count overflow")?;
+    ensure!(
+        value_bytes <= remaining_bytes(reader),
+        "imatrix entry {name} values extend past end of file"
+    );
     let mut values = (0..value_count)
         .map(|_| read_f32(reader))
         .collect::<Result<Vec<_>>>()?;
@@ -175,7 +172,7 @@ fn read_legacy_imatrix_entry(reader: &mut Cursor<Vec<u8>>, index: i32) -> Result
     Ok(ImatrixEntry { name, values })
 }
 
-fn read_legacy_imatrix_trailer(reader: &mut Cursor<Vec<u8>>) -> Result<(i32, Option<String>)> {
+fn read_legacy_imatrix_trailer(reader: &mut ByteReader<'_>) -> Result<(i32, Option<String>)> {
     if reader.position() as usize >= reader.get_ref().len() {
         return Ok((0, None));
     }
@@ -187,19 +184,28 @@ fn read_legacy_imatrix_trailer(reader: &mut Cursor<Vec<u8>>) -> Result<(i32, Opt
     if len <= 0 {
         return Ok((chunk_count, None));
     }
-    let mut dataset = vec![0_u8; len as usize];
+    let len = usize::try_from(len).context("imatrix dataset length overflow")?;
+    ensure!(
+        len <= remaining_bytes(reader),
+        "imatrix dataset extends past end of file"
+    );
+    let mut dataset = vec![0_u8; len];
     reader.read_exact(&mut dataset)?;
     Ok((chunk_count, Some(String::from_utf8(dataset)?)))
 }
 
 fn load_gguf_imatrix(bytes: &[u8], path: &Path) -> Result<LoadedImatrix> {
-    let mut reader = Cursor::new(bytes.to_vec());
+    let mut reader = Cursor::new(bytes);
     let header = GgufHeader::read(&mut reader)?;
     ensure!(
         header.version >= 2,
         "unsupported GGUF imatrix version {} in {}",
         header.version,
         path.display()
+    );
+    ensure!(
+        header.metadata_count <= remaining_bytes(&reader) as u64 / 12,
+        "GGUF metadata count exceeds the available file data"
     );
     let mut metadata = GgufMetadata::default();
     for _ in 0..header.metadata_count {
@@ -208,11 +214,18 @@ fn load_gguf_imatrix(bytes: &[u8], path: &Path) -> Result<LoadedImatrix> {
         metadata.read_value(&mut reader, &key, value_type)?;
     }
 
-    let mut tensors = Vec::with_capacity(header.tensor_count as usize);
+    ensure!(
+        header.tensor_count <= remaining_bytes(&reader) as u64 / 32,
+        "GGUF tensor count exceeds the available file data"
+    );
+    let tensor_count =
+        usize::try_from(header.tensor_count).context("GGUF tensor count overflow")?;
+    let mut tensors = Vec::with_capacity(tensor_count);
     for _ in 0..header.tensor_count {
         tensors.push(GgufTensorInfo::read(&mut reader)?);
     }
-    let data_start = align_to(reader.position(), metadata.alignment);
+    let data_start = align_to(reader.position(), metadata.alignment)
+        .context("GGUF imatrix data offset overflow")?;
     let entries = read_gguf_entries(bytes, &tensors, data_start)?;
     ensure!(
         !entries.is_empty(),
@@ -233,7 +246,7 @@ struct GgufHeader {
 }
 
 impl GgufHeader {
-    fn read(reader: &mut Cursor<Vec<u8>>) -> Result<Self> {
+    fn read(reader: &mut ByteReader<'_>) -> Result<Self> {
         let mut magic = [0_u8; 4];
         reader.read_exact(&mut magic)?;
         ensure!(&magic == GGUF_MAGIC, "not a GGUF file");
@@ -255,7 +268,7 @@ struct GgufMetadata {
 impl GgufMetadata {
     fn read_value(
         &mut self,
-        reader: &mut Cursor<Vec<u8>>,
+        reader: &mut ByteReader<'_>,
         key: &str,
         value_type: u32,
     ) -> Result<()> {
@@ -289,10 +302,14 @@ struct GgufTensorInfo {
 }
 
 impl GgufTensorInfo {
-    fn read(reader: &mut Cursor<Vec<u8>>) -> Result<Self> {
+    fn read(reader: &mut ByteReader<'_>) -> Result<Self> {
         let name = read_gguf_string(reader)?;
         let n_dims = read_u32(reader)?;
         ensure!(n_dims > 0, "GGUF tensor {name} has no dimensions");
+        ensure!(
+            n_dims as usize <= remaining_bytes(reader) / 8,
+            "GGUF tensor {name} dimensions extend past end of file"
+        );
         let dims = (0..n_dims)
             .map(|_| read_u64(reader))
             .collect::<Result<Vec<_>>>()?;
@@ -308,7 +325,9 @@ impl GgufTensorInfo {
 
     fn element_count(&self) -> Result<usize> {
         self.dims.iter().try_fold(1_usize, |acc, dim| {
-            acc.checked_mul(*dim as usize)
+            let dim = usize::try_from(*dim)
+                .with_context(|| format!("GGUF tensor {} dimension overflow", self.name))?;
+            acc.checked_mul(dim)
                 .with_context(|| format!("GGUF tensor {} is too large", self.name))
         })
     }
@@ -395,8 +414,9 @@ fn read_gguf_f32_tensor(
         .with_context(|| format!("GGUF tensor {} is too large", tensor.name))?;
     let offset = data_start
         .checked_add(tensor.offset)
-        .with_context(|| format!("GGUF tensor {} offset overflow", tensor.name))?
-        as usize;
+        .with_context(|| format!("GGUF tensor {} offset overflow", tensor.name))?;
+    let offset = usize::try_from(offset)
+        .with_context(|| format!("GGUF tensor {} offset exceeds address space", tensor.name))?;
     let end = offset
         .checked_add(byte_len)
         .with_context(|| format!("GGUF tensor {} byte range overflow", tensor.name))?;
@@ -427,17 +447,21 @@ fn include_exclude_match(
     true
 }
 
-fn read_string_array(reader: &mut Cursor<Vec<u8>>) -> Result<Vec<String>> {
+fn read_string_array(reader: &mut ByteReader<'_>) -> Result<Vec<String>> {
     let element_type = read_u32(reader)?;
     ensure!(
         element_type == GGUF_TYPE_STRING,
         "expected GGUF string array, found type {element_type}"
     );
     let len = read_u64(reader)?;
+    ensure!(
+        len <= remaining_bytes(reader) as u64 / 8,
+        "GGUF string array count exceeds the available file data"
+    );
     (0..len).map(|_| read_gguf_string(reader)).collect()
 }
 
-fn skip_gguf_value(reader: &mut Cursor<Vec<u8>>, value_type: u32) -> Result<()> {
+fn skip_gguf_value(reader: &mut ByteReader<'_>, value_type: u32) -> Result<()> {
     match value_type {
         0 | 1 => skip_bytes(reader, 1),
         2 | 3 => skip_bytes(reader, 2),
@@ -453,16 +477,20 @@ fn skip_gguf_value(reader: &mut Cursor<Vec<u8>>, value_type: u32) -> Result<()> 
     }
 }
 
-fn skip_gguf_array(reader: &mut Cursor<Vec<u8>>) -> Result<()> {
+fn skip_gguf_array(reader: &mut ByteReader<'_>) -> Result<()> {
     let element_type = read_u32(reader)?;
     let len = read_u64(reader)?;
+    ensure!(
+        len <= remaining_bytes(reader) as u64,
+        "GGUF array count exceeds the available file data"
+    );
     for _ in 0..len {
         skip_gguf_value(reader, element_type)?;
     }
     Ok(())
 }
 
-fn skip_bytes(reader: &mut Cursor<Vec<u8>>, len: u64) -> Result<()> {
+fn skip_bytes(reader: &mut ByteReader<'_>, len: u64) -> Result<()> {
     let position = reader.position();
     let next = position
         .checked_add(len)
@@ -475,42 +503,54 @@ fn skip_bytes(reader: &mut Cursor<Vec<u8>>, len: u64) -> Result<()> {
     Ok(())
 }
 
-fn read_gguf_string(reader: &mut Cursor<Vec<u8>>) -> Result<String> {
+fn read_gguf_string(reader: &mut ByteReader<'_>) -> Result<String> {
     let len = read_u64(reader)?;
-    let mut bytes = vec![0_u8; len as usize];
+    let len = usize::try_from(len).context("GGUF string length overflow")?;
+    ensure!(
+        len <= remaining_bytes(reader),
+        "GGUF string extends past end of file"
+    );
+    let mut bytes = vec![0_u8; len];
     reader.read_exact(&mut bytes)?;
     String::from_utf8(bytes).context("GGUF string is not UTF-8")
 }
 
-fn read_i32(reader: &mut Cursor<Vec<u8>>) -> Result<i32> {
+fn read_i32(reader: &mut ByteReader<'_>) -> Result<i32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(i32::from_le_bytes(bytes))
 }
 
-fn read_u32(reader: &mut Cursor<Vec<u8>>) -> Result<u32> {
+fn read_u32(reader: &mut ByteReader<'_>) -> Result<u32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(u32::from_le_bytes(bytes))
 }
 
-fn read_u64(reader: &mut Cursor<Vec<u8>>) -> Result<u64> {
+fn read_u64(reader: &mut ByteReader<'_>) -> Result<u64> {
     let mut bytes = [0_u8; 8];
     reader.read_exact(&mut bytes)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn read_f32(reader: &mut Cursor<Vec<u8>>) -> Result<f32> {
+fn read_f32(reader: &mut ByteReader<'_>) -> Result<f32> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(f32::from_le_bytes(bytes))
 }
 
-fn align_to(value: u64, alignment: u64) -> u64 {
+fn remaining_bytes(reader: &ByteReader<'_>) -> usize {
+    reader
+        .get_ref()
+        .len()
+        .saturating_sub(reader.position() as usize)
+}
+
+fn align_to(value: u64, alignment: u64) -> Option<u64> {
     if alignment <= 1 {
-        return value;
+        return Some(value);
     }
-    value.div_ceil(alignment) * alignment
+    value.div_ceil(alignment).checked_mul(alignment)
 }
 
 #[cfg(test)]
@@ -530,11 +570,10 @@ mod tests {
             ],
         );
 
-        let imatrix =
-            NativeImatrix::load(&imatrix_path, &["attn_q".to_string()], &Vec::new()).unwrap();
+        let imatrix = Imatrix::load(&imatrix_path, &["attn_q".to_string()], &Vec::new()).unwrap();
 
         assert_eq!(imatrix.entry_count(), 1);
-        assert_eq!(imatrix._values[0], vec![1.0, 2.0]);
+        assert_eq!(imatrix.entries[0].values, vec![1.0, 2.0]);
         assert_eq!(imatrix.dataset(), Some("dataset.txt"));
         assert_eq!(imatrix.chunk_count(), 3);
         fs::remove_dir_all(root).unwrap();
@@ -547,14 +586,18 @@ mod tests {
         let imatrix_path = root.join("imatrix.gguf");
         write_gguf_imatrix(&imatrix_path);
 
-        let imatrix =
-            NativeImatrix::load(&imatrix_path, &["attn_q".to_string()], &Vec::new()).unwrap();
+        let imatrix = Imatrix::load(&imatrix_path, &["attn_q".to_string()], &Vec::new()).unwrap();
 
         assert_eq!(imatrix.entry_count(), 1);
-        assert_eq!(imatrix._values[0], vec![1.0, 2.0, 1.0, 1.0]);
+        assert_eq!(imatrix.entries[0].values, vec![1.0, 2.0, 1.0, 1.0]);
         assert_eq!(imatrix.dataset(), Some("calibration.txt"));
         assert_eq!(imatrix.chunk_count(), 7);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_alignment_overflow() {
+        assert_eq!(align_to(u64::MAX, 32), None);
     }
 
     fn unique_temp_dir() -> PathBuf {

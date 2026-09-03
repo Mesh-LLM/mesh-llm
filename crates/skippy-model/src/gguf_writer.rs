@@ -23,8 +23,8 @@ use crate::gguf_metadata::{
 };
 use crate::gguf_template::{metadata_from_hf_config, mtp_layer_start_from_hf_config};
 use crate::hf_checkpoint::{
-    SafetensorFile, SafetensorTensorInfo, inspect_hf_checkpoint, open_safetensor_files,
-    resolve_auto_output_type,
+    SafetensorFile, SafetensorTensorInfo, open_safetensor_files,
+    resolve_auto_output_type_from_files,
 };
 use crate::tensor_map::{
     TensorNameMap, hf_layer_id, inkling_mtp_depth, is_inkling_fused_w13, is_mtp_source_tensor,
@@ -176,25 +176,38 @@ pub struct DirectCheckpoint {
     buffer_size: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImatrixTensorLayout {
+    pub name: String,
+    pub value_count: usize,
+}
+
 impl DirectCheckpoint {
     /// Open a checkpoint and prepare canonical llama.cpp metadata and names.
     pub fn open(source: &Path, buffer_size: usize) -> Result<Self> {
-        let output_type = resolve_auto_output_type(source, ConvertOutputType::Auto)?;
-        let plan = inspect_hf_checkpoint(source, None, 1.0)?;
+        let files = open_safetensor_files(source)?;
+        ensure!(
+            !files.is_empty(),
+            "no safetensors files found under {}",
+            source.display()
+        );
+        let output_type = resolve_auto_output_type_from_files(&files, ConvertOutputType::Auto);
+        let tensor_count = files.iter().map(|file| file.tensors().len()).sum();
         let mtp_layer_start = mtp_layer_start_from_hf_config(source)?;
         let tensor_name_map = mtp_layer_start
             .map(|layer_start| TensorNameMap::HfToGgufWithMtp { layer_start })
             .unwrap_or(TensorNameMap::HfToGguf);
-        let prepared = prepare_raw_safetensors_gguf(
+        let prepared = prepare_raw_safetensors_gguf_with_files(
             source,
             &RawGgufWriteOptions {
                 buffer_size,
-                metadata: Some(metadata_from_hf_config(source, plan.tensor_count)?),
+                metadata: Some(metadata_from_hf_config(source, tensor_count)?),
                 tensor_name_map,
                 split: None,
                 output_type: Some(output_type),
                 tensor_selection: TensorSelection::All,
             },
+            files,
         )?;
         let mut metadata_gguf = Vec::new();
         write_header_and_tensor_table(&mut metadata_gguf, &prepared.metadata, &prepared.tensors)?;
@@ -217,6 +230,36 @@ impl DirectCheckpoint {
     /// Number of canonical tensors exposed by this checkpoint.
     pub fn tensor_count(&self) -> usize {
         self.tensors.len()
+    }
+
+    /// Canonical tensor names and importance-vector widths expected by llama.cpp.
+    pub fn imatrix_layout(&self) -> Result<Vec<ImatrixTensorLayout>> {
+        self.tensors
+            .iter()
+            .filter(|tensor| tensor.dims.len() >= 2)
+            .map(|tensor| {
+                let ne0 = usize::try_from(tensor.dims[0]).with_context(|| {
+                    format!("imatrix width does not fit usize for {}", tensor.name)
+                })?;
+                let ne2 = tensor
+                    .dims
+                    .get(2)
+                    .copied()
+                    .map(usize::try_from)
+                    .transpose()
+                    .with_context(|| {
+                        format!("imatrix depth does not fit usize for {}", tensor.name)
+                    })?
+                    .unwrap_or(1);
+                let value_count = ne0.checked_mul(ne2).with_context(|| {
+                    format!("imatrix value count overflows usize for {}", tensor.name)
+                })?;
+                Ok(ImatrixTensorLayout {
+                    name: tensor.name.clone(),
+                    value_count,
+                })
+            })
+            .collect()
     }
 
     /// Decode one canonical tensor into the caller-provided F32 destination.
@@ -281,11 +324,19 @@ fn prepare_raw_safetensors_gguf(
     source: &Path,
     options: &RawGgufWriteOptions,
 ) -> Result<PreparedGgufWrite> {
+    let files = open_safetensor_files(source)?;
+    prepare_raw_safetensors_gguf_with_files(source, options, files)
+}
+
+fn prepare_raw_safetensors_gguf_with_files(
+    source: &Path,
+    options: &RawGgufWriteOptions,
+    files: Vec<SafetensorFile>,
+) -> Result<PreparedGgufWrite> {
     ensure!(
         options.buffer_size > 0,
         "buffer_size must be greater than zero"
     );
-    let files = open_safetensor_files(source)?;
     ensure!(
         !files.is_empty(),
         "no safetensors files found under {}",

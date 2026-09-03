@@ -911,6 +911,8 @@ fn stage_config(
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
         ),
         checkpoint_quantization: None,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
         selected_device: load.selected_device.clone(),
         kv_cache: None,
         native_mtp_enabled: load.native_mtp_enabled,

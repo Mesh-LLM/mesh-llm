@@ -177,7 +177,8 @@ one.
 | `hardware.lora_adapters` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.control_vectors` | array of string | unsupported | both | not applicable | rejected | none |
 | `hardware.check_tensors` | boolean | `false` | both | model reload | partial (single-node resolution only; multi-node stages use disabled default) | none |
-| `hardware.checkpoint_quantization` | enum | `preserve` (default), `F32`, `F16`, `BF16`, `Q4_0`, `Q4_K_S`, `Q4_K_M`, `Q5_K_M`, `Q6_K`, `Q8_0` | both | model reload | partial (single-node direct SafeTensors checkpoints only) | none |
+| `hardware.checkpoint_quantization` | enum | `preserve` (default), `F32`, `F16`, `BF16`, `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ2_M`, `IQ1_S`, `IQ1_M`, `TQ1_0`, `TQ2_0`, `Q2_K`, `Q2_K_S`, `IQ3_XS`, `IQ3_XXS`, `IQ3_S`, `IQ3_M`, `Q3_K_S`, `Q3_K_M`, `Q3_K_L`, `IQ4_NL`, `IQ4_XS`, `Q4_K_S`, `Q4_K_M`, `Q5_K_S`, `Q5_K_M`, `Q6_K`, `Q8_0`, `MXFP4_MOE` | both | model reload | partial (single-node direct SafeTensors checkpoints only) | none |
+| `hardware.checkpoint_imatrix` | string path | unset; relative paths resolve from the checkpoint directory | both | model reload | partial (single-node direct SafeTensors checkpoints only); required by importance-aware recipes | none |
 | `hardware.mmap` | bool-or-`auto` | `auto` | both | model reload | wired | `--mmap` |
 | `hardware.use_mmap_prefetch` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |
 | `hardware.use_mmap_buffer` | boolean | unsupported | both | not applicable | rejected (the native model loader does not consume it) | none |
@@ -187,6 +188,11 @@ one.
 | `hardware.op_offload` | boolean | unset preserves llama.cpp's derived default (currently enabled); `false`/`true` force it | both | model reload | partial (single-node resolution only; multi-node stages use auto) | none |
 | `hardware.no_host_buffer` | boolean | `false` | both | model reload | partial (single-node resolution only; multi-node stages use disabled default) | none |
 | `hardware.warmup` | bool-or-`auto` | unsupported | both | not applicable | rejected | none |
+
+For one-off SafeTensors serving, `mesh-llm serve --quant <RECIPE>` overrides
+`hardware.checkpoint_quantization`; `--checkpoint-imatrix <PATH>` supplies the
+optional importance matrix. Run `mesh-llm serve --help-advanced` for the full
+recipe list.
 
 Missing TOML for this group: LoRA per-adapter scale, control-vector scale and
 layer range (`il_start`/`il_end`), RoPE/YaRN load-time overrides, and general
