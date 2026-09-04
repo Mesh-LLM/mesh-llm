@@ -335,14 +335,13 @@ fn deferred_suffix_prefill_enabled(
     payload: Option<StagePrefixCachePayload>,
     max_tokens: u32,
 ) -> bool {
+    // Resident KV suffixes must remain in the serialized cache operation. Releasing
+    // it between restore and suffix prefill lets another request interleave and
+    // destroys prefill phase locality on a shared accelerator.
     max_tokens > 0
         && matches!(
             payload,
-            Some(
-                StagePrefixCachePayload::ResidentKv
-                    | StagePrefixCachePayload::KvRecurrent
-                    | StagePrefixCachePayload::FullState
-            )
+            Some(StagePrefixCachePayload::KvRecurrent | StagePrefixCachePayload::FullState)
         )
 }
 
@@ -1663,11 +1662,16 @@ fn default_local_text_serving_selects_iteration_scheduler() {
 
 #[cfg(test)]
 #[test]
-fn deferred_suffix_prefill_requires_a_nonzero_generation_budget() {
-    assert!(deferred_suffix_prefill_enabled(
+fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
+    assert!(!deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::ResidentKv),
         1,
     ));
+}
+
+#[cfg(test)]
+#[test]
+fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
     assert!(deferred_suffix_prefill_enabled(
         Some(StagePrefixCachePayload::KvRecurrent),
         1,
@@ -1677,7 +1681,7 @@ fn deferred_suffix_prefill_requires_a_nonzero_generation_budget() {
         1,
     ));
     assert!(!deferred_suffix_prefill_enabled(
-        Some(StagePrefixCachePayload::ResidentKv),
+        Some(StagePrefixCachePayload::KvRecurrent),
         0,
     ));
     assert!(!deferred_suffix_prefill_enabled(None, 1));
