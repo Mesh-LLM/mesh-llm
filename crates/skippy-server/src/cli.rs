@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, path::PathBuf};
 
+use crate::frontend::DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS;
 use crate::telemetry::TelemetryLevel;
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -110,8 +111,8 @@ pub struct ServeBinaryArgs {
     pub openai_generation_queue_capacity: Option<usize>,
     #[arg(
         long,
-        default_value_t = 60,
-        help = "Maximum seconds an OpenAI generation request may wait for admission."
+        default_value_t = DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
+        help = "Maximum seconds an OpenAI generation request may wait for admission; 0 waits until cancellation."
     )]
     pub openai_generation_admission_timeout_secs: u64,
     #[arg(long, default_value_t = 256)]
@@ -207,8 +208,8 @@ pub struct ServeOpenAiArgs {
     pub generation_queue_capacity: Option<usize>,
     #[arg(
         long,
-        default_value_t = 60,
-        help = "Maximum seconds a generation request may wait for admission."
+        default_value_t = DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
+        help = "Maximum seconds a generation request may wait for admission; 0 waits until cancellation."
     )]
     pub generation_admission_timeout_secs: u64,
     #[arg(
@@ -282,7 +283,7 @@ mod tests {
         assert!(!args.openai_adaptive_generation_concurrency);
         assert_eq!(args.openai_adaptive_generation_min_concurrency, None);
         assert_eq!(args.openai_generation_queue_capacity, None);
-        assert_eq!(args.openai_generation_admission_timeout_secs, 60);
+        assert_eq!(args.openai_generation_admission_timeout_secs, 0);
 
         let cli = Cli::try_parse_from(["skippy-server", "serve-openai", "--config", "stage.json"])
             .unwrap();
@@ -299,7 +300,7 @@ mod tests {
         assert!(!args.adaptive_generation_concurrency);
         assert_eq!(args.adaptive_generation_min_concurrency, None);
         assert_eq!(args.generation_queue_capacity, None);
-        assert_eq!(args.generation_admission_timeout_secs, 60);
+        assert_eq!(args.generation_admission_timeout_secs, 0);
         assert_eq!(args.openai_guardrails, OpenAiGuardrailsCliMode::Metrics);
     }
 

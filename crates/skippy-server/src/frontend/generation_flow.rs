@@ -1042,8 +1042,20 @@ impl StageOpenAiBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::LocalSessionCleanupGuard;
+    use super::{LocalSessionCleanupGuard, text_generation::resident_capacity_target_tokens};
     use std::cell::Cell;
+
+    #[test]
+    fn resident_capacity_target_excludes_outer_decode_headroom() {
+        let prompt_tokens = 31_101;
+        let outer_reserved_tokens = prompt_tokens + 512;
+
+        assert_eq!(resident_capacity_target_tokens(prompt_tokens), 31_101);
+        assert_ne!(
+            resident_capacity_target_tokens(prompt_tokens),
+            u64::try_from(outer_reserved_tokens).unwrap()
+        );
+    }
 
     #[test]
     fn post_admission_multimodal_failure_releases_session() {
