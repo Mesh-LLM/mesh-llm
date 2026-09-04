@@ -167,7 +167,9 @@ credentials may differ.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
 - ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
   platform-local inference, backend, two-node, Metal and model-download
-  consumers using only composed artifacts.
+  consumers using only composed artifacts. The Linux two-node split row expands
+  to a fixed dense SmolLM2 plus recurrent Qwen3.5 model matrix, serialized with
+  `max-parallel: 1`; pull requests fail fast while main executes both rows.
 - ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
   Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
   producers that start from the plan and static ABI respectively, before
@@ -212,10 +214,12 @@ Initial planner budgets are:
 
 The lane projections pass smaller PR max-parallel values to Clippy, tests,
 hosts, runtimes and platform checks and wider bounded values to main. Host, ABI
-and runtime producer identities are not duplicated. Separate run-scoped graphs
-build one prepared UI artifact per active platform lane; that is the accepted
-readability tradeoff, while UI tests remain owned by the Website graph. Every
-heavy job has a timeout and a deterministic row identity.
+and runtime producer identities are not duplicated. The fixed two-row
+split-model matrix is serialized, so it adds runner-minutes without increasing
+peak workers. Separate run-scoped graphs build one prepared UI artifact per
+active platform lane; that is the accepted readability tradeoff, while UI tests
+remain owned by the Website graph. Every heavy job has a timeout and a
+deterministic row identity.
 
 PR platform matrices for compilation, Rust tests, products and functional
 platform checks fail fast. Main/manual matrices continue all rows for exhaustive

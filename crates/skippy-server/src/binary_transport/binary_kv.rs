@@ -780,6 +780,14 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
     if !kv.should_record() || token_ids.is_empty() {
         return result;
     }
+    if kv.payload_is_exact_state() {
+        let Ok(prompt_token_count) = u64::try_from(message.state.prompt_token_count) else {
+            return result;
+        };
+        if !kv.exact_state_record_token_count_allowed(prompt_token_count, token_ids.len() as u64) {
+            return result;
+        }
+    }
     let identities =
         binary_full_prefill_record_identities(kv, config, session_id, message, token_ids);
     let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());

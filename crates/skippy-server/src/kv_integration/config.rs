@@ -232,25 +232,40 @@ fn store_exact_radix_record(
             payload.release_from(&mut blobs)?;
         }
     }
-    while max_bytes > 0
-        && blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .physical_bytes()
-            > max_bytes
-    {
-        let evicted = radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .evict_lru_recurrent();
-        let Some(evicted) = evicted else {
-            break;
-        };
-        evicted.value.payload.release_from(
-            &mut blobs
+    // Exact snapshots are indivisible, and the default cap is estimated from
+    // attention KV metadata that cannot include architecture-specific
+    // recurrent state. Treat the byte limit as a soft cap for one entry;
+    // otherwise an oversized checkpoint self-evicts immediately and exact
+    // prefix caching is permanently disabled for that stage.
+    if max_bytes > 0 {
+        loop {
+            let over_bytes = blobs
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )?;
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .physical_bytes()
+                > max_bytes;
+            let multiple_entries = radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .stats()
+                .recurrent_entries
+                > 1;
+            if !over_bytes || !multiple_entries {
+                break;
+            }
+            let evicted = radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .evict_lru_recurrent();
+            let Some(evicted) = evicted else {
+                break;
+            };
+            evicted.value.payload.release_from(
+                &mut blobs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )?;
+        }
     }
     Ok(())
 }
@@ -416,6 +431,39 @@ mod tests {
         );
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
         assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
+    }
+
+    #[test]
+    fn oversized_exact_payload_retains_one_reusable_entry() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            4,
+            4,
+            pending("checkpoint", &[1, 2], b"aaaabbbb"),
+        )
+        .unwrap();
+
+        assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 1);
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 8);
+
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            4,
+            4,
+            pending("replacement", &[1, 3], b"ccccdddd"),
+        )
+        .unwrap();
+
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
+        assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 8);
     }
 
     #[test]

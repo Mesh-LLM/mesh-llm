@@ -287,6 +287,9 @@ runtime producers are not duplicated.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local CPU core, CUDA,
   two-node, Metal and model-download consumers using only composed artifacts.
+  The Linux two-node split smoke uses a fixed dense SmolLM2 plus recurrent
+  Qwen3.5 matrix, serialized with `max-parallel: 1`; pull requests fail fast
+  between those rows while main executes both.
   CUDA inference uses the
   approved `gpu-nvidia` ephemeral self-hosted scale set, including for
   same-repository PRs. That hardware-qualified exception executes only through
@@ -320,10 +323,12 @@ The planner records profile budgets: PR drafts/ready runs allow at most
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
 `max-parallel`, and backend/platform rows are selected by ownership rather than
-by a blanket PR fan-out. Host, ABI and runtime producers remain unique per
-selected row. The readability tradeoff is one UI artifact build per active
-platform workflow because artifacts are run-scoped; UI tests still execute
-only in the Website graph and host producers never rebuild the UI themselves.
+by a blanket PR fan-out. The fixed two-row split-model matrix is serialized, so
+it adds runner-minutes without increasing peak workers. Host, ABI and runtime
+producers remain unique per selected row. The readability tradeoff is one UI
+artifact build per active platform workflow because artifacts are run-scoped;
+UI tests still execute only in the Website graph and host producers never
+rebuild the UI themselves.
 
 Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,

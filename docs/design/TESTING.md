@@ -499,12 +499,14 @@ mesh-llm serve \
   response from the layer-package model.
 
 > **CI coverage:** `two_node_split_smoke` runs
-> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
-> tiny GGUF. It starts two serving nodes, waits for a topology with stages on
-> two distinct nodes, checks `/v1/models`, then sends three progressively longer
-> `/v1/chat/completions` prompts with one shared prefix through stage 0. The smoke
-> requires the reported cached-token count to increase after each request so
-> split serving cannot silently fall back to cold prefill for prefix matches.
+> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary in two
+> model lanes: dense SmolLM2-135M and recurrent Qwen3.5-0.8B. Each lane starts
+> two serving nodes (the recurrent lane fixes a 4096-token context), waits for
+> a topology with stages on two distinct nodes, checks `/v1/models`, then sends
+> three progressively longer `/v1/chat/completions` prompts with one shared
+> prefix through stage 0. The smoke requires the reported cached-token count to
+> increase after each request so either model-state path cannot silently fall
+> back to cold prefill for prefix matches.
 >
 > Other nearby CI coverage:
 >

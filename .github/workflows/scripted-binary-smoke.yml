@@ -39,6 +39,11 @@ on:
       model_cache_scope:
         required: true
         type: string
+      model_context_size:
+        description: Optional context-size override passed to model smoke scripts.
+        required: false
+        default: ''
+        type: string
       cache_key_prefix:
         required: false
         default: ''
@@ -54,6 +59,8 @@ on:
       HF_TOKEN:
         required: false
 
+env:
+  MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
 permissions:
   contents: read
   packages: read

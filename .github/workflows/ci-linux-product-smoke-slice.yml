@@ -20,6 +20,11 @@ on:
         required: false
         default: 25
         type: number
+      fail_fast:
+        description: Stop the bounded split-model matrix on the first failure.
+        required: false
+        default: false
+        type: boolean
     secrets:
       HF_TOKEN:
         required: false
@@ -72,15 +77,33 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   two_node_split:
-    name: Two-node split smoke
+    name: Two-node split smoke (${{ matrix.model_state }})
     if: ${{ contains(fromJson(inputs.smoke_matrix).*.id, 'two-node-split') }}
+    strategy:
+      fail-fast: ${{ inputs.fail_fast }}
+      max-parallel: 1
+      matrix:
+        include:
+          - model_state: dense
+            model_url: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
+            model_file: SmolLM2-135M-Instruct-Q8_0.gguf
+            model_cache_scope: two-node-split-smoke-model
+            model_context_size: ''
+          - model_state: recurrent
+            model_url: https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf
+            model_file: Qwen3.5-0.8B-Q4_K_M.gguf
+            model_cache_scope: two-node-split-recurrent-smoke-model
+            model_context_size: '4096'
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
       artifact_name: ci-product-linux-amd64-cpu
       artifact_path: ci-artifacts/linux
       staged_binary_path: ${{ inputs.binary_target }}
-      model_cache_scope: two-node-split-smoke-model
+      model_url: ${{ matrix.model_url }}
+      model_file: ${{ matrix.model_file }}
+      model_cache_scope: ${{ matrix.model_cache_scope }}
+      model_context_size: ${{ matrix.model_context_size }}
       smoke_script: scripts/ci-two-node-split-smoke.sh
       timeout_minutes: ${{ inputs.timeout_minutes }}
     secrets:

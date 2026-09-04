@@ -22,7 +22,8 @@ WORKER_API_PORT="${MESH_TWO_NODE_SPLIT_WORKER_API_PORT:-9368}"
 WORKER_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_WORKER_CONSOLE_PORT:-3162}"
 WORKER_BIND_PORT="${MESH_TWO_NODE_SPLIT_WORKER_BIND_PORT:-53648}"
 MAX_WAIT="${MESH_TWO_NODE_SPLIT_MAX_WAIT:-300}"
-CTX_SIZE="${MESH_TWO_NODE_SPLIT_CTX_SIZE:-}"
+REQUEST_SETTLE_SECONDS="${MESH_TWO_NODE_SPLIT_REQUEST_SETTLE_SECONDS:-1}"
+CTX_SIZE="${MESH_TWO_NODE_SPLIT_CTX_SIZE:-${MESH_LLM_SMOKE_CONTEXT_SIZE:-}}"
 MAX_VRAM="${MESH_TWO_NODE_SPLIT_MAX_VRAM:-1}"
 DEVICE="${MESH_TWO_NODE_SPLIT_DEVICE:-CPU}"
 WORK_DIR="${MESH_TWO_NODE_SPLIT_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/mesh-two-node-split.XXXXXX")}"
@@ -42,6 +43,7 @@ echo "  seed bind:      $SEED_BIND_PORT"
 echo "  worker api:     $WORKER_API_PORT"
 echo "  worker console: $WORKER_CONSOLE_PORT"
 echo "  worker bind:    $WORKER_BIND_PORT"
+echo "  request settle: ${REQUEST_SETTLE_SECONDS}s"
 echo "  ctx size:       ${CTX_SIZE:-model default}"
 echo "  max vram:       ${MAX_VRAM}GB"
 echo "  device:         $DEVICE"
@@ -336,7 +338,7 @@ for index in 1 2 3; do
     # The host returns the OpenAI response before the stage connection has
     # released its single CI lane. Give graceful Stop enough time to finish so
     # the next request tests cache reuse rather than transient admission.
-    sleep 1
+    sleep "$REQUEST_SETTLE_SECONDS"
 done
 
 python3 - "$PREFIX_RESPONSE_DIR" <<'PY'

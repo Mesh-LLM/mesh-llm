@@ -164,6 +164,38 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("cuda-cudart-12-9", smoke)
         self.assertIn("libcublas-12-9", smoke)
 
+    def test_two_node_split_smoke_covers_dense_and_recurrent_models(self):
+        workflow = (
+            WORKFLOWS / "ci-linux-product-smoke-slice.yml"
+        ).read_text()
+        scripted = (WORKFLOWS / "scripted-binary-smoke.yml").read_text()
+
+        self.assertIn("two_node_split:", workflow)
+        self.assertIn("model_state: dense", workflow)
+        self.assertIn("model_state: recurrent", workflow)
+        self.assertIn("max-parallel: 1", workflow)
+        self.assertEqual(
+            workflow.count("smoke_script: scripts/ci-two-node-split-smoke.sh"),
+            1,
+        )
+        self.assertIn(
+            "Qwen3.5-0.8B-GGUF/resolve/"
+            "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/"
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            workflow,
+        )
+        self.assertIn("model_context_size: '4096'", workflow)
+        self.assertIn("fail-fast: ${{ inputs.fail_fast }}", workflow)
+        self.assertIn(
+            "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
+            (WORKFLOWS / "ci-linux-lane.yml").read_text(),
+        )
+        self.assertIn("model_context_size:", scripted)
+        self.assertIn(
+            "MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}",
+            scripted,
+        )
+
     def test_cuda_product_supports_the_registered_gpu_runner_architecture(self):
         runtimes = json.loads(SLICES.read_text())["runtime_rows"]
         cuda = next(row for row in runtimes if row["id"] == "linux-cuda")
