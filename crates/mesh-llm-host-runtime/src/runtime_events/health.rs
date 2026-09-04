@@ -25,6 +25,7 @@ pub struct EngineHealthSnapshot {
     pub subscriber_disconnected: u64,
     pub shutdown_degraded: u64,
     pub reducer_rejected: u64,
+    pub event_cutover_divergence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -38,6 +39,7 @@ struct Counters {
     subscriber_disconnected: AtomicU64,
     shutdown_degraded: AtomicU64,
     reducer_rejected: AtomicU64,
+    event_cutover_divergence: AtomicU64,
 }
 
 /// Engine health: coalesced counters plus a cadence-gated publish gate.
@@ -103,6 +105,17 @@ impl EngineHealth {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Task 6 (`.omo/plans/event-system-fixes.md`, defect D14): a
+    /// `runtime_data::event_cutover` shadow comparison found a legacy
+    /// value that disagreed with the reducer's own projection. The legacy
+    /// value stays authoritative regardless -- this counter is
+    /// observability only, never a cutover trigger.
+    pub fn bump_event_cutover_divergence(&self) {
+        self.counters
+            .event_cutover_divergence
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn set_rebuild_generation(&self, value: u64) {
         self.counters
             .rebuild_generation
@@ -128,6 +141,10 @@ impl EngineHealth {
                 .load(Ordering::Relaxed),
             shutdown_degraded: self.counters.shutdown_degraded.load(Ordering::Relaxed),
             reducer_rejected: self.counters.reducer_rejected.load(Ordering::Relaxed),
+            event_cutover_divergence: self
+                .counters
+                .event_cutover_divergence
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -192,6 +209,7 @@ mod tests {
         health.bump_subscriber_disconnected();
         health.bump_shutdown_degraded();
         health.bump_reducer_rejected();
+        health.bump_event_cutover_divergence();
         health.set_rebuild_generation(2);
 
         let snapshot = health.snapshot();
@@ -207,6 +225,7 @@ mod tests {
                 subscriber_disconnected: 1,
                 shutdown_degraded: 1,
                 reducer_rejected: 1,
+                event_cutover_divergence: 1,
             }
         );
     }

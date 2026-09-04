@@ -132,7 +132,7 @@ fn cursor_exactly_at_the_frontier_after_rebuild_is_in_window_not_evicted() {
 #[test]
 fn state_top_level_keys_match_the_frozen_set() {
     let engine = RuntimeEventEngine::new();
-    let projection = super::state_projection::build(&engine);
+    let projection = crate::runtime_event_api::state_projection::build(&engine);
     let value = serde_json::to_value(&projection).expect("serializable");
     let object = value.as_object().expect("state is a JSON object");
     let keys: Vec<&str> = object.keys().map(String::as_str).collect();

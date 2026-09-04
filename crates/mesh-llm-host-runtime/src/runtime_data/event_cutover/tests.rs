@@ -249,3 +249,53 @@ fn cutover_matrix_is_stable_across_reads() {
     let second: Vec<Generation> = CUTOVER_MATRIX.iter().map(|e| e.generation).collect();
     assert_eq!(first, second);
 }
+
+/// Task 6 (`.omo/plans/event-system-fixes.md`, defect D14): a `Status`
+/// write must still apply and publish exactly as before the shadow
+/// compare was wired in -- the comparison it now runs after the write is
+/// pure observability and must never change `update_snapshots`'s return
+/// value.
+#[test]
+fn status_write_runs_the_production_shadow_compare_without_changing_its_own_result() {
+    let collector = super::super::collector::RuntimeDataCollector::new();
+    let changed = collector.update_runtime_status(RuntimeDataDirty::STATUS, |status| {
+        status.llama_ready = true;
+        true
+    });
+    assert!(changed, "a Legacy-generation Status write must still apply");
+}
+
+/// Same production integration point, with a live engine installed and a
+/// genuine Status/reducer mismatch (the reducer has no available model at
+/// all, while the legacy write claims `llama_ready == true`): the
+/// `event_cutover_divergence` engine health counter must increment, and
+/// the legacy value already written above must remain untouched (every
+/// `CUTOVER_MATRIX` row stays `Legacy`).
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
+fn status_shadow_compare_bumps_engine_health_on_a_genuine_mismatch() {
+    crate::runtime_events::clear_runtime_event_engine();
+    let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+    crate::runtime_events::install_runtime_event_engine(engine.clone());
+
+    let collector = super::super::collector::RuntimeDataCollector::new();
+    let before = engine.health().snapshot().event_cutover_divergence;
+    let changed = collector.update_runtime_status(RuntimeDataDirty::STATUS, |status| {
+        status.llama_ready = true;
+        true
+    });
+    let after = engine.health().snapshot().event_cutover_divergence;
+
+    assert!(changed, "the legacy write must still apply");
+    assert_eq!(
+        after,
+        before + 1,
+        "a genuine Status/reducer mismatch must bump engine health"
+    );
+    assert!(
+        collector.runtime_status_snapshot().llama_ready,
+        "the legacy value stays authoritative regardless of the divergence"
+    );
+
+    crate::runtime_events::clear_runtime_event_engine();
+}

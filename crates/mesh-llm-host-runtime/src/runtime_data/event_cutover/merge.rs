@@ -16,9 +16,16 @@ use super::matrix::{FieldId, Generation, generation_of};
 /// persisted: like the existing dirty-bit subscription state, this resets
 /// on process restart, which is the correct behavior — the compile-time
 /// `CUTOVER_MATRIX` is the only durable authority, not accumulated health.
+///
+/// `divergence` was `#[cfg(test)]`-only through task 5: no producer task
+/// had landed a reducer projection to compare against, so the comparison
+/// only ever ran in unit tests. Task 6
+/// (`.omo/plans/event-system-fixes.md`, defect D14) lands the reducer's
+/// per-category domain state and promotes this counter to production for
+/// the `Status`/`Inventory` fields (see `collector::update_snapshots`'s
+/// shadow-compare calls), while every `CUTOVER_MATRIX` row stays `Legacy`.
 #[derive(Default)]
 pub(crate) struct ShadowHealth {
-    #[cfg(test)]
     divergence: Mutex<HashMap<FieldId, u64>>,
     stale_legacy_writes: Mutex<HashMap<FieldId, u64>>,
 }
@@ -43,7 +50,10 @@ impl ShadowHealth {
             .unwrap_or(&0)
     }
 
-    #[cfg(test)]
+    /// Records the divergence locally AND bumps the runtime-event engine's
+    /// `event_cutover_divergence` counter when an engine is installed (a
+    /// no-op otherwise, e.g. in a unit test with no engine running) --
+    /// task 6's "count divergences in engine health counters" half.
     fn record_divergence(&self, field: FieldId) {
         *self
             .divergence
@@ -51,6 +61,9 @@ impl ShadowHealth {
             .expect("shadow health divergence lock poisoned")
             .entry(field)
             .or_insert(0) += 1;
+        if let Some(engine) = crate::runtime_events::runtime_event_engine() {
+            engine.health().bump_event_cutover_divergence();
+        }
     }
 
     fn record_stale_legacy_write(&self, field: FieldId) {
@@ -64,7 +77,6 @@ impl ShadowHealth {
 }
 
 /// Which generation's write actually took effect for one publish.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MergeOutcome {
     LegacyApplied,
@@ -101,12 +113,12 @@ pub(crate) fn apply_legacy_write_for_generation(
     }
 }
 
-/// Full field-level merge including shadow comparison, exercised directly
-/// by unit tests with synthetic typed values (there is no real reducer
-/// projection to compare against in production yet, since no producer task
-/// has landed — see `tests` for the acceptance coverage this proves).
-/// Divergence is recorded but never flips which generation's value wins.
-#[cfg(test)]
+/// Full field-level merge including shadow comparison. Called from
+/// production for `Status`/`Inventory` (`collector::update_snapshots`)
+/// now that task 6 lands a real reducer projection to compare against for
+/// those two fields, and directly by unit tests with synthetic typed
+/// values for every field (see `tests`). Divergence is recorded but never
+/// flips which generation's value wins.
 pub(crate) fn merge_legacy_publish<T: Clone + PartialEq>(
     field: FieldId,
     legacy_value: T,

@@ -14,6 +14,7 @@
 //! `SubscriberRegistry::publish`.
 
 mod apply;
+mod domain;
 mod rebuild;
 mod state;
 
@@ -21,5 +22,9 @@ mod state;
 mod tests;
 
 pub use apply::{ReduceOutcome, ReducerInput, apply};
+pub use domain::{
+    CacheDomainState, DeviceDomainState, DomainState, ModelDomainState, RequestDomainState,
+    SessionRecentEntry, StageDomainState,
+};
 pub use rebuild::{RebuildError, RebuildOutcome, rebuild};
 pub use state::{OperationState, ReducerSnapshot, RejectReason};

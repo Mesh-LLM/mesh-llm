@@ -3,7 +3,9 @@
 //! Keep mutation local, drop locks before publish, and let readers observe
 //! shared snapshots through this boundary.
 
-use super::event_cutover::{ShadowHealth, field_of_dirty, should_apply_legacy_write};
+use super::event_cutover::{
+    FieldId, ShadowHealth, field_of_dirty, merge_legacy_publish, should_apply_legacy_write,
+};
 use super::inventory::{
     InventoryScanCoordinator, InventoryScanDisposition, InventoryScanError, InventoryScanOutcome,
     InventoryScanResult, replace_local_instances_snapshot, replace_local_inventory_snapshot,
@@ -507,11 +509,16 @@ impl RuntimeDataCollector {
     /// Every field is `Legacy` today (see `event_cutover::CUTOVER_MATRIX`),
     /// so this preserves existing behavior exactly while being the real
     /// integration point once a producer task lands a reducer projection.
+    ///
+    /// After a `Status`/`Inventory` write, also runs the task 6 shadow
+    /// comparison (`record_shadow_divergence`) against the reducer's own
+    /// domain projection -- observability only, never a cutover trigger.
     fn update_snapshots<F>(&self, dirty: RuntimeDataDirty, update: F) -> bool
     where
         F: FnOnce(&mut RuntimeDataSnapshots) -> bool,
     {
-        if let Some(field) = field_of_dirty(dirty)
+        let field = field_of_dirty(dirty);
+        if let Some(field) = field
             && !should_apply_legacy_write(field, &self.shared.event_cutover_health)
         {
             return false;
@@ -526,11 +533,56 @@ impl RuntimeDataCollector {
             update(&mut snapshots)
         };
 
+        if let Some(field) = field {
+            self.record_shadow_divergence(field);
+        }
+
         if changed {
             self.shared.subscriptions.publish(dirty);
         }
 
         changed
+    }
+
+    /// Task 6 (`.omo/plans/event-system-fixes.md`, defect D14): compare the
+    /// just-written legacy value against the reducer's own domain
+    /// projection for the two fields task 6 gives a real reducer
+    /// projection to compare against -- `Status` (does the reducer also
+    /// think a model is available, matching `llama_ready`?) and
+    /// `Inventory` (does the reducer's known model-id set match the legacy
+    /// local-inventory model-name set?). `merge_legacy_publish` records a
+    /// divergence but its returned winner is discarded: every
+    /// `CUTOVER_MATRIX` row stays `Legacy`, so the legacy value already
+    /// written above remains authoritative regardless of this comparison.
+    /// A `None` reducer projection (no engine installed, e.g.
+    /// `--local-model-only` before the engine starts) is a silent no-op,
+    /// matching `merge_legacy_publish`'s own `Option` contract.
+    fn record_shadow_divergence(&self, field: FieldId) {
+        match field {
+            FieldId::Status => {
+                let legacy = self.runtime_status_snapshot().llama_ready;
+                let reducer_available = crate::runtime_events::runtime_event_engine()
+                    .map(|engine| engine.reducer_snapshot().domain().has_available_model());
+                let _ = merge_legacy_publish(
+                    FieldId::Status,
+                    legacy,
+                    reducer_available.as_ref(),
+                    &self.shared.event_cutover_health,
+                );
+            }
+            FieldId::Inventory => {
+                let legacy = self.local_inventory_snapshot().model_names;
+                let reducer_models = crate::runtime_events::runtime_event_engine()
+                    .map(|engine| engine.reducer_snapshot().domain().model_id_set());
+                let _ = merge_legacy_publish(
+                    FieldId::Inventory,
+                    legacy,
+                    reducer_models.as_ref(),
+                    &self.shared.event_cutover_health,
+                );
+            }
+            FieldId::Routing | FieldId::Processes | FieldId::Plugins | FieldId::Runtime => {}
+        }
     }
 }
 

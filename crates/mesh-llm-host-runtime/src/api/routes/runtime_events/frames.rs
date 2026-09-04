@@ -5,15 +5,14 @@
 //! hand-projects only fields drawn from `EVENT_PROJECTION_ALLOWLIST`).
 //!
 //! KNOWN SCOPE LIMIT (documented, not silently papered over): the host
-//! engine's `ReducerSnapshot` (task 4) does not yet retain per-category
-//! domain state (which operations are models vs. stages vs. sessions), so
-//! `models`/`stages`/`sessions`/`requests`/`devices`/`cache` are present as
-//! empty arrays — structurally required, not yet domain-populated. `node`
-//! is populated from genuinely available reducer/health data. Likewise the
-//! engine's replay pipeline does not carry `producer`/`severity` through
-//! from `RuntimeEventEnvelope` (only the bare `RuntimeFact` reaches
-//! replay), so those two allowlisted keys are never emitted; every key this
-//! module DOES emit is real, reducer-backed data.
+//! engine's `ReducerSnapshot` now retains bounded per-category domain
+//! state (task 6, `.omo/plans/event-system-fixes.md`), projected by
+//! `crate::runtime_event_api::state_projection` into
+//! `models`/`stages`/`sessions`/`requests`/`devices`/`cache`. The engine's
+//! replay pipeline still does not carry `producer`/`severity` through from
+//! `RuntimeEventEnvelope` (only the bare `RuntimeFact` reaches replay), so
+//! those two allowlisted keys are never emitted; every key this module DOES
+//! emit is real, reducer-backed data.
 
 use mesh_llm_runtime_event_contracts::{
     NumericValue, Outcome, ProgressUnit, ReasonCode, RuntimeFact,
@@ -24,9 +23,10 @@ use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::health::EngineHealthSnapshot;
 use crate::runtime_events::replay::ReplayFrame;
 
+use crate::runtime_event_api::state_projection;
+
 use super::cursor::Cursor;
 use super::recovery::{Gap, GapReason};
-use super::state_projection;
 
 /// The full per-event-kind projected JSON key allowlist (deny-by-default):
 /// every key `event_projection` may ever emit, drawn from the task-1/3

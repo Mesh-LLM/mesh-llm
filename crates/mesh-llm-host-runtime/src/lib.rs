@@ -16,6 +16,7 @@ mod plugins;
 mod protocol;
 mod runtime;
 mod runtime_data;
+mod runtime_event_api;
 pub mod runtime_events;
 mod system;
 

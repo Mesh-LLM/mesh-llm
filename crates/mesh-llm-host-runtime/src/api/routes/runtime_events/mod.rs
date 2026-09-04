@@ -9,7 +9,6 @@ mod cursor;
 mod frames;
 mod reconnect;
 mod recovery;
-mod state_projection;
 mod stream;
 
 #[cfg(test)]
