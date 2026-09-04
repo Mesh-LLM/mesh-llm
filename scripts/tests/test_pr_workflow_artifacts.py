@@ -228,13 +228,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
     def test_rust_tests_restore_only_verified_trusted_model_cache(self):
         workflow = self.workflow("ci-rust-tests-slice.yml")
         self.assertIn(
-            "SKIPPY_CORRECTNESS_MODEL_REVISION: "
-            "ef4088322893040952513f532f736ddeab518403",
+            "ci/model-artifacts/manifests/skippy-correctness.json",
             workflow,
         )
         self.assertIn(
-            "SKIPPY_CORRECTNESS_MODEL_SHA256: "
-            "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+            "scripts/resolve-test-model-manifest.py",
             workflow,
         )
         self.assertIn("Restore Skippy correctness model cache", workflow)
@@ -243,8 +241,11 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             "needs.runner_policy.outputs.allow_native_github_cache == 'true'",
             workflow,
         )
-        self.assertIn("--revision \"$SKIPPY_CORRECTNESS_MODEL_REVISION\"", workflow)
-        self.assertIn("sha256sum --check --strict", workflow)
+        self.assertIn(
+            '--revision "${{ steps.skippy_correctness_model.outputs.revision }}"',
+            workflow,
+        )
+        self.assertIn('--verify-root "$RUNNER_TEMP/skippy-correctness-model"', workflow)
         self.assertIn("Save trusted Skippy correctness model cache", workflow)
         self.assertIn("uses: actions/cache/save@", workflow)
         self.assertIn(

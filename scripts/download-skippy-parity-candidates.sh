@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${SKIPPY_PARITY_MANIFEST:-$ROOT/docs/skippy/llama-parity-candidates.json}"
+MODEL_MANIFEST="${SKIPPY_PARITY_MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/skippy-parity.json}"
 STATUSES="${SKIPPY_PARITY_DOWNLOAD_STATUSES:-needs_candidate,candidate_multimodal,package_or_remote_only}"
 PRIORITIES="${SKIPPY_PARITY_DOWNLOAD_PRIORITIES:-p0,p1}"
 DRY_RUN=0
@@ -62,21 +63,27 @@ if ! command -v hf >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "$MANIFEST" "$STATUSES" "$PRIORITIES" "$DRY_RUN" <<'PY'
+python3 - "$MANIFEST" "$MODEL_MANIFEST" "$STATUSES" "$PRIORITIES" "$DRY_RUN" <<'PY'
 from __future__ import annotations
 
 import json
+import hashlib
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 manifest = Path(sys.argv[1])
-statuses = {status.strip() for status in sys.argv[2].split(",") if status.strip()}
-priorities = {priority.strip() for priority in sys.argv[3].split(",") if priority.strip()}
-dry_run = sys.argv[4] == "1"
+model_manifest = Path(sys.argv[2])
+statuses = {status.strip() for status in sys.argv[3].split(",") if status.strip()}
+priorities = {priority.strip() for priority in sys.argv[4].split(",") if priority.strip()}
+dry_run = sys.argv[5] == "1"
 
 data = json.loads(manifest.read_text())
+registered = {
+    row["id"]: row
+    for row in json.loads(model_manifest.read_text()).get("artifacts", [])
+}
 priority_lookup = {}
 for priority in ("p0", "p1", "p2"):
     group = data.get("support_priority", {}).get(priority, {})
@@ -97,8 +104,17 @@ for item in data.get("candidates", []):
     )
     if priorities and priority not in priorities:
         continue
-    repo = item.get("repo")
-    include = item.get("include", "*.gguf")
+    artifact_id = item.get("artifact_id")
+    artifact = registered.get(artifact_id) if artifact_id else None
+    if artifact_id and artifact is None:
+        raise SystemExit(f"registered parity artifact is missing: {artifact_id}")
+    if artifact and "manual" not in artifact.get("cadences", []):
+        raise SystemExit(
+            f"registered parity artifact is not allowed for manual downloads: {artifact_id}"
+        )
+    repo = artifact.get("repo") if artifact else item.get("repo")
+    revision = artifact.get("revision") if artifact else None
+    include = artifact.get("files") if artifact else item.get("include", "*.gguf")
     if not repo:
         missing_repos.append(
             {
@@ -117,7 +133,9 @@ for item in data.get("candidates", []):
             "status": item.get("status", ""),
             "priority": priority,
             "repo": repo,
+            "revision": revision,
             "includes": includes,
+            "integrity": artifact.get("file_integrity") if artifact else None,
         }
     )
 
@@ -149,19 +167,43 @@ print()
 skipped = []
 for row in rows:
     cmd = ["hf", "download", row["repo"]]
-    for pattern in row["includes"]:
-        cmd.extend(["--include", pattern])
+    if row["revision"]:
+        cmd.extend(row["includes"])
+        cmd.extend(["--revision", row["revision"]])
+    else:
+        for pattern in row["includes"]:
+            cmd.extend(["--include", pattern])
     label = f"{row['llama_model']} / {row['family']} ({row['priority']}, {row['status']})"
     print(f"# {label}")
     print(" ".join(shlex.quote(part) for part in cmd))
     if not dry_run:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, text=True)
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
         if result.returncode != 0:
             skipped.append((label, row["repo"], row["includes"], result.returncode))
             print(
                 f"skipping {label}: hf download failed with exit {result.returncode}",
                 file=sys.stderr,
             )
+        elif row["integrity"]:
+            candidates = [Path(line.removeprefix("path=")) for line in result.stdout.splitlines()]
+            resolved = next((path for path in reversed(candidates) if path.exists()), None)
+            if resolved is None:
+                raise SystemExit(f"unable to resolve downloaded path for registered artifact: {label}")
+            root = resolved if resolved.is_dir() else resolved.parent
+            for name in row["includes"]:
+                path = root / name
+                record = row["integrity"][name]
+                if not path.is_file() or path.stat().st_size != record["size_bytes"]:
+                    raise SystemExit(f"registered artifact size mismatch: {path}")
+                digest = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != record["blob_id"]:
+                    raise SystemExit(f"registered artifact SHA-256 mismatch: {path}")
+                print(f"verified {path} ({record['size_bytes']} bytes)")
     print()
 
 if skipped:
