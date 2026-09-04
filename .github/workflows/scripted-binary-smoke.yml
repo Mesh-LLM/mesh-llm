@@ -25,11 +25,16 @@ on:
         type: string
       model_url:
         required: false
-        default: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf
+        default: ''
         type: string
       model_file:
         required: false
-        default: SmolLM2-135M-Instruct-Q8_0.gguf
+        default: ''
+        type: string
+      model_manifest:
+        description: Generated manifest for the immutable smoke model.
+        required: false
+        default: ci/model-artifacts/manifests/scripted-binary-smoke.json
         type: string
       model_cache_scope:
         required: true
@@ -48,10 +53,6 @@ on:
     secrets:
       HF_TOKEN:
         required: false
-
-env:
-  MODEL_URL: ${{ inputs.model_url }}
-  MODEL_FILE: ${{ inputs.model_file }}
 
 permissions:
   contents: read
@@ -83,6 +84,7 @@ jobs:
         run: verify-runner-image public cpu
 
       - uses: ./.github/actions/restore-smoke-inputs
+        id: model_inputs
         with:
           artifact_name: ${{ inputs.artifact_name }}
           artifact_path: ${{ inputs.artifact_path }}
@@ -90,9 +92,11 @@ jobs:
           staged_binary_path: ${{ inputs.staged_binary_path }}
           model_url: ${{ inputs.model_url }}
           model_file: ${{ inputs.model_file }}
+          model_manifest: ${{ inputs.model_manifest }}
+          model_cadence: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'pull-request' || 'main' }}
           model_cache_scope: ${{ inputs.model_cache_scope }}
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
 
       - name: Run scripted smoke
-        run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"
+        run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
