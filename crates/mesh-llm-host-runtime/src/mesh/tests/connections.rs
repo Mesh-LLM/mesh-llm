@@ -393,7 +393,7 @@ async fn make_test_node_with_requirements(
             requirement_rejected_peers: HashSet::new(),
             recent_mesh_rejections: VecDeque::new(),
         })),
-        direct_rescue_endpoints: Arc::new(Mutex::new(HashMap::new())),
+        direct_rescue_endpoints: crate::mesh::direct_rescue::DirectRescueEndpoints::default(),
         role: Arc::new(Mutex::new(role)),
         host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
         models: Arc::new(Mutex::new(Vec::new())),

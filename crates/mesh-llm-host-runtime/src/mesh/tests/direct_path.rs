@@ -114,14 +114,20 @@ fn direct_rescue_uses_same_identity_and_stays_alive_with_installed_connection() 
                 .await
             );
 
-            {
-                let retained_endpoints = node.direct_rescue_endpoints.lock().await;
-                let retained = retained_endpoints
-                    .get(&remote.id())
-                    .expect("installed rescue endpoint must be retained");
-                assert_eq!(retained.connection_stable_id, replacement_id);
-                assert!(!retained.endpoint.is_closed());
-            }
+            assert_eq!(
+                node.direct_rescue_endpoints
+                    .stable_id_for(remote.id())
+                    .await,
+                Some(replacement_id)
+            );
+            assert!(
+                !node
+                    .direct_rescue_endpoints
+                    .endpoint_for(remote.id())
+                    .await
+                    .expect("installed rescue endpoint must be retained")
+                    .is_closed()
+            );
 
             // The stale dispatcher for the replaced connection must not release
             // the endpoint that owns the newer direct connection.
@@ -129,10 +135,8 @@ fn direct_rescue_uses_same_identity_and_stays_alive_with_installed_connection() 
                 .await;
             assert_eq!(
                 node.direct_rescue_endpoints
-                    .lock()
-                    .await
-                    .get(&remote.id())
-                    .map(|retained| retained.connection_stable_id),
+                    .stable_id_for(remote.id())
+                    .await,
                 Some(replacement_id)
             );
 
@@ -141,7 +145,7 @@ fn direct_rescue_uses_same_identity_and_stays_alive_with_installed_connection() 
             replacement.close(0u32.into(), b"test complete");
             node.release_direct_rescue_endpoint(remote.id(), replacement_id)
                 .await;
-            assert!(node.direct_rescue_endpoints.lock().await.is_empty());
+            assert!(node.direct_rescue_endpoints.is_empty().await);
 
             node.close_endpoint().await;
             remote.close_endpoint().await;
@@ -186,7 +190,7 @@ fn direct_rescue_failure_keeps_existing_connection_tracked() -> anyhow::Result<(
                     .map(|conn| conn.stable_id()),
                 Some(existing_id)
             );
-            assert!(node.direct_rescue_endpoints.lock().await.is_empty());
+            assert!(node.direct_rescue_endpoints.is_empty().await);
 
             node.close_endpoint().await;
             remote.close_endpoint().await;
@@ -338,6 +342,81 @@ fn direct_path_reverse_dial_does_not_publish_during_pending_handshake() -> anyho
             )
             .await;
 
+            Ok(())
+        })
+}
+
+/// A rescue that completes its dial after shutdown has drained the registry
+/// must not install: `close_endpoint` has already passed the drain, so the
+/// endpoint would stay open and unowned for the rest of the process lifetime.
+#[test]
+fn direct_rescue_install_after_shutdown_drain_is_refused() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let node = make_test_node(super::super::NodeRole::Worker).await?;
+            let remote = make_test_node(super::super::NodeRole::Worker).await?;
+            remote.start_accepting();
+            let existing =
+                connect_mesh(&node.endpoint, remote.endpoint_addr_for_advertisement()).await?;
+            let existing_id = existing.stable_id();
+            node.state
+                .lock()
+                .await
+                .connections
+                .insert(remote.id(), existing);
+
+            let replacement =
+                connect_mesh(&node.endpoint, remote.endpoint_addr_for_advertisement()).await?;
+            let rescue_endpoint = node
+                .dial_direct_rescue_connection(
+                    remote.id(),
+                    remote.endpoint_addr_for_advertisement(),
+                )
+                .await
+                .map(|(endpoint, conn)| {
+                    conn.close(0u32.into(), b"test rescue conn unused");
+                    endpoint
+                });
+
+            // Shutdown drains and latches the registry closed.
+            let drained = node.direct_rescue_endpoints.drain_for_shutdown().await;
+            for endpoint in drained {
+                endpoint.close().await;
+            }
+            assert!(node.direct_rescue_endpoints.is_shutting_down().await);
+
+            let rescue_endpoint =
+                rescue_endpoint.expect("the rescue dial should have produced an endpoint");
+            assert!(
+                !node
+                    .install_refreshed_peer_connection(
+                        remote.id(),
+                        existing_id,
+                        replacement,
+                        Some(rescue_endpoint),
+                    )
+                    .await,
+                "install must be refused once the shutdown drain has run"
+            );
+
+            // Nothing parked, so nothing can be leaked past the drain, and the
+            // pre-existing connection is left tracked.
+            assert!(node.direct_rescue_endpoints.is_empty().await);
+            assert_eq!(
+                node.state
+                    .lock()
+                    .await
+                    .connections
+                    .get(&remote.id())
+                    .map(|conn| conn.stable_id()),
+                Some(existing_id)
+            );
+
+            node.close_endpoint().await;
+            remote.close_endpoint().await;
             Ok(())
         })
 }

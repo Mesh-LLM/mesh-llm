@@ -4,7 +4,8 @@
 //! and removes peers that fail to respond after repeated attempts.
 //! PeerDown messages are broadcast to the mesh when a peer is confirmed dead.
 
-use super::node::{DirectRescueEndpoint, startup_transport_config};
+use super::direct_rescue::DirectRescueEndpoint;
+use super::node::startup_transport_config;
 use super::{
     ConnectionCaptureEvent, ControlProtocol, DEAD_PEER_TTL, MeshPeerRemovalReason,
     ModelRuntimeDescriptor, Node, PEER_DOWN_REPORTER_COOLDOWN_SECS, PEER_STALE_SECS, PeerInfo,
@@ -477,17 +478,10 @@ impl Node {
         peer_id: EndpointId,
         closing_stable_id: usize,
     ) {
-        let endpoint = {
-            let mut endpoints = self.direct_rescue_endpoints.lock().await;
-            if endpoints
-                .get(&peer_id)
-                .is_some_and(|rescue| rescue.connection_stable_id == closing_stable_id)
-            {
-                endpoints.remove(&peer_id).map(|rescue| rescue.endpoint)
-            } else {
-                None
-            }
-        };
+        let endpoint = self
+            .direct_rescue_endpoints
+            .take_if_owns(peer_id, closing_stable_id)
+            .await;
         if let Some(endpoint) = endpoint {
             endpoint.close().await;
         }
@@ -615,6 +609,53 @@ impl Node {
         gossip_ok
     }
 
+    /// Publish `new_conn` as the tracked connection for `peer_id`, taking
+    /// ownership of `rescue_endpoint` if one dialled it.
+    ///
+    /// Returns `Ok(displaced endpoint)` on success for the caller to close
+    /// outside the state lock, or `Err(())` when the swap must be abandoned.
+    /// Endpoint ownership is claimed BEFORE the connection is published: if
+    /// shutdown has already drained the registry the endpoint would never be
+    /// closed by that drain, and publishing first would leave a window with no
+    /// tracked connection at all.
+    async fn claim_refreshed_connection_slot(
+        &self,
+        peer_id: EndpointId,
+        new_conn: &Connection,
+        rescue_endpoint: Option<Endpoint>,
+        state: &mut tokio::sync::MutexGuard<'_, super::MeshState>,
+    ) -> Result<Option<Endpoint>, ()> {
+        let displaced = match rescue_endpoint {
+            Some(endpoint) => self
+                .direct_rescue_endpoints
+                .install(
+                    peer_id,
+                    DirectRescueEndpoint {
+                        endpoint,
+                        connection_stable_id: new_conn.stable_id(),
+                    },
+                )
+                .await
+                .map_err(|endpoint| (endpoint,)),
+            None => Ok(self.direct_rescue_endpoints.take(peer_id).await),
+        };
+
+        match displaced {
+            Ok(displaced) => {
+                state.connections.insert(peer_id, new_conn.clone());
+                Ok(displaced)
+            }
+            Err((endpoint,)) => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    "Relay health refresh raced node shutdown; discarding rescued connection"
+                );
+                endpoint.close().await;
+                Err(())
+            }
+        }
+    }
+
     pub(crate) async fn install_refreshed_peer_connection(
         &self,
         peer_id: EndpointId,
@@ -622,7 +663,7 @@ impl Node {
         new_conn: Connection,
         rescue_endpoint: Option<Endpoint>,
     ) -> bool {
-        let replaced_endpoint = {
+        let claimed = {
             let mut state = self.state.lock().await;
             if !should_remove_connection(
                 state.connections.get(&peer_id).map(|conn| conn.stable_id()),
@@ -639,24 +680,16 @@ impl Node {
                 }
                 return false;
             }
-            // Update the tracked connection and its owning rescue endpoint while
-            // holding the state lock. A stale dispatcher must observe both the
-            // newer stable ID and matching endpoint ownership, never a half-swap.
-            state.connections.insert(peer_id, new_conn.clone());
-            let mut endpoints = self.direct_rescue_endpoints.lock().await;
-            if let Some(endpoint) = rescue_endpoint {
-                endpoints
-                    .insert(
-                        peer_id,
-                        DirectRescueEndpoint {
-                            endpoint,
-                            connection_stable_id: new_conn.stable_id(),
-                        },
-                    )
-                    .map(|replaced| replaced.endpoint)
-            } else {
-                endpoints.remove(&peer_id).map(|replaced| replaced.endpoint)
-            }
+            // Claimed while holding the state lock: a stale dispatcher must
+            // observe both the newer stable ID and matching endpoint
+            // ownership, never a half-swap.
+            self.claim_refreshed_connection_slot(peer_id, &new_conn, rescue_endpoint, &mut state)
+                .await
+        };
+
+        let Ok(replaced_endpoint) = claimed else {
+            new_conn.close(0u32.into(), b"relay-health-shutdown");
+            return false;
         };
 
         if let Some(replaced_endpoint) = replaced_endpoint {
@@ -1294,21 +1327,59 @@ impl Node {
     async fn dial_relay_health_replacement(
         &self,
         peer_id: EndpointId,
+        reason: RelayReconnectReason,
         addr: EndpointAddr,
     ) -> Option<(Option<Endpoint>, Connection)> {
         if direct_only_addr(addr.clone()).is_some() {
-            let candidate = self.dial_direct_rescue_connection(peer_id, addr).await;
-            if candidate.is_none() {
-                tracing::debug!(
-                    peer = %peer_id.fmt_short(),
-                    "Relay health direct rescue failed; retaining existing relay connection"
-                );
+            if let Some((endpoint, conn)) = self
+                .dial_direct_rescue_connection(peer_id, addr.clone())
+                .await
+            {
+                return Some((Some(endpoint), conn));
             }
-            candidate.map(|(endpoint, conn)| (Some(endpoint), conn))
+            self.fall_back_from_failed_direct_rescue(peer_id, reason, addr)
+                .await
         } else {
             self.dial_refreshed_peer_connection(peer_id, addr)
                 .await
                 .map(|conn| (None, conn))
+        }
+    }
+
+    /// Decide what to do after a direct rescue dial produced no usable path.
+    async fn fall_back_from_failed_direct_rescue(
+        &self,
+        peer_id: EndpointId,
+        reason: RelayReconnectReason,
+        addr: EndpointAddr,
+    ) -> Option<(Option<Endpoint>, Connection)> {
+        // A failed rescue is rare and actionable, and every per-candidate
+        // detail is `debug`, so summarize at `warn` — otherwise the field case
+        // we would need to diagnose is silent at the default log level.
+        tracing::warn!(
+            peer = %peer_id.fmt_short(),
+            reason = reason.label(),
+            "Relay health direct rescue failed"
+        );
+
+        match reason {
+            // The peer is not merely on a relay, its relay is degraded.
+            // Retaining it costs the same 600s cooldown as a successful
+            // attempt, so fall back to an ordinary relay refresh rather than
+            // leaving a known-bad path in place until that cooldown expires.
+            RelayReconnectReason::RelayRttDegraded => self
+                .dial_refreshed_peer_connection(peer_id, addr)
+                .await
+                .map(|conn| (None, conn)),
+            // A working relay is strictly better than churning the connection
+            // for no path improvement.
+            RelayReconnectReason::RelayOnlyTooLong => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    "retaining existing relay connection"
+                );
+                None
+            }
         }
     }
 
@@ -1354,8 +1425,9 @@ impl Node {
             reason.label()
         );
 
-        let Some((rescue_endpoint, new_conn)) =
-            self.dial_relay_health_replacement(peer_id, addr).await
+        let Some((rescue_endpoint, new_conn)) = self
+            .dial_relay_health_replacement(peer_id, reason, addr)
+            .await
         else {
             return false;
         };
