@@ -78,6 +78,15 @@ pub struct L3ActivitySnapshot {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct L3InventoryEntry {
+    pub model_identity: String,
+    pub state_identity: String,
+    pub payload_kind: String,
+    pub token_count: u64,
+    pub total_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum L3EffectiveState {
@@ -192,6 +201,11 @@ impl L3CacheManager {
         self.inner.store.limits()
     }
 
+    pub fn update_limits(&self, limits: StoreLimits) -> Result<StoreLimits> {
+        let _lifecycle = self.lifecycle_guard();
+        self.inner.store.update_limits(limits)
+    }
+
     pub fn reconciliation(&self) -> StoreReconciliation {
         self.inner.reconciliation
     }
@@ -203,6 +217,30 @@ impl L3CacheManager {
     pub fn activity(&self) -> Result<L3ActivitySnapshot> {
         let usage = self.usage()?;
         Ok(self.inner.activity.snapshot(Some(&usage)))
+    }
+
+    pub fn inventory(&self) -> Result<Vec<L3InventoryEntry>> {
+        let mut inventory = self
+            .inner
+            .store
+            .list_manifests()?
+            .into_iter()
+            .filter_map(|key| self.inner.store.load_manifest(&key).ok())
+            .map(|manifest| L3InventoryEntry {
+                model_identity: manifest.model_identity,
+                state_identity: manifest.state_identity,
+                payload_kind: manifest.payload_kind,
+                token_count: manifest.token_count,
+                total_bytes: manifest.total_bytes,
+            })
+            .collect::<Vec<_>>();
+        inventory.sort_by(|left, right| {
+            left.model_identity
+                .cmp(&right.model_identity)
+                .then_with(|| left.state_identity.cmp(&right.state_identity))
+                .then_with(|| right.token_count.cmp(&left.token_count))
+        });
+        Ok(inventory)
     }
 
     pub fn effective_status(&self) -> L3EffectiveStatus {
@@ -348,6 +386,14 @@ impl L3CacheManager {
             .operations
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn try_operation_guard(&self) -> Option<RwLockReadGuard<'_, ()>> {
+        match self.inner.operations.try_read() {
+            Ok(guard) => Some(guard),
+            Err(std::sync::TryLockError::Poisoned(error)) => Some(error.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
     }
 
     fn lifecycle_guard(&self) -> RwLockWriteGuard<'_, ()> {
@@ -565,6 +611,17 @@ mod tests {
         let recovery = manager.take_state_transitions();
         assert_eq!(recovery.len(), 1);
         assert_eq!(recovery[0].current, L3EffectiveStatus::default());
+    }
+
+    #[test]
+    fn request_path_can_skip_cache_while_a_lifecycle_operation_drains() {
+        let root = temp_root("lifecycle-fallback");
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+
+        let lifecycle = manager.lifecycle_guard();
+        assert!(manager.try_operation_guard().is_none());
+        drop(lifecycle);
+        assert!(manager.try_operation_guard().is_some());
     }
 
     #[test]

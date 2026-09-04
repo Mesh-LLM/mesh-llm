@@ -22,8 +22,8 @@ pub use l3::{
     StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
 pub use manager::{
-    L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3StateReason,
-    L3StateTransition,
+    L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3InventoryEntry,
+    L3StateReason, L3StateTransition,
 };
 pub use payload::{
     CacheBlobStore, CacheBytes, CacheBytesReconstructStats, CacheDedupeStats, ExactStatePayload,

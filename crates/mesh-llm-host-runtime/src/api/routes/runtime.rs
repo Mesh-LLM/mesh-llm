@@ -43,7 +43,7 @@ pub(super) async fn handle(
         "GET" => handle_get(stream, state, path_only).await,
         "POST" => handle_post(stream, state, path_only, body).await,
         "PUT" => handle_put(stream, state, path_only, body).await,
-        "DELETE" => handle_delete(stream, state, path_only).await,
+        "DELETE" => handle_delete(stream, state, path_only, body).await,
         _ => Ok(()),
     }
 }
@@ -66,6 +66,7 @@ async fn handle_get(
         "/api/runtime/config-control-state" => {
             handle_runtime_config_control_state(stream, state).await
         }
+        "/api/runtime/kv-cache" => super::kv_cache::handle_status(stream).await,
         "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
         "/api/runtime/intents" => handle_get_intents(stream, state).await,
         "/api/runtime/activity" => super::runtime_activity::handle_get(stream, state).await,
@@ -102,6 +103,7 @@ async fn handle_post(
         "/api/runtime/config/validate" => handle_runtime_config_validate(stream, body).await,
         "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
         "/api/runtime/models" => handle_load_model(stream, state, body).await,
+        "/api/runtime/kv-cache/prune" => super::kv_cache::handle_prune(stream, body).await,
         _ => Ok(()),
     }
 }
@@ -124,11 +126,13 @@ async fn handle_delete(
     stream: &mut TcpStream,
     state: &MeshApi,
     path_only: &str,
+    body: &str,
 ) -> anyhow::Result<()> {
     match path_only {
         "/api/runtime/activity/override" => {
             super::runtime_activity::handle_delete(stream, state).await
         }
+        "/api/runtime/kv-cache" => super::kv_cache::handle_clear(stream, body).await,
         p if p.starts_with("/api/runtime/instances/") => {
             handle_unload_instance(stream, state, p).await
         }
@@ -769,7 +773,7 @@ fn required_control_endpoint(endpoint: Option<String>) -> Result<String, LocalCo
     }
 }
 
-async fn ensure_loopback_control_caller(stream: &mut TcpStream) -> anyhow::Result<bool> {
+pub(super) async fn ensure_loopback_control_caller(stream: &mut TcpStream) -> anyhow::Result<bool> {
     ensure_loopback_control_caller_for_peer_addr(stream, stream.peer_addr()).await
 }
 

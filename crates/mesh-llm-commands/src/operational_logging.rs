@@ -142,6 +142,7 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         }
         Command::Gpus { .. } => CliCommandFamily::Hardware,
         Command::Runtime { .. }
+        | Command::KvCache { .. }
         | Command::Load { .. }
         | Command::Unload { .. }
         | Command::Status { .. }
