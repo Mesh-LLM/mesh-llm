@@ -383,7 +383,21 @@ fn runtime_slice_plan_input(
     participants: &[SplitParticipant],
     resources: SplitTopologyResourceInputs,
 ) -> SplitTopologyPlanInput {
-    let mut plan_input = SplitTopologyPlanInput {
+    let mut plan_input = runtime_slice_plan_input_unfiltered(package, participants, resources);
+
+    if !perf_aware_placement_enabled() {
+        strip_perf_aware_signals(&mut plan_input);
+    }
+
+    plan_input
+}
+
+fn runtime_slice_plan_input_unfiltered(
+    package: &skippy::SkippyPackageIdentity,
+    participants: &[SplitParticipant],
+    resources: SplitTopologyResourceInputs,
+) -> SplitTopologyPlanInput {
+    SplitTopologyPlanInput {
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
         model_weight_bytes: package.source_model_bytes,
@@ -409,20 +423,18 @@ fn runtime_slice_plan_input(
             })
             .collect(),
         edges: participant_edges(participants),
-        // Activation frame at the package's wire dtype (f16 default): one
-        // activation_width vector of two-byte elements per token hop.
-        activation_frame_bytes: u64::from(package.activation_width) * 2,
-    };
-
-    if perf_aware_placement_disabled() {
-        strip_perf_aware_signals(&mut plan_input);
+        // The stage wire protocol carries raw f32 activations. Family-specific
+        // sidebands can multiply this at particular boundaries; until the
+        // automatic planner consumes that legality metadata, use the exact
+        // dense-boundary payload instead of the stale f16 assumption.
+        activation_frame_bytes: skippy_topology::wire_payload_bytes_per_token(
+            package.activation_width,
+        ),
     }
-
-    plan_input
 }
 
-/// Strip performance-aware planning signals in place for the
-/// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Fields that pre-date
+/// Strip performance-aware planning signals when the experimental mode is not
+/// explicitly enabled. Fields that pre-date
 /// perf-aware planning — per-node RTT (`stage_transfer_latency_ms`) and the
 /// decode TPOT target — are deliberately kept: the legacy planner consumed
 /// both, so stripping them would change capacity-only placement instead of
@@ -437,21 +449,20 @@ fn strip_perf_aware_signals(plan_input: &mut SplitTopologyPlanInput) {
     plan_input.activation_frame_bytes = 0;
 }
 
-/// Whether performance-aware placement is disabled via the
-/// `MESH_TOPOLOGY_PERF_AWARE` escape hatch. Any of `0`, `false`, `off`, or
-/// `no` (case-insensitive) forces capacity-only placement and the legacy
-/// network estimate; unset or any other value keeps performance-aware
-/// behavior. The value is read afresh on every planning attempt; changing the
-/// process environment affects the next attempt without an internal cache.
-fn perf_aware_placement_disabled() -> bool {
-    perf_aware_disabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
+/// Whether performance-aware placement is enabled. The optimizer remains an
+/// explicit opt-in while its measurement trust and replan-adoption contracts
+/// are being hardened: only `1`, `true`, `on`, or `yes` enables it. Unset,
+/// disable spellings, and unknown values preserve capacity-only placement.
+/// The value is read afresh on every planning attempt.
+pub(super) fn perf_aware_placement_enabled() -> bool {
+    perf_aware_enabled_from_value(std::env::var("MESH_TOPOLOGY_PERF_AWARE").ok().as_deref())
 }
 
-fn perf_aware_disabled_from_value(value: Option<&str>) -> bool {
+fn perf_aware_enabled_from_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
+            "1" | "true" | "on" | "yes"
         )
     })
 }
@@ -1115,36 +1126,29 @@ mod tests {
     }
 
     #[test]
-    fn perf_aware_kill_switch_recognizes_disable_values() {
-        // Unset keeps perf-aware placement (default on).
-        assert!(!perf_aware_disabled_from_value(None));
-        // Exact disable spellings.
-        assert!(perf_aware_disabled_from_value(Some("0")));
-        assert!(perf_aware_disabled_from_value(Some("false")));
-        assert!(perf_aware_disabled_from_value(Some("off")));
-        assert!(perf_aware_disabled_from_value(Some("no")));
-        // Case-insensitive and whitespace-tolerant.
-        assert!(perf_aware_disabled_from_value(Some("OFF")));
-        assert!(perf_aware_disabled_from_value(Some("No")));
-        assert!(perf_aware_disabled_from_value(Some("  off  ")));
-        // Anything else — including enable spellings and garbage — keeps
-        // perf-aware placement; a typo'd value must not silently disable
-        // the feature.
-        assert!(!perf_aware_disabled_from_value(Some("1")));
-        assert!(!perf_aware_disabled_from_value(Some("true")));
-        assert!(!perf_aware_disabled_from_value(Some("on")));
-        assert!(!perf_aware_disabled_from_value(Some("yes")));
-        assert!(!perf_aware_disabled_from_value(Some("perf")));
-        assert!(!perf_aware_disabled_from_value(Some("")));
+    fn perf_aware_planning_requires_explicit_enable_value() {
+        assert!(!perf_aware_enabled_from_value(None));
+        assert!(!perf_aware_enabled_from_value(Some("0")));
+        assert!(!perf_aware_enabled_from_value(Some("false")));
+        assert!(!perf_aware_enabled_from_value(Some("off")));
+        assert!(!perf_aware_enabled_from_value(Some("no")));
+        assert!(!perf_aware_enabled_from_value(Some("perf")));
+        assert!(!perf_aware_enabled_from_value(Some("")));
+
+        assert!(perf_aware_enabled_from_value(Some("1")));
+        assert!(perf_aware_enabled_from_value(Some("true")));
+        assert!(perf_aware_enabled_from_value(Some("on")));
+        assert!(perf_aware_enabled_from_value(Some("yes")));
+        assert!(perf_aware_enabled_from_value(Some("ON")));
+        assert!(perf_aware_enabled_from_value(Some("  yes  ")));
     }
 
     #[test]
-    fn kill_switch_strip_keeps_pre_perf_aware_fields() {
-        // The kill-switch parity contract: MESH_TOPOLOGY_PERF_AWARE=0 must
-        // reproduce pre-PR capacity-only placement, which consumed per-node
-        // RTT (stage_transfer_latency_ms) and the decode TPOT target. The
-        // strip removes only signals introduced by perf-aware planning.
-        let mut plan_input = runtime_slice_plan_input(
+    fn disabled_mode_strip_keeps_pre_perf_aware_fields() {
+        // The default-off parity contract reproduces pre-PR capacity-only
+        // placement, which consumed per-node RTT and the decode TPOT target.
+        // The strip removes only signals introduced by perf-aware planning.
+        let mut plan_input = runtime_slice_plan_input_unfiltered(
             &package(40, 40_000_000_000),
             &[
                 participant_with_perf(1, 26_000_000_000, 5, 400_000),
@@ -1168,6 +1172,11 @@ mod tests {
                 .iter()
                 .all(|node| node.stage_transfer_latency_ms.is_some()),
             "fixture must set RTT for the assertion to mean anything"
+        );
+        assert_eq!(
+            plan_input.activation_frame_bytes,
+            u64::from(896_u32) * 4,
+            "automatic planning must price the raw-f32 wire payload"
         );
 
         strip_perf_aware_signals(&mut plan_input);

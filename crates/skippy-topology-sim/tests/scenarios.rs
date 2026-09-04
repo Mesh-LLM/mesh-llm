@@ -11,7 +11,7 @@ fn load(name: &str) -> Scenario {
 }
 
 #[test]
-fn heterogeneous_pair_splits_proportionally() {
+fn heterogeneous_pair_favors_the_faster_node() {
     let scenario = load("heterogeneous_pair.toml");
     let plan = scenario.plan().expect("plan");
     assert_eq!(plan.stages.len(), 2);
@@ -25,9 +25,10 @@ fn heterogeneous_pair_splits_proportionally() {
     let (alpha, beta) = (span("alpha"), span("beta"));
     assert_eq!(alpha + beta, 40);
     assert!(
-        u64::from(alpha) >= 2 * u64::from(beta),
-        "alpha (2.7x bandwidth) should earn >= 2x beta's layers: {alpha}/{beta}"
+        alpha > beta,
+        "faster alpha should carry more work: {alpha}/{beta}"
     );
+    assert!(beta > 0, "every selected stage must remain non-empty");
 }
 
 #[test]

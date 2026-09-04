@@ -14,6 +14,7 @@ use skippy_protocol::{StageConfig, binary::StageWireMessage};
 
 const MAX_OBSERVATION_AGE: Duration = Duration::from_secs(30 * 60);
 const MAX_EFFECTIVE_SAMPLES: u64 = 256;
+const MAX_TRACKED_STAGE_TIMINGS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StageDecodeTimingHint {
@@ -29,6 +30,8 @@ struct StageDecodeTimingObservation {
     observed_us_per_layer: u64,
     sample_count: u64,
     observed_at: Instant,
+    layer_start: u32,
+    layer_end: u32,
 }
 
 static STAGE_DECODE_TIMINGS: OnceLock<Mutex<HashMap<String, StageDecodeTimingObservation>>> =
@@ -49,22 +52,49 @@ pub(crate) fn record_stage_decode_timing(
         return;
     }
     let layer_count = u64::from(config.layer_end.saturating_sub(config.layer_start));
+    let Some(executed_tokens) = u64::try_from(message.token_count)
+        .ok()
+        .filter(|count| *count > 0)
+    else {
+        return;
+    };
     if layer_count == 0 {
         return;
     }
     let compute_us = (compute_ms * 1_000.0).round().max(1.0) as u64;
-    let sample = compute_us.div_ceil(layer_count);
+    let sample = compute_us.div_ceil(layer_count.saturating_mul(executed_tokens));
     let mut timings = STAGE_DECODE_TIMINGS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+    timings.retain(|_, observation| {
+        now.duration_since(observation.observed_at) <= MAX_OBSERVATION_AGE
+    });
+    let incompatible = timings.get(&config.model_id).is_some_and(|observation| {
+        observation.layer_start != config.layer_start || observation.layer_end != config.layer_end
+    });
+    if incompatible {
+        timings.remove(&config.model_id);
+    }
+    if !timings.contains_key(&config.model_id)
+        && timings.len() >= MAX_TRACKED_STAGE_TIMINGS
+        && let Some(oldest) = timings
+            .iter()
+            .min_by_key(|(_, observation)| observation.observed_at)
+            .map(|(model_id, _)| model_id.clone())
+    {
+        timings.remove(&oldest);
+    }
     let observation =
         timings
             .entry(config.model_id.clone())
             .or_insert(StageDecodeTimingObservation {
                 observed_us_per_layer: sample,
                 sample_count: 0,
-                observed_at: Instant::now(),
+                observed_at: now,
+                layer_start: config.layer_start,
+                layer_end: config.layer_end,
             });
     if observation.sample_count < MAX_EFFECTIVE_SAMPLES {
         let next_count = observation.sample_count + 1;
@@ -82,16 +112,17 @@ pub(crate) fn record_stage_decode_timing(
             .saturating_add(sample)
             / 8;
     }
-    observation.observed_at = Instant::now();
+    observation.observed_at = now;
 }
 
 pub fn stage_decode_timing_hints() -> Vec<StageDecodeTimingHint> {
     let Some(timings) = STAGE_DECODE_TIMINGS.get() else {
         return Vec::new();
     };
-    let timings = timings
+    let mut timings = timings
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    timings.retain(|_, observation| observation.observed_at.elapsed() <= MAX_OBSERVATION_AGE);
     let mut hints = timings
         .iter()
         .filter_map(|(model_id, observation)| {
@@ -111,47 +142,14 @@ pub fn stage_decode_timing_hints() -> Vec<StageDecodeTimingHint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_protocol::{
-        LoadMode,
-        binary::{StageStateHeader, WireActivationDType, WireMessageKind},
-    };
+    use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
 
     fn config(model_id: &str) -> StageConfig {
         StageConfig {
-            run_id: "run".to_string(),
-            topology_id: "topology".to_string(),
             model_id: model_id.to_string(),
-            package_ref: None,
-            manifest_sha256: None,
-            source_model_path: None,
-            source_model_sha256: None,
-            source_model_bytes: None,
-            materialized_path: None,
-            materialized_pinned: false,
-            model_path: None,
-            projector_path: None,
-            stage_id: "stage".to_string(),
-            stage_index: 0,
             layer_start: 10,
             layer_end: 20,
-            ctx_size: 1_024,
-            lane_count: 1,
-            n_batch: None,
-            n_ubatch: None,
-            n_gpu_layers: -1,
-            mmap: None,
-            mlock: false,
-            cache_type_k: "f16".to_string(),
-            cache_type_v: "f16".to_string(),
-            flash_attn_type: Default::default(),
-            filter_tensors_on_load: false,
-            selected_device: None,
-            kv_cache: None,
-            native_mtp_enabled: true,
-            load_mode: LoadMode::RuntimeSlice,
-            bind_addr: "127.0.0.1:0".to_string(),
-            upstream: None,
-            downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -162,7 +160,7 @@ mod tests {
             token_count: 1,
             state: StageStateHeader {
                 decode_step,
-                ..StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32)
+                ..StageStateHeader::new(WireMessageKind::DecodeEmbd)
             },
             request_id: 1,
             session_id: 1,
@@ -192,6 +190,39 @@ mod tests {
             .find(|hint| hint.model_id == model_id)
             .expect("steady timing hint");
         assert_eq!(hint.observed_us_per_layer, 1_000);
+        assert_eq!(hint.sample_count, 1);
+    }
+
+    #[test]
+    fn normalizes_batched_decode_by_executed_token_count() {
+        let model_id = format!("timing-batch-test-{}", std::process::id());
+        let config = config(&model_id);
+        let mut batched = message(8);
+        batched.token_count = 4;
+
+        record_stage_decode_timing(&config, &batched, 40.0);
+        let hint = stage_decode_timing_hints()
+            .into_iter()
+            .find(|hint| hint.model_id == model_id)
+            .expect("batched timing hint");
+        assert_eq!(hint.observed_us_per_layer, 1_000);
+    }
+
+    #[test]
+    fn changing_stage_range_resets_the_observation_window() {
+        let model_id = format!("timing-range-test-{}", std::process::id());
+        let first = config(&model_id);
+        record_stage_decode_timing(&first, &message(8), 10.0);
+
+        let mut changed = first.clone();
+        changed.layer_end = 15;
+        record_stage_decode_timing(&changed, &message(8), 20.0);
+
+        let hint = stage_decode_timing_hints()
+            .into_iter()
+            .find(|hint| hint.model_id == model_id)
+            .expect("changed-range timing hint");
+        assert_eq!(hint.observed_us_per_layer, 4_000);
         assert_eq!(hint.sample_count, 1);
     }
 }

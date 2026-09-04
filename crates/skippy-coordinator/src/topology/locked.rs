@@ -1,8 +1,9 @@
 use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
-    UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
-    layer_required_bytes, layer_weight_bytes, minimum_valid_context, parallel_lane_candidates,
-    recurrent_bytes_by_layer, sum_u64, usable_nodes, validate_input,
+    UsableNode, context_candidates, decode_tpot_target_from_network_lower_bound,
+    estimate_decode_network_ms_per_token, layer_required_bytes, layer_weight_bytes,
+    minimum_valid_context, parallel_lane_candidates, recurrent_bytes_by_layer, sum_u64,
+    usable_nodes, validate_input,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -164,7 +165,7 @@ fn fit_locked_candidate(
             parallel_lanes,
             stages,
             estimated_decode_network_ms_per_token,
-            decode_tpot_target_met: decode_tpot_target_met(
+            decode_tpot_target_met: decode_tpot_target_from_network_lower_bound(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
