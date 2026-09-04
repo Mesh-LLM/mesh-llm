@@ -23,7 +23,7 @@
 //! fails startup" behavior every other survey.rs instrument already has.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use mesh_llm_runtime_event_contracts::{DeliveryClass, SubmitOutcome};
@@ -37,7 +37,7 @@ use super::SurveySettings;
 use crate::plugin;
 use crate::runtime_events::config::{HEALTH_PUBLISH_MIN_INTERVAL, PROGRESS_EXPORT_INTERVAL};
 use crate::runtime_events::engine::RuntimeEventEngine;
-use crate::runtime_events::health::{EngineHealthSnapshot, HealthDeliveryGate};
+use crate::runtime_events::health::EngineHealthSnapshot;
 use crate::runtime_events::runtime_event_engine;
 use crate::runtime_events::telemetry::{
     RuntimeEventTelemetryQueue, RuntimeEventTelemetrySample, TelemetryPipelineSnapshot,
@@ -323,20 +323,19 @@ fn spawn_runtime_event_telemetry_worker(
 }
 
 /// Periodically samples the live engine's coalesced health and reservation
-/// occupancy into `queue`, at the same cadence its own independent
-/// `HealthDeliveryGate` gates (task 8, `.omo/plans/event-system-fixes.md`,
-/// defect D9, replacing the removed engine-global `EngineHealth::publish_at`
-/// cadence). An absent engine (event system not started for this process)
-/// is a normal no-op tick, matching every other consumer's "absent engine
-/// means inactive" contract.
+/// occupancy into `queue`, at this task's own `HEALTH_PUBLISH_MIN_INTERVAL`
+/// (1 Hz) tick -- the sole cadence authority for `sample_engine` (task
+/// 8-fix E4, `.omo/plans/event-system-fixes.md`; see that function's doc
+/// comment for why it no longer gates internally). An absent engine (event
+/// system not started for this process) is a normal no-op tick, matching
+/// every other consumer's "absent engine means inactive" contract.
 fn spawn_runtime_event_telemetry_sampler(queue: Arc<RuntimeEventTelemetryQueue>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(HEALTH_PUBLISH_MIN_INTERVAL);
-        let mut health_gate = HealthDeliveryGate::new();
         loop {
             interval.tick().await;
             if let Some(engine) = runtime_event_engine() {
-                sample_engine(&engine, Instant::now(), &mut health_gate, &queue);
+                sample_engine(&engine, &queue);
             }
             queue.push(RuntimeEventTelemetrySample::Pipeline(
                 queue.pipeline_snapshot(),

@@ -112,21 +112,42 @@ describe('runtime events v1 wire constants', () => {
   // recorded: dropping `shutdown_degraded` or mutating `replay_evicted`
   // 0->77 both passed undetected). `bounds` is a nested object and
   // `ingress_p99_us` is nullable, so pin both by exact value here.
+  //
+  // Task 8-fix E10 (`.omo/plans/event-system-fixes.md`): the assertion
+  // above still only pinned 3 of `HealthProjection`'s 12 fields, so it
+  // still would not have caught the exact gap it names -- `replay_evicted`
+  // 0->77 or a dropped `shutdown_degraded` both pass this suite unmodified.
+  // One exhaustive `toEqual` over the whole `health` object pins all 12
+  // (the 10 flat counter fields plus `bounds` plus `ingress_p99_us`),
+  // matching every value the Rust-side
+  // `sample_frames_fixture_is_byte_exact_for_every_frame_type` test already
+  // pins byte-exact in `frames.json`.
   it('exposes versioned health with bounds and a nullable ingress p99 on the runtime_health sample', () => {
     const samples = FRAMES_FIXTURE.sample_frames as Record<string, string>
     const chunk = parseSseBlock(samples.runtime_health)!
     const parsed = parseRuntimeEventsV1Frame(chunk)
     if (parsed.type !== 'runtime_health') throw new Error('expected a runtime_health sample')
-    expect(parsed.health.version).toBe(0)
-    expect(parsed.health.ingress_p99_us).toBeNull()
-    expect(parsed.health.bounds).toEqual({
-      reservation_table_capacity: 3136,
-      state_transition_lane_depth: 4096,
-      diagnostic_lane_depth: 2048,
-      wake_list_depth: 3136,
-      replay_max_frames: 4096,
-      subscriber_lag_max_frames: 1024,
-      max_concurrent_subscribers: 32
+    expect(parsed.health).toEqual({
+      version: 0,
+      rebuild_generation: 0,
+      reservation_exhausted: 0,
+      terminal_delivery_failed: 0,
+      dropped_progress: 0,
+      dropped_diagnostic: 0,
+      replay_evicted: 0,
+      subscriber_disconnected: 0,
+      shutdown_degraded: 0,
+      reducer_rejected: 0,
+      bounds: {
+        reservation_table_capacity: 3136,
+        state_transition_lane_depth: 4096,
+        diagnostic_lane_depth: 2048,
+        wake_list_depth: 3136,
+        replay_max_frames: 4096,
+        subscriber_lag_max_frames: 1024,
+        max_concurrent_subscribers: 32
+      },
+      ingress_p99_us: null
     })
   })
 })

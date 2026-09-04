@@ -27,7 +27,7 @@ use mesh_llm_runtime_event_contracts::{
 };
 
 use super::engine::RuntimeEventEngine;
-use super::health::{EngineHealthSnapshot, HealthDeliveryGate};
+use super::health::EngineHealthSnapshot;
 
 /// A privacy-safe, ID-free structured telemetry sample. Every variant here
 /// is bounded discrete data (an enum, a count, a duration) -- never an
@@ -181,24 +181,32 @@ impl<I: RuntimeEventIngress> RuntimeEventIngress for ObservingIngress<I> {
 }
 
 /// Sample `engine`'s coalesced health and reservation occupancy into
-/// `queue`, gated by `gate` -- this sampler's OWN independent
-/// [`HealthDeliveryGate`] (task 8, `.omo/plans/event-system-fixes.md`,
-/// defect D9, replacing the removed engine-global `EngineHealth::publish_at`
-/// cadence): a no-op call when `gate` says nothing has changed since the
-/// last delivery. Safe to call from a periodic (e.g. once-per-second) task;
-/// the occupancy scan is a linear pass over the reservation table, the same
-/// cost profile `RuntimeEventEngine::occupied_count` already accepts for
-/// test use, bounded here to at most once per publish cadence.
-pub fn sample_engine(
-    engine: &RuntimeEventEngine,
-    now: Instant,
-    gate: &mut HealthDeliveryGate,
-    queue: &RuntimeEventTelemetryQueue,
-) {
+/// `queue`. Task 8-fix E4 (`.omo/plans/event-system-fixes.md`): ungated by
+/// design -- the sole caller, `spawn_runtime_event_telemetry_sampler`
+/// below, already drives this from its own
+/// `tokio::time::interval(HEALTH_PUBLISH_MIN_INTERVAL)`, so the 1 Hz
+/// cadence is the CALLER's job, not this function's. This used to also
+/// gate on its own `HealthDeliveryGate` (requiring `changed`, mirroring
+/// the frame-delivery consumers in `stream.rs`/`presentation/subscriber.rs`),
+/// but that pattern fits a push-stream consumer -- where "never repeat an
+/// identical frame" genuinely matters -- not an already-periodic sampler.
+/// Every one of `EngineHealth`'s 11 counters is a pure anomaly counter, so
+/// on a healthy node the gated version silenced BOTH the health sample AND
+/// `ReservationOccupancy` (a true instantaneous gauge, unrelated to
+/// whether health "changed") for the rest of the process's life after the
+/// first tick, turning "the 'queue depth' signal" (this module's doc
+/// comment on `ReservationOccupancy` above) into a metric that stops
+/// reporting on a healthy node -- most dashboards/alerts read a stalled
+/// gauge as "exporter died," not "nothing to report." Pushing
+/// unconditionally restores the parent commit's `EngineHealth::publish_at`
+/// semantics exactly (pure interval gating, no change check). The OTLP
+/// recorder (`runtime::survey::runtime_events::record_health_delta`)
+/// already computes real deltas and only calls `Counter::add` when a
+/// counter actually moved, so pushing an unchanged snapshot every second is
+/// a harmless no-op there -- only the continuously-live
+/// `reservation_occupied` Gauge benefits from the restored cadence.
+pub fn sample_engine(engine: &RuntimeEventEngine, queue: &RuntimeEventTelemetryQueue) {
     let snapshot = engine.health().snapshot();
-    if !gate.should_deliver(&snapshot, now) {
-        return;
-    }
     queue.push(RuntimeEventTelemetrySample::EngineHealth(snapshot));
     let table = engine.table();
     let capacity = table.capacity();
@@ -364,33 +372,34 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 
-    // ─── sample_engine: coalesced cadence, real occupancy ──────────────
+    // ─── sample_engine: ungated (task 8-fix E4), real occupancy ────────
 
     #[test]
-    fn sample_engine_is_coalesced_by_the_same_health_publish_cadence() {
+    fn sample_engine_pushes_both_samples_unconditionally_on_every_call() {
+        // Task 8-fix E4: `sample_engine` no longer gates internally -- its
+        // sole caller's own 1 Hz `tokio::time::interval` is the cadence
+        // authority now (`spawn_runtime_event_telemetry_sampler`). Three
+        // back-to-back calls with nothing changing between them must still
+        // push 2 samples EACH (6 total), proving no internal gate remains.
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(8);
-        let mut gate = HealthDeliveryGate::new();
-        let start = Instant::now();
 
-        sample_engine(&engine, start, &mut gate, &queue);
-        sample_engine(&engine, start + Duration::from_millis(1), &mut gate, &queue);
+        sample_engine(&engine, &queue);
+        sample_engine(&engine, &queue);
+        sample_engine(&engine, &queue);
 
-        // Coalesced: the second call lands inside the same publish window
-        // as the first and must not push again.
-        assert_eq!(queue.drain().len(), 2);
+        assert_eq!(queue.drain().len(), 6);
     }
 
     #[test]
     fn sample_engine_reports_real_reservation_occupancy() {
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(8);
-        let mut gate = HealthDeliveryGate::new();
         let reservation = engine
             .reserve_root(OperationId::new(), || terminal_fact())
             .expect("reserve");
 
-        sample_engine(&engine, Instant::now(), &mut gate, &queue);
+        sample_engine(&engine, &queue);
 
         let drained = queue.drain();
         let occupancy = drained.iter().find_map(|sample| match sample {
@@ -407,19 +416,13 @@ mod tests {
         // time (sampling itself never reserves/submits).
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(64);
-        let mut gate = HealthDeliveryGate::new();
         let reservation = engine
             .reserve_root(OperationId::new(), || terminal_fact())
             .expect("reserve");
         assert_eq!(engine.occupied_count(), 1);
 
-        for tick in 0..5u32 {
-            sample_engine(
-                &engine,
-                Instant::now() + Duration::from_secs(u64::from(tick) + 1),
-                &mut gate,
-                &queue,
-            );
+        for _ in 0..5u32 {
+            sample_engine(&engine, &queue);
         }
 
         assert_eq!(engine.occupied_count(), 1);

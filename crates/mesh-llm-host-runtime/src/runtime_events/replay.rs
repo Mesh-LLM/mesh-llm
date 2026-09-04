@@ -96,14 +96,31 @@ impl ReplayBuffer {
     /// Append `frame`, then evict from the front while ANY of the three
     /// frozen bounds is exceeded (first limit wins — whichever bound is
     /// currently violated drives eviction, not all three at once). Returns
-    /// `true` when at least one eviction happened.
-    pub fn push(&self, frame: ReplayFrame) -> bool {
+    /// the NUMBER of frames evicted (`0` when none were).
+    ///
+    /// Task 8-fix E1 (`.omo/plans/event-system-fixes.md`): this used to
+    /// return `bool` ("did at least one eviction happen"), which the sole
+    /// production caller (`engine::drain::apply_and_publish_fact`) turned
+    /// into exactly one `EngineHealth::bump_replay_evicted()` regardless of
+    /// how many frames were actually evicted. That undercounts: a single
+    /// push CAN evict more than one frame. The count/byte dimensions can
+    /// never do this on their own when frames are pushed one at a time
+    /// (each push's own eviction loop below restores the invariant before
+    /// the next push can violate it again), but the AGE dimension can —
+    /// many already-retained frames can all go stale between two pushes,
+    /// independent of how many pushes happened while they sat there (see
+    /// `tests::age_bound_evicts_every_frame_that_outlives_it_not_just_the_oldest`
+    /// below, and `engine::drain::tests` for the engine-level proof through
+    /// the real `apply_and_publish_fact` call site). The frozen
+    /// `replay_evicted` semantics are "one increment per evicted frame",
+    /// so the caller must know the real count, not just "at least one".
+    pub fn push(&self, frame: ReplayFrame) -> usize {
         self.push_at(frame, Instant::now())
     }
 
     /// Same as [`Self::push`] with an explicit "now", so age-bound eviction
     /// is deterministically testable without sleeping on the wall clock.
-    pub(crate) fn push_at(&self, frame: ReplayFrame, now: Instant) -> bool {
+    pub(crate) fn push_at(&self, frame: ReplayFrame, now: Instant) -> usize {
         let byte_cost = APPROX_FRAME_BYTE_COST;
         let mut inner = self
             .inner
@@ -112,15 +129,15 @@ impl ReplayBuffer {
         inner.frames.push_back(RetainedFrame { frame, byte_cost });
         inner.total_bytes += byte_cost;
 
-        let mut evicted = false;
+        let mut evicted_count = 0usize;
         while self.exceeds_any_bound(&inner, now) {
             let Some(removed) = inner.frames.pop_front() else {
                 break;
             };
             inner.total_bytes -= removed.byte_cost;
-            evicted = true;
+            evicted_count += 1;
         }
-        evicted
+        evicted_count
     }
 
     fn exceeds_any_bound(&self, inner: &Inner, now: Instant) -> bool {
@@ -205,9 +222,9 @@ mod tests {
     #[test]
     fn push_beyond_capacity_evicts_the_oldest_frame() {
         let buffer = ReplayBuffer::with_capacity(2);
-        assert!(!buffer.push(frame(0)));
-        assert!(!buffer.push(frame(1)));
-        assert!(buffer.push(frame(2)));
+        assert_eq!(buffer.push(frame(0)), 0);
+        assert_eq!(buffer.push(frame(1)), 0);
+        assert_eq!(buffer.push(frame(2)), 1);
 
         let remaining: Vec<u64> = buffer
             .snapshot()
@@ -233,10 +250,10 @@ mod tests {
         // worth of headroom on the byte dimension, so the byte bound must
         // be the one that fires.
         let buffer = ReplayBuffer::with_bounds(1_000, APPROX_FRAME_BYTE_COST * 3, Duration::MAX);
-        assert!(!buffer.push(frame(0)));
-        assert!(!buffer.push(frame(1)));
-        assert!(!buffer.push(frame(2)));
-        assert!(buffer.push(frame(3)));
+        assert_eq!(buffer.push(frame(0)), 0);
+        assert_eq!(buffer.push(frame(1)), 0);
+        assert_eq!(buffer.push(frame(2)), 0);
+        assert_eq!(buffer.push(frame(3)), 1);
 
         let remaining: Vec<u64> = buffer
             .snapshot()
@@ -250,17 +267,20 @@ mod tests {
     fn push_beyond_the_age_bound_evicts_stale_frames_even_under_the_frame_count_bound() {
         let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(30));
         let start = Instant::now();
-        assert!(!buffer.push_at(frame_at(0, start), start));
-        assert!(!buffer.push_at(
-            frame_at(1, start + Duration::from_secs(10)),
-            start + Duration::from_secs(10)
-        ));
+        assert_eq!(buffer.push_at(frame_at(0, start), start), 0);
+        assert_eq!(
+            buffer.push_at(
+                frame_at(1, start + Duration::from_secs(10)),
+                start + Duration::from_secs(10)
+            ),
+            0
+        );
 
         // Sequence 0 is now 31s old (past the 30s age bound); sequence 1 is
         // only 21s old (still within it).
         let now = start + Duration::from_secs(31);
         let evicted = buffer.push_at(frame_at(2, now), now);
-        assert!(evicted);
+        assert_eq!(evicted, 1);
         let remaining: Vec<u64> = buffer
             .snapshot()
             .iter()
@@ -273,16 +293,24 @@ mod tests {
     fn age_bound_evicts_every_frame_that_outlives_it_not_just_the_oldest() {
         let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(10));
         let start = Instant::now();
-        assert!(!buffer.push_at(frame_at(0, start), start));
-        assert!(!buffer.push_at(
-            frame_at(1, start + Duration::from_secs(1)),
-            start + Duration::from_secs(1)
-        ));
+        assert_eq!(buffer.push_at(frame_at(0, start), start), 0);
+        assert_eq!(
+            buffer.push_at(
+                frame_at(1, start + Duration::from_secs(1)),
+                start + Duration::from_secs(1)
+            ),
+            0
+        );
 
         // Both prior frames are now well past the 10s bound; only the new
         // frame should remain.
         let now = start + Duration::from_secs(50);
-        buffer.push_at(frame_at(2, now), now);
+        let evicted = buffer.push_at(frame_at(2, now), now);
+        assert_eq!(
+            evicted, 2,
+            "one push must count BOTH stale frames it evicts here, not just \
+             report that at least one eviction happened"
+        );
         let remaining: Vec<u64> = buffer
             .snapshot()
             .iter()
@@ -297,9 +325,9 @@ mod tests {
         // frame-count dimension is tight, proving first-limit-wins picks
         // whichever bound actually fires, not always the byte/age ones.
         let buffer = ReplayBuffer::with_bounds(2, usize::MAX, Duration::MAX);
-        assert!(!buffer.push(frame(0)));
-        assert!(!buffer.push(frame(1)));
-        assert!(buffer.push(frame(2)));
+        assert_eq!(buffer.push(frame(0)), 0);
+        assert_eq!(buffer.push(frame(1)), 0);
+        assert_eq!(buffer.push(frame(2)), 1);
         let remaining: Vec<u64> = buffer
             .snapshot()
             .iter()

@@ -249,9 +249,14 @@ impl RuntimeEventEngine {
             fact: fact_arc,
             recorded_at: Instant::now(),
         };
-        if self.replay.push(frame.clone()) {
-            self.health.bump_replay_evicted();
-        }
+        // Task 8-fix E1 (`.omo/plans/event-system-fixes.md`): `push` now
+        // reports the real number of frames it evicted -- a single push can
+        // evict more than one (see `replay::ReplayBuffer::push`'s doc
+        // comment) -- so every evicted frame is credited here, not one
+        // bump per push. `bump_replay_evicted_by` is itself a no-op
+        // (including no version bump) when `evicted == 0`.
+        let evicted = self.replay.push(frame.clone());
+        self.health.bump_replay_evicted_by(evicted as u64);
         self.subscribers.publish(frame);
     }
 
@@ -535,5 +540,122 @@ fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot)
     };
     if engine.table().write_terminal(handle, record) {
         engine.wake().push_next(handle);
+    }
+}
+
+// Task 8-fix E1 (`.omo/plans/event-system-fixes.md`): the engine-level
+// proof that `apply_and_publish_fact` above credits every frame a single
+// `ReplayBuffer::push` evicts, not one bump per push. `engine/mod.rs` has
+// no production seam to shrink the replay buffer's `max_age` below the
+// frozen 300s `REPLAY_MAX_AGE` (and task 8-fix's grant does not extend to
+// adding one there), so `engine_with_tiny_replay_age` below builds a
+// `RuntimeEventEngine` by struct literal -- every field matches
+// `RuntimeEventEngine::with_capacities` exactly except `replay`, which
+// uses a millisecond-scale age bound so the test can force a genuine
+// same-push multi-eviction (only the age dimension can do this; the
+// count/byte dimensions can never evict more than one frame per push when
+// frames are pushed one at a time, since each push's own eviction loop
+// already restores the invariant before the next push can violate it
+// again) without a real 300s wait. This is legal because
+// `engine::drain::tests` is a descendant module of `engine`, where every
+// field of `RuntimeEventEngine` is defined (module-private, not `pub`) --
+// the same visibility rule that already lets this file's own
+// `apply_and_publish_fact` read `self.replay`/`self.health` directly.
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    use mesh_llm_runtime_event_contracts::{
+        FamilyFact, NativeRuntimeEventKind, ProcessInstanceId, RuntimeEventIngress, SubmitOutcome,
+    };
+    use tokio::sync::Notify;
+
+    use super::*;
+    use crate::runtime_events::engine::lanes::{DiagnosticLane, StateLane};
+    use crate::runtime_events::health::EngineHealth;
+    use crate::runtime_events::reducer::ReducerSnapshot;
+    use crate::runtime_events::replay::ReplayBuffer;
+    use crate::runtime_events::reservation::ReservationTable;
+    use crate::runtime_events::subscribers::SubscriberRegistry;
+    use crate::runtime_events::wake::WakeList;
+
+    fn engine_with_tiny_replay_age(max_age: Duration) -> Arc<RuntimeEventEngine> {
+        Arc::new(RuntimeEventEngine {
+            table: ReservationTable::new(64),
+            wake: WakeList::new(),
+            replay: ReplayBuffer::with_bounds(1_000, usize::MAX, max_age),
+            subscribers: SubscriberRegistry::with_capacity(64),
+            health: EngineHealth::default(),
+            children_by_root: Mutex::new(HashMap::new()),
+            pending_root_releases: Mutex::new(HashMap::new()),
+            shutting_down: AtomicBool::new(false),
+            rebuild_generation: AtomicU64::new(0),
+            state_lane: StateLane::default(),
+            diagnostic_lane: DiagnosticLane::default(),
+            reducer_state: Mutex::new(ReducerSnapshot::empty()),
+            process_instance: ProcessInstanceId::new(),
+            telemetry: OnceLock::new(),
+            progress_diagnostic_class_bypass: AtomicBool::new(false),
+            notify: Notify::new(),
+            progress_last_flush: Mutex::new(None),
+        })
+    }
+
+    fn distinct_state_transition_fact() -> RuntimeFact {
+        RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeInitialized))
+    }
+
+    /// A fresh `OperationScope` each call, submitted unreserved (bypassing
+    /// the reservation table entirely) so coalescing never merges it with
+    /// a sibling call: the state lane keys on `(OperationScope, kind)`, and
+    /// every call here mints a brand new `OperationId`.
+    fn submit_one(engine: &Arc<RuntimeEventEngine>) {
+        let scope = OperationScope::root_only(OperationId::new());
+        let outcome = engine
+            .unreserved_ingress(scope)
+            .try_submit(distinct_state_transition_fact());
+        assert_eq!(outcome, SubmitOutcome::Accepted);
+    }
+
+    /// Fails at the parent commit (`apply_and_publish_fact` bumping
+    /// `EngineHealth::replay_evicted` by exactly one per push regardless of
+    /// the real eviction count) and passes once it reports the real count.
+    /// Three distinct facts are drained together so each publishes its own
+    /// replay frame within microseconds of the others (well under the tiny
+    /// age bound); after real wall-clock time passes that bound, a fourth
+    /// push must evict all three in ONE `ReplayBuffer::push` call.
+    #[test]
+    fn a_single_push_that_evicts_several_stale_frames_credits_every_one_at_the_engine_level() {
+        let engine = engine_with_tiny_replay_age(Duration::from_millis(5));
+
+        submit_one(&engine);
+        submit_one(&engine);
+        submit_one(&engine);
+        engine.drain();
+        assert_eq!(
+            engine.health().snapshot().replay_evicted,
+            0,
+            "all three frames were recorded within microseconds of each \
+             other, well under the 5ms age bound -- nothing is stale yet"
+        );
+        assert_eq!(engine.replay().len(), 3);
+
+        // Real wall-clock time passing the tiny age bound, well past it for
+        // safety margin against scheduling jitter on a loaded machine.
+        std::thread::sleep(Duration::from_millis(50));
+
+        submit_one(&engine);
+        engine.drain();
+
+        assert_eq!(
+            engine.health().snapshot().replay_evicted,
+            3,
+            "one push evicted three stale frames; the engine-level EngineHealth \
+             counter must credit every one of them, not bump by one per push"
+        );
+        assert_eq!(engine.replay().len(), 1, "only the fresh frame remains");
     }
 }

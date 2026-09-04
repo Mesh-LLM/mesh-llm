@@ -171,3 +171,105 @@ async fn write_frame(stream: &mut TcpStream, frame: String) -> bool {
         .await
         .is_ok_and(|result| result.is_ok())
 }
+
+// Task 8-fix E5 (`.omo/plans/event-system-fixes.md`): `live_loop`'s recv
+// arm calls `maybe_write_health` after every delivered event frame
+// (`Ok(frame) =>` above) so a busy v1 subscriber's health delivery is
+// never starved behind the 15s keepalive tick alone -- but
+// `live_loop`/`maybe_write_health` had zero test callers anywhere in the
+// repo before this. `live_loop` takes a real `&mut TcpStream`, so this
+// drives it over a genuine loopback TCP pair rather than a mock writer.
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    use mesh_llm_runtime_event_contracts::{
+        FamilyFact, NativeRuntimeEventKind, OperationId, OperationScope, RuntimeEventIngress,
+        RuntimeFact, SubmitOutcome,
+    };
+
+    use super::*;
+
+    /// A real loopback TCP pair: `server` is what `live_loop` writes SSE
+    /// frames into, exactly like the socket `run` hands it; `client` is
+    /// read from directly by the test, exactly like a real subscriber.
+    async fn loopback_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("listener local addr");
+        let client = TcpStream::connect(addr)
+            .await
+            .expect("connect loopback client");
+        let (server, _) = listener.accept().await.expect("accept loopback server");
+        (server, client)
+    }
+
+    fn distinct_state_transition_fact() -> RuntimeFact {
+        RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeInitialized))
+    }
+
+    /// Fails if `maybe_write_health`'s call in `live_loop`'s recv arm is
+    /// removed (mutation M3, `.omo/evidence/event-system-fixes/task-08/mutation-proof.txt`).
+    /// A fresh `HealthDeliveryGate` (mirroring `HealthDeliveryGate::new`'s
+    /// own documented "never delivered yet" contract, exercised by
+    /// `health_delivery_gate_delivers_on_the_first_check_from_new` in
+    /// `health.rs`) delivers unconditionally on its first eligible check,
+    /// so the FIRST time the recv arm's `maybe_write_health` runs -- right
+    /// after this test's one submitted event frame -- it must write a
+    /// `runtime_health` frame. The 15s `KEEPALIVE_INTERVAL` never fires
+    /// within this test's real-time read-retry budget, so a
+    /// `runtime_health` frame on the wire is attributable to the recv arm
+    /// alone, never the keepalive branch.
+    #[tokio::test]
+    async fn live_loop_delivers_health_right_after_an_event_frame_not_only_on_keepalive() {
+        let engine = RuntimeEventEngine::new();
+        let mut subscription = engine.subscribers().subscribe().expect("subscribe");
+        let (mut server, mut client) = loopback_pair().await;
+        let health_gate = HealthDeliveryGate::new();
+
+        let drive_engine = Arc::clone(&engine);
+        let loop_task = tokio::spawn(async move {
+            live_loop(&mut server, &drive_engine, &mut subscription, health_gate).await;
+        });
+
+        let scope = OperationScope::root_only(OperationId::new());
+        let outcome = engine
+            .unreserved_ingress(scope)
+            .try_submit(distinct_state_transition_fact());
+        assert_eq!(outcome, SubmitOutcome::Accepted);
+        engine.drain();
+
+        let mut received = String::new();
+        let mut buf = [0u8; 4096];
+        for _ in 0..100 {
+            match tokio::time::timeout(Duration::from_millis(5), client.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    received.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if received.contains("event: runtime_event")
+                        && received.contains("event: runtime_health")
+                    {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        loop_task.abort();
+
+        assert!(
+            received.contains("event: runtime_event"),
+            "the submitted fact must reach the client as a runtime_event frame; got: {received:?}"
+        );
+        assert!(
+            received.contains("event: runtime_health"),
+            "the per-frame maybe_write_health call must deliver a health frame right \
+             after the event frame, not only on the 15s keepalive tick (never reached \
+             within this test's real-time read budget); got: {received:?}"
+        );
+    }
+}
