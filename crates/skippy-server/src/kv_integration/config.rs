@@ -6,13 +6,12 @@ use std::{
 use anyhow::Result;
 use mesh_llm_events::OutputEvent;
 use skippy_cache::{
-    CacheBlobStore, GeometryBlock, GeometryKind, L3Tier, PayloadGeometry, ResidentActivationCache,
-    ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits, UnifiedRadixCache,
-    prefix_namespace_hash,
+    CacheBlobStore, GeometryBlock, GeometryKind, L3CacheManager, L3Tier, PayloadGeometry,
+    ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits,
+    UnifiedRadixCache, exact_state_identity_for_stage,
 };
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
-use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, infer_family_capability};
 
 use super::{
     EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
@@ -29,6 +28,25 @@ impl KvStageIntegration {
     pub fn from_loaded_model(
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
+    ) -> Result<Option<Self>> {
+        Self::from_loaded_model_with_l3(config, model_state_kind, || l3_manager_from_env(config))
+    }
+
+    /// Construct a stage with an explicitly injected node cache manager.
+    /// Embedders that own several stages can use this path without consulting
+    /// process environment or opening the root again.
+    pub fn from_loaded_model_with_l3_manager(
+        config: &StageConfig,
+        model_state_kind: Option<ModelStateKind>,
+        manager: Option<L3CacheManager>,
+    ) -> Result<Option<Self>> {
+        Self::from_loaded_model_with_l3(config, model_state_kind, || Ok(manager))
+    }
+
+    fn from_loaded_model_with_l3(
+        config: &StageConfig,
+        model_state_kind: Option<ModelStateKind>,
+        manager: impl FnOnce() -> Result<Option<L3CacheManager>>,
     ) -> Result<Option<Self>> {
         let Some(mut cache_config) = effective_cache_config(config) else {
             return Ok(None);
@@ -50,16 +68,7 @@ impl KvStageIntegration {
         if payload == StagePrefixCachePayload::Disabled {
             return Ok(None);
         }
-        let l3 = l3_tier_from_env(config)?;
         let dense_without_recurrent = matches!(model_capability, ModelKvCapability::KnownDense);
-        if l3.is_some() && payload == StagePrefixCachePayload::ResidentKv && dense_without_recurrent
-        {
-            // The durable tier needs exportable state and ResidentKv is
-            // borrow-only. Dense families record KV pages with an empty
-            // recurrent snapshot so they reach disk; the model is known
-            // dense, so the empty snapshot is expected rather than corrupt.
-            payload = StagePrefixCachePayload::KvRecurrent;
-        }
         if matches!(model_capability, ModelKvCapability::KnownRecurrent)
             && matches!(payload, StagePrefixCachePayload::ResidentKv)
         {
@@ -78,6 +87,20 @@ impl KvStageIntegration {
             );
             return Ok(None);
         }
+        let l3_manager = manager()?;
+        if l3_manager.is_some()
+            && payload == StagePrefixCachePayload::ResidentKv
+            && dense_without_recurrent
+        {
+            // The durable tier needs exportable state and ResidentKv is
+            // borrow-only. Dense families record KV pages with an empty
+            // recurrent snapshot so they reach disk; the model is known
+            // dense, so the empty snapshot is expected rather than corrupt.
+            payload = StagePrefixCachePayload::KvRecurrent;
+        }
+        let l3 = l3_manager
+            .map(|manager| l3_tier_for_manager(config, payload, manager))
+            .transpose()?;
         // FullState is architecture-neutral: the native runtime serializes the
         // complete session state for both dense and recurrent model families.
         if matches!(model_capability, ModelKvCapability::KnownRecurrent) {
@@ -102,7 +125,10 @@ impl KvStageIntegration {
         let worker_l3 = l3.clone();
         let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
         let worker_inflight_records = inflight_records.clone();
-        let inflight_fills: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let inflight_fills: Arc<Mutex<BTreeSet<String>>> = l3.as_ref().map_or_else(
+            || Arc::new(Mutex::new(BTreeSet::new())),
+            |tier| tier.manager().fill_claims(),
+        );
         let worker_inflight_fills = inflight_fills.clone();
         let exact_state_record_queue_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_record_queue_bytes = exact_state_record_queue_bytes.clone();
@@ -214,7 +240,7 @@ const L3_SEGMENT_BYTES: usize = 8 * 1024 * 1024;
 /// further.
 const L3_MAX_WINDOW_ROWS: u64 = 64;
 
-fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
+fn l3_manager_from_env(config: &StageConfig) -> Result<Option<L3CacheManager>> {
     let Ok(root) = std::env::var("SKIPPY_L3_DIR") else {
         return Ok(None);
     };
@@ -238,14 +264,11 @@ fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
         Some(bytes) => bytes,
         None => DEFAULT_L3_BUDGET_BYTES,
     };
-    let identity = prefix_namespace_hash(config, 0, None);
-    let tier = match L3Tier::open_with_limits(
+    let manager = match L3CacheManager::acquire(
         &root,
         StoreLimits::new(budget_bytes, DEFAULT_L3_MINIMUM_FREE_BYTES),
-        identity,
-        L3_SEGMENT_BYTES,
     ) {
-        Ok(tier) => tier,
+        Ok(manager) => manager,
         Err(error) => {
             // A tier that cannot open is a visible decline, not a crash:
             // serving continues cache-off for this stage.
@@ -259,6 +282,17 @@ fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
             return Ok(None);
         }
     };
+    Ok(Some(manager))
+}
+
+fn l3_tier_for_manager(
+    config: &StageConfig,
+    payload: StagePrefixCachePayload,
+    manager: L3CacheManager,
+) -> Result<Arc<L3Tier>> {
+    let identity = exact_state_identity_for_stage(config, l3_payload_kind(payload));
+    let root = manager.root().display().to_string();
+    let tier = manager.tier(identity, L3_SEGMENT_BYTES);
     // Warm state must never be invisible: say what the tier can restore the
     // moment the stage comes up.
     match tier.status() {
@@ -282,7 +316,15 @@ fn l3_tier_from_env(config: &StageConfig) -> Result<Option<Arc<L3Tier>>> {
             });
         }
     }
-    Ok(Some(Arc::new(tier)))
+    Ok(Arc::new(tier))
+}
+
+fn l3_payload_kind(payload: StagePrefixCachePayload) -> &'static str {
+    match payload {
+        StagePrefixCachePayload::KvRecurrent => "kv-recurrent",
+        StagePrefixCachePayload::FullState => "full-state",
+        StagePrefixCachePayload::ResidentKv | StagePrefixCachePayload::Disabled => "unsupported",
+    }
 }
 
 /// Describe an exported KV page so the store can cut segments where a growing
@@ -972,6 +1014,66 @@ mod tests {
 
         assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
         assert_eq!(kv.exact_max_entries, RECURRENT_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn injected_manager_is_shared_across_placement_equivalent_stages() {
+        let root = std::env::temp_dir()
+            .join("skippy-server-l3-manager-tests")
+            .join(format!("shared-stages-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let mut first = enabled_auto_config("future/model");
+        first.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::FullState;
+        let second = StageConfig {
+            stage_id: "replica-stage".to_string(),
+            stage_index: 7,
+            topology_id: "other-topology".to_string(),
+            run_id: "other-run".to_string(),
+            ..first.clone()
+        };
+
+        let first = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &first,
+            Some(ModelStateKind::Dense),
+            Some(manager.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        let second = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &second,
+            Some(ModelStateKind::Dense),
+            Some(manager),
+        )
+        .unwrap()
+        .unwrap();
+        let first_l3 = first.l3.as_ref().unwrap();
+        let second_l3 = second.l3.as_ref().unwrap();
+
+        assert!(first_l3.manager().shares_root_with(second_l3.manager()));
+        assert_eq!(first_l3.state_identity(), second_l3.state_identity());
+        assert!(Arc::ptr_eq(&first.inflight_fills, &second.inflight_fills));
+    }
+
+    #[test]
+    fn dense_auto_cache_becomes_exportable_when_disk_is_injected() {
+        let root = std::env::temp_dir()
+            .join("skippy-server-l3-manager-tests")
+            .join(format!("dense-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let config = enabled_auto_config("future/model");
+
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Dense),
+            Some(manager),
+        )
+        .unwrap()
+        .expect("dense disk cache should remain enabled");
+
+        assert_eq!(kv.payload, StagePrefixCachePayload::KvRecurrent);
+        assert!(kv.l3.is_some());
     }
 
     #[test]

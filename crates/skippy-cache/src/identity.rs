@@ -207,11 +207,10 @@ fn prefix_namespace_hasher(
     // process and would prevent otherwise compatible cache identities from
     // agreeing across runs.
     //
-    // Reuse depends on the *shape* of the stage: the model, owned layers, and
-    // pipeline position. Those are hashed below with the runtime layout fields
-    // in `update_layout_identity`.
-    hasher.update(config.stage_id.as_bytes());
-    hasher.update(&config.stage_index.to_le_bytes());
+    // Reuse depends on the numerical shape of the stage, not its placement.
+    // Replicas may have different stage ids/indexes while owning the same layer
+    // range; including those labels prevents both disk reuse and later remote
+    // handoff between otherwise compatible runtimes.
     hasher.update(&config.layer_start.to_le_bytes());
     hasher.update(&config.layer_end.to_le_bytes());
     hasher.update(NATIVE_KV_RUNTIME_ABI_VERSION.as_bytes());
@@ -226,6 +225,30 @@ fn prefix_namespace_hasher(
     }
     hasher.update(&token_start.to_le_bytes());
     hasher
+}
+
+/// Numerical identity for an exact-state payload produced by a stage.
+///
+/// This is the production counterpart to [`ExactStateIdentityParams`]. It
+/// deliberately reuses the same exhaustive weight/layout hashing as radix
+/// pages while excluding run, topology, stage id/index, addresses, and other
+/// placement labels.
+pub fn exact_state_identity_for_stage(config: &StageConfig, payload_kind: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"exact-state-stage-identity-v1");
+    update_weight_identity(&mut hasher, config);
+    hasher.update(&config.layer_start.to_le_bytes());
+    hasher.update(&config.layer_end.to_le_bytes());
+    hasher.update(NATIVE_KV_RUNTIME_ABI_VERSION.as_bytes());
+    hasher.update(&NATIVE_KV_LAYER_CONTIGUOUS_LAYOUT.to_le_bytes());
+    hasher.update(NATIVE_KV_DTYPE.as_bytes());
+    update_layout_identity(&mut hasher, config);
+    update_platform_identity(&mut hasher);
+    hasher.update(&config.ctx_size.to_le_bytes());
+    hasher.update(&config.lane_count.to_le_bytes());
+    hasher.update(b"payload:");
+    hasher.update(payload_kind.as_bytes());
+    format!("blake3:{}", hasher.finalize().to_hex())
 }
 
 /// The *numerical* identity of an exact-state (full-state or KV+recurrent)
@@ -961,6 +984,33 @@ mod identity_stability_tests {
         assert_eq!(
             prefix_identity(&run_one, 0, &tokens).page_id,
             prefix_identity(&run_two, 0, &tokens).page_id
+        );
+    }
+
+    #[test]
+    fn placement_labels_do_not_change_numerical_identity() {
+        let first = config_with_topology("topology-a");
+        let replica = StageConfig {
+            run_id: "other-run".to_string(),
+            topology_id: "topology-b".to_string(),
+            stage_id: "prefill-replica-7".to_string(),
+            stage_index: 9,
+            bind_addr: "127.0.0.1:9999".to_string(),
+            ..first.clone()
+        };
+        let tokens = (0..256).collect::<Vec<_>>();
+
+        assert_eq!(
+            prefix_namespace_hash(&first, 0, None),
+            prefix_namespace_hash(&replica, 0, None)
+        );
+        assert_eq!(
+            exact_state_identity_for_stage(&first, "full-state"),
+            exact_state_identity_for_stage(&replica, "full-state")
+        );
+        assert_eq!(
+            prefix_identity(&first, 0, &tokens).prefix_hash,
+            prefix_identity(&replica, 0, &tokens).prefix_hash
         );
     }
 

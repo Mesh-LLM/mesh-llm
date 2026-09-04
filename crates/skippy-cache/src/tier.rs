@@ -8,10 +8,7 @@
 //! a numerical-identity boundary: spills stamp the tier's
 //! `exact_state_identity`, and fills refuse manifests stamped differently.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -20,57 +17,8 @@ use crate::l3::{
     HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
     StoreLimits, StoreUsage, segment_digest,
 };
+use crate::manager::{L3ActivitySnapshot, L3CacheManager};
 use crate::payload::{ExactStatePayload, ExactStatePayloadKind};
-
-/// What the tier has done since it opened. The status surface is the only
-/// way a user learns whether caching works, so every path that touches disk
-/// counts itself here rather than logging.
-#[derive(Debug, Default)]
-struct L3Activity {
-    fills: AtomicU64,
-    hits: AtomicU64,
-    misses: AtomicU64,
-    writes: AtomicU64,
-    /// Spills whose caller-supplied geometry did not describe the payload, so
-    /// the store fell back to fixed-size cutting. A non-zero count here is why
-    /// write amplification would be high.
-    geometry_rejected: AtomicU64,
-    bytes_read: AtomicU64,
-    bytes_written: AtomicU64,
-    last_error: Mutex<Option<String>>,
-}
-
-impl L3Activity {
-    fn record_error(&self, error: &anyhow::Error) {
-        *self
-            .last_error
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("{error:#}"));
-    }
-}
-
-/// Point-in-time copy of [`L3Activity`], plain data for the status contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct L3ActivitySnapshot {
-    /// Entries loaded from disk into a session.
-    pub fills: u64,
-    /// Lookups that found a usable entry.
-    pub hits: u64,
-    /// Lookups that found nothing for the namespace and prefix.
-    pub misses: u64,
-    /// Entries committed to disk.
-    pub writes: u64,
-    /// Manifests removed by budget enforcement or prune.
-    pub evictions: u64,
-    /// Objects quarantined after failing verification.
-    pub corrupt_entries: u64,
-    pub bytes_read: u64,
-    pub bytes_written: u64,
-    /// Spills that fell back to fixed-size cutting because the geometry did
-    /// not match the payload.
-    pub geometry_rejected: u64,
-    pub last_error: Option<String>,
-}
 
 /// Everything the status contract needs from the tier, in one read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -132,10 +80,9 @@ pub struct L3Fill {
 }
 
 pub struct L3Tier {
-    store: HandoffSegmentStore,
+    manager: L3CacheManager,
     state_identity: String,
     segment_bytes: usize,
-    activity: L3Activity,
 }
 
 impl L3Tier {
@@ -161,16 +108,28 @@ impl L3Tier {
         state_identity: String,
         segment_bytes: usize,
     ) -> Result<Self> {
-        Ok(Self {
-            store: HandoffSegmentStore::open_with_limits(root, limits)?,
+        let manager = L3CacheManager::acquire(root.into(), limits)?;
+        Ok(manager.tier(state_identity, segment_bytes))
+    }
+
+    pub(crate) fn from_manager(
+        manager: L3CacheManager,
+        state_identity: String,
+        segment_bytes: usize,
+    ) -> Self {
+        Self {
+            manager,
             state_identity,
             segment_bytes: segment_bytes.max(1),
-            activity: L3Activity::default(),
-        })
+        }
     }
 
     pub fn store(&self) -> &HandoffSegmentStore {
-        &self.store
+        self.manager.store()
+    }
+
+    pub fn manager(&self) -> &L3CacheManager {
+        &self.manager
     }
 
     pub fn state_identity(&self) -> &str {
@@ -179,24 +138,7 @@ impl L3Tier {
 
     /// Point-in-time activity counters.
     pub fn activity(&self) -> L3ActivitySnapshot {
-        let usage = self.store.usage().ok();
-        L3ActivitySnapshot {
-            fills: self.activity.fills.load(Ordering::Relaxed),
-            hits: self.activity.hits.load(Ordering::Relaxed),
-            misses: self.activity.misses.load(Ordering::Relaxed),
-            writes: self.activity.writes.load(Ordering::Relaxed),
-            evictions: usage.as_ref().map_or(0, |usage| usage.evicted_manifests),
-            corrupt_entries: usage.as_ref().map_or(0, |usage| usage.quarantined_objects),
-            bytes_read: self.activity.bytes_read.load(Ordering::Relaxed),
-            bytes_written: self.activity.bytes_written.load(Ordering::Relaxed),
-            geometry_rejected: self.activity.geometry_rejected.load(Ordering::Relaxed),
-            last_error: self
-                .activity
-                .last_error
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone(),
-        }
+        self.manager.activity_snapshot()
     }
 
     /// The full status snapshot. One pass over the manifests; safe to call
@@ -206,10 +148,10 @@ impl L3Tier {
         Ok(L3Status {
             state_identity: self.state_identity.clone(),
             format_version: MANIFEST_VERSION,
-            usage: self.store.usage()?,
+            usage: self.store().usage()?,
             restorable_manifests: restorable_manifests as u64,
             restorable_tokens,
-            namespaces: self.store.namespace_count()?,
+            namespaces: self.store().namespace_count()?,
             activity: self.activity(),
         })
     }
@@ -230,9 +172,10 @@ impl L3Tier {
         kv_desc_json: Option<String>,
         geometry: Option<&PayloadGeometry>,
     ) -> Result<String> {
+        let _operation = self.manager.operation_guard();
         let result = self.spill_inner(namespace, token_ids, payload, kv_desc_json, geometry);
         if let Err(error) = &result {
-            self.activity.record_error(error);
+            self.manager.activity_counters().record_error(error);
         }
         result
     }
@@ -303,7 +246,8 @@ impl L3Tier {
         let geometry = geometry.filter(|geometry| {
             let matches = geometry.matches(wire.len() as u64);
             if !matches {
-                self.activity
+                self.manager
+                    .activity_counters()
                     .geometry_rejected
                     .fetch_add(1, Ordering::Relaxed);
             }
@@ -332,7 +276,7 @@ impl L3Tier {
             let end = start
                 .checked_add(usize::try_from(len).context("segment length exceeds usize")?)
                 .context("segment range overflows")?;
-            let stored = self.store.put_segment(&wire[start..end])?;
+            let stored = self.store().put_segment(&wire[start..end])?;
             if stored.put.new {
                 new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
@@ -345,16 +289,23 @@ impl L3Tier {
             });
             held.push(stored);
         }
-        self.store.commit(&manifest)?;
-        self.store.link_prefix(
+        // Pin before publishing the manifest so another stage cannot evict
+        // it in the gap between commit and prefix-link publication.
+        let _manifest_pin = self.store().pin(&payload_digest);
+        self.store().commit(&manifest)?;
+        self.store().link_prefix(
             &l3_namespace_key(namespace),
             token_count,
             &l3_prefix_key(namespace, token_ids),
             &payload_digest,
         )?;
         drop(held);
-        self.activity.writes.fetch_add(1, Ordering::Relaxed);
-        self.activity
+        self.manager
+            .activity_counters()
+            .writes
+            .fetch_add(1, Ordering::Relaxed);
+        self.manager
+            .activity_counters()
             .bytes_written
             .fetch_add(new_bytes, Ordering::Relaxed);
         Ok(payload_digest)
@@ -376,12 +327,18 @@ impl L3Tier {
         let result = self.locate_longest_inner(namespace, token_ids, max_probes);
         match &result {
             Ok(Some(_)) => {
-                self.activity.hits.fetch_add(1, Ordering::Relaxed);
+                self.manager
+                    .activity_counters()
+                    .hits
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Ok(None) => {
-                self.activity.misses.fetch_add(1, Ordering::Relaxed);
+                self.manager
+                    .activity_counters()
+                    .misses
+                    .fetch_add(1, Ordering::Relaxed);
             }
-            Err(error) => self.activity.record_error(error),
+            Err(error) => self.manager.activity_counters().record_error(error),
         }
         result
     }
@@ -394,7 +351,7 @@ impl L3Tier {
     ) -> Result<Option<L3Location>> {
         let namespace_key = l3_namespace_key(namespace);
         let query_len = token_ids.len() as u64;
-        let lengths = self.store.recorded_prefix_lengths(&namespace_key)?;
+        let lengths = self.store().recorded_prefix_lengths(&namespace_key)?;
         for length in lengths
             .into_iter()
             .filter(|length| *length > 0 && *length <= query_len)
@@ -402,7 +359,7 @@ impl L3Tier {
         {
             let prefix_key = l3_prefix_key(namespace, &token_ids[..length as usize]);
             let Some(manifest) =
-                self.store
+                self.store()
                     .manifest_for_prefix(&namespace_key, length, &prefix_key)?
             else {
                 continue;
@@ -436,24 +393,29 @@ impl L3Tier {
     /// itself. Full-state fills are whole-blob by nature; kv-recurrent
     /// fills could stream per segment later.
     pub fn load(&self, location: &L3Location) -> Result<L3Fill> {
+        let _operation = self.manager.operation_guard();
         // Pinned for the whole load: eviction under a concurrent spill must
         // not remove the segments this fill is assembling.
-        let _pin = self.store.pin(&location.manifest_key);
+        let _pin = self.store().pin(&location.manifest_key);
         let result = self.load_inner(location);
         match &result {
             Ok(fill) => {
-                self.activity.fills.fetch_add(1, Ordering::Relaxed);
-                self.activity
+                self.manager
+                    .activity_counters()
+                    .fills
+                    .fetch_add(1, Ordering::Relaxed);
+                self.manager
+                    .activity_counters()
                     .bytes_read
                     .fetch_add(fill.payload_bytes, Ordering::Relaxed);
             }
-            Err(error) => self.activity.record_error(error),
+            Err(error) => self.manager.activity_counters().record_error(error),
         }
         result
     }
 
     fn load_inner(&self, location: &L3Location) -> Result<L3Fill> {
-        let manifest = self.store.load_manifest(&location.manifest_key)?;
+        let manifest = self.store().load_manifest(&location.manifest_key)?;
         if manifest.state_identity != self.state_identity {
             bail!(
                 "L3 manifest {} was spilled under state identity {} but the tier serves {}",
@@ -462,7 +424,7 @@ impl L3Tier {
                 self.state_identity
             );
         }
-        let mut wire = self.store.assemble(&manifest)?;
+        let mut wire = self.store().assemble(&manifest)?;
         let payload_bytes = wire.len() as u64;
         let kv_bytes = usize::try_from(manifest.kv_bytes).context("kv bytes exceed usize")?;
         let payload = match manifest.payload_kind.as_str() {
@@ -499,18 +461,18 @@ impl L3Tier {
     /// token total, segment footprint bytes). Startup visibility so warm
     /// state is never invisible.
     pub fn restorable_summary(&self) -> Result<(usize, u64, u64)> {
-        let keys = self.store.list_manifests()?;
+        let keys = self.store().list_manifests()?;
         let mut tokens = 0u64;
         let mut count = 0usize;
         for key in &keys {
-            if let Ok(manifest) = self.store.load_manifest(key)
+            if let Ok(manifest) = self.store().load_manifest(key)
                 && manifest.state_identity == self.state_identity
             {
                 tokens = tokens.saturating_add(manifest.token_count);
                 count += 1;
             }
         }
-        Ok((count, tokens, self.store.segment_footprint_bytes()?))
+        Ok((count, tokens, self.store().segment_footprint_bytes()?))
     }
 }
 
