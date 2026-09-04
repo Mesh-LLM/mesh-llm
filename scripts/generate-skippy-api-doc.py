@@ -137,10 +137,11 @@ def render(headers: list[Header], include_dir: Path) -> str:
     for header in headers:
         if not header.functions:
             continue
+        function_label = "function" if len(header.functions) == 1 else "functions"
         lines.extend(
             [
                 '    <section class="skippy-api-index__group">',
-                f'      <a class="skippy-api-index__group-title" href="#{header_anchor(header)}"><code>{header.name}</code><span>{len(header.functions)} functions</span></a>',
+                f'      <a class="skippy-api-index__group-title" href="#{header_anchor(header)}"><code>{header.name}</code><span>{len(header.functions)} {function_label}</span></a>',
                 '      <div class="skippy-api-index__functions">',
             ]
         )

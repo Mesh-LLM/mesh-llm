@@ -121,6 +121,14 @@ impl OpenAiHookPolicy for MeshAutoHookPolicy {
             .await;
         Ok(virtual_hook_response_to_outcome(&response))
     }
+
+    // Only the pre-dispatch hooks above are implemented — the post-dispatch
+    // request snapshot (`on_chat_completion_terminal`,
+    // `capsule_marker_for_response`) is never read here, so skip the clone
+    // `HookedOpenAiBackend` would otherwise take on every completion.
+    fn observes_dispatched_request(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]

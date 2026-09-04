@@ -1,8 +1,10 @@
+//! Floating-point conversion used by checkpoint tensor views.
+
 use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use crate::types::ConvertOutputType;
+use crate::ConvertOutputType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FloatDType {

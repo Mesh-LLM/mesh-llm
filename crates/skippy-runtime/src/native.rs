@@ -136,6 +136,14 @@ impl StageModel {
         event_reporter: Option<&mut dyn FnMut(RuntimeEvent)>,
     ) -> Result<Self> {
         let path = path.as_ref();
+        if crate::checkpoint::is_safetensors_checkpoint(path) {
+            if event_reporter.is_some() {
+                write_native_log_note(
+                    "SafeTensors source loading does not yet emit native model-open events",
+                );
+            }
+            return Self::open_safetensors(path, config.checkpoint_quantization, config);
+        }
         let use_events = event_reporter.is_some() && runtime_events::model_open_events_supported();
         let begin_label = if use_events {
             "skippy_model_open_with_events begin"
@@ -298,6 +306,22 @@ impl StageModel {
 
     pub fn open(path: impl AsRef<Path>, config: &RuntimeConfig) -> Result<Self> {
         Self::open_path_with_optional_event_reporter(path, config, None)
+    }
+
+    /// Opens an official Hugging Face SafeTensors checkpoint without writing an
+    /// intermediate GGUF. Quantization, when requested, happens per tensor as
+    /// llama.cpp allocates the model's destination buffers.
+    pub fn open_safetensors(
+        source: impl AsRef<Path>,
+        quantization: crate::CheckpointQuantization,
+        config: &RuntimeConfig,
+    ) -> Result<Self> {
+        let raw = crate::checkpoint::open_safetensors(source.as_ref(), quantization, config)?;
+        Self::from_opened_raw(
+            raw,
+            config,
+            "skippy_model_open_from_source returned a null handle",
+        )
     }
 
     pub fn open_with_events(
