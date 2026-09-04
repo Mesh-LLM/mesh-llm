@@ -1883,6 +1883,16 @@
       "macro_name": "eprintln!"
     }
   ],
+  "crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs": [
+    {
+      "line": 415,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 423,
+      "macro_name": "eprintln!"
+    }
+  ],
   "crates/mesh-llm-host-runtime/src/runtime/local_split/tests.rs": [
     {
       "line": 1914,
@@ -4207,6 +4217,24 @@
     {
       "line": 554,
       "macro_name": "eprintln!"
+    }
+  ],
+  "crates/skippy-runtime/tests/runtime_events_native.rs": [
+    {
+      "line": 43,
+      "macro_name": "println!"
+    },
+    {
+      "line": 50,
+      "macro_name": "println!"
+    },
+    {
+      "line": 64,
+      "macro_name": "println!"
+    },
+    {
+      "line": 71,
+      "macro_name": "println!"
     }
   ],
   "crates/skippy-server/examples/mtp_stage_bench.rs": [
