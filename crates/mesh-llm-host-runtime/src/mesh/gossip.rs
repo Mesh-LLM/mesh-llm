@@ -423,6 +423,24 @@ impl Node {
                     context.remote.fmt_short()
                 )
             })?;
+        let is_explicit_join_target = self
+            .join_targets
+            .lock()
+            .await
+            .iter()
+            .any(|target| target.id == context.remote);
+        if is_explicit_join_target
+            && let Some(local_mesh_id) = self.mesh_id().await
+            && let Some(remote_mesh_id) = direct_announcement.mesh_id.as_deref()
+            && local_mesh_id != remote_mesh_id
+        {
+            anyhow::bail!(
+                "mesh ID conflict: local node belongs to mesh '{}' but peer {} belongs to mesh '{}'; stop the local mesh before joining another mesh",
+                local_mesh_id,
+                context.remote.fmt_short(),
+                remote_mesh_id
+            );
+        }
         if let Err(reason) = self
             .validate_direct_peer_requirements(
                 context.remote,

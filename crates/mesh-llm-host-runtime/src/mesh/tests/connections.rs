@@ -487,6 +487,29 @@ async fn make_test_node_with_requirements(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_join_rejects_conflicting_active_meshes() -> Result<()> {
+    let host = make_test_node(super::NodeRole::Worker).await?;
+    let joiner = make_test_node(super::NodeRole::Worker).await?;
+    host.set_mesh_id("host-mesh".to_string()).await;
+    joiner.set_mesh_id("joiner-mesh".to_string()).await;
+    host.start_accepting();
+    joiner.start_accepting();
+
+    let error = joiner
+        .join(&host.invite_token().await)
+        .await
+        .expect_err("an explicit join must not connect two active meshes");
+    let message = format!("{error:#}");
+    assert!(message.contains("mesh ID conflict"), "{message}");
+    assert!(message.contains("joiner-mesh"), "{message}");
+    assert!(message.contains("host-mesh"), "{message}");
+    assert!(message.contains("stop the local mesh"), "{message}");
+    assert!(joiner.peers().await.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_role_claim_transitions_regossip_to_connected_peer() -> Result<()> {
     let host = make_test_node(super::NodeRole::Worker).await?;
     let peer = make_test_node(super::NodeRole::Worker).await?;
