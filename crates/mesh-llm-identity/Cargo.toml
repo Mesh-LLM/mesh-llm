@@ -29,5 +29,11 @@ sha2.workspace = true
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# keyring v4's default Apple backend enables only the macOS keychain. Its
+# transitive Apple store rejects iOS unless protected data is enabled; this
+# direct edge unifies that feature for iOS SDK builds.
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
 [dev-dependencies]
 serial_test = "4"

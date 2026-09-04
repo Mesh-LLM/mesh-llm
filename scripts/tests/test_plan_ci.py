@@ -211,6 +211,7 @@ class PlanCiTests(unittest.TestCase):
                 "website_changed": False,
                 "website_docs_changed": False,
                 "cli_surface_changed": False,
+                "swift_full_required": False,
                 "docs_only": True,
                 "backend_changed": False,
                 "runner_contract_required": False,
@@ -287,6 +288,20 @@ class PlanCiTests(unittest.TestCase):
         self.assertNotIn("web", plan["required_slices"])
         self.assertTrue(plan["signals"]["cli_surface_changed"])
         self.assertFalse(plan["signals"]["website_docs_changed"])
+
+    def test_dependency_lockfile_change_requires_full_swift_input(self) -> None:
+        payload = fixture("runtime.json")
+        payload["changed_files"] = ["Cargo.lock"]
+
+        plan = PLANNER.build_plan(payload, root=ROOT)
+
+        self.assertTrue(plan["signals"]["swift_full_required"])
+        self.assertIn("swift", [row["id"] for row in plan["matrices"]["sdk"]])
+
+    def test_unrelated_runtime_change_keeps_host_only_swift_input(self) -> None:
+        plan = PLANNER.build_plan(fixture("runtime.json"), root=ROOT)
+
+        self.assertFalse(plan["signals"]["swift_full_required"])
 
     def test_backend_change_adds_only_the_owned_backend_rows(self) -> None:
         payload = fixture("runtime.json")

@@ -1664,6 +1664,10 @@ class CiArtifactActionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         routing = self.read_compute_changes()
 
+        macos_lane = (
+            ROOT / ".github" / "workflows" / "ci-macos-lane.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(macos_lane.count("signals.swift_full_required && 'full' || 'host-only'"), 2)
         self.assertIn("type: string", producer)
         self.assertIn("host-only|full", producer)
         self.assertIn(

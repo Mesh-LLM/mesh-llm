@@ -94,6 +94,8 @@ class CliInventoryContractTests(unittest.TestCase):
 
         self.assertIn("Verify generated CLI inventory is deterministic and current", quality)
         self.assertIn("just cli-inventory-check", quality)
+        cli_job = quality.split("  cli_docs_sync:", 1)[1].split("\n  #", 1)[0]
+        self.assertIn("timeout-minutes: 15", cli_job)
         self.assertNotIn("Require public website docs update", quality)
         self.assertIn("npm run test:cli-explorer", web)
         self.assertIn("npm run test:cli-explorer", pages)

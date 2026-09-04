@@ -302,6 +302,9 @@ runtime producers are not duplicated.
   Rust's smoke also uses the exact main-seeded Cargo/target cache. Swift
   production starts from the plan and Kotlin production from the shared
   static ABI; only smoke consumers wait for the matching product lane.
+  Ready PRs use the full iOS-inclusive Swift producer when Cargo dependency
+  inputs, Swift package/build inputs, mesh FFI, or identity inputs change;
+  other selected PR rows may retain the host-only producer.
 - `ci-runner-contract-slice.yml` — plan/provider/PR cache-boundary checks and
   trusted-main runner-image contracts.
 

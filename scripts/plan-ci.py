@@ -606,6 +606,14 @@ def _signal_value(
         )
     if name == "cli_surface_changed":
         return "cli" in domains
+    if name == "swift_full_required":
+        return any(
+            path in {"Cargo.toml", "Cargo.lock", "Package.swift"}
+            or path.startswith("sdk/swift/")
+            or path.startswith("crates/mesh-llm-ffi/")
+            or path.startswith("crates/mesh-llm-identity/")
+            for path in changed_files
+        )
     if name == "docs_only":
         return _documentation_only(domains)
     if name == "backend_changed":
@@ -781,6 +789,7 @@ def _validate_plan(plan: dict[str, Any], slices: dict[str, Any], packages: list[
         "website_changed",
         "website_docs_changed",
         "cli_surface_changed",
+        "swift_full_required",
         "docs_only",
         "backend_changed",
         "runner_contract_required",
@@ -827,6 +836,16 @@ def build_plan(
         raw=input_data.get("affected_crates"),
     )
     domains = _matched_domains(ownership, changed_files, direct_crates)
+    if _signal_value(changed_files, domains, profile, "swift_full_required"):
+        # Dependency and shared FFI/identity changes can affect the iOS build
+        # even though their primary ownership is Rust. Add the existing Swift
+        # domain so normal slice dependency closure selects its producer.
+        domain_order = _string_list(ownership["domains"], "ownership.domains")
+        domains = [
+            domain
+            for domain in domain_order
+            if domain in set(domains) | {"sdk-swift"}
+        ]
     documentation_only = _documentation_only(domains)
     required_slices, reasons, force_all_rows = _select_slices(
         slices,
@@ -862,6 +881,7 @@ def build_plan(
         "website_changed",
         "website_docs_changed",
         "cli_surface_changed",
+        "swift_full_required",
         "docs_only",
         "backend_changed",
         "runner_contract_required",

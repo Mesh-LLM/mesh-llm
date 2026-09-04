@@ -113,6 +113,12 @@ hf_hub = { package = "mesh-llm-hf-hub", version = "1.0.2", default-features = fa
 tabwriter = "1"
 tempfile = "3"
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# keyring v4's default Apple backend enables only the macOS keychain. Its
+# transitive Apple store rejects iOS unless protected data is enabled; this
+# direct edge unifies that feature for iOS SDK builds.
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

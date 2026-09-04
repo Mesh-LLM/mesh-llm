@@ -109,6 +109,9 @@ outputs:
   cli_surface_changed:
     description: Planner-owned CLI surface change signal
     value: ${{ steps.plan.outputs.cli_surface_changed }}
+  swift_full_required:
+    description: Planner-owned iOS-inclusive Swift SDK change signal
+    value: ${{ steps.plan.outputs.swift_full_required }}
   docs_only:
     description: Planner-owned docs-only signal
     value: ${{ steps.plan.outputs.docs_only }}
@@ -263,7 +266,7 @@ runs:
           echo "linux_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "linux")]' ci-plan.json)"
           echo "macos_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "macos")]' ci-plan.json)"
           echo "windows_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "windows")]' ci-plan.json)"
-          for signal in rust_changed ui_changed website_changed website_docs_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
+          for signal in rust_changed ui_changed website_changed website_docs_changed cli_surface_changed swift_full_required docs_only backend_changed runner_contract_required; do
             echo "${signal}=$(jq -r --arg signal "$signal" '.signals[$signal]' ci-plan.json)"
           done
           echo "linux_max_parallel=$(jq -r '.budgets.linux_max_parallel' ci-plan.json)"

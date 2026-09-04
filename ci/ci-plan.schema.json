@@ -71,6 +71,7 @@
         "website_changed",
         "website_docs_changed",
         "cli_surface_changed",
+        "swift_full_required",
         "docs_only",
         "backend_changed",
         "runner_contract_required"
@@ -81,6 +82,7 @@
         "website_changed": {"type": "boolean"},
         "website_docs_changed": {"type": "boolean"},
         "cli_surface_changed": {"type": "boolean"},
+        "swift_full_required": {"type": "boolean"},
         "docs_only": {"type": "boolean"},
         "backend_changed": {"type": "boolean"},
         "runner_contract_required": {"type": "boolean"}
