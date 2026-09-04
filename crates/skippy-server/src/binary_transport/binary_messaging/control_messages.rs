@@ -418,6 +418,10 @@ pub(super) fn handle_prefix_cache_control(
             });
         }
     }
+    // The server frontend emits TryRestorePrefill for ordinary prefix restore.
+    // Keep ledger seeding scoped to that optimistic control message: the
+    // unconditional RestorePrefill path is also used by bench/correctness
+    // harnesses, which do not share this suffix-recording lifecycle.
     if chain_hit
         && message.kind == WireMessageKind::TryRestorePrefill
         && let Some(cache) = kv

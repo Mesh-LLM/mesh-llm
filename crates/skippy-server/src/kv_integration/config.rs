@@ -27,7 +27,8 @@ const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
 // (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
 // cannot see, because that estimate is derived from attention KV metadata
 // alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
-// many snapshots before the soft cap evicts anything: falling to one entry
+// many snapshots (subject to the configured entry limit) before the soft cap
+// evicts anything: falling to one entry
 // turns the catalog into a single-entry cache, where two concurrent sessions
 // on the same stage evict each other on every request.
 const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
@@ -258,17 +259,17 @@ fn store_exact_radix_record(
     // Exact snapshots are indivisible, and the soft cap is estimated from
     // attention KV metadata that cannot include architecture-specific
     // recurrent state, so one snapshot can legitimately exceed it. Hold a small
-    // working set past the soft cap so concurrent sessions on a stage stop
-    // evicting each other, then apply the hard limit so that allowance stays
-    // bounded apart from one indivisible snapshot. Neither pass evicts the last
-    // entry: a snapshot that self-evicts disables exact prefix caching for the
-    // stage entirely, which is the regression this retention policy exists to
-    // prevent.
+    // working set past the soft cap (never more than the configured entry
+    // limit) so concurrent sessions on a stage stop evicting each other, then
+    // apply the hard limit so that allowance stays bounded apart from one
+    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
+    // self-evicts disables exact prefix caching for the stage entirely, which
+    // is the regression this retention policy exists to prevent.
     evict_exact_entries_over(
         radix,
         blobs,
         limits.soft_bytes,
-        EXACT_STATE_MIN_RETAINED_ENTRIES,
+        EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
     )?;
     evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
     Ok(())
@@ -548,6 +549,33 @@ mod tests {
         let mut radix = radix.lock().unwrap();
         assert_eq!(radix.stats().recurrent_entries, 3);
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_some());
+        assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
+        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
+    }
+
+    #[test]
+    fn exact_soft_retention_does_not_exceed_the_configured_entry_limit() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        for (page_id, tokens, bytes) in [
+            ("first", [1, 2], b"aaaabbbb"),
+            ("second", [1, 3], b"ccccdddd"),
+            ("third", [1, 4], b"eeeeffff"),
+        ] {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                2,
+                limits(4, 1_024),
+                pending(page_id, &tokens, bytes),
+            )
+            .unwrap();
+        }
+
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 2);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
         assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
         assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
     }

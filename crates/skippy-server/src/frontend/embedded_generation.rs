@@ -154,12 +154,8 @@ impl StageOpenAiBackend {
                 prefill_chain_cache_stats = chain_cache_stats;
                 fused_first_decode = restored_first_decode;
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
-                let exact_checkpoint_boundary = self.embedded_exact_checkpoint_boundary(
-                    &request,
-                    &session_key,
-                    prefill_tokens,
-                    pos_start,
-                );
+                let exact_checkpoint_boundary =
+                    self.embedded_exact_checkpoint_boundary(&request, prefill_tokens, pos_start);
                 let mut chunk_index = 0usize;
                 while pos_start < prefill_tokens.len() {
                     if request

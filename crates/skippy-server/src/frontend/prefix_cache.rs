@@ -174,15 +174,13 @@ impl StageOpenAiBackend {
     pub(super) fn embedded_exact_checkpoint_boundary(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
-        session_id: &str,
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
     ) -> Option<usize> {
         let kv = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state())?;
-        let base = self.local_kv_message_base(session_id, request.ids);
         let shared_boundary = kv
-            .exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens)
-            .and_then(|identity| usize::try_from(identity.identity.token_count).ok());
+            .exact_shared_checkpoint_token_count(prefill_tokens.len() as u64)
+            .and_then(|token_count| usize::try_from(token_count).ok());
         let chat_boundary = request
             .recurrent_cache_prefix_token_ids
             .filter(|tokens| {
@@ -553,9 +551,6 @@ impl StageOpenAiBackend {
             },
         )?;
         let exact_record_queued = kv.payload_is_exact_state()
-            && kv
-                .exact_shared_checkpoint_token_count(token_ids.len() as u64)
-                .is_none()
             && self.enqueue_exact_state_record_at_tokens(
                 session_id,
                 ids,

@@ -44,6 +44,11 @@ on:
         required: false
         default: ''
         type: string
+      expected_exact_payload_kind:
+        description: Optional exact-state payload kind the smoke must observe in stage telemetry.
+        required: false
+        default: ''
+        type: string
       cache_key_prefix:
         required: false
         default: ''
@@ -61,6 +66,7 @@ on:
 
 env:
   MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
+  MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.expected_exact_payload_kind }}
 permissions:
   contents: read
   packages: read

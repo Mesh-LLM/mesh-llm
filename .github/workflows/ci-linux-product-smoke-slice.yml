@@ -89,11 +89,13 @@ jobs:
             model_file: SmolLM2-135M-Instruct-Q8_0.gguf
             model_cache_scope: two-node-split-smoke-model
             model_context_size: ''
+            expected_exact_payload_kind: ''
           - model_state: recurrent
             model_url: https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf
             model_file: Qwen3.5-0.8B-Q4_K_M.gguf
             model_cache_scope: two-node-split-recurrent-smoke-model
             model_context_size: '4096'
+            expected_exact_payload_kind: kv-recurrent
     uses: ./.github/workflows/scripted-binary-smoke.yml
     with:
       source_sha: ${{ inputs.source_sha }}
@@ -104,6 +106,7 @@ jobs:
       model_file: ${{ matrix.model_file }}
       model_cache_scope: ${{ matrix.model_cache_scope }}
       model_context_size: ${{ matrix.model_context_size }}
+      expected_exact_payload_kind: ${{ matrix.expected_exact_payload_kind }}
       smoke_script: scripts/ci-two-node-split-smoke.sh
       timeout_minutes: ${{ inputs.timeout_minutes }}
     secrets:

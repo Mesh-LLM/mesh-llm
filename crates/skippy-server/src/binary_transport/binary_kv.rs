@@ -781,10 +781,29 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
         return result;
     }
     if kv.payload_is_exact_state() {
+        let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
         let Ok(prompt_token_count) = u64::try_from(message.state.prompt_token_count) else {
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("exact_state_full_prefill_record_skipped_invalid_prompt_count"),
+            );
+            telemetry.emit("stage.binary_kv_record_decision", attrs);
             return result;
         };
         if !kv.exact_state_record_token_count_allowed(prompt_token_count, token_ids.len() as u64) {
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("exact_state_full_prefill_record_skipped_checkpoint_boundary"),
+            );
+            attrs.insert(
+                "skippy.kv.prompt_token_count".to_string(),
+                json!(prompt_token_count),
+            );
+            attrs.insert(
+                "skippy.kv.candidate_token_count".to_string(),
+                json!(token_ids.len()),
+            );
+            telemetry.emit("stage.binary_kv_record_decision", attrs);
             return result;
         }
     }

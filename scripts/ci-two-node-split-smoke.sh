@@ -24,6 +24,7 @@ WORKER_BIND_PORT="${MESH_TWO_NODE_SPLIT_WORKER_BIND_PORT:-53648}"
 MAX_WAIT="${MESH_TWO_NODE_SPLIT_MAX_WAIT:-300}"
 REQUEST_SETTLE_SECONDS="${MESH_TWO_NODE_SPLIT_REQUEST_SETTLE_SECONDS:-1}"
 PREFIX_ATTEMPTS="${MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS:-3}"
+EXPECTED_EXACT_PAYLOAD_KIND="${MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND:-}"
 CTX_SIZE="${MESH_TWO_NODE_SPLIT_CTX_SIZE:-${MESH_LLM_SMOKE_CONTEXT_SIZE:-}}"
 MAX_VRAM="${MESH_TWO_NODE_SPLIT_MAX_VRAM:-1}"
 DEVICE="${MESH_TWO_NODE_SPLIT_DEVICE:-CPU}"
@@ -46,6 +47,7 @@ echo "  worker console: $WORKER_CONSOLE_PORT"
 echo "  worker bind:    $WORKER_BIND_PORT"
 echo "  request settle: ${REQUEST_SETTLE_SECONDS}s"
 echo "  prefix attempts: ${PREFIX_ATTEMPTS}"
+echo "  expected exact payload: ${EXPECTED_EXACT_PAYLOAD_KIND:-none}"
 echo "  ctx size:       ${CTX_SIZE:-model default}"
 echo "  max vram:       ${MAX_VRAM}GB"
 echo "  device:         $DEVICE"
@@ -211,6 +213,7 @@ start_node() {
     HOME="$home" \
         MESH_LLM_RUNTIME_ROOT="$runtime" \
         MESH_LLM_EPHEMERAL_KEY=1 \
+        SKIPPY_TELEMETRY_STDERR=1 \
         "$MESH_LLM" "${args[@]}" >"$log_file" 2>&1 &
     printf '%s\n' "$!"
 }
@@ -300,9 +303,9 @@ PREFIX_PAYLOAD_ROOT="${WORK_DIR}/prefix-payloads"
 PREFIX_RESPONSE_ROOT="${WORK_DIR}/prefix-responses"
 
 # Exit code the prefix validator uses for the one failure this smoke cannot
-# distinguish from a regression on a single pass: a follow-up request that
-# restored nothing, which is what an unreleased stage lane looks like from the
-# outside. Anything else is a real assertion failure and is never retried.
+# distinguish from a regression on a single pass: every request restored
+# nothing, which is what an unreleased stage lane looks like from the outside.
+# Anything else is a real assertion failure and is never retried.
 PREFIX_TRANSIENT_STATUS=75
 
 write_prefix_payloads() {
@@ -374,10 +377,10 @@ if not prompt_counts[0] < prompt_counts[1] < prompt_counts[2]:
     raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
 if cached_counts[0] != 0:
     raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
-# Zero reuse on a follow-up is reported separately from reuse that failed to
-# grow. Only the former is consistent with a stage lane that had not released
-# yet, and only the former earns another attempt.
-if 0 in cached_counts[1:]:
+# A completely cold attempt can arise while a stage lane is still releasing.
+# A partial follow-up miss is the regression under test and must fail directly,
+# not be hidden by a retry that starts from another cold prefix.
+if all(cached == 0 for cached in cached_counts):
     print(
         f"split prefix reuse was empty on a follow-up request: {cached_counts}",
         file=sys.stderr,
@@ -394,6 +397,33 @@ print(
         f"request {index}: prompt_tokens={prompt}, cached_tokens={cached}"
         for index, (prompt, cached) in enumerate(metrics, start=1)
     )
+)
+PY
+}
+
+assert_expected_exact_payload() {
+    [[ -n "$EXPECTED_EXACT_PAYLOAD_KIND" ]] || return 0
+    python3 - "$EXPECTED_EXACT_PAYLOAD_KIND" "$SEED_LOG" "$WORKER_LOG" <<'PY'
+import json
+import sys
+
+expected, *logs = sys.argv[1:]
+for log_path in logs:
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        for line in log:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                event.get("event") == "stage.openai_kv_record_decision"
+                and (event.get("attributes") or {}).get("skippy.exact_cache.payload_kind")
+                == expected
+            ):
+                print(f"observed exact-state payload kind: {expected}")
+                raise SystemExit(0)
+raise SystemExit(
+    f"did not observe exact-state payload kind {expected!r} in split-stage telemetry"
 )
 PY
 }
@@ -435,5 +465,7 @@ if [[ "$prefix_validated" -ne 1 ]]; then
     echo "split prefix reuse never materialized across ${PREFIX_ATTEMPTS} attempts" >&2
     exit 1
 fi
+
+assert_expected_exact_payload
 
 echo "Two-node split smoke passed"
