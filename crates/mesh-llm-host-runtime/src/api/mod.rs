@@ -51,7 +51,7 @@ mod http;
 mod management_lifecycle;
 mod model_target_capacity;
 mod model_targets;
-mod routes;
+pub(crate) mod routes;
 mod server;
 mod split_readiness;
 mod state;

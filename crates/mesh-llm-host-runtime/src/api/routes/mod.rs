@@ -15,7 +15,7 @@ pub(crate) mod runtime;
 mod runtime_activity;
 pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
-mod runtime_events;
+pub(crate) mod runtime_events;
 mod search;
 
 use super::MeshApi;

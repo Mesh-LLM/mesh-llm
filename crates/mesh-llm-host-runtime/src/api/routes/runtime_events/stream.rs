@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -76,8 +76,14 @@ async fn write_initial_frames(
                 && write_frame(stream, frames::health_frame(engine, cursor)).await
         }
         ConnectionShape::InWindow { frames: replay } => {
+            // Task 9 (`.omo/plans/event-system-fixes.md`, defect D11):
+            // write each frame's pre-serialized `wire_bytes` directly
+            // instead of re-running `frames::event_frame` per delivery --
+            // this replay-window catch-up on a fresh connection is the
+            // other half (besides live delivery in `live_loop` below) of
+            // "subscribers write the bytes without re-encoding".
             for frame in replay {
-                if !write_frame(stream, frames::event_frame(engine, frame)).await {
+                if !write_frame(stream, frame.wire_bytes.clone()).await {
                     return false;
                 }
             }
@@ -99,6 +105,17 @@ async fn write_initial_frames(
 /// busy OTHER subscriber's own tick consume the one shared publish window
 /// and starve this connection for up to ~50 minutes under load. This
 /// connection owns its gate independently of every other connection.
+///
+/// Task 9 (`.omo/plans/event-system-fixes.md`, defect D11): the socket is
+/// split into independent read/write halves (`TcpStream::split`) so a
+/// THIRD `select!` branch can read-probe for client EOF/error concurrently
+/// with the existing keepalive/recv write paths, without the two sides
+/// contending over one `&mut TcpStream` borrow. An SSE client never
+/// legitimately sends bytes on this connection, so ANY read outcome on
+/// that branch -- a clean EOF (`Ok(0)`) or a read error (reset, etc.) --
+/// means the client is gone; this lets a closed client free its
+/// subscriber slot immediately instead of only being discovered on the
+/// next write attempt, up to `KEEPALIVE_INTERVAL` (15s) away.
 async fn live_loop(
     stream: &mut TcpStream,
     engine: &Arc<RuntimeEventEngine>,
@@ -109,13 +126,16 @@ async fn live_loop(
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     keepalive.tick().await;
 
+    let (mut read_half, mut write_half) = stream.split();
+    let mut disconnect_probe = [0u8; 64];
+
     loop {
         tokio::select! {
             _ = keepalive.tick() => {
-                if !write_frame(stream, KEEPALIVE_FRAME.to_string()).await {
+                if !write_frame(&mut write_half, KEEPALIVE_FRAME.to_string()).await {
                     break;
                 }
-                if !maybe_write_health(stream, engine, &mut health_gate, current_cursor(engine)).await {
+                if !maybe_write_health(&mut write_half, engine, &mut health_gate, current_cursor(engine)).await {
                     break;
                 }
             }
@@ -130,11 +150,16 @@ async fn live_loop(
                         subscription.record_disconnect(engine.health());
                         break;
                     }
-                    if !write_frame(stream, frames::event_frame(engine, &frame)).await {
+                    let sequence = frame.sequence.get();
+                    // Task 9 (`.omo/plans/event-system-fixes.md`, defect
+                    // D11): write the pre-serialized bytes directly --
+                    // never re-run `event_projection` + JSON encoding
+                    // here.
+                    if !write_frame(&mut write_half, frame.wire_bytes.clone()).await {
                         break;
                     }
-                    let cursor = Cursor::new(engine.process_instance(), frame.sequence.get());
-                    if !maybe_write_health(stream, engine, &mut health_gate, cursor).await {
+                    let cursor = Cursor::new(engine.process_instance(), sequence);
+                    if !maybe_write_health(&mut write_half, engine, &mut health_gate, cursor).await {
                         break;
                     }
                 }
@@ -143,6 +168,12 @@ async fn live_loop(
                     break;
                 }
                 Err(RecvError::Closed) => break,
+            },
+            read_result = read_half.read(&mut disconnect_probe) => match read_result {
+                Ok(0) | Err(_) => break,
+                // Unexpected client-sent bytes on a read-only SSE stream;
+                // not a disconnect signal -- ignore and keep serving.
+                Ok(_) => {}
             },
         }
     }
@@ -154,7 +185,7 @@ async fn live_loop(
 /// caller's `break` handling stays uniform; a gate-suppressed check (nothing
 /// to deliver) returns `true`.
 async fn maybe_write_health(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     engine: &Arc<RuntimeEventEngine>,
     health_gate: &mut HealthDeliveryGate,
     cursor: Cursor,
@@ -166,8 +197,14 @@ async fn maybe_write_health(
     write_frame(stream, frames::health_frame(engine, cursor)).await
 }
 
-async fn write_frame(stream: &mut TcpStream, frame: String) -> bool {
-    tokio::time::timeout(WRITE_TIMEOUT, stream.write_all(frame.as_bytes()))
+/// Generic over the writer (`&mut TcpStream` before `live_loop` splits the
+/// socket; `&mut WriteHalf<'_>` once it does) and over the payload
+/// (`String` for the JSON-frame writers; `Arc<[u8]>` for a `ReplayFrame`'s
+/// pre-serialized `wire_bytes`, task 9,
+/// `.omo/plans/event-system-fixes.md`) so every call site in this module
+/// shares one write-with-timeout implementation.
+async fn write_frame(stream: &mut (impl AsyncWrite + Unpin), frame: impl AsRef<[u8]>) -> bool {
+    tokio::time::timeout(WRITE_TIMEOUT, stream.write_all(frame.as_ref()))
         .await
         .is_ok_and(|result| result.is_ok())
 }
@@ -271,5 +308,51 @@ mod tests {
              after the event frame, not only on the 15s keepalive tick (never reached \
              within this test's real-time read budget); got: {received:?}"
         );
+    }
+
+    /// Task 9 (`.omo/plans/event-system-fixes.md`, defect D11): a closed
+    /// client socket must free its subscriber slot right away, not sit
+    /// occupied until the next `KEEPALIVE_INTERVAL` (15s) write attempt
+    /// discovers the write failing. This closes the CLIENT half of a real
+    /// loopback pair and asserts the engine's active-subscriber count
+    /// drops back to zero well within a budget far shorter than one
+    /// keepalive interval -- against the UNMODIFIED `live_loop` (no
+    /// read-side branch yet), nothing submits an event and the keepalive
+    /// tick is 15s away, so this must time out and fail here.
+    #[tokio::test]
+    async fn closing_the_client_socket_frees_the_subscriber_slot_before_the_next_keepalive() {
+        let engine = RuntimeEventEngine::new();
+        let mut subscription = engine.subscribers().subscribe().expect("subscribe");
+        let (mut server, client) = loopback_pair().await;
+        let health_gate = HealthDeliveryGate::new();
+
+        assert_eq!(engine.subscribers().active_count(), 1);
+
+        let drive_engine = Arc::clone(&engine);
+        let loop_task = tokio::spawn(async move {
+            live_loop(&mut server, &drive_engine, &mut subscription, health_gate).await;
+        });
+
+        // Close the client's side of the connection -- the server's next
+        // read attempt on this socket must observe EOF.
+        drop(client);
+
+        let freed = tokio::time::timeout(Duration::from_secs(1), async {
+            while engine.subscribers().active_count() != 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(
+            freed.is_ok(),
+            "the subscriber slot must free within 1s of the client closing its \
+             socket, well under the 15s keepalive interval; still occupied: {}",
+            engine.subscribers().active_count()
+        );
+
+        tokio::time::timeout(Duration::from_millis(200), loop_task)
+            .await
+            .expect("live_loop must exit promptly once the client closes its socket")
+            .expect("live_loop task must not panic");
     }
 }

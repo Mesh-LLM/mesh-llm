@@ -20,6 +20,12 @@ fn frame_for(scope: OperationScope, fact: RuntimeFact) -> ReplayFrame {
         scope,
         fact: Arc::new(fact),
         recorded_at: Instant::now(),
+        // Task 9 (`.omo/plans/event-system-fixes.md`) added this field to
+        // `ReplayFrame`; `route_fact`/`flush_tick` never read it, so an
+        // empty placeholder is correct here. Mechanical fix only -- no
+        // presentation test behavior changes (task 9 does not own
+        // `presentation/*`).
+        wire_bytes: Arc::from(Vec::new()),
     }
 }
 

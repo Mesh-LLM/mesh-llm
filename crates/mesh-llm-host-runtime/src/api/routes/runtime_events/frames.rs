@@ -490,7 +490,18 @@ pub(super) struct EventBody {
     pub(super) event: EventProjection,
 }
 
-pub(super) fn event_frame(engine: &RuntimeEventEngine, frame: &ReplayFrame) -> String {
+/// `pub(crate)` (task 9, `.omo/plans/event-system-fixes.md`, defect D11):
+/// `runtime_events::engine::drain::apply_and_publish_fact` calls this to
+/// pre-serialize a frame's `runtime_event` wire bytes exactly once, at
+/// push, storing them on `ReplayFrame::wire_bytes` so every later delivery
+/// (live subscriber or replay-window catch-up) writes the same bytes
+/// without re-running `event_projection` + JSON encoding. That is the ONE
+/// call site granted outside `api::routes::runtime_events` for this
+/// function; the encoder's output is unchanged (byte-exactness is pinned
+/// by `runtime_event_api_tests::sample_frames_fixture_is_byte_exact_for_every_frame_type`,
+/// which calls `event_frame_at` directly and is unaffected by this
+/// visibility change).
+pub(crate) fn event_frame(engine: &RuntimeEventEngine, frame: &ReplayFrame) -> String {
     event_frame_at(engine.process_instance(), frame)
 }
 

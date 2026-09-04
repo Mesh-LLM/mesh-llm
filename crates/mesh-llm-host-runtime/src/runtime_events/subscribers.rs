@@ -23,7 +23,7 @@ use super::config::{
     SUBSCRIBER_LAG_MAX_FRAMES,
 };
 use super::health::EngineHealth;
-use super::replay::{APPROX_FRAME_BYTE_COST, ReplayFrame};
+use super::replay::ReplayFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscribeError {
@@ -129,12 +129,24 @@ impl SubscriptionHandle {
 /// `RecvError::Lagged` before this function is ever reached — first limit
 /// wins, and the channel's own limit is checked first by construction (a
 /// `Lagged` receive short-circuits the caller's match arm).
+///
+/// Task 9 (`.omo/plans/event-system-fixes.md`, defect D11): the BYTES
+/// check now multiplies `backlog_len` by `frame`'s own REAL
+/// `wire_bytes.len()` instead of the removed fixed
+/// `APPROX_FRAME_BYTE_COST` estimate. This is still an approximation of
+/// the true backlog byte total -- `tokio::sync::broadcast::Receiver` has
+/// no API to inspect the SIZE of every still-queued message without
+/// consuming them (consuming would defeat the purpose: it would drain the
+/// very backlog being measured) -- but it is now grounded in a REAL,
+/// currently-observed frame size rather than a compile-time guess,
+/// consistent with replay retention's own real-byte accounting
+/// (`replay::ReplayBuffer::push_at`).
 #[must_use]
 pub fn lag_bound_exceeded(frame: &ReplayFrame, backlog_len: usize, now: Instant) -> bool {
     if now.saturating_duration_since(frame.recorded_at) > SUBSCRIBER_LAG_MAX_AGE {
         return true;
     }
-    backlog_len.saturating_mul(APPROX_FRAME_BYTE_COST) > SUBSCRIBER_LAG_MAX_BYTES
+    backlog_len.saturating_mul(frame.wire_bytes.len()) > SUBSCRIBER_LAG_MAX_BYTES
 }
 
 impl Drop for SubscriptionHandle {
@@ -161,6 +173,7 @@ mod tests {
                 NativeRuntimeEventKind::RuntimeStopped,
             ))),
             recorded_at: Instant::now(),
+            wire_bytes: std::sync::Arc::from(Vec::new()),
         }
     }
 
@@ -242,12 +255,17 @@ mod tests {
 
     #[test]
     fn lag_bound_exceeded_by_backlog_bytes_even_for_a_fresh_frame() {
-        let fresh = frame(0);
+        // Task 9 (`.omo/plans/event-system-fixes.md`): a real, controlled
+        // 100-byte wire frame -- not the removed fixed
+        // `APPROX_FRAME_BYTE_COST` constant -- drives the backlog-bytes
+        // approximation now.
+        let mut fresh = frame(0);
+        fresh.wire_bytes = std::sync::Arc::from(vec![0u8; 100]);
         let now = fresh.recorded_at;
 
         // A backlog whose approximate byte cost alone already exceeds the
         // frozen byte bound must trip it regardless of age.
-        let backlog_len = SUBSCRIBER_LAG_MAX_BYTES / APPROX_FRAME_BYTE_COST + 2;
+        let backlog_len = SUBSCRIBER_LAG_MAX_BYTES / fresh.wire_bytes.len() + 2;
         assert!(lag_bound_exceeded(&fresh, backlog_len, now));
     }
 

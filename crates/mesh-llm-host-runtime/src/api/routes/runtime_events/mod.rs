@@ -4,9 +4,18 @@
 //! wire encoding, cursor transport, and connection-shape recovery ordering
 //! only; it never rebuilds replay or reducer logic — those stay owned by
 //! `crate::runtime_events` (task 3/4's host engine).
+//!
+//! `frames` is `pub(crate)` (task 9, `.omo/plans/event-system-fixes.md`,
+//! defect D11): `runtime_events::engine::drain::apply_and_publish_fact`
+//! calls `frames::event_frame` to pre-serialize each frame's wire bytes
+//! exactly once, at push, instead of every subscriber re-encoding it on
+//! delivery. `mod routes;`/`mod runtime_events;` one level up (`api/mod.rs`,
+//! `api/routes/mod.rs`) are `pub(crate)` too, for the same reason: Rust
+//! path visibility requires every segment along the way to be reachable,
+//! not just the leaf item.
 
 mod cursor;
-mod frames;
+pub(crate) mod frames;
 mod reconnect;
 mod recovery;
 mod stream;

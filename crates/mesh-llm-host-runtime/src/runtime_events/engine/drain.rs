@@ -242,13 +242,30 @@ impl RuntimeEventEngine {
         *reducer_state = next;
         drop(reducer_state);
 
-        let frame = ReplayFrame {
+        let mut frame = ReplayFrame {
             sequence: EventSequence::new(ingress_sequence),
             rebuild_generation: self.rebuild_generation.load(Ordering::Acquire),
             scope,
             fact: fact_arc,
             recorded_at: Instant::now(),
+            // Placeholder, overwritten immediately below. `event_frame`
+            // only reads `sequence`/`rebuild_generation`/`scope`/`fact` --
+            // never `wire_bytes` itself -- so computing the real bytes
+            // against this not-yet-filled `frame` is safe.
+            wire_bytes: Arc::from(Vec::new()),
         };
+        // Task 9 (`.omo/plans/event-system-fixes.md`, defect D11):
+        // serialize this frame's `runtime_event` wire bytes ONCE, here, at
+        // push -- not once per subscriber delivery. `frames::event_frame`
+        // is the exact byte-for-byte SSE encoder the v1 stream has always
+        // used; calling it from here (the one call site granted to
+        // engine/drain.rs for this seam) instead of duplicating its logic
+        // guarantees these bytes are identical to what a fresh
+        // `event_frame` call would have produced (pinned by
+        // `runtime_event_api_tests::sample_frames_fixture_is_byte_exact_for_every_frame_type`).
+        let encoded = crate::api::routes::runtime_events::frames::event_frame(self, &frame);
+        frame.wire_bytes = Arc::from(encoded.into_bytes());
+
         // Task 8-fix E1 (`.omo/plans/event-system-fixes.md`): `push` now
         // reports the real number of frames it evicted -- a single push can
         // evict more than one (see `replay::ReplayBuffer::push`'s doc
@@ -552,15 +569,30 @@ fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot)
 // `RuntimeEventEngine` by struct literal -- every field matches
 // `RuntimeEventEngine::with_capacities` exactly except `replay`, which
 // uses a millisecond-scale age bound so the test can force a genuine
-// same-push multi-eviction (only the age dimension can do this; the
-// count/byte dimensions can never evict more than one frame per push when
-// frames are pushed one at a time, since each push's own eviction loop
-// already restores the invariant before the next push can violate it
-// again) without a real 300s wait. This is legal because
-// `engine::drain::tests` is a descendant module of `engine`, where every
-// field of `RuntimeEventEngine` is defined (module-private, not `pub`) --
-// the same visibility rule that already lets this file's own
-// `apply_and_publish_fact` read `self.replay`/`self.health` directly.
+// same-push multi-eviction without a real 300s wait.
+//
+// Task 9 CORRECTION (`.omo/plans/event-system-fixes.md`, defect D11): this
+// comment used to claim "only the age dimension can [evict more than one
+// frame per push]; the count/byte dimensions can never... since each
+// push's own eviction loop already restores the invariant before the next
+// push can violate it again" -- true of the COUNT dimension always, and
+// was true of the BYTE dimension only while `ReplayBuffer` charged every
+// frame the same fixed `APPROX_FRAME_BYTE_COST`. Task 9 replaced that
+// fixed cost with each frame's REAL, variable pre-serialized wire-byte
+// length (`replay::ReplayFrame::wire_bytes`), so the byte dimension can
+// now ALSO evict more than one frame per push -- proven at the
+// `ReplayBuffer` level (not here; see the ownership note below) by
+// `replay::tests::a_single_large_frame_can_evict_multiple_smaller_frames_via_the_byte_bound`.
+// The test below still isolates the AGE dimension specifically
+// (`max_bytes: usize::MAX` means the byte bound can never fire here), so
+// it remains a valid, UNCHANGED proof of age-driven multi-eviction; it is
+// simply no longer the only dimension capable of it.
+//
+// This is legal because `engine::drain::tests` is a descendant module of
+// `engine`, where every field of `RuntimeEventEngine` is defined
+// (module-private, not `pub`) -- the same visibility rule that already
+// lets this file's own `apply_and_publish_fact` read
+// `self.replay`/`self.health` directly.
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

@@ -455,6 +455,10 @@ fn sample_frames_fixture_is_byte_exact_for_every_frame_type() {
         scope: sample_scope(),
         fact: std::sync::Arc::new(sample_request_completed_fact()),
         recorded_at: std::time::Instant::now(),
+        // `event_frame_at` (called below) never reads `wire_bytes` --
+        // added by task 9, `.omo/plans/event-system-fixes.md` -- so an
+        // empty placeholder does not affect this byte-exactness assertion.
+        wire_bytes: std::sync::Arc::from(Vec::new()),
     };
     assert_eq!(
         super::frames::event_frame_at(sample_instance(), &frame),

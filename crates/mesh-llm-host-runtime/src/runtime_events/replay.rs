@@ -3,12 +3,29 @@
 //! Frames are appended only after the reducer has acknowledged a wake entry,
 //! so replay never holds partially applied state. Retention is bounded on
 //! all three frozen dimensions (frame count, age, bytes; first limit wins):
-//! a push evicts from the front until every bound is satisfied. The byte
-//! dimension uses a fixed, per-frame memory-footprint estimate
-//! ([`APPROX_FRAME_BYTE_COST`]) rather than a wire-serialized size —
-//! `RuntimeFact` deliberately never derives `Serialize` (see `frames.rs` in
-//! the API layer), so this bound approximates retained memory, not bytes
-//! that will cross the wire.
+//! a push evicts from the front until every bound is satisfied.
+//!
+//! Task 9 (`.omo/plans/event-system-fixes.md`, defect D11): the byte
+//! dimension now charges each retained frame the REAL length of its
+//! pre-serialized `runtime_event` wire bytes (`ReplayFrame::wire_bytes`),
+//! not a fixed per-frame memory-footprint estimate. The bytes are computed
+//! exactly ONCE, at push, by `engine::drain::apply_and_publish_fact` (via
+//! the same `api::routes::runtime_events::frames::event_frame` encoder the
+//! wire uses) and shared -- by `Arc` clone, never re-encoded -- with every
+//! subscriber that ever sees this frame, whether through a live broadcast
+//! delivery or a replay-window catch-up on a fresh connection. See
+//! [`ReplayBuffer::push`]'s doc comment for what charging REAL, VARIABLE
+//! per-frame bytes (instead of a FIXED constant) changes about which
+//! retention dimension can evict more than one frame in a single push.
+//!
+//! [`ReplayBuffer::frames_after`] additionally enforces the AGE bound AT
+//! READ TIME, against the caller's own `now` -- not only at the moment of
+//! the last push. Without this, a frame that outlives `REPLAY_MAX_AGE`
+//! while the engine is otherwise idle (no new push ever runs to trigger
+//! `push_at`'s own eviction loop) would sit in the buffer, still
+//! technically "retained", and get served to any client that reconnects
+//! asking for it -- silently violating the retention-window contract for
+//! exactly the clients who waited the longest.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -26,16 +43,20 @@ pub struct ReplayFrame {
     pub scope: OperationScope,
     pub fact: Arc<RuntimeFact>,
     pub recorded_at: Instant,
+    /// The exact `runtime_event` SSE frame bytes for this fact, serialized
+    /// ONCE at push (task 9, `.omo/plans/event-system-fixes.md`, defect
+    /// D11) by `engine::drain::apply_and_publish_fact` via
+    /// `api::routes::runtime_events::frames::event_frame` -- byte-for-byte
+    /// identical to what that encoder has always produced (see
+    /// `runtime_event_api_tests::sample_frames_fixture_is_byte_exact_for_every_frame_type`,
+    /// unaffected by this change). Every consumer -- a live subscriber's
+    /// `recv()` delivery and a fresh connection's replay-window catch-up
+    /// alike -- writes these bytes directly instead of re-running
+    /// `event_projection` + JSON encoding per delivery. Cloning a
+    /// `ReplayFrame` clones this `Arc` (cheap refcount bump), never the
+    /// underlying bytes.
+    pub wire_bytes: Arc<[u8]>,
 }
-
-/// Fixed per-frame memory-footprint estimate for the byte dimension of both
-/// replay retention and per-subscriber lag (shared with `subscribers.rs`).
-/// Deliberately NOT a wire-serialized size: `RuntimeFact` never derives
-/// `Serialize`, so this is `size_of::<ReplayFrame>()` plus the largest
-/// family fact's own inline size — a real, deterministic, compiler-computed
-/// lower bound on retained memory per frame, not a fabricated constant.
-pub(crate) const APPROX_FRAME_BYTE_COST: usize =
-    std::mem::size_of::<ReplayFrame>() + std::mem::size_of::<RuntimeFact>();
 
 struct RetainedFrame {
     frame: ReplayFrame,
@@ -63,6 +84,28 @@ impl std::fmt::Debug for Inner {
             .field("total_bytes", &self.total_bytes)
             .finish()
     }
+}
+
+/// Read-time lookup result for [`ReplayBuffer::frames_after`]: either the
+/// live frames strictly after the requested cursor, or an eviction signal
+/// when the next expected frame is unavailable -- whether because a prior
+/// push already evicted it (count/byte bound) or because THIS READ found
+/// it older than the age bound even though push-time eviction has not run
+/// since (task 9, `.omo/plans/event-system-fixes.md`, defect D11).
+#[derive(Debug)]
+pub enum ReplayLookup {
+    /// Every retained, still-live frame strictly after the requested
+    /// cursor, in sequence order. Empty when the caller is already caught
+    /// up to the newest known sequence.
+    InWindow(Vec<ReplayFrame>),
+    /// The frame immediately after the requested cursor is unavailable.
+    /// `oldest_available` is the oldest LIVE (non-stale) frame's sequence,
+    /// if any survive; `latest` is the newest sequence physically
+    /// retained (whether or not it is itself stale), for diagnostics.
+    Evicted {
+        oldest_available: Option<u64>,
+        latest: Option<u64>,
+    },
 }
 
 impl ReplayBuffer {
@@ -103,17 +146,40 @@ impl ReplayBuffer {
     /// production caller (`engine::drain::apply_and_publish_fact`) turned
     /// into exactly one `EngineHealth::bump_replay_evicted()` regardless of
     /// how many frames were actually evicted. That undercounts: a single
-    /// push CAN evict more than one frame. The count/byte dimensions can
-    /// never do this on their own when frames are pushed one at a time
-    /// (each push's own eviction loop below restores the invariant before
-    /// the next push can violate it again), but the AGE dimension can —
-    /// many already-retained frames can all go stale between two pushes,
-    /// independent of how many pushes happened while they sat there (see
+    /// push CAN evict more than one frame. The frozen `replay_evicted`
+    /// semantics are "one increment per evicted frame", so the caller must
+    /// know the real count, not just "at least one".
+    ///
+    /// Task 9 CORRECTION (`.omo/plans/event-system-fixes.md`, defect D11):
+    /// the reasoning that used to live here claimed the count/byte
+    /// dimensions could never evict more than one frame per push "when
+    /// frames are pushed one at a time, since each push's own eviction
+    /// loop already restores the invariant before the next push can
+    /// violate it again" -- true ONLY while `byte_cost` was the FIXED
+    /// `APPROX_FRAME_BYTE_COST` constant task 8 used (so `total_bytes ==
+    /// len * cost`, and one push could only ever add exactly `cost` bytes,
+    /// meaning at most one eviction could restore the bound). That
+    /// constant is gone: `byte_cost` is now the REAL, VARIABLE length of
+    /// each frame's pre-serialized wire bytes (`ReplayFrame::wire_bytes`),
+    /// so ONE large frame's push can add far more than any single small
+    /// retained frame's worth of bytes -- satisfying the bound again can
+    /// then require evicting SEVERAL smaller frames, not just the oldest.
+    /// See
+    /// `tests::a_single_large_frame_can_evict_multiple_smaller_frames_via_the_byte_bound`
+    /// below for a same-push, byte-bound-only proof (`max_bytes` finite,
+    /// `max_age` effectively infinite, so ONLY the byte dimension can be
+    /// firing).
+    ///
+    /// The COUNT dimension is unaffected by this change and still can
+    /// never evict more than one frame per push: each push adds exactly
+    /// one frame to `frames.len()`, so a count-only overflow is always by
+    /// exactly one. The AGE dimension's original reasoning is unaffected
+    /// too -- see
     /// `tests::age_bound_evicts_every_frame_that_outlives_it_not_just_the_oldest`
-    /// below, and `engine::drain::tests` for the engine-level proof through
-    /// the real `apply_and_publish_fact` call site). The frozen
-    /// `replay_evicted` semantics are "one increment per evicted frame",
-    /// so the caller must know the real count, not just "at least one".
+    /// and
+    /// `engine::drain::tests::a_single_push_that_evicts_several_stale_frames_credits_every_one_at_the_engine_level`
+    /// (which pins `max_bytes: usize::MAX`, so only the age dimension can
+    /// be the one firing there) -- both still pass unchanged.
     pub fn push(&self, frame: ReplayFrame) -> usize {
         self.push_at(frame, Instant::now())
     }
@@ -121,7 +187,7 @@ impl ReplayBuffer {
     /// Same as [`Self::push`] with an explicit "now", so age-bound eviction
     /// is deterministically testable without sleeping on the wall clock.
     pub(crate) fn push_at(&self, frame: ReplayFrame, now: Instant) -> usize {
-        let byte_cost = APPROX_FRAME_BYTE_COST;
+        let byte_cost = frame.wire_bytes.len();
         let mut inner = self
             .inner
             .lock()
@@ -189,6 +255,58 @@ impl ReplayBuffer {
             .map(|retained| retained.frame.clone())
             .collect()
     }
+
+    /// Look up every retained frame strictly after `cursor`, enforcing the
+    /// AGE bound (`max_age`) AT READ TIME against `now` -- not only at the
+    /// last push (task 9, `.omo/plans/event-system-fixes.md`, defect D11).
+    /// `recorded_at` is non-decreasing front-to-back (frames are only ever
+    /// appended in increasing-sequence order), so the still-live frames
+    /// always form a contiguous SUFFIX of the retained deque: everything
+    /// before that suffix is either already push-evicted (physically
+    /// absent) or read-time-stale (physically present, but too old to
+    /// serve). This never mutates the buffer, and the returned
+    /// `Vec<ReplayFrame>` is a one-shot snapshot of the matching frames --
+    /// exactly like [`Self::snapshot`] already returns for the whole
+    /// buffer, just filtered and age-checked in the same locked pass, not
+    /// a persistent per-caller copy of the buffer itself.
+    #[must_use]
+    pub fn frames_after(&self, cursor: u64, now: Instant) -> ReplayLookup {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let latest = inner
+            .frames
+            .back()
+            .map(|retained| retained.frame.sequence.get());
+        let live_start = inner.frames.iter().position(|retained| {
+            now.saturating_duration_since(retained.frame.recorded_at) <= self.max_age
+        });
+        let Some(live_start) = live_start else {
+            // Every physically retained frame (if any at all) is already
+            // past the age bound as of `now`; nothing is available to
+            // serve, even though push-time eviction never ran.
+            return ReplayLookup::Evicted {
+                oldest_available: None,
+                latest,
+            };
+        };
+        let oldest_available = inner.frames[live_start].frame.sequence.get();
+        if oldest_available > cursor.saturating_add(1) {
+            return ReplayLookup::Evicted {
+                oldest_available: Some(oldest_available),
+                latest,
+            };
+        }
+        let frames = inner
+            .frames
+            .iter()
+            .skip(live_start)
+            .filter(|retained| retained.frame.sequence.get() > cursor)
+            .map(|retained| retained.frame.clone())
+            .collect();
+        ReplayLookup::InWindow(frames)
+    }
 }
 
 impl Default for ReplayBuffer {
@@ -216,7 +334,18 @@ mod tests {
                 NativeRuntimeEventKind::RuntimeStopped,
             ))),
             recorded_at,
+            wire_bytes: Arc::from(Vec::new()),
         }
+    }
+
+    /// A frame whose `wire_bytes` is a REAL, controlled-size byte buffer
+    /// (task 9, `.omo/plans/event-system-fixes.md`) -- not the removed
+    /// fixed `APPROX_FRAME_BYTE_COST` estimate -- so byte-bound tests can
+    /// pin exact eviction thresholds against known real sizes.
+    fn frame_with_bytes(sequence: u64, byte_len: usize) -> ReplayFrame {
+        let mut built = frame(sequence);
+        built.wire_bytes = Arc::from(vec![0u8; byte_len]);
+        built
     }
 
     #[test]
@@ -245,15 +374,17 @@ mod tests {
     }
 
     #[test]
-    fn push_beyond_the_byte_bound_evicts_the_oldest_frame_even_under_the_frame_count_bound() {
-        // 1,000 frames of headroom on the count dimension; only 3 frames'
-        // worth of headroom on the byte dimension, so the byte bound must
-        // be the one that fires.
-        let buffer = ReplayBuffer::with_bounds(1_000, APPROX_FRAME_BYTE_COST * 3, Duration::MAX);
-        assert_eq!(buffer.push(frame(0)), 0);
-        assert_eq!(buffer.push(frame(1)), 0);
-        assert_eq!(buffer.push(frame(2)), 0);
-        assert_eq!(buffer.push(frame(3)), 1);
+    fn push_beyond_the_byte_bound_evicts_based_on_real_frame_sizes() {
+        // Each frame's wire_bytes is a REAL, controlled 100-byte buffer --
+        // not the old fixed APPROX_FRAME_BYTE_COST estimate -- so a
+        // 350-byte bound allows exactly 3 such frames before a 4th evicts
+        // the oldest. 1,000 frames of headroom on the count dimension so
+        // only the byte bound can be the one firing.
+        let buffer = ReplayBuffer::with_bounds(1_000, 350, Duration::MAX);
+        assert_eq!(buffer.push(frame_with_bytes(0, 100)), 0);
+        assert_eq!(buffer.push(frame_with_bytes(1, 100)), 0);
+        assert_eq!(buffer.push(frame_with_bytes(2, 100)), 0);
+        assert_eq!(buffer.push(frame_with_bytes(3, 100)), 1);
 
         let remaining: Vec<u64> = buffer
             .snapshot()
@@ -261,6 +392,41 @@ mod tests {
             .map(|entry| entry.sequence.get())
             .collect();
         assert_eq!(remaining, vec![1, 2, 3]);
+    }
+
+    /// Proves the CRITICAL claim this task's brief demanded be checked:
+    /// with REAL, VARIABLE per-frame byte costs, the byte dimension --
+    /// like the age dimension, but UNLIKE the count dimension -- can now
+    /// evict more than one frame in a single push. This was structurally
+    /// impossible before task 9 (a fixed `APPROX_FRAME_BYTE_COST` meant
+    /// `total_bytes == len * cost`, so one push could only ever add one
+    /// frame's worth of cost, and evicting any single frame always
+    /// restored the bound).
+    #[test]
+    fn a_single_large_frame_can_evict_multiple_smaller_frames_via_the_byte_bound() {
+        // Three small (10-byte) frames fit comfortably under a 35-byte
+        // bound (total 30 <= 35). A fourth, much larger (30-byte) frame
+        // brings the total to 60 -- evicting only the oldest 10-byte frame
+        // brings it to 50, still over; only evicting ALL THREE small
+        // frames restores it to 30 (<= 35).
+        let buffer = ReplayBuffer::with_bounds(1_000, 35, Duration::MAX);
+        assert_eq!(buffer.push(frame_with_bytes(0, 10)), 0);
+        assert_eq!(buffer.push(frame_with_bytes(1, 10)), 0);
+        assert_eq!(buffer.push(frame_with_bytes(2, 10)), 0);
+
+        let evicted = buffer.push(frame_with_bytes(3, 30));
+        assert_eq!(
+            evicted, 3,
+            "one push must evict all three smaller frames to satisfy the \
+             real byte bound now that per-frame cost is variable, not just \
+             the single oldest one"
+        );
+        let remaining: Vec<u64> = buffer
+            .snapshot()
+            .iter()
+            .map(|entry| entry.sequence.get())
+            .collect();
+        assert_eq!(remaining, vec![3]);
     }
 
     #[test]
@@ -334,5 +500,150 @@ mod tests {
             .map(|entry| entry.sequence.get())
             .collect();
         assert_eq!(remaining, vec![1, 2]);
+    }
+
+    // ─── frames_after: read-time lookup (task 9) ───────────────────────
+
+    #[test]
+    fn frames_after_returns_only_frames_strictly_after_the_cursor_while_fresh() {
+        let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(30));
+        let start = Instant::now();
+        assert_eq!(buffer.push_at(frame_at(5, start), start), 0);
+        assert_eq!(buffer.push_at(frame_at(6, start), start), 0);
+
+        match buffer.frames_after(5, start) {
+            ReplayLookup::InWindow(frames) => {
+                let sequences: Vec<u64> = frames.iter().map(|f| f.sequence.get()).collect();
+                assert_eq!(sequences, vec![6]);
+            }
+            other => panic!("expected InWindow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frames_after_reports_a_gap_when_the_oldest_retained_frame_is_ahead_of_the_cursor() {
+        let buffer = ReplayBuffer::with_bounds(2, usize::MAX, Duration::MAX);
+        assert_eq!(buffer.push(frame(0)), 0);
+        assert_eq!(buffer.push(frame(1)), 0);
+        assert_eq!(buffer.push(frame(2)), 1); // push-evicts sequence 0
+        assert_eq!(buffer.push(frame(3)), 1); // push-evicts sequence 1
+
+        // The client already has sequence 0 and wants sequence 1 onward,
+        // but sequence 1 was itself push-evicted -- a genuine gap.
+        match buffer.frames_after(0, Instant::now()) {
+            ReplayLookup::Evicted {
+                oldest_available,
+                latest,
+            } => {
+                assert_eq!(oldest_available, Some(2));
+                assert_eq!(latest, Some(3));
+            }
+            other => panic!(
+                "expected Evicted (sequence 1 was push-evicted and the cursor wants it), got {other:?}"
+            ),
+        }
+    }
+
+    /// Acceptance bullet 2 (`.omo/plans/event-system-fixes.md`, task 9,
+    /// defect D11): "a frame older than the age bound is reported evicted
+    /// without a push". The frame here is NEVER push-evicted -- `len()`
+    /// stays 1 throughout -- yet a read past the age bound must still
+    /// report it evicted, purely from THIS read's own `now`.
+    #[test]
+    fn frames_after_reports_a_still_retained_but_stale_frame_as_evicted_without_any_push() {
+        let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(30));
+        let start = Instant::now();
+        assert_eq!(buffer.push_at(frame_at(5, start), start), 0);
+
+        // Still fresh: in-window.
+        match buffer.frames_after(4, start) {
+            ReplayLookup::InWindow(frames) => {
+                let sequences: Vec<u64> = frames.iter().map(|f| f.sequence.get()).collect();
+                assert_eq!(sequences, vec![5]);
+            }
+            other => panic!("expected InWindow while fresh, got {other:?}"),
+        }
+
+        // 31s later -- past the 30s age bound -- with NO further push: the
+        // frame is still physically retained (nothing push-evicted it),
+        // but a read at this instant must report it evicted.
+        let now = start + Duration::from_secs(31);
+        match buffer.frames_after(4, now) {
+            ReplayLookup::Evicted {
+                oldest_available,
+                latest,
+            } => {
+                assert_eq!(oldest_available, None, "no live frame remains to serve");
+                assert_eq!(
+                    latest,
+                    Some(5),
+                    "the physically-retained (if stale) frame's sequence is \
+                     still reported as the latest known, for diagnostics"
+                );
+            }
+            other => {
+                panic!("expected Evicted once the only retained frame is stale, got {other:?}")
+            }
+        }
+        assert_eq!(
+            buffer.len(),
+            1,
+            "eviction here was a READ-TIME determination only -- no push \
+             occurred, so the frame is still physically in the buffer"
+        );
+    }
+
+    #[test]
+    fn frames_after_on_an_empty_buffer_reports_evicted_with_no_latest() {
+        let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(30));
+        match buffer.frames_after(0, Instant::now()) {
+            ReplayLookup::Evicted {
+                oldest_available,
+                latest,
+            } => {
+                assert_eq!(oldest_available, None);
+                assert_eq!(latest, None);
+            }
+            other => panic!("expected Evicted on an empty buffer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frames_after_with_a_mixed_stale_and_live_buffer_only_excludes_the_stale_prefix() {
+        let buffer = ReplayBuffer::with_bounds(1_000, usize::MAX, Duration::from_secs(10));
+        let start = Instant::now();
+        assert_eq!(buffer.push_at(frame_at(5, start), start), 0);
+        assert_eq!(buffer.push_at(frame_at(6, start), start), 0);
+        let fresh_at = start + Duration::from_secs(9);
+        assert_eq!(buffer.push_at(frame_at(7, fresh_at), fresh_at), 0);
+
+        // At `fresh_at + 2s` (11s after sequences 5/6 were recorded, 2s
+        // after sequence 7), 5 and 6 are stale (>10s) but 7 is still live
+        // (2s old). A cursor of 6 (client already has up to 6) must still
+        // resolve in-window to just [7] -- no gap, since the client isn't
+        // asking for the now-stale 5/6 anyway.
+        let now = fresh_at + Duration::from_secs(2);
+        match buffer.frames_after(6, now) {
+            ReplayLookup::InWindow(frames) => {
+                let sequences: Vec<u64> = frames.iter().map(|f| f.sequence.get()).collect();
+                assert_eq!(sequences, vec![7]);
+            }
+            other => {
+                panic!("expected InWindow (cursor already covers the stale prefix), got {other:?}")
+            }
+        }
+
+        // But a cursor of 4 (client wants 5 onward) now hits a gap: 5/6
+        // are stale/unavailable even though never push-evicted.
+        match buffer.frames_after(4, now) {
+            ReplayLookup::Evicted {
+                oldest_available,
+                latest,
+            } => {
+                assert_eq!(oldest_available, Some(7));
+                assert_eq!(latest, Some(7));
+            }
+            other => panic!("expected Evicted (5/6 are stale, requested from 4), got {other:?}"),
+        }
     }
 }
