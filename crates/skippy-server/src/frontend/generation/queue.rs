@@ -36,6 +36,22 @@ const SERVICE_RATE_EWMA_ALPHA: f64 = 0.25;
 const SERVICE_RATE_WINDOW: usize = 64;
 const ADMISSION_CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 
+/// How many admissions the oldest waiter may be bypassed before the queue stops
+/// admitting anyone else and reserves the pool for it.
+///
+/// `selected_waiter` normally ranks only waiters that fit the *currently* free
+/// KV budget, so a request larger than the free budget is never a candidate. A
+/// continuous stream of smaller requests that each fit can therefore bypass a
+/// large waiter forever — unbounded when the admission timeout is zero and there
+/// is no deadline to break the wait. Once the oldest waiter has been passed over
+/// this many turns (each turn is one completed admission) and still cannot fit,
+/// admission is held so active reservations drain toward it. Every queued
+/// request fits an empty pool (`claim_or_enqueue` rejects impossible requests up
+/// front), so draining always makes progress. The bound trades a little
+/// throughput and cache locality for a hard ceiling on bypasses before drain
+/// reservation begins.
+pub(in crate::frontend) const ADMISSION_STARVATION_BOUND_TURNS: u64 = 32;
+
 pub(in crate::frontend) type GenerationCacheAffinityRefresh =
     Arc<dyn Fn() -> CacheAffinity + Send + Sync>;
 
@@ -190,6 +206,31 @@ impl GenerationAdmissionQueue {
                     .collect::<Vec<_>>(),
             )
         };
+        // Anti-starvation head-of-line reservation. The oldest waiter (smallest
+        // enqueued turn, then smallest order) is the one at risk: once it has
+        // been bypassed ADMISSION_STARVATION_BOUND_TURNS times, reserve the pool
+        // for it instead of letting a steady stream of smaller, currently-fitting
+        // requests keep passing it. If it now fits, hand it the lane directly so a
+        // higher cache-value newcomer cannot re-occupy the drained pool ahead of
+        // it; otherwise select nobody so active reservations keep draining.
+        if let Some((senior_id, senior)) = waiters
+            .iter()
+            .min_by_key(|(_, waiter)| (waiter.enqueued_turn, waiter.order))
+            && turn.saturating_sub(senior.enqueued_turn) >= ADMISSION_STARVATION_BOUND_TURNS
+        {
+            let senior_id = *senior_id;
+            if !token_budget.can_reserve_now(senior.token_budget_request)? {
+                return Ok(None);
+            }
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.selected_id.is_none() && state.waiters.contains_key(&senior_id) {
+                state.selected_id = Some(senior_id);
+            }
+            return Ok(state.selected_id);
+        }
         let mut eligible_waiters = Vec::with_capacity(waiters.len());
         for (id, waiter) in waiters {
             if token_budget.can_reserve_now(waiter.token_budget_request)? {

@@ -2,6 +2,7 @@ use super::*;
 use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
 use crate::frontend::generation::OpenAiBackendMode;
 use crate::frontend::iteration_scheduler::IterationScheduler;
 use crate::runtime_state::RuntimeState;
@@ -242,6 +243,103 @@ async fn capacity_waiters_drain_serially_after_each_kv_release() {
         assert_eq!(controller.generation_token_budget.active_tokens(), 10);
         drop(admitted);
     }
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn full_pool_waiter_is_admitted_after_bounded_half_pool_bypasses() {
+    let controller = admission_controller_with_budget(2, 4, 10);
+    let half_pool_work = GenerationAdmissionWork::new(5, 0);
+    let full_pool_work = GenerationAdmissionWork::new(10, 0);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active-half-pool"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::ZERO,
+            half_pool_work,
+        )
+        .await
+        .expect("initial half-pool admission");
+
+    let full_pool_controller = controller.clone();
+    let full_pool_waiter = tokio::spawn(async move {
+        full_pool_controller
+            .acquire_work(
+                &trusted_ids("full-pool-waiter"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                full_pool_work,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("full-pool request entered the queue");
+
+    // Keep one half-pool reservation active and repeatedly fill/release the
+    // other half. The full-pool request cannot fit during these admissions.
+    for wave in 0..ADMISSION_STARVATION_BOUND_TURNS {
+        let bypass = tokio::time::timeout(
+            Duration::from_secs(1),
+            controller.acquire_work(
+                &trusted_ids(&format!("half-pool-bypass-{wave}")),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                half_pool_work,
+            ),
+        )
+        .await
+        .expect("fitting half-pool request completed before the timeout")
+        .expect("fitting half-pool request admitted before the bound");
+        assert_eq!(controller.generation_token_budget.active_tokens(), 10);
+        drop(bypass);
+    }
+
+    // The next fitting arrival reaches the bound and must remain queued while
+    // the controller drains capacity toward the older full-pool request.
+    let bypass_controller = controller.clone();
+    let blocked_bypass = tokio::spawn(async move {
+        bypass_controller
+            .acquire_work(
+                &trusted_ids("half-pool-after-bound"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                half_pool_work,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("post-bound half-pool request remained queued");
+    assert!(!full_pool_waiter.is_finished());
+    assert!(!blocked_bypass.is_finished());
+
+    drop(active);
+    let admitted_full_pool = tokio::time::timeout(Duration::from_secs(1), full_pool_waiter)
+        .await
+        .expect("full-pool waiter admitted after capacity drained")
+        .expect("full-pool waiter task completed")
+        .expect("full-pool admission succeeded");
+    assert_eq!(controller.generation_token_budget.active_tokens(), 10);
+    assert!(!blocked_bypass.is_finished());
+
+    drop(admitted_full_pool);
+    let admitted_bypass = tokio::time::timeout(Duration::from_secs(1), blocked_bypass)
+        .await
+        .expect("younger half-pool waiter admitted after the senior completed")
+        .expect("half-pool waiter task completed")
+        .expect("half-pool admission succeeded");
+    drop(admitted_bypass);
     assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
     assert_eq!(controller.generation_limit.available_permits(), 2);
     assert_eq!(controller.generation_token_budget.active_tokens(), 0);
