@@ -43,7 +43,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -80,7 +81,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -114,7 +116,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -148,7 +151,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -182,7 +186,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "selection",
       "producerSymbols": [
@@ -218,7 +223,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -254,7 +260,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -291,7 +298,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -325,7 +333,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -359,7 +368,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -396,7 +406,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -432,7 +443,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -468,7 +480,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -504,7 +517,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -538,7 +552,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -572,7 +587,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -608,7 +624,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -645,7 +662,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -679,7 +697,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -713,7 +732,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -749,7 +769,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -786,7 +807,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -820,7 +842,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -857,7 +880,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -893,7 +917,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -930,7 +955,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -966,7 +992,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1003,7 +1030,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1040,7 +1068,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1076,7 +1105,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1112,7 +1142,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1146,7 +1177,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -1180,7 +1212,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "selection",
       "producerSymbols": [
@@ -1217,7 +1250,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1254,7 +1288,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1289,7 +1324,8 @@ export const runtimeEventInventory = {
         "scope",
         "state",
         "numeric_summaries",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "health",
       "producerSymbols": [
@@ -1324,7 +1360,8 @@ export const runtimeEventInventory = {
         "scope",
         "state",
         "numeric_summaries",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "health",
       "producerSymbols": [
@@ -1359,7 +1396,8 @@ export const runtimeEventInventory = {
         "scope",
         "state",
         "numeric_summaries",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "health",
       "producerSymbols": [
@@ -1395,7 +1433,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1432,7 +1471,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1468,7 +1508,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1505,7 +1546,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1542,7 +1584,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1578,7 +1621,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1615,7 +1659,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1649,7 +1694,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "progress",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "progress",
       "producerSymbols": [
@@ -1683,7 +1729,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -1720,7 +1767,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1755,7 +1803,8 @@ export const runtimeEventInventory = {
         "scope",
         "state",
         "numeric_summaries",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "health",
       "producerSymbols": [
@@ -1792,7 +1841,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1828,7 +1878,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -1865,7 +1916,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -1899,7 +1951,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -1933,7 +1986,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -1969,7 +2023,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2006,7 +2061,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2040,7 +2096,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2076,7 +2133,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2113,7 +2171,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2149,7 +2208,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2183,7 +2243,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -2220,7 +2281,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2257,7 +2319,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2293,7 +2356,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2330,7 +2394,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2364,7 +2429,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "progress",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "progress",
       "producerSymbols": [
@@ -2398,7 +2464,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2435,7 +2502,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2472,7 +2540,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2506,7 +2575,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2540,7 +2610,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "progress",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "progress",
       "producerSymbols": [
@@ -2574,7 +2645,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2608,7 +2680,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2642,7 +2715,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -2676,7 +2750,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -2713,7 +2788,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2749,7 +2825,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2786,7 +2863,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2820,7 +2898,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "progress",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "progress",
       "producerSymbols": [
@@ -2854,7 +2933,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2888,7 +2968,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -2924,7 +3005,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -2961,7 +3043,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -2995,7 +3078,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -3031,7 +3115,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3068,7 +3153,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3102,7 +3188,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -3139,7 +3226,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3175,7 +3263,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3212,7 +3301,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3249,7 +3339,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3285,7 +3376,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3321,7 +3413,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3357,7 +3450,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3394,7 +3488,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3428,7 +3523,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -3462,7 +3558,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -3498,7 +3595,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3535,7 +3633,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3572,7 +3671,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3609,7 +3709,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3645,7 +3746,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3682,7 +3784,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3716,7 +3819,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "progress",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "progress",
       "producerSymbols": [
@@ -3750,7 +3854,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -3786,7 +3891,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3823,7 +3929,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -3859,7 +3966,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3895,7 +4003,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3931,7 +4040,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -3965,7 +4075,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4002,7 +4113,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4039,7 +4151,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4075,7 +4188,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4112,7 +4226,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4146,7 +4261,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -4182,7 +4298,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4216,7 +4333,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4253,7 +4371,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4287,7 +4406,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4321,7 +4441,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4358,7 +4479,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4395,7 +4517,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4431,7 +4554,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4468,7 +4592,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4502,7 +4627,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -4539,7 +4665,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4575,7 +4702,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4611,7 +4739,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4648,7 +4777,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4682,7 +4812,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4718,7 +4849,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4755,7 +4887,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4791,7 +4924,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4828,7 +4962,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -4864,7 +4999,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -4898,7 +5034,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4932,7 +5069,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -4969,7 +5107,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5003,7 +5142,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5037,7 +5177,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "capacity",
       "producerSymbols": [
@@ -5073,7 +5214,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5109,7 +5251,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5143,7 +5286,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5177,7 +5321,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5211,7 +5356,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5248,7 +5394,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5282,7 +5429,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5318,7 +5466,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5352,7 +5501,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5386,7 +5536,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5420,7 +5571,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5454,7 +5606,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5488,7 +5641,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5522,7 +5676,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5558,7 +5713,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5595,7 +5751,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5631,7 +5788,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5668,7 +5826,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5705,7 +5864,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5739,7 +5899,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5775,7 +5936,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5809,7 +5971,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5845,7 +6008,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5879,7 +6043,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -5916,7 +6081,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -5952,7 +6118,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -5989,7 +6156,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6026,7 +6194,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6063,7 +6232,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6099,7 +6269,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -6135,7 +6306,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -6172,7 +6344,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6206,7 +6379,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -6243,7 +6417,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6279,7 +6454,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -6316,7 +6492,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6353,7 +6530,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6389,7 +6567,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -6426,7 +6605,8 @@ export const runtimeEventInventory = {
         "outcome",
         "reason_code",
         "duration_ms",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "failure",
       "producerSymbols": [
@@ -6460,7 +6640,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -6494,7 +6675,8 @@ export const runtimeEventInventory = {
         "severity",
         "scope",
         "state",
-        "summary"
+        "summary",
+        "operation"
       ],
       "projectionProfile": "state",
       "producerSymbols": [
@@ -6530,7 +6712,8 @@ export const runtimeEventInventory = {
         "state",
         "outcome",
         "duration_ms",
-        "numeric_summaries"
+        "numeric_summaries",
+        "operation"
       ],
       "projectionProfile": "success",
       "producerSymbols": [
@@ -6565,7 +6748,8 @@ export const runtimeEventInventory = {
         "scope",
         "state",
         "summary",
-        "reason_code"
+        "reason_code",
+        "operation"
       ],
       "projectionProfile": "diagnostic",
       "producerSymbols": [

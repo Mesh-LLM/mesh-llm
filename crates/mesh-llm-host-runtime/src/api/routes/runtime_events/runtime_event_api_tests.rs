@@ -4,14 +4,17 @@
 //! `MeshApi` + TCP harness already established there).
 
 use mesh_llm_runtime_event_contracts::{
-    FactData, FamilyFact, Outcome, ReasonCode, RequestEventKind, RuntimeEventIngress, RuntimeFact,
+    ChildOperationId, EventSequence, FactData, FamilyFact, OperationId, OperationScope, Outcome,
+    ProcessInstanceId, ReasonCode, RequestEventKind, RequestId, RuntimeEventIngress, RuntimeFact,
+    ScopeIdentities,
 };
 
 use crate::runtime_events::engine::RuntimeEventEngine;
+use crate::runtime_events::replay::ReplayFrame;
 
 use super::cursor::Cursor;
 use super::frames::{EVENT_PROJECTION_ALLOWLIST, REQUIRED_ENVELOPE_KEYS, STATE_TOP_LEVEL_KEYS};
-use super::recovery::{ConnectionShape, GapReason, classify};
+use super::recovery::{ConnectionShape, Gap, GapReason, classify};
 
 fn synthetic_unknown() -> RuntimeFact {
     RuntimeFact::Request(FamilyFact::with_data(
@@ -145,8 +148,9 @@ fn state_top_level_keys_match_the_frozen_set() {
 #[test]
 fn event_projection_keys_are_a_subset_of_the_allowlist_for_every_submitted_kind() {
     let facts = [terminal_success(), synthetic_unknown()];
+    let scope = OperationScope::root_only(OperationId::new());
     for fact in facts {
-        let projection = super::frames::event_projection(&fact);
+        let projection = super::frames::event_projection(&fact, scope);
         let value = serde_json::to_value(&projection).expect("serializable");
         let object = value.as_object().expect("event is a JSON object");
         for key in object.keys() {
@@ -254,4 +258,156 @@ fn recovery_fixture_gap_reasons_match_the_rust_enum() {
     let reasons = fixture["replay_gap_reasons"].as_object().expect("object");
     assert!(reasons.contains_key(GapReason::StaleInstance.as_str()));
     assert!(reasons.contains_key(GapReason::Evicted.as_str()));
+}
+
+// ─── Task 7: operation identity + always-present base keys ─────────────
+
+#[test]
+fn producer_and_severity_are_always_present_on_every_event_projection() {
+    let scope = OperationScope::root_only(OperationId::new());
+    for fact in [terminal_success(), synthetic_unknown()] {
+        let value = serde_json::to_value(super::frames::event_projection(&fact, scope))
+            .expect("serializable");
+        let object = value.as_object().expect("event is a JSON object");
+        assert!(
+            object.contains_key("producer"),
+            "producer must always be present"
+        );
+        assert!(
+            object.contains_key("severity"),
+            "severity must always be present"
+        );
+    }
+}
+
+#[test]
+fn root_and_child_operation_scopes_are_distinguishable_on_the_wire() {
+    let root_id = OperationId::new();
+    let root_scope = OperationScope::root_only(root_id);
+    let child_scope = OperationScope::with_child(root_id, ChildOperationId::new());
+
+    let root_value = serde_json::to_value(super::frames::event_projection(
+        &terminal_success(),
+        root_scope,
+    ))
+    .expect("serializable");
+    let child_value = serde_json::to_value(super::frames::event_projection(
+        &terminal_success(),
+        child_scope,
+    ))
+    .expect("serializable");
+
+    let root_operation = root_value["operation"]
+        .as_object()
+        .expect("operation present");
+    assert_eq!(root_operation["root"], root_id.to_string());
+    assert!(
+        !root_operation.contains_key("child"),
+        "a root scope must not carry a child id"
+    );
+
+    let child_operation = child_value["operation"]
+        .as_object()
+        .expect("operation present");
+    assert_eq!(child_operation["root"], root_id.to_string());
+    assert!(
+        child_operation.contains_key("child"),
+        "a child scope must carry a child id"
+    );
+}
+
+// ─── Task 7: byte-exact sample frames for all four frame types ─────────
+
+const SAMPLE_INSTANCE_UUID: &str = "0195f000-0000-7000-8000-000000000001";
+const SAMPLE_ROOT_UUID: &str = "0195f000-0000-7000-8000-0000000000aa";
+const SAMPLE_CHILD_UUID: &str = "0195f000-0000-7000-8000-0000000000bb";
+
+fn parse_fixture_uuid(text: &str) -> uuid::Uuid {
+    uuid::Uuid::parse_str(text).expect("valid fixture uuid")
+}
+
+fn sample_instance() -> ProcessInstanceId {
+    ProcessInstanceId::from_uuid(parse_fixture_uuid(SAMPLE_INSTANCE_UUID))
+}
+
+fn sample_scope() -> OperationScope {
+    OperationScope::with_child(
+        OperationId::from_uuid(parse_fixture_uuid(SAMPLE_ROOT_UUID)),
+        ChildOperationId::from_uuid(parse_fixture_uuid(SAMPLE_CHILD_UUID)),
+    )
+}
+
+fn sample_request_completed_fact() -> RuntimeFact {
+    RuntimeFact::Request(FamilyFact::with_data(
+        RequestEventKind::RequestCompleted,
+        FactData {
+            outcome: Some(Outcome::Success),
+            scope: ScopeIdentities {
+                request_id: Some(RequestId::new(SAMPLE_ROOT_UUID).expect("valid request id")),
+                ..ScopeIdentities::default()
+            },
+            ..FactData::default()
+        },
+    ))
+}
+
+fn sample_gap() -> Gap {
+    Gap {
+        reason: GapReason::Evicted,
+        requested: Cursor::new(sample_instance(), 5),
+        oldest_available: Some(10),
+        latest: Some(20),
+    }
+}
+
+/// One canonical, deterministic sample per frame type, pinned byte-exact
+/// against `fixtures/runtime_events_v1/frames.json`'s `sample_frames` and
+/// consumed identically by `use-runtime-events-v1.test.tsx` on the
+/// TypeScript side (parsed through `parseSseBlock`/`parseRuntimeEventsV1Frame`).
+/// Every input is a fixed constant (instance/root/child UUIDs, a fresh
+/// zero-state engine, a hand-built fact/gap) so re-running this test can
+/// never produce a different byte sequence.
+#[test]
+fn sample_frames_fixture_is_byte_exact_for_every_frame_type() {
+    let fixture: serde_json::Value = serde_json::from_str(FRAMES_FIXTURE).expect("valid JSON");
+    let samples = fixture["sample_frames"]
+        .as_object()
+        .expect("sample_frames object present in the fixture");
+
+    let engine = RuntimeEventEngine::new();
+    let cursor = Cursor::new(sample_instance(), 0);
+
+    assert_eq!(
+        super::frames::state_frame(&engine, cursor),
+        samples["runtime_state"]
+            .as_str()
+            .expect("runtime_state sample")
+    );
+    assert_eq!(
+        super::frames::health_frame(&engine, cursor),
+        samples["runtime_health"]
+            .as_str()
+            .expect("runtime_health sample")
+    );
+
+    let frame = ReplayFrame {
+        sequence: EventSequence::new(1),
+        rebuild_generation: 0,
+        scope: sample_scope(),
+        fact: std::sync::Arc::new(sample_request_completed_fact()),
+        recorded_at: std::time::Instant::now(),
+    };
+    assert_eq!(
+        super::frames::event_frame_at(sample_instance(), &frame),
+        samples["runtime_event"]
+            .as_str()
+            .expect("runtime_event sample")
+    );
+
+    assert_eq!(
+        super::frames::replay_gap_frame_at(sample_instance(), 0, &sample_gap()),
+        samples["runtime_replay_gap"]
+            .as_str()
+            .expect("runtime_replay_gap sample")
+    );
 }

@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use mesh_llm_events::logging::identifiers::RequestId as LoggingRequestId;
 use mesh_llm_runtime_event_contracts::{
     ChildOperationId, FactData, OperationId, Outcome, ReasonCode, RequestEventKind, RequestFact,
-    RuntimeEventIngress, RuntimeFact,
+    RequestId, RuntimeEventIngress, RuntimeFact, ScopeIdentities,
 };
 use openai_frontend::{
     OpenAiFailure, OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
@@ -55,6 +55,26 @@ fn operation_id_for_request(request_id: LoggingRequestId) -> OperationId {
 
 fn empty_data() -> FactData {
     FactData::default()
+}
+
+/// Task 7 (`.omo/plans/event-system-fixes.md`, review defect D5): every
+/// request-class fact carries `scope.request_id` = the root uuid text, the
+/// same text `operation_id_for_request` above mints byte-equal to the
+/// logging request id. This is what lets the wire's `operation.root` and
+/// `event.scope.request_id` both be independently checked against the same
+/// structured-log request id.
+fn scope_for_request(request_id: LoggingRequestId) -> ScopeIdentities {
+    ScopeIdentities {
+        request_id: RequestId::new(&request_id.as_uuid().to_string()).ok(),
+        ..ScopeIdentities::default()
+    }
+}
+
+fn data_with_scope(request_id: LoggingRequestId) -> FactData {
+    FactData {
+        scope: scope_for_request(request_id),
+        ..FactData::default()
+    }
 }
 
 fn request_fact(kind: RequestEventKind, data: FactData) -> RuntimeFact {
@@ -98,14 +118,17 @@ fn failure_reason(failure: OpenAiFailure) -> ReasonCode {
 /// row. `Completed`/`CompletedWithUsage` -> `RequestCompleted`; a `Cancelled`
 /// failure -> `RequestCancelled`; a `Timeout` failure -> `RequestTimedOut`;
 /// every remaining failure -> `RequestFailed`.
-fn terminal_fact_for_result(result: OpenAiTerminalResult) -> RuntimeFact {
+fn terminal_fact_for_result(
+    request_id: LoggingRequestId,
+    result: OpenAiTerminalResult,
+) -> RuntimeFact {
     match result {
         OpenAiTerminalResult::Completed { .. }
         | OpenAiTerminalResult::CompletedWithUsage { .. } => request_fact(
             RequestEventKind::RequestCompleted,
             FactData {
                 outcome: Some(Outcome::Success),
-                ..empty_data()
+                ..data_with_scope(request_id)
             },
         ),
         OpenAiTerminalResult::Failed {
@@ -116,7 +139,7 @@ fn terminal_fact_for_result(result: OpenAiTerminalResult) -> RuntimeFact {
             FactData {
                 outcome: Some(Outcome::Cancelled),
                 reason: Some(ReasonCode::Cancellation),
-                ..empty_data()
+                ..data_with_scope(request_id)
             },
         ),
         OpenAiTerminalResult::Failed {
@@ -127,7 +150,7 @@ fn terminal_fact_for_result(result: OpenAiTerminalResult) -> RuntimeFact {
             FactData {
                 outcome: Some(Outcome::Failure),
                 reason: Some(ReasonCode::Timeout),
-                ..empty_data()
+                ..data_with_scope(request_id)
             },
         ),
         OpenAiTerminalResult::Failed { failure, .. } => request_fact(
@@ -135,7 +158,7 @@ fn terminal_fact_for_result(result: OpenAiTerminalResult) -> RuntimeFact {
             FactData {
                 outcome: Some(Outcome::Failure),
                 reason: Some(failure_reason(failure)),
-                ..empty_data()
+                ..data_with_scope(request_id)
             },
         ),
     }
@@ -201,11 +224,11 @@ impl OpenAiRuntimeEventObserver {
         };
         let _ = root.ingress().try_submit(request_fact(
             RequestEventKind::RequestReceived,
-            empty_data(),
+            data_with_scope(context.request_id),
         ));
         let _ = root.ingress().try_submit(request_fact(
             RequestEventKind::RequestAdmitted,
-            empty_data(),
+            data_with_scope(context.request_id),
         ));
 
         let mut tracked = self.lock();
@@ -248,7 +271,7 @@ impl OpenAiRuntimeEventObserver {
         };
         let _ = child.ingress().try_submit(request_fact(
             RequestEventKind::RequestExecutionStarted,
-            empty_data(),
+            data_with_scope(request_id),
         ));
 
         let mut tracked = self.lock();
@@ -273,7 +296,7 @@ impl OpenAiRuntimeEventObserver {
         if let Some(backend) = backend {
             let _ = backend
                 .ingress()
-                .try_submit(terminal_fact_for_result(result));
+                .try_submit(terminal_fact_for_result(request_id, result));
         }
     }
 }
@@ -297,7 +320,7 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     FactData {
                         outcome: Some(Outcome::Rejected),
                         reason: Some(rejection_reason(*rejection)),
-                        ..empty_data()
+                        ..data_with_scope(context.request_id)
                     },
                 ),
             ),
@@ -309,7 +332,10 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
             } => self.backend_terminal(context.request_id, *result),
             OpenAiLifecycleEvent::NonStreamTerminal { context, result }
             | OpenAiLifecycleEvent::StreamTerminal { context, result } => {
-                self.resolve_root(context.request_id, terminal_fact_for_result(*result));
+                self.resolve_root(
+                    context.request_id,
+                    terminal_fact_for_result(context.request_id, *result),
+                );
             }
             OpenAiLifecycleEvent::StreamCancelled { context }
             | OpenAiLifecycleEvent::RequestCancelled { context } => self.resolve_root(
@@ -319,7 +345,7 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     FactData {
                         outcome: Some(Outcome::Cancelled),
                         reason: Some(ReasonCode::Cancellation),
-                        ..empty_data()
+                        ..data_with_scope(context.request_id)
                     },
                 ),
             ),
@@ -330,7 +356,7 @@ impl OpenAiLifecycleObserver for OpenAiRuntimeEventObserver {
                     FactData {
                         outcome: Some(Outcome::Unknown),
                         reason: Some(ReasonCode::TerminalNotDelivered),
-                        ..empty_data()
+                        ..data_with_scope(context.request_id)
                     },
                 ),
             ),
@@ -670,15 +696,68 @@ mod tests {
         // progress, outcome, reason, duration, numeric summaries, and a
         // bounded human summary only. This test documents that guarantee
         // via the emitted fact shape rather than re-deriving FactData's
-        // definition.
-        let fact = terminal_fact_for_result(OpenAiTerminalResult::Completed { status_code: 200 });
+        // definition. `scope.request_id` is task 7's correlation id, never
+        // request content -- everything else on `ScopeIdentities` stays
+        // unset.
+        let request_id = parse_request_id(REQUEST_ID).expect("test UUID should parse");
+        let fact = terminal_fact_for_result(
+            request_id,
+            OpenAiTerminalResult::Completed { status_code: 200 },
+        );
         let RuntimeFact::Request(fact) = fact else {
             panic!("expected a Request fact");
         };
         assert_eq!(
             fact.data().scope,
-            mesh_llm_runtime_event_contracts::ScopeIdentities::default()
+            mesh_llm_runtime_event_contracts::ScopeIdentities {
+                request_id: Some(
+                    RequestId::new(&request_id.as_uuid().to_string()).expect("valid request id")
+                ),
+                ..Default::default()
+            }
         );
         assert!(fact.data().summary.is_none());
+    }
+
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn request_facts_carry_scope_request_id_equal_to_the_root_operation_id_text() {
+        let engine = install_test_engine();
+        let observer = OpenAiRuntimeEventObserver::new();
+        let context = context();
+        let expected = operation_id_for_request(context.request_id).to_string();
+
+        observer.observe(&OpenAiLifecycleEvent::Admitted {
+            context: context.clone(),
+        });
+        observer.observe(&OpenAiLifecycleEvent::NonStreamTerminal {
+            context,
+            result: OpenAiTerminalResult::Completed { status_code: 200 },
+        });
+        engine.drain();
+
+        let request_ids: Vec<String> = engine
+            .replay()
+            .snapshot()
+            .into_iter()
+            .filter_map(|frame| match frame.fact.as_ref() {
+                RuntimeFact::Request(fact) => fact
+                    .data()
+                    .scope
+                    .request_id
+                    .as_ref()
+                    .map(|id| id.as_str().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !request_ids.is_empty(),
+            "expected at least one request fact with a scope.request_id"
+        );
+        assert!(
+            request_ids.iter().all(|id| id == &expected),
+            "every request fact must carry the root uuid text: {request_ids:?}"
+        );
+        clear_runtime_event_engine();
     }
 }

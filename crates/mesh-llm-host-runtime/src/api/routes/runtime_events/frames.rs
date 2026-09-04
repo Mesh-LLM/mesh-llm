@@ -4,18 +4,29 @@
 //! ever derives `Serialize` for the wire (see `event_projection`, which
 //! hand-projects only fields drawn from `EVENT_PROJECTION_ALLOWLIST`).
 //!
-//! KNOWN SCOPE LIMIT (documented, not silently papered over): the host
-//! engine's `ReducerSnapshot` now retains bounded per-category domain
+//! The host engine's `ReducerSnapshot` retains bounded per-category domain
 //! state (task 6, `.omo/plans/event-system-fixes.md`), projected by
 //! `crate::runtime_event_api::state_projection` into
-//! `models`/`stages`/`sessions`/`requests`/`devices`/`cache`. The engine's
-//! replay pipeline still does not carry `producer`/`severity` through from
-//! `RuntimeEventEnvelope` (only the bare `RuntimeFact` reaches replay), so
-//! those two allowlisted keys are never emitted; every key this module DOES
-//! emit is real, reducer-backed data.
+//! `models`/`stages`/`sessions`/`requests`/`devices`/`cache`.
+//!
+//! Task 7 (`.omo/plans/event-system-fixes.md`) puts operation identity and
+//! the inventory's base keys on the wire: `ReplayFrame::scope` (already
+//! carried by the reducer/wake pipeline since task 4/5) is now projected as
+//! `operation` on every `runtime_event`, and `producer`/`severity` are now
+//! always present. KNOWN SCOPE LIMIT (documented, not silently papered
+//! over): `RuntimeEventEnvelope` (`mesh_llm_runtime_event_contracts::carrier`)
+//! defines a real `producer: ProducerSource` / `severity: Severity` pair,
+//! but the engine's replay pipeline does not construct or carry that
+//! envelope through to `ReplayFrame` (only `scope`, the bare `RuntimeFact`,
+//! sequence, and rebuild generation survive to replay) — plumbing it there
+//! touches `engine/drain.rs`/`wake.rs`/`replay.rs`, which are out of this
+//! task's ownership (Tasks 4/5/9). `producer`/`severity` are therefore
+//! DERIVED here, deterministically, from data already on every
+//! `RuntimeFact`/`ReplayFrame` (see `producer_str`/`severity_str` below) —
+//! real, principled projections, not fabricated placeholders.
 
 use mesh_llm_runtime_event_contracts::{
-    NumericValue, Outcome, ProgressUnit, ReasonCode, RuntimeFact,
+    NumericValue, OperationScope, Outcome, ProcessInstanceId, ProgressUnit, ReasonCode, RuntimeFact,
 };
 use serde::Serialize;
 
@@ -47,6 +58,7 @@ pub(super) const EVENT_PROJECTION_ALLOWLIST: &[&str] = &[
     "reason_code",
     "duration_ms",
     "numeric_summaries",
+    "operation",
 ];
 
 #[cfg(test)]
@@ -200,10 +212,35 @@ pub(super) struct NumericSummaryProjection {
     pub(super) value: serde_json::Value,
 }
 
+/// Root/child operation identity, projected from `ReplayFrame::scope`.
+/// `root` is the same UUID text as the logging `request_id` for a
+/// request-rooted operation (see `network::openai::runtime_events`'s
+/// byte-equality rule); `child` is present only for a scope reserved under
+/// `OperationScope::Child`, which is what makes a root's terminal
+/// distinguishable on the wire from a backend child's terminal of the same
+/// event kind.
+#[derive(Debug, Serialize)]
+pub(super) struct OperationProjection {
+    pub(super) root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) child: Option<String>,
+}
+
+fn operation_projection(scope: OperationScope) -> OperationProjection {
+    OperationProjection {
+        root: scope.root().to_string(),
+        child: scope.child().map(|child| child.to_string()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct EventProjection {
     pub(super) category: &'static str,
     pub(super) kind: &'static str,
+    pub(super) producer: &'static str,
+    pub(super) severity: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) operation: Option<OperationProjection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) scope: Option<ScopeProjection>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -277,6 +314,33 @@ fn reason_code_str(reason: &ReasonCode) -> String {
     }
 }
 
+/// Every fact reaches the engine through `RuntimeEventIngress::try_submit`,
+/// and every current call site — including the native-callback trampolines
+/// such as `skippy_runtime::runtime_events::model_open_event_trampoline` —
+/// is Rust code decoding an envelope and calling `try_submit` itself; there
+/// is no native-thread-to-wire path yet (review defect D7, task 10).
+/// `"rust"` is therefore the correct, non-fabricated value for every event
+/// this module can project today; task 10 is where a real per-submission
+/// producer tag would first exist to derive from instead.
+fn producer_str(_fact: &RuntimeFact) -> &'static str {
+    "rust"
+}
+
+/// Derived from data already on `FactData`, never fabricated: an explicit
+/// `Outcome` maps directly to a severity tier, and a fact with no outcome
+/// (state transitions, progress) defaults to `"info"` except in the
+/// `diagnostic` category, which is inherently anomaly-flagging even before
+/// an outcome is set.
+fn severity_str(fact: &RuntimeFact) -> &'static str {
+    match fact.data().outcome {
+        Some(Outcome::Failure) => "error",
+        Some(Outcome::Rejected | Outcome::Cancelled | Outcome::Unknown) => "warning",
+        Some(Outcome::Success) => "info",
+        None if category(fact) == "diagnostic" => "warning",
+        None => "info",
+    }
+}
+
 fn progress_unit_str(unit: ProgressUnit) -> &'static str {
     match unit {
         ProgressUnit::None => "none",
@@ -298,27 +362,42 @@ fn numeric_value_json(value: NumericValue) -> serde_json::Value {
     }
 }
 
-pub(super) fn event_projection(fact: &RuntimeFact) -> EventProjection {
+pub(super) fn event_projection(fact: &RuntimeFact, scope: OperationScope) -> EventProjection {
     let data = fact.data();
-    let scope = &data.scope;
-    let scope_projection = if scope.model_id.is_some()
-        || scope.topology_id.is_some()
-        || scope.stage.is_some()
-        || scope.session_id.is_some()
-        || scope.request_id.is_some()
-        || scope.device_id.is_some()
+    let fact_scope = &data.scope;
+    let scope_projection = if fact_scope.model_id.is_some()
+        || fact_scope.topology_id.is_some()
+        || fact_scope.stage.is_some()
+        || fact_scope.session_id.is_some()
+        || fact_scope.request_id.is_some()
+        || fact_scope.device_id.is_some()
     {
         Some(ScopeProjection {
-            model_id: scope.model_id.as_ref().map(|id| id.as_str().to_string()),
-            topology_id: scope.topology_id.as_ref().map(|id| id.as_str().to_string()),
-            stage_id: scope
+            model_id: fact_scope
+                .model_id
+                .as_ref()
+                .map(|id| id.as_str().to_string()),
+            topology_id: fact_scope
+                .topology_id
+                .as_ref()
+                .map(|id| id.as_str().to_string()),
+            stage_id: fact_scope
                 .stage
                 .as_ref()
                 .map(|stage| stage.id.as_str().to_string()),
-            stage_index: scope.stage.as_ref().map(|stage| stage.index),
-            session_id: scope.session_id.as_ref().map(|id| id.as_str().to_string()),
-            request_id: scope.request_id.as_ref().map(|id| id.as_str().to_string()),
-            device_id: scope.device_id.as_ref().map(|id| id.as_str().to_string()),
+            stage_index: fact_scope.stage.as_ref().map(|stage| stage.index),
+            session_id: fact_scope
+                .session_id
+                .as_ref()
+                .map(|id| id.as_str().to_string()),
+            request_id: fact_scope
+                .request_id
+                .as_ref()
+                .map(|id| id.as_str().to_string()),
+            device_id: fact_scope
+                .device_id
+                .as_ref()
+                .map(|id| id.as_str().to_string()),
         })
     } else {
         None
@@ -327,6 +406,9 @@ pub(super) fn event_projection(fact: &RuntimeFact) -> EventProjection {
     EventProjection {
         category: category(fact),
         kind: fact.kind_id(),
+        producer: producer_str(fact),
+        severity: severity_str(fact),
+        operation: Some(operation_projection(scope)),
         scope: scope_projection,
         state: data
             .state
@@ -370,12 +452,20 @@ pub(super) struct EventBody {
 }
 
 pub(super) fn event_frame(engine: &RuntimeEventEngine, frame: &ReplayFrame) -> String {
-    let cursor = Cursor::new(engine.process_instance(), frame.sequence.get());
+    event_frame_at(engine.process_instance(), frame)
+}
+
+/// Instance-parameterized core of [`event_frame`], split out so a
+/// byte-exact fixture test can supply a fixed `ProcessInstanceId` instead
+/// of the engine's randomly-minted one (see
+/// `runtime_event_api_tests::sample_frames_fixture_is_byte_exact_for_every_frame_type`).
+pub(super) fn event_frame_at(instance: ProcessInstanceId, frame: &ReplayFrame) -> String {
+    let cursor = Cursor::new(instance, frame.sequence.get());
     let payload = envelope(
         cursor,
         frame.rebuild_generation,
         EventBody {
-            event: event_projection(&frame.fact),
+            event: event_projection(&frame.fact, frame.scope),
         },
     );
     encode("runtime_event", cursor, &payload)
@@ -403,11 +493,24 @@ impl GapReason {
 }
 
 pub(super) fn replay_gap_frame(engine: &RuntimeEventEngine, gap: &Gap) -> String {
-    let instance = engine.process_instance();
+    replay_gap_frame_at(
+        engine.process_instance(),
+        engine.health().snapshot().rebuild_generation,
+        gap,
+    )
+}
+
+/// Instance/generation-parameterized core of [`replay_gap_frame`], split
+/// out for the same byte-exact-fixture reason as [`event_frame_at`].
+pub(super) fn replay_gap_frame_at(
+    instance: ProcessInstanceId,
+    rebuild_generation: u64,
+    gap: &Gap,
+) -> String {
     let current_cursor = Cursor::new(instance, gap.latest.or(gap.oldest_available).unwrap_or(0));
     let payload = envelope(
         current_cursor,
-        engine.health().snapshot().rebuild_generation,
+        rebuild_generation,
         ReplayGapBody {
             requested_cursor: gap.requested.encode(),
             reason: gap.reason.as_str(),

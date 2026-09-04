@@ -22,6 +22,7 @@ projected_envelope_keys = [
 projected_event_keys = [
   "category", "kind", "producer", "severity", "summary", "scope", "state",
   "progress", "outcome", "reason_code", "duration_ms", "numeric_summaries",
+  "operation",
 ]
 base_projected_event_keys = ["category", "kind", "producer", "severity"]
 forbidden_projection_keys = [
@@ -32,28 +33,28 @@ forbidden_projection_keys = [
 
 [[projection_profiles]]
 name = "state"
-keys = ["scope", "state", "summary"]
+keys = ["scope", "state", "summary", "operation"]
 [[projection_profiles]]
 name = "progress"
-keys = ["scope", "progress", "numeric_summaries"]
+keys = ["scope", "progress", "numeric_summaries", "operation"]
 [[projection_profiles]]
 name = "success"
-keys = ["scope", "state", "outcome", "duration_ms", "numeric_summaries"]
+keys = ["scope", "state", "outcome", "duration_ms", "numeric_summaries", "operation"]
 [[projection_profiles]]
 name = "failure"
-keys = ["scope", "state", "outcome", "reason_code", "duration_ms", "summary"]
+keys = ["scope", "state", "outcome", "reason_code", "duration_ms", "summary", "operation"]
 [[projection_profiles]]
 name = "capacity"
-keys = ["scope", "state", "numeric_summaries"]
+keys = ["scope", "state", "numeric_summaries", "operation"]
 [[projection_profiles]]
 name = "diagnostic"
-keys = ["scope", "state", "summary", "reason_code"]
+keys = ["scope", "state", "summary", "reason_code", "operation"]
 [[projection_profiles]]
 name = "health"
-keys = ["scope", "state", "numeric_summaries", "summary"]
+keys = ["scope", "state", "numeric_summaries", "summary", "operation"]
 [[projection_profiles]]
 name = "selection"
-keys = ["scope", "state", "numeric_summaries"]
+keys = ["scope", "state", "numeric_summaries", "operation"]
 
 [[carriers]]
 name = "schema_version"

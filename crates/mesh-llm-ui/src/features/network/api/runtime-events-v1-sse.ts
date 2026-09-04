@@ -48,7 +48,8 @@ export const EVENT_PROJECTED_KEY_ALLOWLIST = [
   'outcome',
   'reason_code',
   'duration_ms',
-  'numeric_summaries'
+  'numeric_summaries',
+  'operation'
 ] as const
 
 export const REPLAY_GAP_REASONS = ['stale_instance', 'evicted'] as const
