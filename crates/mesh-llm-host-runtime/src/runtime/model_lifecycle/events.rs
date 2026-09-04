@@ -47,18 +47,79 @@ fn emit_available_model_set_changed(model: &str) {
     ));
 }
 
-/// A `FactData` carrying only the model's logical id. An over-length model
-/// name (bounded by `LogicalModelId`) degrades to no scope rather than
+/// A `FactData` carrying only the model's logical id. `model` is
+/// defensively redacted (`redact_local_path`) before it ever reaches
+/// `LogicalModelId` -- event-system-fixes F2 live-sampling finding: a raw
+/// local filesystem path (a `mesh-llm load`/`--model`/`--gguf` argument,
+/// including one re-used verbatim on a startup load's failure path that
+/// never got the chance to resolve) must never reach `scope.model_id` on
+/// the wire. A non-path model reference (an HF `org/repo[:sel]` ref, a
+/// resolved `local-gguf/sha256-...` id, a plain catalog name) is not
+/// path-shaped and passes through unchanged. An over-length model name
+/// (bounded by `LogicalModelId`) still degrades to no scope rather than
 /// failing the emission.
 fn model_scope(model: &str) -> FactData {
     let mut data = FactData::default();
-    if let Ok(id) = LogicalModelId::new(model) {
+    if let Ok(id) = LogicalModelId::new(redact_local_path(model).as_ref()) {
         data.scope = ScopeIdentities {
             model_id: Some(id),
             ..ScopeIdentities::default()
         };
     }
     data
+}
+
+/// Collapse `model` to its bare filename when it looks like a local
+/// filesystem path (absolute Unix, `~`/`./`/`../`-relative, or a Windows
+/// drive-letter path); returns `model` unchanged otherwise. Manual
+/// separator handling -- not `std::path::Path` -- so the check behaves
+/// identically regardless of which OS this binary happens to be built
+/// for: a `C:\...` path is redacted the same way whether observed on a
+/// Windows host or exercised in a portable unit test.
+fn redact_local_path(model: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = model.as_bytes();
+    let is_windows_drive_path = bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let looks_like_path = model.starts_with('/')
+        || model.starts_with('\\')
+        || model.starts_with("./")
+        || model.starts_with("../")
+        || model.starts_with('~')
+        || is_windows_drive_path;
+    if !looks_like_path {
+        return std::borrow::Cow::Borrowed(model);
+    }
+    let trimmed = model.trim_end_matches(['/', '\\']);
+    match trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|segment| !segment.is_empty())
+    {
+        Some(basename) => std::borrow::Cow::Owned(basename.to_string()),
+        None => std::borrow::Cow::Borrowed("local-model"),
+    }
+}
+
+/// A stable, non-path identity for the four facts a load operation emits
+/// BEFORE its model's source resolves (`ModelQueued`,
+/// `ModelResolutionStarted`, `ModelLoadRequested`, `ModelLoadStarted`) --
+/// the event-system-fixes F2 finding this whole file's redaction exists
+/// for. `model` (the raw `mesh-llm load`/`--model`/`--gguf` argument) may
+/// itself be a raw local filesystem path; `redact_local_path` strips any
+/// directory component before it is folded in here, purely for
+/// observability (so a human watching `runtime_state.models[]` mid-load
+/// still sees a recognizable filename). The `root` component is what
+/// actually matters for correctness: it makes every load operation's
+/// provisional row globally unique, so two concurrent loads can never
+/// collide on the SAME provisional `models[]` row even when their
+/// (redacted) basenames coincide. The reducer's
+/// `reconcile_model_root_identity` (`runtime_events::reducer::domain`)
+/// supersedes this row the instant the SAME root reports its resolved
+/// (post-resolution) identity, instead of leaving it an orphaned phantom.
+fn provisional_model_identity(root: OperationId, model: &str) -> String {
+    format!("pending-resolution/{root}/{}", redact_local_path(model))
 }
 
 fn terminal_not_delivered() -> FactData {
@@ -170,23 +231,31 @@ impl LoadOperation {
         } else {
             None
         };
+        // F2 fix: these four facts fire before the model's source is known,
+        // so `model` (the raw, possibly-a-local-path argument) is never
+        // used directly here -- see `provisional_model_identity`.
+        let provisional = provisional_model_identity(root_id, model);
         if let Some(prep) = &prep {
             let _ = prep.ingress().try_submit(RuntimeFact::ModelPreparation(
                 ModelPreparationFact::with_data(
                     ModelPreparationEventKind::ModelQueued,
-                    model_scope(model),
+                    model_scope(&provisional),
                 ),
             ));
             let _ = prep.ingress().try_submit(RuntimeFact::ModelPreparation(
                 ModelPreparationFact::with_data(
                     ModelPreparationEventKind::ModelResolutionStarted,
-                    model_scope(model),
+                    model_scope(&provisional),
                 ),
             ));
         }
         if let Some(load) = &load {
-            submit_loading(load, ModelLoadingEventKind::ModelLoadRequested, model);
-            submit_loading(load, ModelLoadingEventKind::ModelLoadStarted, model);
+            submit_loading(
+                load,
+                ModelLoadingEventKind::ModelLoadRequested,
+                &provisional,
+            );
+            submit_loading(load, ModelLoadingEventKind::ModelLoadStarted, &provisional);
         }
         Self {
             root,
@@ -564,6 +633,103 @@ mod tests {
         let engine = RuntimeEventEngine::new();
         install_runtime_event_engine(engine.clone());
         engine
+    }
+
+    /// Every `scope.model_id` a captured frame carries, across every
+    /// family this file emits.
+    fn all_model_ids(engine: &RuntimeEventEngine) -> Vec<String> {
+        engine
+            .replay()
+            .snapshot()
+            .into_iter()
+            .filter_map(|frame| {
+                let id = match frame.fact.as_ref() {
+                    RuntimeFact::ModelPreparation(f) => f.data().scope.model_id.as_ref(),
+                    RuntimeFact::ModelLoading(f) => f.data().scope.model_id.as_ref(),
+                    RuntimeFact::ModelAvailability(f) => f.data().scope.model_id.as_ref(),
+                    _ => None,
+                };
+                id.map(|id| id.as_str().to_string())
+            })
+            .collect()
+    }
+
+    /// F2 fix regression test (event-system-fixes, live-sampling finding):
+    /// a `mesh-llm load <raw filesystem path>` argument must never appear,
+    /// in whole or in the raw-path form itself, as any frame's
+    /// `scope.model_id` -- the exact leak `.omo/evidence/event-system-fixes/
+    /// final/f2/canary.txt` captured live (a directory-canary path leaking
+    /// into `model_queued`/`model_resolution_started`/
+    /// `model_load_requested`/`model_load_started`).
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn load_with_a_raw_filesystem_path_never_leaks_it_into_scope_model_id() {
+        let engine = install_test_engine();
+        let raw_path = "/var/folders/T/opencode/f2/f2dircanary_9f1c2a/model.gguf";
+        let op = LoadOperation::begin(raw_path);
+        engine.drain();
+
+        let ids = all_model_ids(&engine);
+        assert!(
+            !ids.is_empty(),
+            "begin() must still emit its four pre-resolution facts"
+        );
+        for id in &ids {
+            assert!(
+                !id.contains(raw_path),
+                "raw path leaked verbatim into scope.model_id: {id}"
+            );
+            assert!(
+                !id.contains("f2dircanary"),
+                "directory canary leaked into scope.model_id: {id}"
+            );
+            assert!(
+                !id.contains("/var/folders"),
+                "absolute path prefix leaked into scope.model_id: {id}"
+            );
+            assert!(
+                !id.starts_with('/'),
+                "scope.model_id must never itself be an absolute path: {id}"
+            );
+        }
+
+        op.load_failed(raw_path);
+        engine.drain();
+        let ids_after_failure = all_model_ids(&engine);
+        assert!(
+            ids_after_failure
+                .iter()
+                .all(|id| !id.contains(raw_path) && !id.contains("f2dircanary")),
+            "a load-failure path (which re-uses the raw, unresolved argument) \
+             must also never leak the raw path: {ids_after_failure:?}"
+        );
+        clear_runtime_event_engine();
+    }
+
+    /// F2 fix: two concurrent loads whose (redacted) basenames coincide
+    /// must never collide on the SAME provisional `scope.model_id` --
+    /// each provisional id embeds its own operation root, so this proves
+    /// uniqueness at the producer boundary (the reducer-side supersede
+    /// behavior itself is proven in
+    /// `runtime_events::reducer::tests::domain`).
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn concurrent_loads_with_the_same_basename_get_distinct_provisional_ids() {
+        let engine = install_test_engine();
+        let _first = LoadOperation::begin("/models/a/model.gguf");
+        let _second = LoadOperation::begin("/models/b/model.gguf");
+        engine.drain();
+
+        let ids = all_model_ids(&engine);
+        let distinct: std::collections::HashSet<&str> =
+            ids.iter().map(std::string::String::as_str).collect();
+        assert_eq!(
+            distinct.len(),
+            2,
+            "two concurrent loads sharing a basename must get distinct \
+             provisional ids, got: {ids:?}"
+        );
+        clear_runtime_event_engine();
     }
 
     #[test]

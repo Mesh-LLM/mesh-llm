@@ -91,7 +91,7 @@ pub fn apply(snapshot: &Arc<ReducerSnapshot>, input: ReducerInput) -> ReduceOutc
     }
 
     let next = advance(&current, &input, incoming_outcome, incoming_progress);
-    let next_domain = snapshot.domain().apply_fact(&input.fact);
+    let next_domain = snapshot.domain().apply_fact(input.scope, &input.fact);
     ReduceOutcome::Applied(Arc::new(snapshot.with_operation(
         input.scope,
         next,

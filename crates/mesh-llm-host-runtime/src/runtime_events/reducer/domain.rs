@@ -22,8 +22,9 @@ use std::collections::{HashMap, VecDeque};
 
 use mesh_llm_runtime_event_contracts::{
     FactData, KvRuntimeStateEventKind, ModelAvailabilityEventKind, ModelLoadingEventKind,
-    ModelPreparationEventKind, ModelUnloadingEventKind, Outcome, RequestEventKind,
-    ResourceHealthEventKind, RuntimeFact, SessionEventKind, StageTopologyEventKind,
+    ModelPreparationEventKind, ModelUnloadingEventKind, OperationId, OperationScope, Outcome,
+    RequestEventKind, ResourceHealthEventKind, RuntimeFact, SessionEventKind,
+    StageTopologyEventKind,
 };
 
 use crate::runtime_events::config::{LIFECYCLE_OPERATION_BOUND, REQUEST_ROOT_BOUND};
@@ -85,6 +86,19 @@ pub struct CacheDomainState {
 pub struct DomainState {
     models: HashMap<String, ModelDomainState>,
     models_order: VecDeque<String>,
+    /// F2 fix (event-system-fixes, live-sampling finding): a load
+    /// operation's model identity legitimately CHANGES mid-flight -- the
+    /// facts fired before source resolution completes necessarily carry a
+    /// provisional identity (see `model_lifecycle::events::model_scope`'s
+    /// doc comment), and every later fact for the SAME root operation
+    /// carries the resolved canonical id instead. This tracks each root
+    /// operation's CURRENT model id so [`reconcile_model_root_identity`]
+    /// can evict the stale provisional row the moment the SAME root
+    /// reports a different id, instead of leaving it an orphaned phantom
+    /// stuck at whatever `load_phase` its last fact set. Bounded at
+    /// `LIFECYCLE_OPERATION_BOUND`, exactly like every sibling map here.
+    model_root_identity: HashMap<OperationId, String>,
+    model_root_identity_order: VecDeque<OperationId>,
     stages: HashMap<String, StageDomainState>,
     stages_order: VecDeque<String>,
     sessions_active: HashMap<String, String>,
@@ -175,18 +189,20 @@ impl DomainState {
     /// mutated, matching `ReducerSnapshot::with_operation`'s own
     /// transactional discipline.
     #[must_use]
-    pub(super) fn apply_fact(&self, fact: &RuntimeFact) -> Self {
+    pub(super) fn apply_fact(&self, scope: OperationScope, fact: &RuntimeFact) -> Self {
         let mut next = self.clone();
         match fact {
             RuntimeFact::ModelPreparation(f) => {
-                apply_model_preparation(&mut next, *f.kind(), f.data());
+                apply_model_preparation(&mut next, scope, *f.kind(), f.data());
             }
-            RuntimeFact::ModelLoading(f) => apply_model_loading(&mut next, *f.kind(), f.data()),
+            RuntimeFact::ModelLoading(f) => {
+                apply_model_loading(&mut next, scope, *f.kind(), f.data());
+            }
             RuntimeFact::ModelAvailability(f) => {
-                apply_model_availability(&mut next, *f.kind(), f.data());
+                apply_model_availability(&mut next, scope, *f.kind(), f.data());
             }
             RuntimeFact::ModelUnloading(f) => {
-                apply_model_unloading(&mut next, *f.kind(), f.data());
+                apply_model_unloading(&mut next, scope, *f.kind(), f.data());
             }
             RuntimeFact::StageTopology(f) => apply_stage_topology(&mut next, *f.kind(), f.data()),
             RuntimeFact::Session(f) => apply_session(&mut next, *f.kind(), f.data()),
@@ -218,6 +234,10 @@ impl DomainState {
         debug_assert_eq!(next.requests_order.len(), next.requests.len());
         debug_assert_eq!(next.devices_order.len(), next.devices.len());
         debug_assert_eq!(next.sessions_order.len(), next.sessions_active.len());
+        debug_assert_eq!(
+            next.model_root_identity_order.len(),
+            next.model_root_identity.len()
+        );
         next
     }
 }
@@ -294,6 +314,51 @@ fn remove_bounded<V>(order: &mut VecDeque<String>, map: &mut HashMap<String, V>,
     map.remove(id);
 }
 
+/// Move `root` to the back of `order` (most-recently-touched); if `root` is
+/// new and `map` is already at `bound`, evict the single oldest root's
+/// identity mapping first. Mirrors [`touch`]'s idiom, applied to the root
+/// -> current-model-id correlation map instead of a model_id-keyed map.
+fn touch_root_identity(
+    order: &mut VecDeque<OperationId>,
+    map: &mut HashMap<OperationId, String>,
+    root: OperationId,
+    bound: usize,
+) {
+    if let Some(position) = order.iter().position(|existing| *existing == root) {
+        order.remove(position);
+    } else if map.len() >= bound
+        && let Some(oldest) = order.pop_front()
+    {
+        map.remove(&oldest);
+    }
+    order.push_back(root);
+}
+
+/// F2 fix (event-system-fixes, live-sampling finding): call this
+/// immediately before every `touch`+`models.entry(id)` site in the model
+/// apply functions below. A load operation's model identity legitimately
+/// changes mid-flight (see the `model_root_identity` field doc), so `id`
+/// for the SAME `root` can legitimately differ across successive facts.
+/// When it does, the row `id` previously occupied is evicted -- superseded
+/// rather than left an orphaned phantom -- before `root`'s new identity is
+/// recorded and the caller proceeds to touch/create the row for `id`.
+fn reconcile_model_root_identity(state: &mut DomainState, root: OperationId, id: &str) {
+    if let Some(previous) = state.model_root_identity.get(&root) {
+        if previous == id {
+            return;
+        }
+        let previous = previous.clone();
+        remove_bounded(&mut state.models_order, &mut state.models, &previous);
+    }
+    touch_root_identity(
+        &mut state.model_root_identity_order,
+        &mut state.model_root_identity,
+        root,
+        LIFECYCLE_OPERATION_BOUND,
+    );
+    state.model_root_identity.insert(root, id.to_string());
+}
+
 fn push_recent(recent: &mut VecDeque<SessionRecentEntry>, entry: SessionRecentEntry, bound: usize) {
     if recent.len() >= bound {
         recent.pop_front();
@@ -326,12 +391,14 @@ fn preparation_phase_label(kind: ModelPreparationEventKind) -> &'static str {
 
 fn apply_model_preparation(
     state: &mut DomainState,
+    scope: OperationScope,
     kind: ModelPreparationEventKind,
     data: &FactData,
 ) {
     let Some(id) = model_id(data) else {
         return;
     };
+    reconcile_model_root_identity(state, scope.root(), &id);
     touch(
         &mut state.models_order,
         &mut state.models,
@@ -371,10 +438,16 @@ fn loading_phase_label(kind: ModelLoadingEventKind) -> &'static str {
     }
 }
 
-fn apply_model_loading(state: &mut DomainState, kind: ModelLoadingEventKind, data: &FactData) {
+fn apply_model_loading(
+    state: &mut DomainState,
+    scope: OperationScope,
+    kind: ModelLoadingEventKind,
+    data: &FactData,
+) {
     let Some(id) = model_id(data) else {
         return;
     };
+    reconcile_model_root_identity(state, scope.root(), &id);
     touch(
         &mut state.models_order,
         &mut state.models,
@@ -416,12 +489,14 @@ fn availability_label(kind: ModelAvailabilityEventKind) -> Option<&'static str> 
 
 fn apply_model_availability(
     state: &mut DomainState,
+    scope: OperationScope,
     kind: ModelAvailabilityEventKind,
     data: &FactData,
 ) {
     let Some(id) = model_id(data) else {
         return;
     };
+    reconcile_model_root_identity(state, scope.root(), &id);
     touch(
         &mut state.models_order,
         &mut state.models,
@@ -443,7 +518,12 @@ fn apply_model_availability(
     }
 }
 
-fn apply_model_unloading(state: &mut DomainState, kind: ModelUnloadingEventKind, data: &FactData) {
+fn apply_model_unloading(
+    state: &mut DomainState,
+    scope: OperationScope,
+    kind: ModelUnloadingEventKind,
+    data: &FactData,
+) {
     let Some(id) = model_id(data) else {
         return;
     };
@@ -456,6 +536,7 @@ fn apply_model_unloading(state: &mut DomainState, kind: ModelUnloadingEventKind,
         | ModelUnloadingEventKind::SessionDrainingStarted
         | ModelUnloadingEventKind::SessionDrainingCompleted
         | ModelUnloadingEventKind::UnloadFailed => {
+            reconcile_model_root_identity(state, scope.root(), &id);
             touch(
                 &mut state.models_order,
                 &mut state.models,

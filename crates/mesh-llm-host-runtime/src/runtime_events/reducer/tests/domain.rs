@@ -209,6 +209,62 @@ fn model_load_phase_changed_carries_the_producer_supplied_phase_name() {
     assert_eq!(model.load_phase.as_deref(), Some("downloading_weights"));
 }
 
+/// F2 fix (event-system-fixes, live-sampling finding): a single load
+/// operation's model identity legitimately changes mid-flight (a
+/// pre-resolution provisional id, superseded by the resolved canonical id
+/// once source resolution completes). Before this fix the provisional
+/// row was an ORPHANED PHANTOM -- stuck at whatever `load_phase` its last
+/// fact set, forever, because no later fact ever referenced that id again
+/// to transition or evict it (reproduced live: a stale
+/// `"load_phase":"loading"` row survived 15+ minutes and 3 reconnects).
+/// `reconcile_model_root_identity` correlates by the fact's ROOT
+/// operation (stable across the whole operation, unlike model_id) and
+/// evicts the stale row the moment the SAME root reports a different id.
+#[test]
+fn a_root_operations_provisional_model_row_is_superseded_not_orphaned_on_resolution() {
+    let snapshot = ReducerSnapshot::empty();
+    let scope = root();
+    let ReduceOutcome::Applied(snapshot) = apply(
+        &snapshot,
+        input(
+            scope,
+            0,
+            model_load_phase_fact("pending-resolution/op-1", "loading"),
+        ),
+    ) else {
+        panic!("the provisional (pre-resolution) fact must apply");
+    };
+    assert!(
+        snapshot
+            .domain()
+            .models()
+            .iter()
+            .any(|model| model.id == "pending-resolution/op-1"),
+        "the provisional row must exist right after the pre-resolution fact"
+    );
+
+    let ReduceOutcome::Applied(snapshot) = apply(
+        &snapshot,
+        input(scope, 1, model_load_phase_fact("resolved-model", "loading")),
+    ) else {
+        panic!("the resolved-identity fact for the SAME root must apply");
+    };
+
+    let models = snapshot.domain().models();
+    assert!(
+        !models
+            .iter()
+            .any(|model| model.id == "pending-resolution/op-1"),
+        "the provisional row must be SUPERSEDED once the SAME root reports \
+         its resolved identity, not left an orphaned phantom stuck in \
+         \"loading\" forever"
+    );
+    assert!(
+        models.iter().any(|model| model.id == "resolved-model"),
+        "the resolved identity's own row must exist after supersession"
+    );
+}
+
 #[test]
 fn stages_track_latest_topology_state() {
     let snapshot = ReducerSnapshot::empty();
