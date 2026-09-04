@@ -6,6 +6,7 @@ import { MeshVizTopologyGhost } from '@/features/network/components/MeshVizTopol
 import { ModelCatalog } from '@/features/network/components/ModelCatalog'
 import { NetworkHeroBanner } from '@/features/network/components/NetworkHeroBanner'
 import { PeersTable } from '@/features/network/components/PeersTable'
+import { PairingPanel } from '@/features/network/components/PairingPanel'
 import { LiveDataUnavailableOverlay } from '@/components/ui/LiveDataUnavailableOverlay'
 import { resolveOpenAIBaseUrl } from '@/app/layout/shell-adapter'
 import { DashboardLayout } from '@/features/network/layouts/DashboardLayout'
@@ -206,6 +207,7 @@ function DashboardPageContent({
         />
       }
       status={<StatusStrip metrics={displayData.statusMetrics} />}
+      pairing={<PairingPanel enabled={liveMode} />}
       topology={
         <div className="relative h-full min-h-0">
           <MeshViz

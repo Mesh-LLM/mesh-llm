@@ -8,6 +8,12 @@ export const modelKeys = {
   catalog: () => [...modelKeys.all, 'catalog'] as const
 }
 
+export const pairingKeys = {
+  all: ['pairing'] as const,
+  sessions: () => [...pairingKeys.all, 'sessions'] as const,
+  nearby: () => [...pairingKeys.all, 'nearby'] as const
+}
+
 export const pluginKeys = {
   all: ['plugins'] as const,
   list: () => [...pluginKeys.all, 'list'] as const,

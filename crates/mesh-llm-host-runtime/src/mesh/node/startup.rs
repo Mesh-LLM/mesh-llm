@@ -66,6 +66,7 @@ pub(super) async fn bind_mesh_endpoint(
         .secret_key(secret_key)
         .alpns(vec![
             ALPN_V1.to_vec(),
+            ALPN_PAIRING_V1.to_vec(),
             skippy_protocol::STAGE_ALPN_V2.to_vec(),
         ])
         .transport_config(startup_transport_config())

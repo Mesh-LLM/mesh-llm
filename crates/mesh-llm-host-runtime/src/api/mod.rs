@@ -1,4 +1,4 @@
-//! Mesh management API — read-only dashboard on port 3131 (default).
+//! Mesh management API and dashboard on port 3131 (default).
 //!
 //! Endpoints:
 //!   GET  /health         — lightweight liveness plus mesh/serving summary (JSON, always 200 when answering)
@@ -26,9 +26,14 @@
 //!   POST /api/runtime/models — load a local model
 //!   DELETE /api/runtime/models/{model} — unload a local model
 //!   DELETE /api/runtime/instances/{instance_id} — unload one local runtime instance
+//!   POST /api/runtime/shutdown — request graceful local daemon shutdown (trusted-local only)
 //!   GET  /api/events    — SSE stream of status updates
 //!   GET  /api/discover  — browse Nostr meshes or LAN mDNS advertisements
 //!   POST /api/discovery/lan-details — invite-token proof-gated LAN detail
+//!   GET  /api/pairing/sessions — active and recent secure pairing ceremonies (trusted-local only)
+//!   POST /api/pairing/offers — create a short-lived single-use pairing offer (trusted-local only)
+//!   POST /api/pairing/connect — begin pairing from an opaque offer (trusted-local only)
+//!   POST /api/pairing/sessions/{id}/{approve|reject|cancel} — decide a pairing request (trusted-local only)
 //!   POST /api/chat      — proxy to chat completions API
 //!   POST /api/responses — proxy to responses API
 //!   POST /api/objects   — upload a request-scoped media object

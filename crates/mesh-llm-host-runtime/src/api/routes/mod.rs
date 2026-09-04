@@ -9,6 +9,7 @@ mod mesh_hook;
 mod model_interests;
 mod model_targets;
 mod objects;
+mod pairing;
 mod path_picker;
 mod plugins;
 pub(crate) mod runtime;
@@ -44,6 +45,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 ("GET", "/api/discover") => {
                     discover::handle(stream, state).await?;
+                    Ok(true)
+                }
+                (method, path) if path == "/api/pairing" || path.starts_with("/api/pairing/") => {
+                    pairing::handle(stream, state, method, path, body).await?;
                     Ok(true)
                 }
                 ("GET", "/health") => {
@@ -94,6 +99,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("POST", "/api/runtime/config/validate")
                 | ("POST", "/api/runtime/mesh-guardrails")
                 | ("POST", "/api/runtime/models")
+                | ("POST", "/api/runtime/shutdown")
                 | ("PUT", "/api/runtime/activity/override")
                 | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {

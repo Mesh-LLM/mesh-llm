@@ -8,6 +8,8 @@ pub(crate) fn requires_trusted_local_access(method: &str, path: &str) -> bool {
         return true;
     }
     if path == "/mcp"
+        || path == "/api/pairing"
+        || path.starts_with("/api/pairing/")
         || path.starts_with("/api/plugins")
         || (method == "POST"
             && (path == "/mesh/hook"
@@ -37,6 +39,7 @@ pub(crate) fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("POST", "/api/runtime/pick-directory")
             | ("POST", "/api/runtime/mesh-guardrails")
             | ("POST", "/api/runtime/models")
+            | ("POST", "/api/runtime/shutdown")
             | ("POST", "/api/model-interests")
             | ("PUT", "/api/runtime/activity/override")
     ) || (method == "DELETE"
@@ -132,6 +135,9 @@ mod tests {
             ("GET", "/api/logs/requests"),
             ("POST", "/api/logs/requests/export"),
             ("POST", "/mcp"),
+            ("GET", "/api/pairing"),
+            ("POST", "/api/pairing/offers"),
+            ("POST", "/api/pairing/sessions/session-1/approve"),
             ("GET", "/api/plugins"),
             ("POST", "/api/plugins/agents/tools/run"),
             ("POST", "/api/objects"),
@@ -139,6 +145,7 @@ mod tests {
             ("POST", "/mesh/hook"),
             ("GET", "/api/runtime/endpoints"),
             ("POST", "/api/runtime/models"),
+            ("POST", "/api/runtime/shutdown"),
             ("DELETE", "/api/runtime/models/qwen"),
             ("DELETE", "/api/runtime/instances/instance-1"),
             ("POST", "/api/runtime/mesh-guardrails"),

@@ -48,6 +48,8 @@ pub(crate) struct LanMeshAdvertisement {
     /// which is the working direction when a multi-homed node cannot initiate
     /// a relay-less direct connection itself.
     pub(crate) endpoint_addr_b64: Option<String>,
+    pub(crate) pairing_offer_id: Option<String>,
+    pub(crate) pairing_offer_expires_at: Option<u64>,
 }
 
 impl LanMeshAdvertisement {
@@ -95,6 +97,8 @@ impl LanMeshAdvertisement {
             app_version: app_version.map(str::to_owned),
             join_material: LanJoinMaterial::RequiresSuppliedToken,
             endpoint_addr_b64: None,
+            pairing_offer_id: None,
+            pairing_offer_expires_at: None,
         }
     }
 
@@ -103,6 +107,12 @@ impl LanMeshAdvertisement {
     /// additive `ep_addr` TXT key.
     pub(crate) fn with_endpoint_addr(mut self, addr: &iroh::EndpointAddr) -> Self {
         self.endpoint_addr_b64 = encode_endpoint_addr_b64(addr);
+        self
+    }
+
+    pub(crate) fn with_pairing_offer(mut self, offer: &crate::mesh::PairingOffer) -> Self {
+        self.pairing_offer_id = Some(offer.offer_id.clone());
+        self.pairing_offer_expires_at = Some(offer.expires_at);
         self
     }
 
@@ -145,6 +155,15 @@ impl LanMeshAdvertisement {
         push_optional_txt(&mut txt, "proof_challenge", self.proof_challenge.as_deref());
         push_optional_txt(&mut txt, "version", self.app_version.as_deref());
         push_optional_txt(&mut txt, "ep_addr", self.endpoint_addr_b64.as_deref());
+        push_optional_txt(
+            &mut txt,
+            "pairing",
+            self.pairing_offer_id.as_ref().map(|_| "v1"),
+        );
+        push_optional_txt(&mut txt, "pair_id", self.pairing_offer_id.as_deref());
+        if let Some(expires_at) = self.pairing_offer_expires_at {
+            txt.push(("pair_exp".to_string(), expires_at.to_string()));
+        }
 
         for (key, value) in &txt {
             anyhow::ensure!(
@@ -185,6 +204,9 @@ impl LanMeshAdvertisement {
             "proof_challenge",
             "version",
             "ep_addr",
+            "pairing",
+            "pair_id",
+            "pair_exp",
         ]
         .into_iter()
         .filter_map(|key| service.get_property_val_str(key).map(|value| (key, value)))
@@ -228,6 +250,10 @@ pub struct LanDiscoveredMesh {
     pub(crate) join_material: LanJoinMaterial,
     pub joinable_with_supplied_token: bool,
     pub published_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairing_offer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairing_offer_expires_at: Option<u64>,
     pub discovered_at: u64,
     #[serde(skip)]
     join_token: Option<String>,
@@ -406,13 +432,21 @@ async fn publish_lan_advertisement(attempt: LanPublishAttempt<'_>) {
         host_name,
     } = attempt;
     let listing = build_local_mesh_listing(node, name, region, max_clients).await;
-    let advert = LanMeshAdvertisement::from_listing(
+    let pairing_offer = node
+        .create_pairing_offer()
+        .await
+        .ok()
+        .and_then(|response| crate::mesh::PairingOffer::decode(&response.offer).ok());
+    let mut advert = LanMeshAdvertisement::from_listing(
         &listing,
         Some(&listing.invite_token),
         Some(crate::VERSION),
         details_reachable,
     )
     .with_endpoint_addr(&node.advertised_endpoint_addr());
+    if let Some(offer) = pairing_offer.as_ref() {
+        advert = advert.with_pairing_offer(offer);
+    }
     let Some(service_info) = encode_lan_service_info(
         &advert,
         instance_name,
@@ -798,6 +832,27 @@ fn lan_discovered_mesh(
     joinable: bool,
 ) -> LanDiscoveredMesh {
     let endpoint_addr = advert.endpoint_addr();
+    let pairing_offer_expires_at = advert.pairing_offer_expires_at;
+    let pairing_offer = endpoint_addr
+        .clone()
+        .zip(advert.pairing_offer_id.clone())
+        .filter(|_| {
+            pairing_offer_expires_at.is_some_and(|expires_at| expires_at > current_unix_secs())
+        })
+        .and_then(|(endpoint_addr, offer_id)| {
+            crate::mesh::PairingOffer {
+                version: 1,
+                offer_id,
+                endpoint_addr,
+                device_name: advert
+                    .mesh_name
+                    .clone()
+                    .unwrap_or_else(|| service.get_fullname().to_string()),
+                expires_at: pairing_offer_expires_at?,
+            }
+            .encode()
+            .ok()
+        });
     LanDiscoveredMesh {
         mode: MeshDiscoveryMode::Mdns.as_str(),
         scope: MeshDiscoveryMode::Mdns.scope(),
@@ -818,6 +873,8 @@ fn lan_discovered_mesh(
         join_material: advert.join_material,
         joinable_with_supplied_token: joinable,
         published_version: advert.app_version,
+        pairing_offer,
+        pairing_offer_expires_at,
         discovered_at: current_unix_secs(),
         join_token: joinable.then(|| supplied_invite_token.unwrap_or_default().to_string()),
         endpoint_addr,
@@ -965,6 +1022,12 @@ fn parse_txt_properties(props: &HashMap<&str, &str>) -> Result<LanMeshAdvertisem
         app_version: optional_txt(props, "version"),
         join_material: LanJoinMaterial::RequiresSuppliedToken,
         endpoint_addr_b64: optional_txt(props, "ep_addr"),
+        pairing_offer_id: (props.get("pairing") == Some(&"v1"))
+            .then(|| optional_txt(props, "pair_id"))
+            .flatten(),
+        pairing_offer_expires_at: props
+            .get("pair_exp")
+            .and_then(|value| value.parse::<u64>().ok()),
     })
 }
 

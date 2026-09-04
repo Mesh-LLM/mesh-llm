@@ -16,6 +16,7 @@ use prost::Message;
 #[cfg(test)]
 mod config_tests;
 pub const ALPN_CONTROL_V1: &[u8] = b"mesh-llm-control/1";
+pub const ALPN_PAIRING_V1: &[u8] = b"mesh-llm-pairing/1";
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 #[cfg(test)]
 pub const ALPN: &[u8] = ALPN_V1;

@@ -95,6 +95,7 @@ mod operational_logging;
 mod owner_control;
 mod owner_control_response;
 mod owner_lifecycle_cache;
+mod pairing;
 mod peer_state;
 mod plugin_config;
 mod plugin_mesh;
@@ -151,6 +152,14 @@ pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_vram_bytes_capped,
 };
 pub(crate) use node::{PeerDownReport, peer_down_endpoint_id};
+#[expect(
+    unused_imports,
+    reason = "public pairing API surface is consumed by management and launcher callers"
+)]
+pub use pairing::{
+    PairingDecision, PairingDirection, PairingOffer, PairingOfferResponse, PairingSession,
+    PairingSessionStatus,
+};
 pub(crate) use peer_state::{
     ControlListenerLifecycle, DEAD_PEER_TTL, MeshState, PEER_DOWN_REPORTER_COOLDOWN_SECS,
     PEER_STALE_SECS, resolve_peer_leaving,

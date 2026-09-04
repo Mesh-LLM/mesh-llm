@@ -441,6 +441,7 @@ async fn make_test_node_with_requirements(
         stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
         plugin_manager: Arc::new(Mutex::new(None)),
         display_name: Arc::new(Mutex::new(None)),
+        pairing: pairing::PairingService::default(),
         owner_attestation: Arc::new(Mutex::new(None)),
         release_attestation: Arc::new(Mutex::new(None)),
         release_attestation_summary: Arc::new(Mutex::new(

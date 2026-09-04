@@ -40,6 +40,29 @@ async fn runtime_status_and_activity_routes_are_dispatched() {
 }
 
 #[tokio::test]
+async fn local_runtime_shutdown_route_requests_graceful_shutdown() {
+    let state = build_test_mesh_api().await;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+
+    let response = send_runtime_lifecycle_request(
+        state,
+        "POST /api/runtime/shutdown HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n"
+            .into(),
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 202 Accepted"), "response: {response}");
+    assert_eq!(json_body(&response)["stopping"], true);
+    assert!(matches!(
+        control_rx.recv().await,
+        Some(RuntimeControlRequest::Shutdown {
+            source: "local launcher"
+        })
+    ));
+}
+
+#[tokio::test]
 async fn local_runtime_model_routes_remain_the_lifecycle_api() {
     let state = build_test_mesh_api().await;
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();

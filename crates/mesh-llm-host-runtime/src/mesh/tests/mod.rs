@@ -15,6 +15,7 @@ include!("peer_state.rs");
 include!("protocol_frames.rs");
 include!("admission.rs");
 include!("requirements.rs");
+include!("pairing.rs");
 
 mod split_coverage {
     use super::super::*;

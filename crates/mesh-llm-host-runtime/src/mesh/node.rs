@@ -142,6 +142,7 @@ pub struct Node {
     pub(crate) stage_topologies: Arc<Mutex<StageTopologyState>>,
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
+    pub(crate) pairing: pairing::PairingService,
     pub(crate) owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
     pub(crate) release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
     pub(crate) release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
@@ -825,6 +826,7 @@ impl Node {
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
+            pairing: pairing::PairingService::default(),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
@@ -901,7 +903,11 @@ impl Node {
                 .build();
             let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
                 .secret_key(secret_key.clone())
-                .alpns(vec![ALPN.to_vec(), skippy_protocol::STAGE_ALPN_V2.to_vec()])
+                .alpns(vec![
+                    ALPN.to_vec(),
+                    ALPN_PAIRING_V1.to_vec(),
+                    skippy_protocol::STAGE_ALPN_V2.to_vec(),
+                ])
                 .relay_mode(iroh::endpoint::RelayMode::Disabled)
                 .transport_config(transport_config)
                 .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
@@ -1005,6 +1011,7 @@ impl Node {
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
+            pairing: pairing::PairingService::default(),
             owner_attestation: Arc::new(Mutex::new(None)),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(

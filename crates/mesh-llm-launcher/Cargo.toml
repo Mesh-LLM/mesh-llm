@@ -1,0 +1,27 @@
+[package]
+name = "mesh-llm-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native tray launcher for the Mesh LLM daemon and web console"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm = { path = "../mesh-llm" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["full"] }
+url = "2"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"

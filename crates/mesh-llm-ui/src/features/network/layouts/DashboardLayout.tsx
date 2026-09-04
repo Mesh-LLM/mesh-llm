@@ -7,6 +7,7 @@ import {
 type DashboardLayoutProps = {
   hero: ReactNode
   status: ReactNode
+  pairing?: ReactNode
   topology: ReactNode
   catalog: ReactNode
   peers: ReactNode
@@ -14,11 +15,21 @@ type DashboardLayoutProps = {
   drawers: ReactNode
 }
 
-export function DashboardLayout({ hero, status, topology, catalog, peers, connect, drawers }: DashboardLayoutProps) {
+export function DashboardLayout({
+  hero,
+  status,
+  pairing,
+  topology,
+  catalog,
+  peers,
+  connect,
+  drawers
+}: DashboardLayoutProps) {
   return (
     <div className="flex min-w-0 flex-col gap-[14px]">
       {hero}
       {status}
+      {pairing}
       <div
         className={`grid min-w-0 gap-[14px] xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)] xl:items-stretch ${DASHBOARD_TOPOLOGY_ROW_HEIGHT_CLASS}`}
       >

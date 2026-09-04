@@ -102,8 +102,20 @@ async fn handle_post(
         "/api/runtime/config/validate" => handle_runtime_config_validate(stream, body).await,
         "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
         "/api/runtime/models" => handle_load_model(stream, state, body).await,
+        "/api/runtime/shutdown" => handle_runtime_shutdown(stream, state).await,
         _ => Ok(()),
     }
+}
+
+async fn handle_runtime_shutdown(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    };
+    respond_json(stream, 202, &serde_json::json!({ "stopping": true })).await?;
+    let _ = control_tx.send(RuntimeControlRequest::Shutdown {
+        source: "local launcher",
+    });
+    Ok(())
 }
 
 async fn handle_put(

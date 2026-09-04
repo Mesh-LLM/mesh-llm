@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mesh Launcher",
+  "identifier": "com.mesh-llm.launcher",
+  "build": {
+    "frontendDist": "assets"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../mesh-llm-ui/public/icon-192.png",
+      "../mesh-llm-ui/public/icon-512.png",
+      "../mesh-llm-ui/public/meshllm-favicon.ico"
+    ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["mesh-llm"]
+      }
+    }
+  }
+}

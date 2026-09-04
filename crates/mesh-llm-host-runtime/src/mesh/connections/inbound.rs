@@ -31,6 +31,9 @@ impl Node {
             );
         })?;
         let remote = conn.remote_id();
+        if alpn.as_slice() == ALPN_PAIRING_V1 {
+            return self.handle_pairing_incoming(conn, remote).await;
+        }
         if self.handle_stage_alpn(&alpn, conn.clone(), remote).await {
             return Ok(());
         }
