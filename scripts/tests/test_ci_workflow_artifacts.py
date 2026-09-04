@@ -30,6 +30,7 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertTrue(profile["all_rows"])
         self.assertEqual(profile["budgets"]["total_max_workers"], 18)
         self.assertEqual(profile["budgets"]["linux_max_parallel"], 12)
+        self.assertEqual(profile["budgets"]["macos_max_parallel"], 4)
         self.assertEqual(profile["budgets"]["windows_max_parallel"], 2)
 
     def test_orchestrator_calls_same_slices_for_pr_and_main(self):
@@ -83,6 +84,10 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         self.assertNotIn("runtime_product", kotlin)
         self.assertNotIn("needs:", swift)
         self.assertNotIn("runtime_product", swift)
+        self.assertIn(
+            "max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}",
+            swift,
+        )
         self.assertIn("needs: [runtime_product, kotlin_sdk_input]", linux)
         self.assertIn(
             "needs: [validate_plan, runtime_product, swift_sdk_input]",

@@ -308,6 +308,10 @@ runtime producers are not duplicated.
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
+The full Swift producer fans the seven Apple Rust targets into separately
+cached jobs, bounded by the lane's macOS `max-parallel` budget, then assembles
+their immutable static libraries into one verified XCFramework. Host-only PR
+production remains a single job.
 The Swift SDK smoke consumes the lane's immutable UI distribution with
 `--skip-build`; it does not install Node or pnpm and owns no package-manager
 cache.
@@ -319,7 +323,10 @@ The planner records profile budgets: PR drafts/ready runs allow at most
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
 `max-parallel`, and backend/platform rows are selected by ownership rather than
 by a blanket PR fan-out. Host, ABI and runtime producers remain unique per
-selected row. The readability tradeoff is one UI artifact build per active
+selected row. The full Swift target matrix is the intentional exception: its
+seven architecture/platform libraries are independent producer inputs and use
+the existing macOS cap (two for PR profiles and four for main/manual profiles)
+before one assembly join. The readability tradeoff is one UI artifact build per active
 platform workflow because artifacts are run-scoped; UI tests still execute
 only in the Website graph and host producers never rebuild the UI themselves.
 

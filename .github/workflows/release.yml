@@ -818,6 +818,7 @@ jobs:
       prepare_release_version: ${{ github.event_name == 'workflow_dispatch' }}
       update_release_manifest: ${{ github.event_name == 'workflow_dispatch' }}
       require_tracked_console: ${{ github.event_name != 'workflow_dispatch' }}
+      max_parallel: 4
       retention_days: 90
       timeout_minutes: 180
 

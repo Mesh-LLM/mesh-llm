@@ -56,6 +56,11 @@ on:
         required: false
         default: 45
         type: number
+      max_parallel:
+        description: Maximum concurrent full-matrix target builds.
+        required: false
+        default: 4
+        type: number
 
 jobs:
   runner_policy:
@@ -89,9 +94,56 @@ jobs:
           pr_approved_sha: ${{ vars.DEPOT_PR_APPROVED_SHA }}
           force_hosted: ${{ inputs.force_hosted }}
 
-  swift_sdk_artifact:
-    name: Swift SDK input (${{ inputs.mode }})
+      - name: Validate typed producer inputs
+        shell: bash
+        env:
+          SWIFT_SDK_MODE: ${{ inputs.mode }}
+          MAX_PARALLEL: ${{ inputs.max_parallel }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
+          UPDATE_RELEASE_MANIFEST: ${{ inputs.update_release_manifest }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$SWIFT_SDK_MODE" in
+            host-only|full) ;;
+            *)
+              echo "unsupported Swift SDK artifact mode: $SWIFT_SDK_MODE" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "$MAX_PARALLEL" =~ ^[1-4]$ ]]; then
+            echo "max_parallel must be an integer from 1 through 4" >&2
+            exit 1
+          fi
+          if [[ ( "$PREPARE_RELEASE_VERSION" == "true" ||
+                  "$UPDATE_RELEASE_MANIFEST" == "true" ) &&
+                -z "$RELEASE_TAG" ]]; then
+            echo "release_tag is required for release preparation" >&2
+            exit 1
+          fi
+          if [[ "$PREPARE_RELEASE_VERSION" == "true" &&
+                "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "release source preparation requires workflow_dispatch" >&2
+            exit 1
+          fi
+
+  swift_sdk_target:
+    name: Swift target (${{ matrix.target }})
+    if: ${{ inputs.mode == 'full' }}
     needs: runner_policy
+    strategy:
+      fail-fast: true
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - aarch64-apple-ios-sim
+          - x86_64-apple-ios
+          - aarch64-apple-ios-macabi
+          - x86_64-apple-ios-macabi
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
     runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
@@ -117,34 +169,96 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
-      - name: Validate typed producer inputs
-        shell: bash
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+
+      - name: Install macOS SDK build dependencies
+        run: brew install cmake ninja
+      - name: Install macOS SDK linker
+        uses: ./.github/actions/setup-macos-lld
+
+      - name: Resolve macOS native toolchain epoch
+        id: native_toolchain
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          include_tool_versions: "true"
+
+      - if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        continue-on-error: true
+        with:
+          workspaces: . -> target
+          cache-bin: "false"
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
+          shared-key: swift-sdk-${{ matrix.target }}
+          key: ${{ steps.native_toolchain.outputs.epoch }}
+          add-job-id-key: "false"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Restore exact Swift target native ABI cache
+        if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .deps/llama-build/build-stage-abi-${{ matrix.target }}-metal
+          key: ${{ format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}', matrix.target, runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
+
+      - name: Prepare dispatched release version
+        if: ${{ inputs.prepare_release_version }}
         env:
-          SWIFT_SDK_MODE: ${{ inputs.mode }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          PREPARE_RELEASE_VERSION: ${{ inputs.prepare_release_version }}
-          UPDATE_RELEASE_MANIFEST: ${{ inputs.update_release_manifest }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          case "$SWIFT_SDK_MODE" in
-            host-only|full) ;;
-            *)
-              echo "unsupported Swift SDK artifact mode: $SWIFT_SDK_MODE" >&2
-              exit 1
-              ;;
-          esac
-          if [[ ( "$PREPARE_RELEASE_VERSION" == "true" ||
-                  "$UPDATE_RELEASE_MANIFEST" == "true" ) &&
-                -z "$RELEASE_TAG" ]]; then
-            echo "release_tag is required for release preparation" >&2
-            exit 1
-          fi
-          if [[ "$PREPARE_RELEASE_VERSION" == "true" &&
-                "$EVENT_NAME" != "workflow_dispatch" ]]; then
-            echo "release source preparation requires workflow_dispatch" >&2
-            exit 1
-          fi
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Build Swift target
+        run: sdk/swift/scripts/build-xcframework.sh --target "${{ matrix.target }}"
+
+      - name: Upload immutable Swift target
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: swift-sdk-target-${{ matrix.target }}-${{ github.run_attempt }}
+          path: dist/swift-targets
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Capture Swift target sccache statistics
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-swift-sdk-${{ matrix.target }}-${{ github.run_attempt }}
+
+  swift_sdk_artifact:
+    name: Swift SDK input (${{ inputs.mode }})
+    needs: [runner_policy, swift_sdk_target]
+    if: ${{ !cancelled() && needs.runner_policy.result == 'success' && (inputs.mode == 'host-only' || needs.swift_sdk_target.result == 'success') }}
+    runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    env:
+      CACHE_NAMESPACE: mesh-llm
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      LLAMA_STAGE_BACKEND: metal
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' || github.event.inputs.original_event_name == 'pull_request' || github.event.inputs.original_event_name == 'pull_request_target') && 'READ_ONLY' || 'READ_WRITE' }}
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_macos, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
@@ -220,9 +334,19 @@ jobs:
         if: ${{ inputs.mode == 'host-only' }}
         run: sdk/swift/scripts/build-host-macos-xcframework.sh
 
+      - name: Download immutable Swift targets
+        if: ${{ inputs.mode == 'full' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
+        with:
+          pattern: swift-sdk-target-*-${{ github.run_attempt }}
+          path: dist/swift-targets
+          merge-multiple: true
+
       - name: Build full Swift SDK input
         if: ${{ inputs.mode == 'full' }}
-        run: sdk/swift/scripts/build-xcframework.sh
+        run: |
+          set -euo pipefail
+          sdk/swift/scripts/build-xcframework.sh --assemble-from dist/swift-targets
 
       - name: Verify committed Swift binding source is current
         if: ${{ !inputs.prepare_release_version }}

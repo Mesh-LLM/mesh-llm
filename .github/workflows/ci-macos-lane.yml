@@ -140,6 +140,7 @@ jobs:
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
       mode: ${{ (fromJson(inputs.lane_plan_json).profile == 'main' || fromJson(inputs.lane_plan_json).profile == 'manual-full') && 'full' || 'host-only' }}
       artifact_name: ci-sdk-swift
+      max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}
       retention_days: 1
       timeout_minutes: 90
 

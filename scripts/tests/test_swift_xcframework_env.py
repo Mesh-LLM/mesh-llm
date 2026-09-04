@@ -24,6 +24,22 @@ class SwiftXcframeworkEnvTests(unittest.TestCase):
         self.assertIn("*-apple-ios*)", script)
         self.assertIn('CARGO_ENV+=("IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET")', script)
 
+    def test_target_mode_stages_one_library_for_parallel_ci(self) -> None:
+        script = SCRIPT.read_text()
+
+        self.assertIn('build-xcframework.sh --target <rust-target>', script)
+        self.assertIn('MODE="target"', script)
+        self.assertIn('stage_target_library "$SELECTED_TARGET"', script)
+        self.assertIn('install -m 0644 "$SOURCE_LIBRARY"', script)
+
+    def test_assembly_mode_requires_every_apple_target(self) -> None:
+        script = SCRIPT.read_text()
+
+        self.assertIn('build-xcframework.sh --assemble-from <target-artifact-directory>', script)
+        self.assertIn('for RUST_TARGET in "${APPLE_TARGETS[@]}"', script)
+        self.assertIn('staged Swift target library is missing', script)
+        self.assertIn('restore_staged_libraries', script)
+
 
 if __name__ == "__main__":
     unittest.main()

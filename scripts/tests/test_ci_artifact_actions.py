@@ -1671,6 +1671,20 @@ class CiArtifactActionTests(unittest.TestCase):
             producer,
         )
         self.assertIn("sdk/swift/scripts/build-xcframework.sh", producer)
+        self.assertIn("max-parallel: ${{ inputs.max_parallel }}", producer)
+        self.assertEqual(producer.count("- aarch64-apple-ios\n"), 1)
+        self.assertIn(
+            'build-xcframework.sh --target "${{ matrix.target }}"',
+            producer,
+        )
+        self.assertIn(
+            "pattern: swift-sdk-target-*-${{ github.run_attempt }}",
+            producer,
+        )
+        self.assertIn(
+            "build-xcframework.sh --assemble-from dist/swift-targets",
+            producer,
+        )
         self.assertIn(
             "scripts/verify-swift-release-artifact.sh",
             producer,
@@ -2759,7 +2773,11 @@ class CiArtifactActionTests(unittest.TestCase):
             "ci-windows-host-slice.yml": {"runner_policy", "windows_host"},
             "ci-windows-runtime-slice.yml": {"runner_policy", "windows_runtime"},
             "static-abi-artifact.yml": {"runner_policy", "static_abi_artifact"},
-            "swift-sdk-artifact.yml": {"runner_policy", "swift_sdk_artifact"},
+            "swift-sdk-artifact.yml": {
+                "runner_policy",
+                "swift_sdk_target",
+                "swift_sdk_artifact",
+            },
         }
 
         def step_block(workflow: str, marker: str) -> str:
