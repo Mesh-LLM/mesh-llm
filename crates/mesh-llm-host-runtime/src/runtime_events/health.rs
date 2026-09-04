@@ -193,6 +193,19 @@ impl EngineHealth {
         self.bump_version();
     }
 
+    /// Task 13 (`.omo/plans/event-system-fixes.md`): bumped once per
+    /// `INGRESS_LATENCY_MIN_SAMPLES` newly recorded ingress-latency
+    /// samples (see `ingress_latency::IngressLatencyReservoir::record`),
+    /// so a genuinely-changed `ingress_p99_us` is periodically observable
+    /// through the existing change-gated health-delivery contract without
+    /// bumping (and so flooding delivery) on every single submission. No
+    /// dedicated counter is added to `EngineHealthSnapshot` for this --
+    /// the p99 VALUE itself, sourced separately from
+    /// `RuntimeEventEngine::ingress_p99_us`, is the observable change.
+    pub fn bump_for_ingress_latency_milestone(&self) {
+        self.bump_version();
+    }
+
     pub fn set_rebuild_generation(&self, value: u64) {
         self.counters
             .rebuild_generation
@@ -299,6 +312,23 @@ mod tests {
         assert_eq!(health.snapshot().version, 2);
         health.set_rebuild_generation(7);
         assert_eq!(health.snapshot().version, 3);
+    }
+
+    #[test]
+    fn bump_for_ingress_latency_milestone_bumps_version_with_no_dedicated_counter() {
+        let health = EngineHealth::default();
+        assert_eq!(health.snapshot().version, 0);
+
+        health.bump_for_ingress_latency_milestone();
+
+        assert_eq!(
+            health.snapshot(),
+            EngineHealthSnapshot {
+                version: 1,
+                ..EngineHealthSnapshot::default()
+            },
+            "a milestone bump must move only the version, no other counter"
+        );
     }
 
     #[test]

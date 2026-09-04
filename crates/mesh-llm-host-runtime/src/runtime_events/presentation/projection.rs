@@ -224,13 +224,18 @@ pub fn fact_projection_event(fact: &RuntimeFact) -> OutputEvent {
 /// (`.omo/plans/event-system-fixes.md`) adds `version` plus the same
 /// `bounds`/`ingress_p99_us` additions the wire `runtime_health` frame's
 /// `HealthProjection` carries, so the log line and the wire frame never
-/// diverge in shape. `ingress_p99_us` has no source yet (task 13 lands the
-/// reservoir); it always logs as `null` here, matching the wire frame's
-/// always-nullable field.
+/// diverge in shape. `ingress_p99_us` is not part of `EngineHealthSnapshot`
+/// itself (recording a sample must never bump `health_version` on every
+/// submission -- see `EngineHealth::bump_for_ingress_latency_milestone`),
+/// so task 13 (`.omo/plans/event-system-fixes.md`) threads it in as a
+/// separate argument, sourced by the caller from
+/// `RuntimeEventEngine::ingress_p99_us`.
 #[must_use]
-pub fn health_projection_event(snapshot: EngineHealthSnapshot) -> OutputEvent {
+pub fn health_projection_event(
+    snapshot: EngineHealthSnapshot,
+    ingress_p99_us: Option<u64>,
+) -> OutputEvent {
     let bounds = EngineConfig::FROZEN;
-    let ingress_p99_us: Option<u64> = None;
     OutputEvent::Info {
         message: format!(
             "version={} reservation_exhausted={} terminal_delivery_failed={} dropped_progress={} \

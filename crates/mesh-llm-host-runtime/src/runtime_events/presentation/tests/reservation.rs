@@ -87,7 +87,7 @@ fn health_snapshot_is_forwarded_on_flush_without_touching_the_progress_coalescer
     health.bump_reservation_exhausted();
 
     let now = Instant::now();
-    flush_tick(&coalescer, &health, &mut health_gate, &sink, now);
+    flush_tick(&coalescer, &health, || None, &mut health_gate, &sink, now);
 
     let emitted = sink.drain();
     assert!(
@@ -110,8 +110,8 @@ fn health_snapshot_cadence_gate_is_never_bypassed_by_repeated_flush_ticks() {
     health.bump_reservation_exhausted();
 
     let now = Instant::now();
-    flush_tick(&coalescer, &health, &mut health_gate, &sink, now);
-    flush_tick(&coalescer, &health, &mut health_gate, &sink, now);
+    flush_tick(&coalescer, &health, || None, &mut health_gate, &sink, now);
+    flush_tick(&coalescer, &health, || None, &mut health_gate, &sink, now);
 
     let health_events = sink.drain().into_iter().filter(is_health_event).count();
     assert_eq!(
@@ -133,8 +133,8 @@ fn two_independent_gates_each_receive_their_own_health_delivery_after_one_bump()
     health.bump_reservation_exhausted();
 
     let now = Instant::now();
-    flush_tick(&coalescer, &health, &mut gate_a, &sink_a, now);
-    flush_tick(&coalescer, &health, &mut gate_b, &sink_b, now);
+    flush_tick(&coalescer, &health, || None, &mut gate_a, &sink_a, now);
+    flush_tick(&coalescer, &health, || None, &mut gate_b, &sink_b, now);
 
     for sink in [&sink_a, &sink_b] {
         assert!(
@@ -154,13 +154,14 @@ fn an_idle_gate_delivers_nothing_across_sixty_ticks_while_the_version_is_unchang
     let now = Instant::now();
     // Prime the gate once so the idle phase below starts from an
     // already-delivered baseline, matching a real connection's seeded start.
-    flush_tick(&coalescer, &health, &mut health_gate, &sink, now);
+    flush_tick(&coalescer, &health, || None, &mut health_gate, &sink, now);
     sink.drain();
 
     for tick in 1..=60u64 {
         flush_tick(
             &coalescer,
             &health,
+            || None,
             &mut health_gate,
             &sink,
             now + std::time::Duration::from_secs(tick),
@@ -182,7 +183,14 @@ fn health_log_line_carries_version_bounds_and_a_null_ingress_p99() {
     let sink = RecordingSink::default();
     health.bump_reservation_exhausted();
 
-    flush_tick(&coalescer, &health, &mut health_gate, &sink, Instant::now());
+    flush_tick(
+        &coalescer,
+        &health,
+        || None,
+        &mut health_gate,
+        &sink,
+        Instant::now(),
+    );
 
     let message = sink
         .drain()

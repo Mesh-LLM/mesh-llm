@@ -95,6 +95,7 @@ pub(super) fn route_fact(
 pub(super) fn flush_tick(
     coalescer: &ProgressCoalescer,
     health: &EngineHealth,
+    ingress_p99_us: impl FnOnce() -> Option<u64>,
     health_gate: &mut HealthDeliveryGate,
     sink: &dyn PresentationSink,
     now: Instant,
@@ -102,7 +103,7 @@ pub(super) fn flush_tick(
     for (_scope, fact) in coalescer.flush_at(now) {
         sink.emit(fact_projection_event(&fact));
     }
-    maybe_emit_health(health, health_gate, sink, now);
+    maybe_emit_health(health, ingress_p99_us, health_gate, sink, now);
 }
 
 /// Emit a coalesced health snapshot through `sink` only when `health_gate`
@@ -112,13 +113,14 @@ pub(super) fn flush_tick(
 /// either cadence alone.
 fn maybe_emit_health(
     health: &EngineHealth,
+    ingress_p99_us: impl FnOnce() -> Option<u64>,
     health_gate: &mut HealthDeliveryGate,
     sink: &dyn PresentationSink,
     now: Instant,
 ) {
     let snapshot = health.snapshot();
     if health_gate.should_deliver(&snapshot, now) {
-        sink.emit(health_projection_event(snapshot));
+        sink.emit(health_projection_event(snapshot, ingress_p99_us()));
     }
 }
 
@@ -153,7 +155,13 @@ pub async fn drive_presentation_subscriber(
                 match received {
                     Ok(frame) => {
                         route_fact(&coalescer, sink.as_ref(), &frame);
-                        maybe_emit_health(engine.health(), &mut health_gate, sink.as_ref(), Instant::now());
+                        maybe_emit_health(
+                            engine.health(),
+                            || engine.ingress_p99_us(),
+                            &mut health_gate,
+                            sink.as_ref(),
+                            Instant::now(),
+                        );
                     }
                     Err(RecvError::Lagged(_)) => {
                         subscription.record_disconnect(engine.health());
@@ -163,7 +171,14 @@ pub async fn drive_presentation_subscriber(
                 }
             }
             _ = tick.tick() => {
-                flush_tick(&coalescer, engine.health(), &mut health_gate, sink.as_ref(), Instant::now());
+                flush_tick(
+                    &coalescer,
+                    engine.health(),
+                    || engine.ingress_p99_us(),
+                    &mut health_gate,
+                    sink.as_ref(),
+                    Instant::now(),
+                );
             }
         }
     }

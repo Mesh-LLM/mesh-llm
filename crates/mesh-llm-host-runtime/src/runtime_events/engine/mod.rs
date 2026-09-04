@@ -18,6 +18,7 @@ use tokio::sync::Notify;
 
 use super::config::RESERVATION_TABLE_CAPACITY;
 use super::health::EngineHealth;
+use super::ingress_latency::IngressLatencyReservoir;
 use super::reducer::ReducerSnapshot;
 use super::replay::ReplayBuffer;
 use super::reservation::{ReservationTable, SlotHandle};
@@ -100,6 +101,11 @@ pub struct RuntimeEventEngine {
     /// first drain call, matching `EngineHealth`'s identical
     /// `last_published` convention.
     progress_last_flush: Mutex<Option<Instant>>,
+    /// Task 13 (`.omo/plans/event-system-fixes.md`, defect D13's p99
+    /// half): the fixed, always-present ingress-latency ring backing
+    /// `Self::ingress_p99_us`, written unconditionally in `submit` below,
+    /// independent of whether a telemetry queue was ever installed.
+    ingress_latency: IngressLatencyReservoir,
 }
 
 impl RuntimeEventEngine {
@@ -138,6 +144,7 @@ impl RuntimeEventEngine {
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
             progress_last_flush: Mutex::new(None),
+            ingress_latency: IngressLatencyReservoir::new(),
         })
     }
 
@@ -224,6 +231,16 @@ impl RuntimeEventEngine {
     #[must_use]
     pub fn health(&self) -> &EngineHealth {
         &self.health
+    }
+
+    /// The current p99 (99th percentile) ingress duration in whole
+    /// microseconds, over the fixed in-process reservoir `submit` writes
+    /// unconditionally -- `None` before `INGRESS_LATENCY_MIN_SAMPLES`
+    /// samples have ever been recorded. Never gated on OTLP telemetry
+    /// configuration (task 13, `.omo/plans/event-system-fixes.md`).
+    #[must_use]
+    pub fn ingress_p99_us(&self) -> Option<u64> {
+        self.ingress_latency.p99_micros()
     }
 
     #[must_use]
@@ -336,7 +353,12 @@ impl RuntimeEventEngine {
             }
         }
         let telemetry = self.telemetry.get();
-        let start = telemetry.map(|_| Instant::now());
+        // Task 13 (`.omo/plans/event-system-fixes.md`, "Must NOT: gate p99
+        // on OTLP configuration"): always capture the submission start,
+        // regardless of whether a telemetry queue is installed -- unlike
+        // the old telemetry-only `start`, `self.ingress_latency` below is
+        // written on every call.
+        let start = Instant::now();
         // `handle.is_some()` (R1 fix, task 6-fix,
         // `.omo/plans/event-system-fixes.md`): whether THIS submission
         // arrived through a reservation-bound `ScopedIngress`. Threaded
@@ -357,8 +379,12 @@ impl RuntimeEventEngine {
             }
             DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, scope, reserved, fact),
         };
-        if let (Some(queue), Some(start)) = (telemetry, start) {
-            queue.record_class_outcome(class, outcome, start.elapsed());
+        let elapsed = start.elapsed();
+        if self.ingress_latency.record(elapsed) {
+            self.health.bump_for_ingress_latency_milestone();
+        }
+        if let Some(queue) = telemetry {
+            queue.record_class_outcome(class, outcome, elapsed);
         }
         if outcome == SubmitOutcome::Accepted {
             self.notify.notify_one();

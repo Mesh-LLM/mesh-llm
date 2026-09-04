@@ -62,12 +62,15 @@
 //! the driver's existing cadence was already the only clock task 5 needed.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::config::{TUI_RENDER_TICK, WAKE_LIST_DEPTH};
 use super::engine::RuntimeEventEngine;
+use super::health::HealthDeliveryGate;
+use super::presentation::health_projection_event;
 
 /// Spawn the engine-owned driver task for `engine`. Keep the returned
 /// handle alive for the life of the serving process and hand it to
@@ -82,14 +85,46 @@ pub fn spawn_engine_driver(engine: Arc<RuntimeEventEngine>) -> JoinHandle<()> {
 async fn drive_engine(engine: Arc<RuntimeEventEngine>) {
     let mut tick = tokio::time::interval(TUI_RENDER_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // Task 13 (`.omo/plans/event-system-fixes.md`): this driver's OWN
+    // `event_system_health` log-line consumer, gated exactly like the v1
+    // SSE `live_loop` and the presentation subscriber's `maybe_emit_health`
+    // (`runtime_events::health`'s module doc: each independent consumer
+    // owns its own `HealthDeliveryGate`, so one consumer's cadence can
+    // never starve another's, and none of them is an engine-global gate --
+    // defect D9). This is a FOURTH such consumer, not a replacement for
+    // the presentation subscriber's own emission: the driver runs in every
+    // serving mode INCLUDING `--local-model-only`, which never spawns a
+    // presentation subscriber at all (see `presentation::subscriber`'s
+    // module doc), so it is the only way the log line reaches that mode.
+    let mut health_gate = HealthDeliveryGate::new();
     loop {
         tokio::select! {
             () = engine.notified() => {
                 engine.drain();
+                maybe_emit_health_log_line(&engine, &mut health_gate);
             }
             _ = tick.tick() => {
                 engine.drain();
+                maybe_emit_health_log_line(&engine, &mut health_gate);
             }
+        }
+    }
+}
+
+/// Emit the `event_system_health` log line through `mesh_llm_events::emit_event`
+/// only when `health_gate` says the last-delivered version is stale.
+/// `ingress_p99_us` (task 13) is only computed -- via
+/// `RuntimeEventEngine::ingress_p99_us`, which sorts the reservoir's
+/// samples -- when actually about to deliver, never on every drain pass.
+/// `emit_event` no-ops safely when no output sink is installed, so this is
+/// harmless to call unconditionally in a context with no sink (e.g. a
+/// test).
+fn maybe_emit_health_log_line(engine: &RuntimeEventEngine, health_gate: &mut HealthDeliveryGate) {
+    let snapshot = engine.health().snapshot();
+    if health_gate.should_deliver(&snapshot, Instant::now()) {
+        let event = health_projection_event(snapshot, engine.ingress_p99_us());
+        if let Err(error) = mesh_llm_events::emit_event(event) {
+            tracing::warn!("engine-driver health log emission failed: {error}");
         }
     }
 }
@@ -125,6 +160,9 @@ pub fn finalize_engine_driver(driver_handle: JoinHandle<()>) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex as StdMutex;
+
+    use mesh_llm_events::{OutputEvent, OutputSink, clear_output_sink, set_output_sink};
     use mesh_llm_runtime_event_contracts::{
         FamilyFact, NativeRuntimeEventKind, OperationId, OperationScope, RuntimeEventIngress,
         RuntimeFact, SubmitOutcome,
@@ -317,5 +355,168 @@ mod tests {
              independent of whether the driver task itself ever got scheduled"
         );
         clear_runtime_event_engine();
+    }
+
+    #[derive(Default)]
+    struct RecordingOutputSink {
+        events: StdMutex<Vec<OutputEvent>>,
+    }
+
+    impl RecordingOutputSink {
+        fn take_events(&self) -> Vec<OutputEvent> {
+            std::mem::take(
+                &mut *self
+                    .events
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()),
+            )
+        }
+    }
+
+    impl OutputSink for RecordingOutputSink {
+        fn emit_event(&self, event: OutputEvent) -> std::io::Result<()> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(event);
+            Ok(())
+        }
+    }
+
+    fn is_health_event(event: &OutputEvent) -> bool {
+        matches!(
+            event,
+            OutputEvent::Info { context, .. } if context.as_deref() == Some("event_system_health")
+        )
+    }
+
+    /// `mesh_llm_events::emit_event`'s output sink is one PROCESS-GLOBAL
+    /// static: any OTHER test in this file (or anywhere else in the
+    /// binary) that spawns its own `spawn_engine_driver` -- and there are
+    /// several, none of them `#[serial_test::serial]`-marked, since they
+    /// never cared about output before this task -- can run concurrently
+    /// on a different OS thread and land ITS OWN driver's health line
+    /// (indistinguishable "version=0 ..." on a fresh, idle engine) in this
+    /// test's recording sink too. Filtering on a distinctive
+    /// `reservation_exhausted` count this test alone produces (bumped
+    /// this many times before the driver ever spawns) makes the
+    /// assertions below robust to that noise without requiring every
+    /// driver-spawning test in the crate to coordinate a shared lock.
+    const DISTINCTIVE_BUMP_COUNT: usize = 137;
+
+    fn matches_this_test(event: &OutputEvent) -> bool {
+        is_health_event(event)
+            && matches!(
+                event,
+                OutputEvent::Info { message, .. }
+                    if message.contains(&format!("reservation_exhausted={DISTINCTIVE_BUMP_COUNT}"))
+            )
+    }
+
+    /// Task 13 (`.omo/plans/event-system-fixes.md`, landmine 3): the
+    /// driver's own health-log-line consumer must be gated exactly like
+    /// the pre-existing v1 SSE `live_loop` and presentation-subscriber
+    /// consumers -- NOT an ungated fourth consumer that would flood
+    /// identical `event_system_health` lines on every ~33ms fallback
+    /// tick. A fresh `HealthDeliveryGate` delivers unconditionally on its
+    /// own first eligible check (see `health.rs`'s
+    /// `health_delivery_gate_delivers_on_the_first_check_from_new`), which
+    /// this driver hits on its own free first tick (`tokio::time::interval`
+    /// completes its first `.tick()` immediately, independent of virtual
+    /// time -- the same quirk `drive_presentation_subscriber`'s own
+    /// analogous test documents) BEFORE this test submits anything. Five
+    /// more fallback ticks with nothing changed must add NOTHING further.
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial]
+    async fn driver_health_log_line_is_gated_not_flooded_on_every_fallback_tick() {
+        clear_output_sink();
+        let sink = std::sync::Arc::new(RecordingOutputSink::default());
+        set_output_sink(sink.clone());
+
+        let engine = RuntimeEventEngine::new();
+        for _ in 0..DISTINCTIVE_BUMP_COUNT {
+            engine.health().bump_reservation_exhausted();
+        }
+        let driver = spawn_engine_driver(engine.clone());
+        settle_past_the_free_first_tick().await;
+
+        tokio::time::advance(TUI_RENDER_TICK * 5).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        driver.abort();
+        clear_output_sink();
+        let events = sink.take_events();
+        let matched = events
+            .iter()
+            .filter(|event| matches_this_test(event))
+            .count();
+        assert_eq!(
+            matched,
+            1,
+            "the driver's free first tick delivers exactly one health line for this test's \
+             distinctive state; five more ticks with no counter change must add none -- an \
+             ungated consumer would show six; matching events: {:?}",
+            events
+                .iter()
+                .filter(|event| matches_this_test(event))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Complementary half of the gating proof: once a real counter changes
+    /// AND real wall-clock time (the gate's cadence is real `Instant::now()`,
+    /// never virtualized by `tokio::time::pause`) has passed the 1s
+    /// minimum, the driver's gate DOES deliver again -- proving this is a
+    /// real change-and-cadence gate, not a permanently-latched one-shot.
+    #[tokio::test(start_paused = true)]
+    #[serial_test::serial]
+    async fn driver_health_log_line_delivers_again_after_a_real_change_past_the_cadence() {
+        clear_output_sink();
+        let sink = std::sync::Arc::new(RecordingOutputSink::default());
+        set_output_sink(sink.clone());
+
+        let engine = RuntimeEventEngine::new();
+        for _ in 0..DISTINCTIVE_BUMP_COUNT {
+            engine.health().bump_reservation_exhausted();
+        }
+        let driver = spawn_engine_driver(engine.clone());
+        settle_past_the_free_first_tick().await;
+        let first_matches = sink
+            .take_events()
+            .into_iter()
+            .filter(matches_this_test)
+            .count();
+        assert_eq!(first_matches, 1, "the free first tick must deliver once");
+
+        // A real, further counter change past the 1s real-wall-clock
+        // cadence (`HealthDeliveryGate`'s cadence reads real
+        // `std::time::Instant::now()`, never virtualized by
+        // `tokio::time::pause` -- mirrors `wiring.rs`'s identical
+        // technique for the presentation subscriber's own recv arm).
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        engine.health().bump_reservation_exhausted();
+        tokio::time::advance(TUI_RENDER_TICK).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        driver.abort();
+        clear_output_sink();
+        let events = sink.take_events();
+        let second_count = format!("reservation_exhausted={}", DISTINCTIVE_BUMP_COUNT + 1);
+        let matched = events
+            .iter()
+            .filter(|event| {
+                is_health_event(event)
+                    && matches!(event, OutputEvent::Info { message, .. } if message.contains(&second_count))
+            })
+            .count();
+        assert_eq!(
+            matched, 1,
+            "a real counter change past the 1s cadence must deliver exactly one more \
+             health line reflecting it; got: {events:?}"
+        );
     }
 }

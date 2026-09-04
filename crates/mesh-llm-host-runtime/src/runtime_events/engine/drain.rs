@@ -633,6 +633,7 @@ mod tests {
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
             progress_last_flush: Mutex::new(None),
+            ingress_latency: crate::runtime_events::ingress_latency::IngressLatencyReservoir::new(),
         })
     }
 

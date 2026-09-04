@@ -13,6 +13,7 @@ pub mod config;
 pub mod driver;
 pub mod engine;
 pub mod health;
+mod ingress_latency;
 pub mod presentation;
 pub mod reducer;
 pub mod replay;

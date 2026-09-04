@@ -256,6 +256,36 @@ fn health_frame_wire_json_carries_version_bounds_and_a_null_ingress_p99() {
     );
 }
 
+#[test]
+fn health_frame_wire_json_populates_ingress_p99_us_after_the_minimum_sample_threshold() {
+    use mesh_llm_runtime_event_contracts::{
+        FamilyFact, NativeRuntimeEventKind, OperationId, OperationScope, RuntimeFact,
+    };
+
+    let engine = RuntimeEventEngine::new();
+    for _ in 0..100 {
+        let scope = OperationScope::root_only(OperationId::new());
+        let fact =
+            RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeInitialized));
+        let _ = engine.unreserved_ingress(scope).try_submit(fact);
+    }
+
+    let cursor = Cursor::new(engine.process_instance(), 0);
+    let frame = super::frames::health_frame(&engine, cursor);
+    let data_line = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("data line present");
+    let value: serde_json::Value = serde_json::from_str(data_line).expect("valid JSON");
+    let health = value["health"].as_object().expect("health is an object");
+
+    assert!(
+        health["ingress_p99_us"].is_u64(),
+        "after >=100 submissions, ingress_p99_us must be a populated number, got: {:?}",
+        health["ingress_p99_us"]
+    );
+}
+
 // ─── Shared Rust/TS fixture round-trip ─────────────────────────────────
 
 const FRAMES_FIXTURE: &str = include_str!(

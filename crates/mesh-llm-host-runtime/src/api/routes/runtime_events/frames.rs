@@ -202,13 +202,13 @@ pub(super) struct HealthBody {
 
 pub(super) fn health_frame(engine: &RuntimeEventEngine, cursor: Cursor) -> String {
     let snapshot = engine.health().snapshot();
-    let payload = envelope(
-        cursor,
-        snapshot.rebuild_generation,
-        HealthBody {
-            health: snapshot.into(),
-        },
-    );
+    // Task 13 (`.omo/plans/event-system-fixes.md`): `ingress_p99_us` is
+    // NOT part of `EngineHealthSnapshot` (see `HealthProjection`'s doc
+    // comment on why), so the blanket `From` impl always leaves it `None`
+    // -- fill it in here from the engine's reservoir, sourced separately.
+    let mut health: HealthProjection = snapshot.into();
+    health.ingress_p99_us = engine.ingress_p99_us();
+    let payload = envelope(cursor, snapshot.rebuild_generation, HealthBody { health });
     encode("runtime_health", cursor, &payload)
 }
 

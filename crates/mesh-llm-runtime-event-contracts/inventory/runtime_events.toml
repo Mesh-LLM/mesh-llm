@@ -590,6 +590,22 @@ derivation = "= RESERVATION_TABLE_CAPACITY (3136) + UNRESERVED_OPERATION_BOUND (
 task = "6-fix"
 reason = "The reducer's TRUE total structural ceiling on operation_count(): the pre-existing RESERVATION_TABLE_CAPACITY bound (reservation-backed scopes, backstopped by evict_settled_over_capacity) plus the new UNRESERVED_OPERATION_BOUND (never-reserved scopes, unreserved_order). EngineHealth::bump_reducer_eviction_stalled now compares against this combined ceiling instead of the old RESERVATION_TABLE_CAPACITY-only check, which legitimate unreserved traffic could exceed without anything actually being stalled."
 
+[[health_bound_amendments]]
+constant = "INGRESS_LATENCY_RESERVOIR_CAPACITY"
+location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+value = 4096
+derivation = "frozen literal from the plan's Frozen additions and amendments table: 'Ingress p99 reservoir | 4,096 most recent try_submit durations, fixed ring, microsecond resolution'"
+task = "13"
+reason = "Bounds the fixed ring of recent try_submit ingress-latency samples (runtime_events::ingress_latency::IngressLatencyReservoir) behind runtime_health's ingress_p99_us wire field and the event_system_health log line, written unconditionally on every submit independent of whether OTLP telemetry is installed. A NEW table, not reducer_bound_amendments, because this bound governs the health/telemetry ingress-latency reservoir, not the reducer's operations map -- reusing that table's name would misdescribe its purpose. Numerically equal to STATE_TRANSITION_LANE_DEPTH but deliberately NOT aliased to it (unlike UNRESERVED_OPERATION_BOUND's real structural alias above): the two bound structurally unrelated things (a (scope, kind) coalescing map vs. a duration-sample ring), so sharing a name would be exactly the D12 defect class (three private duplicate copies of a bound with no real relationship)."
+
+[[health_bound_amendments]]
+constant = "INGRESS_LATENCY_MIN_SAMPLES"
+location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+value = 100
+derivation = "frozen literal from the plan's Frozen additions and amendments table: 'runtime_health additions | bounds object ... and ingress_p99_us (nullable until 100 samples exist)'"
+task = "13"
+reason = "The minimum number of recorded ingress-latency samples before ingress_p99_us reports Some instead of null. Reused as EngineHealth::bump_for_ingress_latency_milestone's cadence: RuntimeEventEngine::submit bumps the shared health_version once per this many newly recorded samples (via IngressLatencyReservoir::record's milestone return), so a genuinely-changed p99 is periodically observable through the existing change-gated health-delivery contract without bumping -- and so gating delivery -- on every single submission (see .omo/evidence/event-system-fixes/task-13/p99-cadence-note.txt)."
+
 [[event_projection_overrides]]
 profile = "progress"
 event_ids = [

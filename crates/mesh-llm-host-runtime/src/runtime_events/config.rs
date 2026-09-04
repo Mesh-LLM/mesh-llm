@@ -112,6 +112,33 @@ pub const CHILD_SETTLE_GRACE: Duration = SHUTDOWN_DRAIN_DEADLINE;
 /// Callback ingress p99 budget on certification hosts.
 pub const CALLBACK_INGRESS_P99_BUDGET: Duration = Duration::from_micros(100);
 
+/// Task 13 (`.omo/plans/event-system-fixes.md`, defect D13's p99 half),
+/// amended via `[[health_bound_amendments]]` in
+/// `crates/mesh-llm-runtime-event-contracts/inventory/runtime_events.toml`
+/// (see `.omo/evidence/event-system-fixes/task-13/amendment-note.txt`):
+/// the fixed ring size backing `runtime_events::ingress_latency::IngressLatencyReservoir`,
+/// the in-process, OTLP-independent ingress-latency instrument behind
+/// `runtime_health`'s `ingress_p99_us` wire field and the
+/// `event_system_health` log line. Numerically equal to
+/// `STATE_TRANSITION_LANE_DEPTH` but NOT an alias of it (unlike
+/// `UNRESERVED_OPERATION_BOUND` above) -- the two bound structurally
+/// unrelated things (a `(scope, kind)` coalescing map vs. a duration-sample
+/// ring), so a shared name would misdescribe one of them; see D12
+/// (`.omo/plans/event-system-fixes.md`) on the hazard of two bounds
+/// coincidentally sharing a value without a real relationship.
+pub const INGRESS_LATENCY_RESERVOIR_CAPACITY: usize = 4_096;
+
+/// Task 13, same amendment as [`INGRESS_LATENCY_RESERVOIR_CAPACITY`]: the
+/// minimum number of recorded ingress-latency samples before
+/// `ingress_p99_us` reports `Some` instead of `null` (frozen: "nullable
+/// until 100 samples exist"). Reused as the version-bump milestone cadence
+/// -- `RuntimeEventEngine::submit` bumps `EngineHealth`'s version once per
+/// this many newly recorded samples, so a genuinely-changed p99 is never
+/// permanently stranded behind an unrelated counter, without bumping (and
+/// so gating health delivery) on every single submission; see
+/// `.omo/evidence/event-system-fixes/task-13/p99-cadence-note.txt`.
+pub const INGRESS_LATENCY_MIN_SAMPLES: usize = 100;
+
 /// Read-only snapshot of the frozen bounds, exposed through engine health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngineConfig {
@@ -171,6 +198,16 @@ mod tests {
         assert_eq!(
             TOTAL_OPERATION_BOUND,
             RESERVATION_TABLE_CAPACITY + UNRESERVED_OPERATION_BOUND
+        );
+    }
+
+    #[test]
+    fn ingress_latency_bounds_are_frozen() {
+        assert_eq!(INGRESS_LATENCY_RESERVOIR_CAPACITY, 4_096);
+        assert_eq!(INGRESS_LATENCY_MIN_SAMPLES, 100);
+        assert_eq!(
+            INGRESS_LATENCY_RESERVOIR_CAPACITY, STATE_TRANSITION_LANE_DEPTH,
+            "numerically equal by coincidence, not by shared meaning -- see the doc comment"
         );
     }
 
