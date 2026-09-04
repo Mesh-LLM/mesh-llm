@@ -1,3 +1,6 @@
+use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::admission::GenerationTokenBudgetRequest;
+use crate::frontend::admission::GenerationTokenReservation;
 use crate::frontend::generation::CONTEXT_BUDGET_MAX_TOKENS;
 use crate::frontend::generation::GENERATION_RETRY_AFTER_SECS;
 use crate::frontend::generation::PhaseTimer;
@@ -66,6 +69,7 @@ impl Default for GenerationAdmissionScheduling {
 #[derive(Clone)]
 struct GenerationAdmissionWaiter {
     scheduling: GenerationAdmissionScheduling,
+    token_budget_request: GenerationTokenBudgetRequest,
     enqueued_turn: u64,
     order: u64,
 }
@@ -101,22 +105,27 @@ impl GenerationAdmissionQueue {
     pub(in crate::frontend) fn claim_or_enqueue(
         self: &Arc<Self>,
         generation_limit: Arc<Semaphore>,
+        token_budget: Arc<GenerationTokenBudget>,
+        token_budget_request: GenerationTokenBudgetRequest,
         scheduling: GenerationAdmissionScheduling,
         generation_queue_depth: Arc<AtomicUsize>,
         generation_queue_limit: usize,
     ) -> OpenAiResult<GenerationAdmissionClaim> {
+        // Validate an impossible request before queue capacity or current load
+        // can disguise it as transient overload.
+        let _ = token_budget.can_reserve_now(token_budget_request)?;
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.waiters.is_empty() {
-            match generation_limit.try_acquire_owned() {
-                Ok(permit) => return Ok(GenerationAdmissionClaim::Acquired(permit)),
-                Err(tokio::sync::TryAcquireError::Closed) => {
-                    return Err(generation_lanes_busy_error());
-                }
-                Err(tokio::sync::TryAcquireError::NoPermits) => {}
-            }
+        if state.waiters.is_empty()
+            && let Some(resources) = try_acquire_generation_resources(
+                generation_limit.clone(),
+                &token_budget,
+                token_budget_request,
+            )?
+        {
+            return Ok(GenerationAdmissionClaim::Acquired(resources));
         }
         let reservation = reserve_generation_queue(generation_queue_depth, generation_queue_limit)
             .ok_or_else(generation_queue_full_error)?;
@@ -131,6 +140,7 @@ impl GenerationAdmissionQueue {
             id,
             GenerationAdmissionWaiter {
                 scheduling,
+                token_budget_request,
                 enqueued_turn: turn,
                 order: id,
             },
@@ -140,6 +150,8 @@ impl GenerationAdmissionQueue {
         Ok(GenerationAdmissionClaim::Queued(
             GenerationAdmissionQueueLease {
                 queue: Arc::clone(self),
+                token_budget,
+                token_budget_request,
                 id,
                 reservation: Some(reservation),
             },
@@ -150,7 +162,7 @@ impl GenerationAdmissionQueue {
         self.changed.notify_waiters();
     }
 
-    fn selected_waiter(&self) -> Option<u64> {
+    fn selected_waiter(&self, token_budget: &GenerationTokenBudget) -> OpenAiResult<Option<u64>> {
         // Notify wakes the whole waiting set. Serialize and memoize one
         // election per available lane so N waiters do not each refresh and
         // sort the same N affinities.
@@ -167,7 +179,7 @@ impl GenerationAdmissionQueue {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(selected_id) = state.selected_id {
-                return Some(selected_id);
+                return Ok(Some(selected_id));
             }
             (
                 state.turn,
@@ -178,12 +190,18 @@ impl GenerationAdmissionQueue {
                     .collect::<Vec<_>>(),
             )
         };
-        let affinities = waiters
+        let mut eligible_waiters = Vec::with_capacity(waiters.len());
+        for (id, waiter) in waiters {
+            if token_budget.can_reserve_now(waiter.token_budget_request)? {
+                eligible_waiters.push((id, waiter));
+            }
+        }
+        let affinities = eligible_waiters
             .iter()
             .map(|(_, waiter)| (waiter.scheduling.refresh_affinity)())
             .collect::<Vec<_>>();
         let selected_id = order_cache_aware_candidates(
-            waiters
+            eligible_waiters
                 .iter()
                 .map(|(_, waiter)| waiter)
                 .zip(affinities.iter())
@@ -201,7 +219,7 @@ impl GenerationAdmissionQueue {
             true,
         )
         .first()
-        .and_then(|index| waiters.get(*index).map(|(id, _)| id))
+        .and_then(|index| eligible_waiters.get(*index).map(|(id, _)| id))
         .copied();
         let mut state = self
             .state
@@ -212,7 +230,7 @@ impl GenerationAdmissionQueue {
         {
             state.selected_id = selected_id;
         }
-        state.selected_id
+        Ok(state.selected_id)
     }
 
     fn remove(&self, id: u64) -> bool {
@@ -248,12 +266,19 @@ impl GenerationAdmissionQueue {
 }
 
 pub(in crate::frontend) enum GenerationAdmissionClaim {
-    Acquired(OwnedSemaphorePermit),
+    Acquired(GenerationAdmissionResources),
     Queued(GenerationAdmissionQueueLease),
+}
+
+pub(in crate::frontend) struct GenerationAdmissionResources {
+    pub(in crate::frontend) lane: OwnedSemaphorePermit,
+    pub(in crate::frontend) token_budget: GenerationTokenReservation,
 }
 
 pub(in crate::frontend) struct GenerationAdmissionQueueLease {
     queue: Arc<GenerationAdmissionQueue>,
+    token_budget: Arc<GenerationTokenBudget>,
+    token_budget_request: GenerationTokenBudgetRequest,
     id: u64,
     reservation: Option<GenerationQueueReservation>,
 }
@@ -263,40 +288,77 @@ impl GenerationAdmissionQueueLease {
         mut self,
         generation_limit: Arc<Semaphore>,
         admission_timeout: Duration,
-        deadline: Instant,
+        deadline: Option<Instant>,
         cancellation: &CancellationToken,
-    ) -> OpenAiResult<OwnedSemaphorePermit> {
+    ) -> OpenAiResult<GenerationAdmissionResources> {
         loop {
             if cancellation.is_cancelled() {
                 return Err(OpenAiError::cancelled("request cancelled"));
             }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(generation_queue_timeout_error(admission_timeout));
+            }
             let notified = self.queue.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.queue.selected_waiter() == Some(self.id) {
-                match generation_limit.clone().try_acquire_owned() {
-                    Ok(permit) => {
-                        self.queue.complete_selection(self.id);
-                        self.reservation.take();
-                        self.queue.changed.notify_waiters();
-                        return Ok(permit);
-                    }
-                    Err(tokio::sync::TryAcquireError::Closed) => {
-                        return Err(generation_lanes_busy_error());
-                    }
-                    Err(tokio::sync::TryAcquireError::NoPermits) => {}
-                }
+            let token_released = self.token_budget.release_notification().notified();
+            tokio::pin!(token_released);
+            token_released.as_mut().enable();
+            if self.queue.selected_waiter(&self.token_budget)? == Some(self.id)
+                && let Some(resources) = try_acquire_generation_resources(
+                    generation_limit.clone(),
+                    &self.token_budget,
+                    self.token_budget_request,
+                )?
+            {
+                self.queue.complete_selection(self.id);
+                self.reservation.take();
+                self.queue.changed.notify_waiters();
+                return Ok(resources);
             }
-            let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
-            tokio::select! {
-                () = &mut notified => {}
-                () = timeout => return Err(generation_queue_timeout_error(admission_timeout)),
-                () = cancellation.cancelled() => {
-                    return Err(OpenAiError::cancelled("request cancelled"));
+            if let Some(deadline) = deadline {
+                let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+                tokio::select! {
+                    () = &mut notified => {}
+                    () = &mut token_released => {}
+                    () = timeout => return Err(generation_queue_timeout_error(admission_timeout)),
+                    () = cancellation.cancelled() => {
+                        return Err(OpenAiError::cancelled("request cancelled"));
+                    }
+                }
+            } else {
+                tokio::select! {
+                    () = &mut notified => {}
+                    () = &mut token_released => {}
+                    () = cancellation.cancelled() => {
+                        return Err(OpenAiError::cancelled("request cancelled"));
+                    }
                 }
             }
         }
     }
+}
+
+fn try_acquire_generation_resources(
+    generation_limit: Arc<Semaphore>,
+    token_budget: &Arc<GenerationTokenBudget>,
+    token_budget_request: GenerationTokenBudgetRequest,
+) -> OpenAiResult<Option<GenerationAdmissionResources>> {
+    let lane = match generation_limit.try_acquire_owned() {
+        Ok(lane) => lane,
+        Err(tokio::sync::TryAcquireError::NoPermits) => return Ok(None),
+        Err(tokio::sync::TryAcquireError::Closed) => {
+            return Err(generation_lanes_busy_error());
+        }
+    };
+    let Some(token_budget) = token_budget.try_reserve(token_budget_request)? else {
+        // This is the raw semaphore permit rather than the controller wrapper,
+        // so releasing an unsuccessful partial claim does not wake the same
+        // waiter into a hot loop. A real KV release provides the wakeup.
+        drop(lane);
+        return Ok(None);
+    };
+    Ok(Some(GenerationAdmissionResources { lane, token_budget }))
 }
 
 impl Drop for GenerationAdmissionQueueLease {
@@ -367,8 +429,9 @@ impl GenerationServiceEstimator {
                 queued: false,
             });
         };
-        if let Some(wait_ms) =
-            predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
+        if !admission_timeout.is_zero()
+            && let Some(wait_ms) =
+                predicted_wait_ms_for_state(&state, self.concurrency.load(Ordering::Acquire))
             && wait_ms > admission_timeout.as_secs_f64() * 1_000.0
         {
             return Err(wait_ms);
