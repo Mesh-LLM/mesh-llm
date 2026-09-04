@@ -332,9 +332,3 @@ jobs:
                 "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
             echo "::endgroup::"
           done < <(jq -r '.[]' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")
-      - name: Capture SafeTensors smoke cache evidence
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/capture-sccache-stats
-        with:
-          artifact_name: sccache-safetensors-runtime-smoke-${{ github.run_attempt }}
-          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
