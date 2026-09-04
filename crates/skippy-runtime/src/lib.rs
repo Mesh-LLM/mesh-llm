@@ -13,6 +13,7 @@ mod logging;
 mod media;
 mod native;
 mod native_mtp;
+mod native_test_evidence;
 mod ngram;
 pub mod package;
 mod path_cstring;
@@ -40,6 +41,7 @@ pub use logging::{
 };
 pub use native::{StageModel, StageModelReader};
 pub use native_mtp::NativeMtpDraft;
+pub use native_test_evidence::write_evidence_marker;
 pub use ngram::{Cache as NgramCache, NGRAM_CACHE_MAX_NGRAM};
 pub use runtime_event_reporter::{clear_runtime_event_reporter, install_runtime_event_reporter};
 pub use runtime_events::{
