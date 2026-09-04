@@ -425,7 +425,7 @@ struct CandidatePlan {
     plan: TopologyPlan,
     minimum_remaining_vram: u64,
     total_remaining_vram: u128,
-    /// Modeled per-token decode time (max stage service time + network) in
+    /// Modeled per-token decode time (serial stage service + network) in
     /// microseconds; present only when every node in the subset reports
     /// sustained bandwidth. Drives candidate preference when comparable.
     modeled_decode_tpot_us: Option<u128>,
@@ -498,13 +498,13 @@ fn fit_candidate(
     let mut total_remaining_vram = 0u128;
 
     // Performance-aware span assignment: when every node in the subset reports
-    // sustained memory bandwidth, balance modeled per-stage decode service time
-    // (weight streaming dominates quantized decode) instead of packing each
-    // node to its memory ceiling. Any missing signal falls back to the exact
-    // capacity-greedy walk below, so signal-less fleets keep bit-identical
-    // placement.
-    if let Some((spans, _bottleneck_us)) = perf_balanced_spans(
-        &layer_weights,
+    // sustained memory bandwidth, minimize modeled single-stream serial decode
+    // time (weight streaming dominates quantized decode). Any missing signal
+    // falls back to the exact capacity-greedy walk below, so signal-less fleets
+    // keep bit-identical placement.
+    let streamed_layer_weights = streamed_layer_weight_bytes(input);
+    if let Some((spans, _stage_service_us)) = serial_optimized_spans(
+        &streamed_layer_weights,
         &layer_required_bytes,
         &capacities,
         input.layer_count as usize,
@@ -610,7 +610,9 @@ fn fit_candidate(
             parallel_lanes,
             stages,
             estimated_decode_network_ms_per_token,
-            decode_tpot_target_met: decode_tpot_target_met(
+            // Network time is a lower bound on full decode TPOT: it can prove
+            // a miss, but it cannot prove success without compute signals.
+            decode_tpot_target_met: decode_tpot_target_from_network_lower_bound(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
@@ -642,27 +644,26 @@ fn candidate_has_required_stage0(
 }
 
 fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
-    // Same-shape candidates (same node set) always both carry modeled TPOT or
-    // both not (signal completeness is a property of the node subset), so
-    // comparing on it here is equivalent to the latency path below and keeps
-    // the two orderings consistent.
-    if let (Some(candidate_tpot), Some(current_tpot)) = (
-        candidate.modeled_decode_tpot_us,
-        current.modeled_decode_tpot_us,
-    ) && candidate_tpot != current_tpot
-    {
-        return candidate_tpot < current_tpot;
-    }
-    let candidate_estimate = candidate
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let current_estimate = current
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    candidate_estimate < current_estimate
-        || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
+    // This comparison is between different node subsets of the same count,
+    // so signal completeness can differ. Prefer a complete TPOT model, then
+    // compare like-for-like estimates; never turn a missing estimate into
+    // zero latency.
+    estimate_completeness(candidate)
+        .cmp(&estimate_completeness(current))
+        .then_with(|| {
+            lower_option_is_better(
+                candidate.modeled_decode_tpot_us,
+                current.modeled_decode_tpot_us,
+            )
+        })
+        .then_with(|| {
+            lower_option_is_better(
+                candidate.plan.estimated_decode_network_ms_per_token,
+                current.plan.estimated_decode_network_ms_per_token,
+            )
+        })
+        .then_with(|| candidate.cmp(current))
+        == Ordering::Greater
 }
 
 fn latency_candidate_better(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
@@ -670,38 +671,65 @@ fn latency_candidate_better(candidate: &CandidatePlan, current: &CandidatePlan) 
 }
 
 fn latency_candidate_ordering(left: &CandidatePlan, right: &CandidatePlan) -> Ordering {
-    // Target-met outranks both estimates: a candidate that meets the decode
-    // TPOT target must not lose to one that misses it, whether compared on
-    // the modeled TPOT or the network-only estimate. This preserves the
-    // legacy priority; the modeled-TPOT tiebreak below is new and must not
-    // jump the target-met key.
-    let left_estimate = left
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let right_estimate = right
-        .plan
-        .estimated_decode_network_ms_per_token
-        .unwrap_or_default();
-    let left_target_met = left.plan.decode_tpot_target_met.unwrap_or(true);
-    let right_target_met = right.plan.decode_tpot_target_met.unwrap_or(true);
-
-    left_target_met
-        .cmp(&right_target_met)
+    estimate_completeness(left)
+        .cmp(&estimate_completeness(right))
         .then_with(|| {
-            // With complete bandwidth signals the modeled decode TPOT
-            // subsumes the network estimate (it includes network time);
-            // prefer it when both candidates carry it. Mixed-signal
-            // comparisons keep the legacy order.
-            match (left.modeled_decode_tpot_us, right.modeled_decode_tpot_us) {
-                (Some(left_tpot), Some(right_tpot)) => right_tpot.cmp(&left_tpot),
-                _ => Ordering::Equal,
+            if left.modeled_decode_tpot_us.is_some() && right.modeled_decode_tpot_us.is_some() {
+                target_status_rank(left.plan.decode_tpot_target_met)
+                    .cmp(&target_status_rank(right.plan.decode_tpot_target_met))
+            } else {
+                Ordering::Equal
             }
         })
-        .then_with(|| right_estimate.cmp(&left_estimate))
+        .then_with(|| {
+            lower_option_is_better(left.modeled_decode_tpot_us, right.modeled_decode_tpot_us)
+        })
+        .then_with(|| {
+            lower_option_is_better(
+                left.plan.estimated_decode_network_ms_per_token,
+                right.plan.estimated_decode_network_ms_per_token,
+            )
+        })
         .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
         .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
         .then_with(|| left.cmp(right))
+}
+
+/// Within equally complete full-TPOT estimates, known target success wins,
+/// followed by an unconfigured target and then a known miss. Estimate
+/// completeness is compared first so withholding compute cannot improve rank.
+fn target_status_rank(status: Option<bool>) -> u8 {
+    match status {
+        Some(true) => 2,
+        None => 1,
+        Some(false) => 0,
+    }
+}
+
+/// Full modeled TPOT is more decision-useful than a network-only estimate,
+/// which is more useful than no estimate. Numeric values are only compared by
+/// `lower_option_is_better` when both candidates carry the same signal kind.
+fn estimate_completeness(candidate: &CandidatePlan) -> u8 {
+    if candidate.modeled_decode_tpot_us.is_some() {
+        2
+    } else if candidate
+        .plan
+        .estimated_decode_network_ms_per_token
+        .is_some()
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn lower_option_is_better<T: Ord>(left: Option<T>, right: Option<T>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
@@ -809,12 +837,15 @@ fn candidate_network_ms_per_token(
     }
 }
 
-fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
-    Some(estimate? <= target?)
-}
-
 fn decode_tpot_target_met_us(estimate_us: Option<u128>, target_ms: Option<u32>) -> Option<bool> {
     Some(estimate_us? <= u128::from(target_ms?).saturating_mul(1_000))
+}
+
+fn decode_tpot_target_from_network_lower_bound(
+    network_ms: Option<u32>,
+    target_ms: Option<u32>,
+) -> Option<bool> {
+    (network_ms? > target_ms?).then_some(false)
 }
 
 /// Modeled single-stream decode TPOT for a planned stage sequence, serial
@@ -1038,12 +1069,13 @@ fn modeled_stage_time_us(node: &UsableNode, weight_bytes: u64, layer_count: usiz
 /// node id tie-break). For each contiguous split of the layer sequence across
 /// the stages, every stage's memory requirement must fit its node's ceiling
 /// (checked with prefix sums in O(1)); among feasible assignments we minimize
-/// the maximum modeled stage service time (bottleneck), breaking ties on the
-/// sum of stage times (work conservation), then on lexicographically smallest
-/// boundary vector for determinism. Returns `None` unless every node reports
+/// the serial sum of modeled stage service times, matching the single-stream
+/// TPOT evaluator used to rank the resulting plan. Ties prefer the smaller
+/// bottleneck stage time, then the lexicographically smallest boundary vector
+/// for determinism. Returns `None` unless every node reports
 /// sustained memory bandwidth — the caller then keeps today's capacity-greedy
 /// walk, which guarantees signal-less fleets keep identical placement.
-fn perf_balanced_spans(
+fn serial_optimized_spans(
     layer_weights: &[u64],
     linearized_required_bytes: &[u64],
     capacities: &[UsableNode],
@@ -1072,7 +1104,7 @@ fn perf_balanced_spans(
         prefix_weights[index + 1] = prefix_weights[index] + u128::from(*bytes);
     }
 
-    // dp[stage][boundary] = best (max stage time, total stage time) for
+    // dp[stage][boundary] = best (total stage time, max stage time) for
     // assigning layers 0..boundary to stages 0..=stage, plus the parent
     // boundary for reconstruction.
     let mut dp = vec![vec![(u128::MAX, u128::MAX, 0usize); layer_count + 1]; capacities.len()];
@@ -1102,8 +1134,8 @@ fn perf_balanced_spans(
             }
             let mut best = (u128::MAX, u128::MAX, 0usize);
             for previous in 0..boundary {
-                let (prev_max, prev_total, _) = dp[stage_index - 1][previous];
-                if prev_max == u128::MAX {
+                let (prev_total, prev_max, _) = dp[stage_index - 1][previous];
+                if prev_total == u128::MAX {
                     continue;
                 }
                 let weight = prefix_weights[boundary] - prefix_weights[previous];
@@ -1116,7 +1148,7 @@ fn perf_balanced_spans(
                 if required > u128::from(node.usable_vram_bytes) {
                     continue;
                 }
-                let candidate = (prev_max.max(time), prev_total + time, previous);
+                let candidate = (prev_total + time, prev_max.max(time), previous);
                 if candidate < best {
                     best = candidate;
                 }
@@ -1125,8 +1157,8 @@ fn perf_balanced_spans(
         }
     }
     let final_stage = capacities.len() - 1;
-    let (best_max, _, _) = dp[final_stage][layer_count];
-    if best_max == u128::MAX {
+    let (best_total, _, _) = dp[final_stage][layer_count];
+    if best_total == u128::MAX {
         return None;
     }
     // Reconstruct boundary chain.
@@ -1138,7 +1170,7 @@ fn perf_balanced_spans(
         boundary = previous;
     }
     spans.reverse();
-    Some((spans, best_max))
+    Some((spans, best_total))
 }
 
 fn max_contiguous_layers_from(
@@ -1349,10 +1381,10 @@ mod tests {
     }
 
     #[test]
-    fn perf_signals_balance_stage_times_across_equal_capacity_nodes() {
-        // Two nodes with identical capacity but a 2:1 bandwidth split: the
-        // capacity-only planner would give both the same layer count, while
-        // perf-aware balancing gives the faster node ~2x the layers.
+    fn single_stream_objective_assigns_only_required_work_to_slower_node() {
+        // For single-stream TPOT, stage times are serial. With ample memory,
+        // the faster node should therefore receive every layer except the one
+        // required to keep the slower stage non-empty.
         let fast = perf_node("fast", 48, 546_000);
         let slow = perf_node("slow", 48, 273_000);
         let mut planning = input(vec![fast, slow]);
@@ -1369,13 +1401,8 @@ mod tests {
             .iter()
             .find(|stage| stage.node_id == "slow")
             .expect("slow stage");
-        assert!(
-            fast_stage.layer_end - fast_stage.layer_start
-                > 2 * (slow_stage.layer_end - slow_stage.layer_start) - 2,
-            "fast node should receive roughly 2x the layers: fast={} slow={}",
-            fast_stage.layer_end - fast_stage.layer_start,
-            slow_stage.layer_end - slow_stage.layer_start
-        );
+        assert_eq!(slow_stage.layer_end - slow_stage.layer_start, 1);
+        assert_eq!(fast_stage.layer_end - fast_stage.layer_start, 39);
     }
 
     #[test]
@@ -1554,27 +1581,49 @@ mod tests {
     }
 
     #[test]
-    fn candidate_ordering_uses_each_plans_scored_target_result() {
+    fn candidate_ordering_does_not_reward_missing_full_tpot() {
         let candidate = |network_ms, target_met, modeled_us| CandidatePlan {
             plan: TopologyPlan {
                 context_length: 65_536,
                 parallel_lanes: 1,
                 stages: Vec::new(),
                 estimated_decode_network_ms_per_token: Some(network_ms),
-                decode_tpot_target_met: Some(target_met),
+                decode_tpot_target_met: target_met,
                 modeled_decode_tpot_us: modeled_us,
             },
             minimum_remaining_vram: 0,
             total_remaining_vram: 0,
             modeled_decode_tpot_us: modeled_us,
         };
-        let modeled_miss = candidate(1, false, Some(100_000));
-        let fallback_meets = candidate(20, true, None);
+        let modeled_miss = candidate(20, Some(false), Some(100_000));
+        let fallback_unknown = candidate(1, None, None);
 
         assert!(
-            latency_candidate_better(&fallback_meets, &modeled_miss),
-            "a target-meeting fallback candidate must outrank a modeled miss even when its network-only estimate is higher"
+            latency_candidate_better(&modeled_miss, &fallback_unknown),
+            "withholding compute data must not turn a network-only estimate into a target success"
         );
+    }
+
+    #[test]
+    fn missing_network_estimate_is_not_treated_as_zero() {
+        let candidate = |network_ms| CandidatePlan {
+            plan: TopologyPlan {
+                context_length: 65_536,
+                parallel_lanes: 1,
+                stages: Vec::new(),
+                estimated_decode_network_ms_per_token: network_ms,
+                decode_tpot_target_met: None,
+                modeled_decode_tpot_us: None,
+            },
+            minimum_remaining_vram: 0,
+            total_remaining_vram: 0,
+            modeled_decode_tpot_us: None,
+        };
+        let measured = candidate(Some(20));
+        let missing = candidate(None);
+
+        assert!(candidate_better_for_same_shape(&measured, &missing));
+        assert!(!candidate_better_for_same_shape(&missing, &measured));
     }
 
     #[test]
@@ -1855,7 +1904,10 @@ mod tests {
         assert_eq!(plan.context_length, 65_536);
         assert_eq!(plan.stages.len(), 2);
         assert_eq!(plan.estimated_decode_network_ms_per_token, Some(20));
-        assert_eq!(plan.decode_tpot_target_met, Some(true));
+        assert_eq!(
+            plan.decode_tpot_target_met, None,
+            "network time below target is not proof that full TPOT meets it"
+        );
     }
 
     #[test]

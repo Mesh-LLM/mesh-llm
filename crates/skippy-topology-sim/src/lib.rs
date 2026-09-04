@@ -5,8 +5,9 @@
 //! package, and workload intent. The simulator feeds the scenario into
 //! [`skippy_coordinator::topology::plan_topology`] and scores the resulting
 //! plan with the same cost model the planner uses, so planner decisions can
-//! be asserted against expectations ("a 2x-bandwidth node receives ~2x the
-//! layers", "a slow link rejects the TPOT target") in CI without a cluster.
+//! be asserted against expectations ("a faster node receives as much work as
+//! its capacity allows", "a slow link rejects the TPOT target") in CI without
+//! a cluster.
 //!
 //! The [`execution`](execution) layer adds a discrete pipeline model over a
 //! chosen plan: per-stage service times from streamed weight bytes and
@@ -22,6 +23,7 @@ pub mod execution;
 
 /// One candidate node in a scenario.
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioNode {
     pub vram_bytes: u64,
     /// Sustained memory bandwidth in MiB/s (`None` = unreported signal).
@@ -37,6 +39,7 @@ pub struct ScenarioNode {
 
 /// One directed link between scenario nodes. Keys are `"<source> -> <target>"`.
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioLink {
     pub rtt_ms: u32,
     #[serde(default)]
@@ -44,6 +47,7 @@ pub struct ScenarioLink {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioModel {
     pub layer_count: u32,
     pub weight_bytes_per_layer: u64,
@@ -68,6 +72,7 @@ pub struct ScenarioModel {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioWorkload {
     #[serde(default)]
     pub minimum_nodes: Option<usize>,
@@ -76,6 +81,7 @@ pub struct ScenarioWorkload {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scenario {
     pub nodes: std::collections::BTreeMap<String, ScenarioNode>,
     #[serde(default)]
@@ -294,7 +300,21 @@ minimum_nodes = 2
     }
 
     #[test]
-    fn heterogeneous_bandwidth_pair_proportions_layers() {
+    fn unknown_nested_keys_fail_loudly() {
+        let scenario = HETEROGENEOUS_PAIR.replace(
+            "sustained_mem_bandwidth_mib_per_s = 546000",
+            "sustained_mem_bandwith_mib_per_s = 546000",
+        );
+        let error = Scenario::from_toml(&scenario)
+            .expect_err("a misspelled nested performance field must be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected parse error: {error}"
+        );
+    }
+
+    #[test]
+    fn single_stream_objective_prefers_the_faster_node() {
         let scenario = Scenario::from_toml(HETEROGENEOUS_PAIR).expect("scenario");
         let plan = scenario.plan().expect("plan");
         assert_eq!(plan.stages.len(), 2);
@@ -310,9 +330,14 @@ minimum_nodes = 2
             .expect("beta stage");
         let alpha_layers = alpha.layer_end - alpha.layer_start;
         let beta_layers = beta.layer_end - beta.layer_start;
+        assert_eq!(alpha_layers + beta_layers, 40, "all layers placed");
         assert!(
-            alpha_layers >= 2 * beta_layers - 2,
-            "2x bandwidth should earn ~2x layers: alpha={alpha_layers} beta={beta_layers}"
+            alpha_layers > beta_layers,
+            "faster alpha should carry more work"
+        );
+        assert!(
+            beta_layers > 0,
+            "every selected stage must remain non-empty"
         );
     }
 
@@ -332,18 +357,14 @@ minimum_nodes = 2
             .iter()
             .find(|stage| stage.node_id == "beta")
             .expect("beta stage");
-        // Without signals the capacity-greedy walk fills the first node to
-        // its memory ceiling (~38 layers) and hands the remainder (~2) to
-        // the second — very different from the perf-aware ~2:1 split. What
-        // must hold: full coverage and non-empty stages; and the split must
-        // NOT match perf proportions, proving the fallback engaged.
+        // Without complete signals the exact capacity-greedy fallback fills
+        // the first node to its memory ceiling and hands the remainder to the
+        // second. The fallback contract is locked more precisely in the
+        // coordinator package; this scenario guards full, non-empty coverage.
         let alpha_layers = alpha.layer_end - alpha.layer_start;
         let beta_layers = beta.layer_end - beta.layer_start;
         assert_eq!(alpha_layers + beta_layers, 40, "all layers placed");
         assert!(alpha_layers > 0 && beta_layers > 0);
-        assert!(
-            beta_layers * 2 < alpha_layers,
-            "capacity-only fallback packs the first node instead of balancing: alpha={alpha_layers} beta={beta_layers}"
-        );
+        assert!(alpha_layers > beta_layers);
     }
 }

@@ -86,6 +86,7 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         models: vec![model.name.to_string()],
         vram_bytes: 0,
         rtt_ms: None,
+        rtt_observation_window: None,
         model_source: None,
         admitted: true,
         serving_models: vec![model.name.to_string()],
@@ -146,6 +147,7 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         inference_admission_state: None,
         display_rtt: None,
         selected_path: None,
+        observed_large_frame: None,
         propagated_latency: None,
     }
 }
@@ -184,6 +186,9 @@ pub(super) fn fleet_peer_with_health(
             model_name: model.name.to_string(),
             avg_tokens_per_second_milli,
             throughput_samples: 8,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         }];
     }
     peer
@@ -797,6 +802,9 @@ async fn tool_capability_outranks_advertised_throughput_for_the_acting_model() {
             model_name: BIG_MODELS[0].name.to_string(),
             avg_tokens_per_second_milli: 1_000,
             throughput_samples: 8,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         }];
     let mut fast_non_caller =
         fleet_peer_with_tool_use(2, BIG_MODELS[1], CapabilityLevel::None, None);
@@ -805,6 +813,9 @@ async fn tool_capability_outranks_advertised_throughput_for_the_acting_model() {
             model_name: BIG_MODELS[1].name.to_string(),
             avg_tokens_per_second_milli: 90_000,
             throughput_samples: 8,
+            observed_stage_us_per_layer: None,
+            stage_timing_samples: None,
+            stage_timing_age_ms: None,
         }];
     node.insert_test_peer(slow_tool_caller).await;
     node.insert_test_peer(fast_non_caller).await;

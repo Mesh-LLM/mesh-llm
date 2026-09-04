@@ -11,6 +11,16 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
+const MAX_GOSSIP_GPU_METRIC_VALUES: usize = 16;
+const MAX_GOSSIP_GPU_METRIC_CSV_BYTES: usize = 1_024;
+const MAX_GOSSIP_MEM_BANDWIDTH_GBPS_PER_DEVICE: f64 = 10_000.0;
+const MAX_GOSSIP_COMPUTE_TFLOPS_PER_DEVICE: f64 = 10_000.0;
+const MIN_TRUSTED_STAGE_TIMING_SAMPLES: u64 = 8;
+const MAX_TRUSTED_STAGE_TIMING_AGE_MS: u64 = 2 * 60 * 1_000;
+const SIGNATURE_LINK_BANDWIDTH_BUCKET_MIB_PER_S: u32 = 5;
+const SIGNATURE_MEM_BANDWIDTH_BUCKET_MIB_PER_S: u32 = 5_000;
+const SIGNATURE_COMPUTE_BUCKET_GFLOP_PER_S: u32 = 1_000;
+const SIGNATURE_STAGE_TIMING_BUCKET_US_PER_LAYER: u64 = 100;
 
 /// Try to extract GGUF architecture metadata from a layer package's shared
 /// metadata file.  Layer packages store a `shared/metadata.gguf` that carries
@@ -446,12 +456,16 @@ impl SplitParticipantPerf {
         mem_bandwidth_gbps: Option<&str>,
         compute_tflops_fp16: Option<&str>,
     ) -> Self {
-        let bandwidth_mib_per_s = parse_metric_csv_sum(mem_bandwidth_gbps)
-            .map(|gbps| gbps * 1_000_000_000.0 / 1_048_576.0)
-            .and_then(|mib| u32::try_from(mib.trunc() as u64).ok());
-        let compute_gflop_per_s = parse_metric_csv_sum(compute_tflops_fp16)
-            .map(|tflops| tflops * 1_000.0)
-            .and_then(|gflops| u32::try_from(gflops.trunc() as u64).ok());
+        let bandwidth_mib_per_s = parse_bounded_metric_csv_sum(
+            mem_bandwidth_gbps,
+            MAX_GOSSIP_MEM_BANDWIDTH_GBPS_PER_DEVICE,
+        )
+        .map(|gbps| gbps * 1_000_000_000.0 / 1_048_576.0)
+        .and_then(|mib| u32::try_from(mib.trunc() as u64).ok());
+        let compute_gflop_per_s =
+            parse_bounded_metric_csv_sum(compute_tflops_fp16, MAX_GOSSIP_COMPUTE_TFLOPS_PER_DEVICE)
+                .map(|tflops| tflops * 1_000.0)
+                .and_then(|gflops| u32::try_from(gflops.trunc() as u64).ok());
         Self {
             sustained_mem_bandwidth_mib_per_s: bandwidth_mib_per_s,
             sustained_compute_gflop_per_s: compute_gflop_per_s,
@@ -463,31 +477,45 @@ impl SplitParticipantPerf {
         mut self,
         hint: Option<&crate::network::metrics::ModelThroughputHint>,
     ) -> Self {
-        self.observed_decode_us_per_layer = hint.and_then(|hint| hint.observed_stage_us_per_layer);
+        self.observed_decode_us_per_layer = hint.and_then(|hint| {
+            if hint.stage_timing_samples.unwrap_or_default() >= MIN_TRUSTED_STAGE_TIMING_SAMPLES
+                && hint.stage_timing_age_ms.unwrap_or(u64::MAX) <= MAX_TRUSTED_STAGE_TIMING_AGE_MS
+            {
+                hint.observed_stage_us_per_layer
+            } else {
+                None
+            }
+        });
         self
     }
 }
 
-/// Sum a comma-separated float list ("1948.7,2100.1"). Tolerates empty/blank
-/// entries. `None` when the field is absent, empty, or any entry is
-/// non-finite/negative/unparsable.
-fn parse_metric_csv_sum(field: Option<&str>) -> Option<f64> {
+/// Sum a bounded comma-separated peer metric list. Limits are deliberately
+/// above current hardware, but prevent a fabricated near-`u32::MAX` aggregate
+/// from dominating placement or exhausting parse work.
+fn parse_bounded_metric_csv_sum(field: Option<&str>, max_per_value: f64) -> Option<f64> {
     let field = field?;
+    if field.len() > MAX_GOSSIP_GPU_METRIC_CSV_BYTES {
+        return None;
+    }
     let mut total = 0.0f64;
-    let mut saw_value = false;
-    for entry in field.split(',') {
+    let mut value_count = 0usize;
+    for (entry_index, entry) in field.split(',').enumerate() {
+        if entry_index >= MAX_GOSSIP_GPU_METRIC_VALUES {
+            return None;
+        }
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
         }
         let value: f64 = entry.parse().ok()?;
-        if !value.is_finite() || value < 0.0 {
+        if !value.is_finite() || value <= 0.0 || value > max_per_value {
             return None;
         }
+        value_count += 1;
         total += value;
-        saw_value = true;
     }
-    saw_value.then_some(total)
+    (value_count > 0).then_some(total)
 }
 
 impl SplitParticipantPackageSignal {
@@ -682,9 +710,11 @@ pub(super) async fn collect_split_participants(
         .with_local_perf(SplitParticipantPerf {
             sustained_mem_bandwidth_mib_per_s: local_perf.0,
             sustained_compute_gflop_per_s: local_perf.1,
-            observed_decode_us_per_layer: local_stage_timing
-                .as_ref()
-                .map(|hint| hint.observed_us_per_layer),
+            observed_decode_us_per_layer: local_stage_timing.as_ref().and_then(|hint| {
+                (hint.sample_count >= MIN_TRUSTED_STAGE_TIMING_SAMPLES
+                    && hint.sample_age_ms <= MAX_TRUSTED_STAGE_TIMING_AGE_MS)
+                    .then_some(hint.observed_us_per_layer)
+            }),
         }),
     ];
     let mut excluded = Vec::new();
@@ -991,25 +1021,70 @@ fn split_inventory_covered_layers<'a>(
 pub(super) fn split_participant_signature(
     participants: &[SplitParticipant],
 ) -> SplitParticipantSignature {
+    split_participant_signature_with_perf(
+        participants,
+        super::split_planning::perf_aware_placement_enabled(),
+    )
+}
+
+fn split_participant_signature_with_perf(
+    participants: &[SplitParticipant],
+    include_perf: bool,
+) -> SplitParticipantSignature {
     participants
         .iter()
         .map(|participant| {
+            let link_bandwidth = if include_perf {
+                participant.large_frame_mib_per_s
+            } else {
+                None
+            };
+            let mem_bandwidth = if include_perf {
+                participant.sustained_mem_bandwidth_mib_per_s
+            } else {
+                None
+            };
+            let compute = if include_perf {
+                participant.sustained_compute_gflop_per_s
+            } else {
+                None
+            };
+            let stage_timing = if include_perf {
+                participant.observed_decode_us_per_layer
+            } else {
+                None
+            };
             (
                 participant.node_id.to_string(),
                 participant.vram_bytes,
                 participant.cached_slice_bytes,
                 participant.missing_artifact_bytes,
                 participant.rtt_ms,
-                participant.large_frame_mib_per_s,
+                link_bandwidth.map(|value| {
+                    quantize_nonzero_u32(value, SIGNATURE_LINK_BANDWIDTH_BUCKET_MIB_PER_S)
+                }),
                 participant.artifact_transfer_supported,
                 participant.availability_score,
-                participant.sustained_mem_bandwidth_mib_per_s,
-                participant.sustained_compute_gflop_per_s,
-                participant.observed_decode_us_per_layer,
+                mem_bandwidth.map(|value| {
+                    quantize_nonzero_u32(value, SIGNATURE_MEM_BANDWIDTH_BUCKET_MIB_PER_S)
+                }),
+                compute
+                    .map(|value| quantize_nonzero_u32(value, SIGNATURE_COMPUTE_BUCKET_GFLOP_PER_S)),
+                stage_timing.map(|value| {
+                    quantize_nonzero_u64(value, SIGNATURE_STAGE_TIMING_BUCKET_US_PER_LAYER)
+                }),
                 participant.rtt_corroborated,
             )
         })
         .collect()
+}
+
+fn quantize_nonzero_u32(value: u32, bucket: u32) -> u32 {
+    value.max(bucket) / bucket * bucket
+}
+
+fn quantize_nonzero_u64(value: u64, bucket: u64) -> u64 {
+    value.max(bucket) / bucket * bucket
 }
 
 pub(super) fn split_participant_set_hash(participants: &[SplitParticipant]) -> String {
@@ -1130,6 +1205,96 @@ pub(super) fn log_topology_plan_diagnostics(
             model_ref,
             diagnostics = ?diagnostics,
             "package-aware split topology planner emitted diagnostics"
+        );
+    }
+}
+
+#[cfg(test)]
+mod perf_signal_tests {
+    use super::*;
+    use crate::network::metrics::ModelThroughputHint;
+
+    #[test]
+    fn peer_gpu_metrics_reject_implausible_or_oversized_csvs() {
+        let plausible =
+            SplitParticipantPerf::from_gossip_csvs(Some("1948.7,2100.1"), Some("850.0,900.0"));
+        assert!(plausible.sustained_mem_bandwidth_mib_per_s.is_some());
+        assert!(plausible.sustained_compute_gflop_per_s.is_some());
+
+        let implausible = SplitParticipantPerf::from_gossip_csvs(Some("4294967295"), None);
+        assert_eq!(implausible.sustained_mem_bandwidth_mib_per_s, None);
+
+        let too_many = std::iter::repeat_n("100", MAX_GOSSIP_GPU_METRIC_VALUES + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        let oversized = SplitParticipantPerf::from_gossip_csvs(Some(&too_many), None);
+        assert_eq!(oversized.sustained_mem_bandwidth_mib_per_s, None);
+
+        let too_long = "1".repeat(MAX_GOSSIP_GPU_METRIC_CSV_BYTES + 1);
+        let oversized = SplitParticipantPerf::from_gossip_csvs(Some(&too_long), None);
+        assert_eq!(oversized.sustained_mem_bandwidth_mib_per_s, None);
+    }
+
+    #[test]
+    fn stage_timing_requires_fresh_multi_sample_evidence() {
+        let hint = |samples, age_ms| ModelThroughputHint {
+            model_name: "model".to_string(),
+            avg_tokens_per_second_milli: 0,
+            throughput_samples: 0,
+            observed_stage_us_per_layer: Some(2_500),
+            stage_timing_samples: Some(samples),
+            stage_timing_age_ms: Some(age_ms),
+        };
+
+        assert_eq!(
+            SplitParticipantPerf::default()
+                .with_stage_timing(Some(&hint(MIN_TRUSTED_STAGE_TIMING_SAMPLES, 500)))
+                .observed_decode_us_per_layer,
+            Some(2_500)
+        );
+        assert_eq!(
+            SplitParticipantPerf::default()
+                .with_stage_timing(Some(&hint(MIN_TRUSTED_STAGE_TIMING_SAMPLES - 1, 500)))
+                .observed_decode_us_per_layer,
+            None
+        );
+        assert_eq!(
+            SplitParticipantPerf::default()
+                .with_stage_timing(Some(&hint(
+                    MIN_TRUSTED_STAGE_TIMING_SAMPLES,
+                    MAX_TRUSTED_STAGE_TIMING_AGE_MS + 1,
+                )))
+                .observed_decode_us_per_layer,
+            None
+        );
+    }
+
+    #[test]
+    fn participant_signature_ignores_sub_bucket_perf_noise() {
+        let mut first = SplitParticipant::new(
+            iroh::SecretKey::from_bytes(&[41; 32]).public(),
+            40_000_000_000,
+            None,
+        );
+        first.sustained_mem_bandwidth_mib_per_s = Some(400_001);
+        first.sustained_compute_gflop_per_s = Some(20_001);
+        first.observed_decode_us_per_layer = Some(2_501);
+        first.large_frame_mib_per_s = Some(101);
+        let mut noisy = first;
+        noisy.sustained_mem_bandwidth_mib_per_s = Some(404_999);
+        noisy.sustained_compute_gflop_per_s = Some(20_999);
+        noisy.observed_decode_us_per_layer = Some(2_599);
+        noisy.large_frame_mib_per_s = Some(104);
+
+        assert_eq!(
+            split_participant_signature_with_perf(&[first], true),
+            split_participant_signature_with_perf(&[noisy], true)
+        );
+
+        noisy.observed_decode_us_per_layer = Some(2_600);
+        assert_ne!(
+            split_participant_signature_with_perf(&[first], true),
+            split_participant_signature_with_perf(&[noisy], true)
         );
     }
 }
