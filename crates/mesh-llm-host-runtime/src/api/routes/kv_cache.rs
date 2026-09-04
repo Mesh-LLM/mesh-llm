@@ -28,7 +28,7 @@ struct KvCacheEffectivePayload {
 }
 
 #[derive(Debug, Serialize)]
-struct KvCacheStatusPayload {
+pub(crate) struct KvCacheStatusPayload {
     version: u32,
     format_version: u32,
     configured: KvCacheConfiguredPayload,
@@ -50,10 +50,22 @@ struct KvCacheClearRequest {
     model_identity: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct KvCacheOperationPayload {
-    freed_bytes: u64,
-    status: KvCacheStatusPayload,
+#[derive(Clone, Debug)]
+pub(crate) enum KvCacheOperation {
+    Status,
+    Prune {
+        target_bytes: Option<u64>,
+        model_identity: Option<String>,
+    },
+    Clear {
+        model_identity: Option<String>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct KvCacheOperationResult {
+    pub(crate) status_json: Vec<u8>,
+    pub(crate) freed_bytes: Option<u64>,
 }
 
 pub(super) async fn handle_status(stream: &mut TcpStream) -> anyhow::Result<()> {
@@ -78,48 +90,24 @@ pub(super) async fn handle_prune(stream: &mut TcpStream, body: &str) -> anyhow::
             Err(error) => return respond_error(stream, 400, &error.to_string()).await,
         }
     };
-    let Some(manager) = node_kv_disk_manager() else {
+    if node_kv_disk_manager().is_none() {
         return respond_error(stream, 409, "disk prompt cache is not active").await;
-    };
-    let target = request.target_bytes.unwrap_or_else(|| {
-        manager
-            .limits()
-            .budget_bytes
-            .saturating_mul(85)
-            .checked_div(100)
-            .unwrap_or(0)
-    });
-    let result = tokio::task::spawn_blocking(move || match request.model_identity.as_deref() {
-        Some(identity) if identity.trim().is_empty() => {
-            anyhow::bail!("model_identity must not be empty")
-        }
-        Some(identity) => manager.prune_model_to(identity, target),
-        None => manager.prune_to(target),
+    }
+    match execute_operation(KvCacheOperation::Prune {
+        target_bytes: request.target_bytes,
+        model_identity: request.model_identity,
     })
-    .await;
-    let freed = match result {
-        Ok(Ok(freed)) => freed,
-        Ok(Err(error)) => return respond_error(stream, 500, &error.to_string()).await,
-        Err(error) => return respond_error(stream, 500, &error.to_string()).await,
-    };
-    respond_json(
-        stream,
-        200,
-        &KvCacheOperationPayload {
-            freed_bytes: freed,
-            status: status_payload()?,
-        },
-    )
     .await
+    {
+        Ok(result) => respond_operation(stream, result).await,
+        Err(error) => respond_error(stream, 500, &error.to_string()).await,
+    }
 }
 
 pub(super) async fn handle_clear(stream: &mut TcpStream, body: &str) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
     }
-    let Some(manager) = node_kv_disk_manager() else {
-        return respond_error(stream, 409, "disk prompt cache is not active").await;
-    };
     let request = if body.trim().is_empty() {
         KvCacheClearRequest::default()
     } else {
@@ -128,28 +116,84 @@ pub(super) async fn handle_clear(stream: &mut TcpStream, body: &str) -> anyhow::
             Err(error) => return respond_error(stream, 400, &error.to_string()).await,
         }
     };
-    let result = tokio::task::spawn_blocking(move || match request.model_identity.as_deref() {
-        Some(identity) if identity.trim().is_empty() => {
-            anyhow::bail!("model_identity must not be empty")
-        }
-        Some(identity) => manager.clear_model(identity),
-        None => manager.clear(),
+    if node_kv_disk_manager().is_none() {
+        return respond_error(stream, 409, "disk prompt cache is not active").await;
+    }
+    match execute_operation(KvCacheOperation::Clear {
+        model_identity: request.model_identity,
     })
-    .await;
-    let freed = match result {
-        Ok(Ok(freed)) => freed,
-        Ok(Err(error)) => return respond_error(stream, 500, &error.to_string()).await,
-        Err(error) => return respond_error(stream, 500, &error.to_string()).await,
-    };
+    .await
+    {
+        Ok(result) => respond_operation(stream, result).await,
+        Err(error) => respond_error(stream, 500, &error.to_string()).await,
+    }
+}
+
+async fn respond_operation(
+    stream: &mut TcpStream,
+    result: KvCacheOperationResult,
+) -> anyhow::Result<()> {
+    let status = serde_json::from_slice::<serde_json::Value>(&result.status_json)?;
     respond_json(
         stream,
         200,
-        &KvCacheOperationPayload {
-            freed_bytes: freed,
-            status: status_payload()?,
-        },
+        &serde_json::json!({
+            "freed_bytes": result.freed_bytes.unwrap_or(0),
+            "status": status,
+        }),
     )
     .await
+}
+
+pub(crate) async fn execute_operation(
+    operation: KvCacheOperation,
+) -> anyhow::Result<KvCacheOperationResult> {
+    let freed_bytes = match operation {
+        KvCacheOperation::Status => None,
+        KvCacheOperation::Prune {
+            target_bytes,
+            model_identity,
+        } => {
+            let manager = node_kv_disk_manager()
+                .ok_or_else(|| anyhow::anyhow!("disk prompt cache is not active"))?;
+            let target = target_bytes.unwrap_or_else(|| {
+                manager
+                    .limits()
+                    .budget_bytes
+                    .saturating_mul(85)
+                    .checked_div(100)
+                    .unwrap_or(0)
+            });
+            Some(
+                tokio::task::spawn_blocking(move || match model_identity.as_deref() {
+                    Some(identity) if identity.trim().is_empty() => {
+                        anyhow::bail!("model_identity must not be empty")
+                    }
+                    Some(identity) => manager.prune_model_to(identity, target),
+                    None => manager.prune_to(target),
+                })
+                .await??,
+            )
+        }
+        KvCacheOperation::Clear { model_identity } => {
+            let manager = node_kv_disk_manager()
+                .ok_or_else(|| anyhow::anyhow!("disk prompt cache is not active"))?;
+            Some(
+                tokio::task::spawn_blocking(move || match model_identity.as_deref() {
+                    Some(identity) if identity.trim().is_empty() => {
+                        anyhow::bail!("model_identity must not be empty")
+                    }
+                    Some(identity) => manager.clear_model(identity),
+                    None => manager.clear(),
+                })
+                .await??,
+            )
+        }
+    };
+    Ok(KvCacheOperationResult {
+        status_json: serde_json::to_vec(&status_payload()?)?,
+        freed_bytes,
+    })
 }
 
 fn status_payload() -> anyhow::Result<KvCacheStatusPayload> {

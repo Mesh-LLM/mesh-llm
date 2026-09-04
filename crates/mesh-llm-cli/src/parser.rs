@@ -181,6 +181,10 @@ mod tests {
             "--model-identity",
             "blake3:model",
             "--yes",
+            "--endpoint",
+            "node-a",
+            "--endpoint",
+            "node-b",
             "--json",
         ])
         .expect("kv-cache prune should parse");
@@ -191,6 +195,7 @@ mod tests {
                         target,
                         model_identity,
                         yes,
+                        endpoints,
                         json,
                         ..
                     },
@@ -198,6 +203,7 @@ mod tests {
                 assert_eq!(target.as_deref(), Some("16GiB"));
                 assert_eq!(model_identity.as_deref(), Some("blake3:model"));
                 assert!(yes);
+                assert_eq!(endpoints, vec!["node-a", "node-b"]);
                 assert!(json);
             }
             other => panic!("unexpected command: {other:?}"),

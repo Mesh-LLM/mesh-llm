@@ -3,7 +3,7 @@ mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
 mod health;
-mod kv_cache;
+pub(crate) mod kv_cache;
 pub(crate) mod logs;
 mod mcp;
 mod mesh_hook;
@@ -89,6 +89,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("POST", "/api/runtime/control/scan-refresh")
                 | ("POST", "/api/runtime/control/refresh-inventory")
                 | ("POST", "/api/runtime/control/apply-config")
+                | ("POST", "/api/runtime/control/kv-cache")
                 | ("POST", "/api/runtime/control/load-model")
                 | ("POST", "/api/runtime/control/unload-model")
                 | ("POST", "/api/runtime/control/ensure-model")

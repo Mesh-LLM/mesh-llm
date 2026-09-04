@@ -1111,6 +1111,9 @@ pub enum Command {
 pub enum KvCacheCommand {
     /// Show the configured and effective cache state.
     Status {
+        /// Authenticated owner-control endpoint; repeat for multiple owned nodes.
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
         #[arg(long, default_value = "3131")]
         port: u16,
         #[arg(long)]
@@ -1126,6 +1129,9 @@ pub enum KvCacheCommand {
         model_identity: Option<String>,
         #[arg(long)]
         yes: bool,
+        /// Authenticated owner-control endpoint; repeat for multiple owned nodes.
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
         #[arg(long, default_value = "3131")]
         port: u16,
         #[arg(long)]
@@ -1138,6 +1144,9 @@ pub enum KvCacheCommand {
         model_identity: Option<String>,
         #[arg(long)]
         yes: bool,
+        /// Authenticated owner-control endpoint; repeat for multiple owned nodes.
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
         #[arg(long, default_value = "3131")]
         port: u16,
         #[arg(long)]

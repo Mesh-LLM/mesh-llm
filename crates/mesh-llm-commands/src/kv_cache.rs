@@ -6,14 +6,23 @@ use serde_json::{Value, json};
 
 pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
     match command {
-        KvCacheCommand::Status { port, json } => {
-            let value = request(*port, reqwest::Method::GET, "/api/runtime/kv-cache", None).await?;
+        KvCacheCommand::Status {
+            endpoints,
+            port,
+            json,
+        } => {
+            let value = if endpoints.is_empty() {
+                request(*port, reqwest::Method::GET, "/api/runtime/kv-cache", None).await?
+            } else {
+                remote_request(*port, endpoints, "status", None, None).await?
+            };
             print_response(&value, *json)
         }
         KvCacheCommand::Prune {
             target,
             model_identity,
             yes,
+            endpoints,
             port,
             json: json_output,
         } => {
@@ -27,32 +36,69 @@ pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
                 "target_bytes": target_bytes,
                 "model_identity": model_identity,
             });
-            let value = request(
-                *port,
-                reqwest::Method::POST,
-                "/api/runtime/kv-cache/prune",
-                Some(body),
-            )
-            .await?;
+            let value = if endpoints.is_empty() {
+                request(
+                    *port,
+                    reqwest::Method::POST,
+                    "/api/runtime/kv-cache/prune",
+                    Some(body),
+                )
+                .await?
+            } else {
+                remote_request(
+                    *port,
+                    endpoints,
+                    "prune",
+                    target_bytes,
+                    model_identity.clone(),
+                )
+                .await?
+            };
             print_response(&value, *json_output)
         }
         KvCacheCommand::Clear {
             model_identity,
             yes,
+            endpoints,
             port,
             json: json_output,
         } => {
             confirm_destructive("clear inactive disk prompt-cache entries", *yes)?;
-            let value = request(
-                *port,
-                reqwest::Method::DELETE,
-                "/api/runtime/kv-cache",
-                Some(json!({ "model_identity": model_identity })),
-            )
-            .await?;
+            let value = if endpoints.is_empty() {
+                request(
+                    *port,
+                    reqwest::Method::DELETE,
+                    "/api/runtime/kv-cache",
+                    Some(json!({ "model_identity": model_identity })),
+                )
+                .await?
+            } else {
+                remote_request(*port, endpoints, "clear", None, model_identity.clone()).await?
+            };
             print_response(&value, *json_output)
         }
     }
+}
+
+async fn remote_request(
+    port: u16,
+    endpoints: &[String],
+    operation: &str,
+    target_bytes: Option<u64>,
+    model_identity: Option<String>,
+) -> Result<Value> {
+    request(
+        port,
+        reqwest::Method::POST,
+        "/api/runtime/control/kv-cache",
+        Some(json!({
+            "endpoints": endpoints,
+            "operation": operation,
+            "target_bytes": target_bytes,
+            "model_identity": model_identity,
+        })),
+    )
+    .await
 }
 
 async fn request(
@@ -62,7 +108,7 @@ async fn request(
     body: Option<Value>,
 ) -> Result<Value> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(45))
         .build()?;
     let url = format!("http://127.0.0.1:{port}{path}");
     let mut request = client.request(method, &url);
@@ -110,6 +156,34 @@ fn confirm_destructive(action: &str, yes: bool) -> Result<()> {
 fn print_response(value: &Value, json_output: bool) -> Result<()> {
     if json_output {
         println!("{}", serde_json::to_string(value)?);
+        return Ok(());
+    }
+    if let Some(results) = value.get("results").and_then(Value::as_array) {
+        for result in results {
+            let node = result
+                .get("target_node_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            if let Some(error) = result.get("error").filter(|value| !value.is_null()) {
+                println!(
+                    "Node {node}: error: {}",
+                    error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error")
+                );
+            } else if let Some(freed) = result.get("freed_bytes").and_then(Value::as_u64) {
+                println!("Node {node}: freed {freed} bytes");
+            } else {
+                let state = result
+                    .get("status")
+                    .and_then(|status| status.get("effective"))
+                    .and_then(|effective| effective.get("state"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                println!("Node {node}: {state}");
+            }
+        }
         return Ok(());
     }
     if let Some(freed) = value.get("freed_bytes").and_then(Value::as_u64) {

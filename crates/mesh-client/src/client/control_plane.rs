@@ -6,6 +6,7 @@ use crate::proto::node::{
     OwnerControlDrainModelResponse, OwnerControlEnsureModelRequest,
     OwnerControlEnsureModelResponse, OwnerControlEnvelope, OwnerControlError,
     OwnerControlErrorCode, OwnerControlGetConfigRequest, OwnerControlHandshake,
+    OwnerControlKvCacheOperation, OwnerControlKvCacheRequest, OwnerControlKvCacheResponse,
     OwnerControlLoadModelRequest, OwnerControlLoadModelResponse, OwnerControlModelRef,
     OwnerControlRefreshInventory, OwnerControlRefreshInventoryRequest, OwnerControlRequest,
     OwnerControlResponse, OwnerControlUnloadModelRequest, OwnerControlUnloadModelResponse,
@@ -34,6 +35,9 @@ const OWNER_CONTROL_REQUEST_WRITE_TIMEOUT_SECS: u64 = 2;
 const OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 5;
 const OWNER_CONTROL_UNARY_RESPONSE_TIMEOUT_SECS: u64 =
     OWNER_CONTROL_SERVER_UNARY_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
+const OWNER_CONTROL_SERVER_KV_CACHE_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 30;
+const OWNER_CONTROL_KV_CACHE_RESPONSE_TIMEOUT_SECS: u64 =
+    OWNER_CONTROL_SERVER_KV_CACHE_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
 const OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN: u64 = 30;
 const OWNER_CONTROL_INVENTORY_RESPONSE_TIMEOUT_SECS: u64 =
     OWNER_CONTROL_SERVER_SCAN_DEADLINE_SECS_FOR_CLIENT_MARGIN + 5;
@@ -316,6 +320,23 @@ fn map_legacy_lifecycle_unsupported(
     }
 }
 
+fn map_kv_cache_unsupported(error: ControlPlaneClientError) -> ControlPlaneClientError {
+    match error {
+        ControlPlaneClientError::Remote(mut remote)
+            if matches!(
+                remote.code,
+                OwnerControlErrorCode::BadRequest | OwnerControlErrorCode::UnknownCommand
+            ) =>
+        {
+            remote.code = OwnerControlErrorCode::ControlUnsupported;
+            remote.message =
+                "remote owner-control endpoint does not support kv-cache operations".to_string();
+            ControlPlaneClientError::Remote(remote)
+        }
+        other => other,
+    }
+}
+
 enum LifecycleCommand {
     Load(OwnerControlLoadModelRequest),
     Unload(OwnerControlUnloadModelRequest),
@@ -442,6 +463,7 @@ impl OwnerControlClient {
                     unload_model: None,
                     ensure_model: None,
                     drain_model: None,
+                    kv_cache: None,
                 },
             )
             .await?;
@@ -478,6 +500,7 @@ impl OwnerControlClient {
                     unload_model: None,
                     ensure_model: None,
                     drain_model: None,
+                    kv_cache: None,
                 },
             )
             .await?;
@@ -513,6 +536,7 @@ impl OwnerControlClient {
                     unload_model: None,
                     ensure_model: None,
                     drain_model: None,
+                    kv_cache: None,
                 },
             )
             .await?;
@@ -530,6 +554,42 @@ impl OwnerControlClient {
             snapshot,
             inventory: response.inventory,
         })
+    }
+
+    pub async fn kv_cache(
+        &self,
+        operation: OwnerControlKvCacheOperation,
+        target_bytes: Option<u64>,
+        model_identity: Option<String>,
+    ) -> Result<OwnerControlKvCacheResponse, ControlPlaneClientError> {
+        let response = self
+            .send_unary_request(
+                std::time::Duration::from_secs(OWNER_CONTROL_KV_CACHE_RESPONSE_TIMEOUT_SECS),
+                |request_id, requester_node_id, target_node_id| OwnerControlRequest {
+                    request_id,
+                    kv_cache: Some(OwnerControlKvCacheRequest {
+                        requester_node_id,
+                        target_node_id,
+                        operation: operation as i32,
+                        target_bytes,
+                        model_identity,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(map_kv_cache_unsupported)?;
+        let response = response.kv_cache.ok_or_else(|| {
+            ControlPlaneClientError::Protocol(
+                "owner-control kv_cache response missing payload".to_string(),
+            )
+        })?;
+        serde_json::from_slice::<serde_json::Value>(&response.status_json).map_err(|error| {
+            ControlPlaneClientError::Protocol(format!(
+                "owner-control kv_cache response has invalid status JSON: {error}"
+            ))
+        })?;
+        Ok(response)
     }
 
     pub async fn load_model(
@@ -705,6 +765,7 @@ impl OwnerControlClient {
                 unload_model: None,
                 ensure_model: None,
                 drain_model: None,
+                kv_cache: None,
             }),
             response: None,
             error: None,
