@@ -2,7 +2,10 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    println!("cargo:rerun-if-changed=dist");
+    // Keep Cargo's default package change detection. Watching `dist`
+    // explicitly makes a missing directory look changed on every invocation,
+    // so test loops rebuild this crate and every dependent crate indefinitely.
+    // The default still notices when `dist` appears or its contents change.
     configure_console_dist();
 }
 
