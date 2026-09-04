@@ -1,8 +1,12 @@
 //! Per-delivery-class submit handling.
 //!
 //! Terminal writes are the only path that touches the reservation table's
-//! write-once slot and the wake list. The other three lanes are minimal,
-//! genuinely bounded stand-ins: task 4 owns their real reducer semantics.
+//! write-once slot and the wake list; state-transition, diagnostic, and
+//! progress facts route through their own bounded structures below, each
+//! drained fully by `engine::drain` (task 4,
+//! `.omo/plans/event-system-fixes.md`). Every submit function here mints
+//! from the SAME shared counter (`wake.rs::next_sequence`) exactly once
+//! per call, regardless of outcome -- there is no second counter.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -13,33 +17,76 @@ use super::RuntimeEventEngine;
 use crate::runtime_events::config::{DIAGNOSTIC_LANE_DEPTH, STATE_TRANSITION_LANE_DEPTH};
 use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
 
-/// Per-engine bounded latest-value lane: a repeat kind coalesces in place, a
-/// new kind past the depth ceiling evicts the oldest distinct kind rather
-/// than reporting a drop (state transitions have no `Dropped*` outcome).
+/// A state-transition lane key: coalescing is per operation scope AND
+/// kind, never globally by kind alone (review defect D2) -- two different
+/// operations reporting the same kind must never overwrite each other.
+type StateLaneKey = (OperationScope, &'static str);
+
+/// Per-engine bounded latest-value lane, keyed by `(OperationScope, kind)`:
+/// a repeat key coalesces in place; a new key past the depth ceiling
+/// evicts the oldest distinct key rather than reporting a drop (state
+/// transitions have no `Dropped*` outcome). Each held value carries the
+/// ingress sequence it was minted with.
 #[derive(Default)]
 pub(crate) struct StateLane {
-    entries: Mutex<VecDeque<&'static str>>,
-    latest: Mutex<HashMap<&'static str, RuntimeFact>>,
+    entries: Mutex<VecDeque<StateLaneKey>>,
+    latest: Mutex<HashMap<StateLaneKey, (RuntimeFact, u64)>>,
 }
 
 impl StateLane {
-    /// Test-only: the set of kinds currently held (latest-value-wins) in
-    /// this lane. Backs `RuntimeEventEngine::state_lane_kinds()`.
+    /// Test-only: the kinds currently held (latest-value-wins) in this
+    /// lane, across every scope. Backs `RuntimeEventEngine::state_lane_kinds()`.
     #[cfg(test)]
     pub(super) fn kinds(&self) -> Vec<&'static str> {
         self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .copied()
+            .map(|(_, kind)| *kind)
+            .collect()
+    }
+
+    /// Drain every currently-held key, oldest first, clearing the lane.
+    /// A submission for the same key that arrives after this call starts
+    /// fresh (`Accepted`, not `Coalesced`), matching the terminal lane's
+    /// own "drained means gone" contract.
+    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64)> {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries
+            .drain(..)
+            .filter_map(|key| {
+                latest
+                    .remove(&key)
+                    .map(|(fact, sequence)| (key.0, fact, sequence))
+            })
             .collect()
     }
 }
 
-/// Per-engine bounded diagnostic queue.
+/// Per-engine bounded diagnostic queue: strict FIFO, each entry carrying
+/// the scope and ingress sequence it was submitted with.
 #[derive(Default)]
 pub(crate) struct DiagnosticLane {
-    queue: Mutex<VecDeque<RuntimeFact>>,
+    queue: Mutex<VecDeque<(OperationScope, RuntimeFact, u64)>>,
+}
+
+impl DiagnosticLane {
+    /// Drain every currently-queued diagnostic, oldest first, clearing the
+    /// queue.
+    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64)> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
 }
 
 pub(super) fn submit_terminal(
@@ -49,10 +96,12 @@ pub(super) fn submit_terminal(
     fact: RuntimeFact,
 ) -> SubmitOutcome {
     let Some(handle) = handle else {
+        engine.wake().next_ingress_sequence();
         engine.health().bump_terminal_delivery_failed();
         return SubmitOutcome::TerminalDeliveryFailed;
     };
     if engine.table().occupant(handle) != Some(scope) {
+        engine.wake().next_ingress_sequence();
         engine.health().bump_terminal_delivery_failed();
         return SubmitOutcome::TerminalDeliveryFailed;
     }
@@ -61,9 +110,16 @@ pub(super) fn submit_terminal(
         synthesized: false,
     };
     if engine.table().write_terminal(handle, record) {
+        // Mint-and-enqueue as ONE atomic step (unchanged `push_next`):
+        // splitting these across two lock acquisitions would let a
+        // later-minted concurrent submission's push overtake an
+        // earlier-minted one's, breaking the wake list's FIFO ==
+        // ingress-sequence-order invariant under concurrent terminal
+        // writes to different scopes.
         engine.wake().push_next(handle);
         SubmitOutcome::Accepted
     } else {
+        engine.wake().next_ingress_sequence();
         engine.health().bump_terminal_delivery_failed();
         SubmitOutcome::TerminalDeliveryFailed
     }
@@ -74,8 +130,11 @@ pub(super) fn submit_progress(
     handle: Option<SlotHandle>,
     fact: RuntimeFact,
 ) -> SubmitOutcome {
+    let sequence = engine.wake().next_ingress_sequence();
     match handle {
-        Some(handle) if engine.table().coalesce_progress(handle, fact) => SubmitOutcome::Coalesced,
+        Some(handle) if engine.table().coalesce_progress(handle, fact, sequence) => {
+            SubmitOutcome::Coalesced
+        }
         _ => {
             engine.health().bump_dropped_progress();
             SubmitOutcome::DroppedProgress
@@ -85,31 +144,38 @@ pub(super) fn submit_progress(
 
 pub(super) fn submit_state_transition(
     engine: &RuntimeEventEngine,
+    scope: OperationScope,
     fact: RuntimeFact,
 ) -> SubmitOutcome {
+    let sequence = engine.wake().next_ingress_sequence();
     let lane = engine.state_lane();
-    let kind = fact.kind_id();
+    let key: StateLaneKey = (scope, fact.kind_id());
     let mut latest = lane
         .latest
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if latest.insert(kind, fact).is_some() {
+    if latest.insert(key, (fact, sequence)).is_some() {
         return SubmitOutcome::Coalesced;
     }
     let mut entries = lane
         .entries
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    entries.push_back(kind);
+    entries.push_back(key);
     if entries.len() > STATE_TRANSITION_LANE_DEPTH {
         if let Some(evicted) = entries.pop_front() {
-            latest.remove(evicted);
+            latest.remove(&evicted);
         }
     }
     SubmitOutcome::Accepted
 }
 
-pub(super) fn submit_diagnostic(engine: &RuntimeEventEngine, fact: RuntimeFact) -> SubmitOutcome {
+pub(super) fn submit_diagnostic(
+    engine: &RuntimeEventEngine,
+    scope: OperationScope,
+    fact: RuntimeFact,
+) -> SubmitOutcome {
+    let sequence = engine.wake().next_ingress_sequence();
     let mut queue = engine
         .diagnostic_lane()
         .queue
@@ -120,6 +186,6 @@ pub(super) fn submit_diagnostic(engine: &RuntimeEventEngine, fact: RuntimeFact) 
         engine.health().bump_dropped_diagnostic();
         return SubmitOutcome::DroppedDiagnostic;
     }
-    queue.push_back(fact);
+    queue.push_back((scope, fact, sequence));
     SubmitOutcome::Accepted
 }

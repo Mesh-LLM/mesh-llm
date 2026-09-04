@@ -21,7 +21,11 @@ pub struct TerminalRecord {
 struct Slot {
     occupant: Option<OperationScope>,
     terminal: Option<TerminalRecord>,
-    progress: Option<RuntimeFact>,
+    /// The single progress-coalescing value, tagged with the ingress
+    /// sequence it was minted with so the engine's periodic flush
+    /// (`engine/drain.rs`, task 4) applies it under its real,
+    /// gap-preserving position rather than a synthetic re-numbering.
+    progress: Option<(RuntimeFact, u64)>,
     generation: u64,
 }
 
@@ -95,15 +99,36 @@ impl ReservationTable {
         true
     }
 
-    /// Overwrite the single progress-coalescing slot bound to `handle`.
+    /// Overwrite the single progress-coalescing slot bound to `handle` with
+    /// `fact`, tagging it with the ingress `sequence` it was minted with.
     /// Returns `false` for a stale handle.
-    pub fn coalesce_progress(&self, handle: SlotHandle, fact: RuntimeFact) -> bool {
+    pub fn coalesce_progress(&self, handle: SlotHandle, fact: RuntimeFact, sequence: u64) -> bool {
         let mut slot = self.slot_lock(handle.index);
         if slot.generation != handle.generation {
             return false;
         }
-        slot.progress = Some(fact);
+        slot.progress = Some((fact, sequence));
         true
+    }
+
+    /// Take every currently-pending progress fact across the whole table,
+    /// clearing each taken slot's progress value as it is read (the
+    /// engine's periodic 100 ms progress flush, task 4). A full-table scan
+    /// is bounded by this table's fixed capacity and cheap at that
+    /// cadence.
+    #[must_use]
+    pub fn take_all_progress(&self) -> Vec<(OperationScope, RuntimeFact, u64)> {
+        let mut taken = Vec::new();
+        for index in 0..self.slots.len() {
+            let mut slot = self.slot_lock(index);
+            let Some((fact, sequence)) = slot.progress.take() else {
+                continue;
+            };
+            if let Some(scope) = slot.occupant {
+                taken.push((scope, fact, sequence));
+            }
+        }
+        taken
     }
 
     #[must_use]

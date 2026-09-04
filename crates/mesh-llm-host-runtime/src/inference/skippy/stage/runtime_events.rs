@@ -271,18 +271,15 @@ mod tests {
         op.ready(4);
         engine.drain();
         assert_eq!(engine.occupied_count(), 0);
-        // Terminal-class kind: reaches replay() via the reducer.
+        // Every delivery class -- terminal and state-transition alike --
+        // reaches replay() once drained.
         let kinds = replay_kinds(&engine);
         assert!(kinds.contains(&"stage_ready".to_string()));
-        // StateTransition-class kinds: never reach replay(); they live in
-        // the engine's own bounded state lane (see `state_lane_kinds`'s
-        // doc comment on why).
-        let state_kinds = engine.state_lane_kinds();
-        assert!(state_kinds.contains(&"stage_starting"));
-        assert!(state_kinds.contains(&"stage_loading"));
-        assert!(state_kinds.contains(&"available_stage_set_changed"));
-        assert!(state_kinds.contains(&"request_capacity_changed"));
-        assert!(state_kinds.contains(&"lane_capacity_changed"));
+        assert!(kinds.contains(&"stage_starting".to_string()));
+        assert!(kinds.contains(&"stage_loading".to_string()));
+        assert!(kinds.contains(&"available_stage_set_changed".to_string()));
+        assert!(kinds.contains(&"request_capacity_changed".to_string()));
+        assert!(kinds.contains(&"lane_capacity_changed".to_string()));
         clear_runtime_event_engine();
     }
 
@@ -314,9 +311,8 @@ mod tests {
         assert_eq!(engine.occupied_count(), 0);
         let kinds = replay_kinds(&engine);
         assert!(kinds.contains(&"stage_stopped".to_string()));
-        let state_kinds = engine.state_lane_kinds();
-        assert!(state_kinds.contains(&"stage_stopping"));
-        assert!(state_kinds.contains(&"available_stage_set_changed"));
+        assert!(kinds.contains(&"stage_stopping".to_string()));
+        assert!(kinds.contains(&"available_stage_set_changed".to_string()));
         clear_runtime_event_engine();
     }
 

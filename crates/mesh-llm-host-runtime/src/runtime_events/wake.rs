@@ -1,5 +1,17 @@
 //! Bounded wake list: FIFO ingress-sequence order, sized to the reservation
 //! table so a terminal write (one per slot) can never overflow it.
+//!
+//! `next_sequence` is the engine's ONE ingress-sequence counter (task 4,
+//! `.omo/plans/event-system-fixes.md`): every `RuntimeEventEngine::submit`
+//! call consumes it exactly once, regardless of delivery class or outcome
+//! (`Accepted`, `Coalesced`, `Dropped*`, `TerminalDeliveryFailed`) -- there
+//! is no second counter anywhere in the engine. A terminal write consumes
+//! it through [`Self::push_next`] (mint-and-enqueue as ONE atomic step, so
+//! concurrent terminal writes to different scopes can never publish out of
+//! sequence order); every other lane, and every terminal failure path,
+//! consumes it through the bare [`Self::next_ingress_sequence`] mint and
+//! records the value itself (state-transition lane, diagnostic queue,
+//! progress slot -- see `engine/lanes.rs` and `engine/drain.rs`).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

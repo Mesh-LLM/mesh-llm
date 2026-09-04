@@ -247,12 +247,15 @@ impl SkippyGenerationRuntimeEventAdapter {
             .as_ref()
             .or(tracking.prefill.as_ref())
             .map(OperationReservation::scope);
-        if let Some(prefill) = tracking.prefill.as_ref() {
-            self.submit(prefill, prefill_terminal);
-        }
-        if let Some(generation) = tracking.generation.as_ref() {
-            self.submit(generation, generation_terminal);
-        }
+        // `session_idle`/`stop_condition_reached` must be submitted BEFORE
+        // either terminal below: both ride `anchor_scope` unreserved, and
+        // (task 4, `.omo/plans/event-system-fixes.md`) a StateTransition
+        // fact submitted for an already-settled scope is correctly
+        // rejected by the reducer as `OperationSettled` -- so submitting
+        // them after the scope's own terminal would mint them a HIGHER
+        // ingress sequence than that terminal and silently drop them, now
+        // that state-transition facts actually reach the reducer instead
+        // of sitting unapplied in the engine's state lane.
         if let Some(scope) = anchor_scope {
             if let Some(engine) = runtime_event_engine() {
                 let ingress = engine.unreserved_ingress(scope);
@@ -261,6 +264,12 @@ impl SkippyGenerationRuntimeEventAdapter {
                     let _ = ingress.try_submit(stop_condition_reached_fact());
                 }
             }
+        }
+        if let Some(prefill) = tracking.prefill.as_ref() {
+            self.submit(prefill, prefill_terminal);
+        }
+        if let Some(generation) = tracking.generation.as_ref() {
+            self.submit(generation, generation_terminal);
         }
     }
 

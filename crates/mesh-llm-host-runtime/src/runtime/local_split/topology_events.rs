@@ -341,7 +341,7 @@ mod tests {
             .map(|frame| frame.fact.kind_id().to_string())
             .collect::<Vec<_>>();
         assert!(kinds.contains(&"topology_ready".to_string()));
-        assert!(engine.state_lane_kinds().contains(&"topology_assembling"));
+        assert!(kinds.contains(&"topology_assembling".to_string()));
         clear_runtime_event_engine();
     }
 
@@ -398,7 +398,7 @@ mod tests {
             .map(|frame| frame.fact.kind_id().to_string())
             .collect::<Vec<_>>();
         assert!(kinds.contains(&"topology_unavailable".to_string()));
-        assert!(engine.state_lane_kinds().contains(&"node_unavailable"));
+        assert!(kinds.contains(&"node_unavailable".to_string()));
         clear_runtime_event_engine();
     }
 

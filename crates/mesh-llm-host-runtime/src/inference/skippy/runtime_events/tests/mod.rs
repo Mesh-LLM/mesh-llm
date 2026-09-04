@@ -11,7 +11,7 @@ mod session_prefill_kv;
 use super::*;
 use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
-use mesh_llm_runtime_event_contracts::{GenerationEventKind, PrefillEventKind};
+use mesh_llm_runtime_event_contracts::{GenerationEventKind, PrefillEventKind, SessionEventKind};
 use skippy_server::frontend::GenerationTermination;
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
@@ -64,6 +64,18 @@ fn prefill_kinds(engine: &RuntimeEventEngine) -> Vec<PrefillEventKind> {
         .into_iter()
         .filter_map(|frame| match frame.fact.as_ref() {
             RuntimeFact::Prefill(fact) => Some(*fact.kind()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn session_kinds(engine: &RuntimeEventEngine) -> Vec<SessionEventKind> {
+    engine
+        .replay()
+        .snapshot()
+        .into_iter()
+        .filter_map(|frame| match frame.fact.as_ref() {
+            RuntimeFact::Session(fact) => Some(*fact.kind()),
             _ => None,
         })
         .collect()

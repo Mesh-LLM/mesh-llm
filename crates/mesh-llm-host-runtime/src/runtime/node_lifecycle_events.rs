@@ -117,19 +117,19 @@ mod tests {
         emit_node_draining();
         emit_node_stopped();
         engine.drain();
-        let state_kinds = engine.state_lane_kinds();
-        assert!(state_kinds.contains(&"node_starting"));
-        assert!(state_kinds.contains(&"node_accepting_requests"));
-        assert!(state_kinds.contains(&"node_draining"));
-        // node_stopped is the one Terminal-class kind in this family; it
-        // reaches replay() via the reducer, never the state lane.
-        let terminal_kinds = engine
+        // Every delivery class in this family -- the three
+        // StateTransition kinds and the one Terminal kind -- reaches
+        // replay() once drained.
+        let kinds = engine
             .replay()
             .snapshot()
             .into_iter()
             .map(|frame| frame.fact.kind_id().to_string())
             .collect::<Vec<_>>();
-        assert!(terminal_kinds.contains(&"node_stopped".to_string()));
+        assert!(kinds.contains(&"node_starting".to_string()));
+        assert!(kinds.contains(&"node_accepting_requests".to_string()));
+        assert!(kinds.contains(&"node_draining".to_string()));
+        assert!(kinds.contains(&"node_stopped".to_string()));
         clear_runtime_event_engine();
     }
 

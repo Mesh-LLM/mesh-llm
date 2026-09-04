@@ -58,6 +58,12 @@ pub struct RuntimeEventEngine {
     /// -- the engine-owned driver's (`runtime_events::driver`, task 3) wake
     /// source, alongside its own fallback tick. See [`Self::notified`].
     notify: Notify,
+    /// The instant the progress lane was last flushed, so `engine::drain`
+    /// (task 4) can gate flushing to the frozen 100 ms
+    /// `PROGRESS_EXPORT_INTERVAL` without a second timer: `None` until the
+    /// first drain call, matching `EngineHealth`'s identical
+    /// `last_published` convention.
+    progress_last_flush: Mutex<Option<Instant>>,
 }
 
 impl RuntimeEventEngine {
@@ -94,6 +100,7 @@ impl RuntimeEventEngine {
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
             notify: Notify::new(),
+            progress_last_flush: Mutex::new(None),
         })
     }
 
@@ -273,10 +280,14 @@ impl RuntimeEventEngine {
         {
             match class {
                 DeliveryClass::Progress => {
+                    // Task 4: every outcome consumes the shared ingress
+                    // sequence, even one short-circuited before any lane.
+                    self.wake.next_ingress_sequence();
                     self.health.bump_dropped_progress();
                     return SubmitOutcome::DroppedProgress;
                 }
                 DeliveryClass::Diagnostic => {
+                    self.wake.next_ingress_sequence();
                     self.health.bump_dropped_diagnostic();
                     return SubmitOutcome::DroppedDiagnostic;
                 }
@@ -288,8 +299,8 @@ impl RuntimeEventEngine {
         let outcome = match class {
             DeliveryClass::Terminal => lanes::submit_terminal(self, scope, handle, fact),
             DeliveryClass::Progress => lanes::submit_progress(self, handle, fact),
-            DeliveryClass::StateTransition => lanes::submit_state_transition(self, fact),
-            DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, fact),
+            DeliveryClass::StateTransition => lanes::submit_state_transition(self, scope, fact),
+            DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, scope, fact),
         };
         if let (Some(queue), Some(start)) = (telemetry, start) {
             queue.record_class_outcome(class, outcome, start.elapsed());

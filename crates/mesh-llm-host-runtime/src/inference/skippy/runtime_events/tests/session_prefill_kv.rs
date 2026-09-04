@@ -23,7 +23,7 @@ fn session_becomes_active_on_start_and_idle_on_completion() {
         .unwrap();
     engine.drain();
     assert!(
-        engine.state_lane_kinds().contains(&"session_idle"),
+        session_kinds(&engine).contains(&SessionEventKind::SessionIdle),
         "session must become idle once the generation resolves"
     );
     clear_runtime_event_engine();
@@ -177,9 +177,7 @@ fn stop_condition_reached_co_emits_only_for_callback_stop_termination() {
         .unwrap();
     engine.drain();
     assert!(
-        engine
-            .state_lane_kinds()
-            .contains(&"stop_condition_reached"),
+        generation_kinds(&engine).contains(&GenerationEventKind::StopConditionReached),
         "CallbackStop termination must co-emit stop_condition_reached"
     );
     clear_runtime_event_engine();
@@ -198,9 +196,7 @@ fn stop_condition_reached_co_emits_only_for_callback_stop_termination() {
         .unwrap();
     engine.drain();
     assert!(
-        !engine
-            .state_lane_kinds()
-            .contains(&"stop_condition_reached"),
+        !generation_kinds(&engine).contains(&GenerationEventKind::StopConditionReached),
         "budget-exhaustion (MaxTokens) termination must NOT report a stop condition"
     );
     clear_runtime_event_engine();
