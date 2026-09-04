@@ -1,3 +1,5 @@
+//! Hugging Face tokenizer to GGUF metadata conversion.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -10,6 +12,7 @@ use crate::gguf_writer::GgufKv;
 const TOKEN_TYPE_NORMAL: i32 = 1;
 const TOKEN_TYPE_UNUSED: i32 = 5;
 const TOKEN_TYPE_CONTROL: i32 = 3;
+const MAX_TOKENIZER_VOCAB_SIZE: usize = 1_048_576;
 
 pub(crate) fn push_tokenizer_metadata(
     metadata: &mut Vec<GgufKv>,
@@ -43,7 +46,7 @@ pub(crate) fn push_tokenizer_metadata(
     Ok(())
 }
 
-pub(crate) fn ensure_native_tokenizer_metadata_supported(source: &Path) -> Result<()> {
+pub fn ensure_native_tokenizer_metadata_supported(source: &Path) -> Result<()> {
     if source.join("tokenizer.json").exists() {
         return Ok(());
     }
@@ -88,11 +91,15 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         .context("tokenizer.json model missing object field vocab")?;
     let added_tokens = collect_added_tokens(tokenizer);
     let tokenizer_vocab_size = tokenizer_vocab_size(raw_vocab, &added_tokens)?;
-    let inkling_unpadded_vocab = inkling_text_u32(config, "unpadded_vocab_size")
+    let configured_unpadded_vocab = configured_text_u32(config, "unpadded_vocab_size")
         .and_then(|value| usize::try_from(value).ok());
-    let vocab_size = inkling_text_u32(config, "vocab_size")
+    let vocab_size = configured_text_u32(config, "vocab_size")
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(tokenizer_vocab_size);
+    ensure!(
+        vocab_size <= MAX_TOKENIZER_VOCAB_SIZE,
+        "configured vocab_size {vocab_size} exceeds supported maximum {MAX_TOKENIZER_VOCAB_SIZE}"
+    );
     ensure!(
         vocab_size >= tokenizer_vocab_size,
         "configured vocab_size {vocab_size} is smaller than tokenizer vocab size {tokenizer_vocab_size}"
@@ -125,19 +132,19 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         }
     }
 
-    if let Some(unpadded_vocab) = inkling_unpadded_vocab {
+    if let Some(unpadded_vocab) = configured_unpadded_vocab {
         ensure!(
-            unpadded_vocab <= vocab_size,
-            "Inkling unpadded_vocab_size exceeds vocab_size"
+            unpadded_vocab == tokenizer_vocab_size,
+            "configured unpadded_vocab_size {unpadded_vocab} does not match tokenizer vocab size {tokenizer_vocab_size}"
         );
-        for index in unpadded_vocab..vocab_size {
-            ensure!(
-                tokens[index].is_empty(),
-                "real token found at/above Inkling unpadded_vocab_size: {index}"
-            );
-            tokens[index] = format!("[PAD{index}]");
-            token_types[index] = TOKEN_TYPE_UNUSED;
-        }
+    }
+    for index in tokenizer_vocab_size..vocab_size {
+        ensure!(
+            tokens[index].is_empty(),
+            "real token found at/above tokenizer vocab size: {index}"
+        );
+        tokens[index] = format!("[PAD{index}]");
+        token_types[index] = TOKEN_TYPE_UNUSED;
     }
 
     let missing = tokens.iter().position(String::is_empty);
@@ -263,6 +270,9 @@ fn tokenizer_pre(config: &Value) -> Result<&'static str> {
     if model_type.starts_with("qwen2") || model_type.starts_with("qwen3") {
         return Ok("qwen2");
     }
+    if model_type == "granitemoehybrid" {
+        return Ok("dbrx");
+    }
     if model_type == "inkling_mm_model" {
         return Ok("inkling");
     }
@@ -343,6 +353,10 @@ fn inkling_text_u32(config: &Value, key: &str) -> Option<u32> {
         return None;
     }
     config.get("text_config")?.get(key).and_then(u32_value)
+}
+
+fn configured_text_u32(config: &Value, key: &str) -> Option<u32> {
+    inkling_text_u32(config, key).or_else(|| config.get(key).and_then(u32_value))
 }
 
 fn push_added_token_id(
@@ -494,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_trailing_embedding_vocab_padding() {
+    fn fills_trailing_embedding_vocab_padding_as_unused_tokens() {
         let tokenizer: Value = serde_json::from_str(
             r#"{
               "model": {
@@ -514,8 +528,55 @@ mod tests {
 
         let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
 
-        assert_eq!(metadata.tokens.len(), 3);
+        assert_eq!(metadata.tokens.len(), 8);
         assert_eq!(metadata.tokens[2], "<|endoftext|>");
+        assert_eq!(metadata.tokens[3], "[PAD3]");
+        assert_eq!(metadata.tokens[7], "[PAD7]");
+        assert_eq!(metadata.token_types[3], TOKEN_TYPE_UNUSED);
+    }
+
+    #[test]
+    fn rejects_non_inkling_unpadded_vocab_mismatch() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {"type": "BPE", "vocab": {"a": 0, "b": 1}, "merges": []},
+              "decoder": {"type": "ByteLevel"}
+            }"#,
+        )
+        .unwrap();
+        let config: Value = serde_json::from_str(
+            r#"{"model_type":"qwen2","vocab_size":2,"unpadded_vocab_size":1}"#,
+        )
+        .unwrap();
+
+        let error = match read_byte_level_bpe(&tokenizer, &config) {
+            Ok(_) => panic!("mismatched unpadded vocabulary must fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("configured unpadded_vocab_size 1"));
+        assert!(error.contains("tokenizer vocab size 2"));
+    }
+
+    #[test]
+    fn rejects_oversized_non_inkling_vocab_before_allocation() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {"type": "BPE", "vocab": {"a": 0}, "merges": []},
+              "decoder": {"type": "ByteLevel"}
+            }"#,
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_str(r#"{"model_type":"llama","vocab_size":4294967295}"#).unwrap();
+
+        let error = match read_byte_level_bpe(&tokenizer, &config) {
+            Ok(_) => panic!("oversized vocabulary must fail before allocation"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("configured vocab_size 4294967295"));
+        assert!(error.contains("exceeds supported maximum"));
     }
 
     #[test]

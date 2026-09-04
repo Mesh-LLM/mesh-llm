@@ -111,6 +111,25 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             consumer,
         )
 
+    def test_safetensors_runtime_smoke_is_fail_closed_and_compiles_once(self):
+        workflow = (WORKFLOWS / "ci-rust-tests-slice.yml").read_text()
+        smoke = workflow[workflow.index("  safetensors_runtime_smoke:"):]
+        test_name = (
+            "inference::skippy::resolver::tests::"
+            "safetensors_checkpoint_reaches_mesh_host_runtime"
+        )
+
+        self.assertIn('MESH_LLM_SKIP_UI: "1"', smoke)
+        self.assertIn("uses: ./.github/actions/restore-sccache-seed", smoke)
+        self.assertEqual(smoke.count("cargo test --locked"), 1)
+        self.assertIn("--lib --no-run --message-format=json", smoke)
+        self.assertIn(f'test_name="{test_name}"', smoke)
+        self.assertIn('grep -Fqx "$test_name: test"', smoke)
+        self.assertIn(
+            '"$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture',
+            smoke,
+        )
+
     def test_runtime_image_verification_preserves_backend_argument(self):
         workflow = (WORKFLOWS / "ci-linux-runtime-slice.yml").read_text()
 

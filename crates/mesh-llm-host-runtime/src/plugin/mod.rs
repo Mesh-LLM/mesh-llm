@@ -1,7 +1,9 @@
+mod channel_broadcast;
 mod config;
 mod health;
 mod installed;
 pub(crate) mod mcp;
+pub mod openai_exchange;
 mod runtime;
 mod schema_validation;
 pub(crate) mod stapler;
@@ -1124,6 +1126,21 @@ impl PluginManager {
         plugin.manifest().await
     }
 
+    /// Non-starting counterpart to [`Self::manifest`]: returns the plugin's
+    /// already-cached manifest without calling `ensure_running`, so a
+    /// delivery-filtering check (declares this channel? subscribes to this
+    /// event?) never lazily starts a stopped plugin or blocks its caller on
+    /// connection/init timeouts. `Plugin::shutdown` clears the cached
+    /// manifest, so this doubles as an "already running" check: a stopped or
+    /// never-started plugin has no cached manifest and returns `None` here.
+    async fn manifest_snapshot(&self, plugin_name: &str) -> Option<proto::PluginManifest> {
+        self.inner
+            .plugins
+            .get(plugin_name)?
+            .manifest_snapshot()
+            .await
+    }
+
     pub async fn manifest_json(&self, plugin_name: &str) -> Result<Option<Value>> {
         Ok(self
             .manifest(plugin_name)
@@ -1208,19 +1225,12 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn plugin_declares_mesh_channel(&self, plugin_name: &str, channel: &str) -> bool {
-        self.manifest(plugin_name)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|manifest| manifest_declares_mesh_channel(&manifest, channel))
-    }
-
+    /// Whether an already-running `plugin_name` subscribes to mesh event
+    /// `kind`. Same non-starting contract as
+    /// [`Self::plugin_declares_mesh_channel`], for [`Self::broadcast_mesh_event`].
     pub async fn plugin_subscribes_mesh_event(&self, plugin_name: &str, kind: i32) -> bool {
-        self.manifest(plugin_name)
+        self.manifest_snapshot(plugin_name)
             .await
-            .ok()
-            .flatten()
             .is_some_and(|manifest| manifest_subscribes_mesh_event(&manifest, kind))
     }
 
@@ -1420,13 +1430,6 @@ pub(crate) fn plugin_manifest_to_json(manifest: &proto::PluginManifest) -> Value
         }).collect::<Vec<_>>(),
         "capabilities": manifest.capabilities,
     })
-}
-
-fn manifest_declares_mesh_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
-    manifest
-        .mesh_channels
-        .iter()
-        .any(|entry| entry.name == channel)
 }
 
 fn manifest_subscribes_mesh_event(manifest: &proto::PluginManifest, kind: i32) -> bool {

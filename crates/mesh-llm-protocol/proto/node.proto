@@ -173,6 +173,7 @@ message CacheAffinityEntry {
   CacheTier tier = 5;
   uint64 restore_micros = 6;
   uint64 queue_delay_micros = 7;
+  uint64 prefill_micros_per_token = 8; // measured; zero means unavailable
 }
 
 enum CacheTier {

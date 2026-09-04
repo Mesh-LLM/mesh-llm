@@ -1,5 +1,9 @@
+use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
 use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
-use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
+use super::probe::{
+    ResponseProbe, append_capsule_nonce_headers, response_is_event_stream,
+    try_parse_response_headers,
+};
 use super::relay::{relay_error_response, relay_success_response};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
@@ -30,6 +34,7 @@ struct ResponsesStreamRelayState {
     output_text: String,
     usage: Option<serde_json::Value>,
     observed_usage: Option<TokenUsage>,
+    observed_cache_cost: Option<CacheCostObservation>,
     sequence_number: i32,
     created_emitted: bool,
     output_item_emitted: bool,
@@ -49,6 +54,7 @@ impl ResponsesStreamRelayState {
             output_text: String::new(),
             usage: None,
             observed_usage: None,
+            observed_cache_cost: None,
             sequence_number: 0,
             created_emitted: false,
             output_item_emitted: false,
@@ -96,7 +102,16 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
     let mut state = ChatStreamNormalizationState::default();
     let mut observed_usage = None;
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    let mut observed_cache_cost = None;
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
+    );
+    append_capsule_nonce_headers(
+        &mut header,
+        parsed.client_nonce.as_deref(),
+        parsed.nonce_origin.as_deref(),
+    );
+    header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
@@ -134,6 +149,8 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             if let Some(usage) = parse_token_usage_from_json_body(data.as_bytes()) {
                 observed_usage = Some(usage);
             }
+            observed_cache_cost =
+                observed_cache_cost.or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
             let normalized = state.normalize_data(&data);
             write_captured_sse_event(tcp_stream, &mut response_capture, None, &normalized).await?;
             if upstream_error_seen {
@@ -176,6 +193,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         return Ok(RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         });
     }
     if !done_seen {
@@ -187,6 +205,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage: observed_usage,
+        cache_cost: observed_cache_cost,
     })
 }
 
@@ -238,6 +257,9 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         if !should_parse_stream_chunk(data, state.model.is_empty(), state.usage.is_none()) {
             return Ok(());
         }
+        state.observed_cache_cost = state
+            .observed_cache_cost
+            .or_else(|| parse_cache_cost_from_json_body(data.as_bytes()));
         process_translated_responses_frame(tcp_stream, response_capture, state, data).await?;
         if progress.first_chunk_seen {
             route_observer.stream_chunk();
@@ -261,7 +283,15 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
     let mut state = ResponsesStreamRelayState::new();
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
+    );
+    append_capsule_nonce_headers(
+        &mut header,
+        parsed.client_nonce.as_deref(),
+        parsed.nonce_origin.as_deref(),
+    );
+    header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
@@ -324,6 +354,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         return Ok(RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         });
     }
     if !progress.done_seen {
@@ -339,6 +370,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
     Ok(RouteAttemptResult::Delivered {
         status_code: 200,
         usage: state.observed_usage,
+        cache_cost: state.observed_cache_cost,
     })
 }
 
@@ -738,6 +770,7 @@ mod tests {
                     completion_tokens: Some(13),
                     total_tokens: Some(18),
                 }),
+                cache_cost: None,
             }
         );
 
@@ -785,13 +818,13 @@ mod tests {
             .expect("relay")
         });
 
-        let usage_chunk = r#"{"id":"chatcmpl-y","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9}}"#;
+        let usage_chunk = r#"{"id":"chatcmpl-y","object":"chat.completion.chunk","created":1,"model":"qwen","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9},"timings":{"prompt_ms":6.0,"queue_wait_ms":1.0,"cache_restore_ms":2.0,"suffix_prefill_n":2}}"#;
         upstream_writer
             .write_all(format!("data: {usage_chunk}\n\n").as_bytes())
             .await
             .unwrap();
         upstream_writer
-            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"prompt_ms\":99.0,\"queue_wait_ms\":99.0,\"cache_restore_ms\":99.0,\"suffix_prefill_n\":1}}\n\ndata: [DONE]\n\n")
             .await
             .unwrap();
         upstream_writer.shutdown().await.unwrap();
@@ -813,6 +846,11 @@ mod tests {
                     completion_tokens: Some(7),
                     total_tokens: Some(9),
                 }),
+                cache_cost: Some(CacheCostObservation {
+                    queue_delay_micros: 1_000,
+                    restore_micros: 2_000,
+                    prefill_micros_per_token: Some(2_000),
+                }),
             }
         );
         assert!(String::from_utf8_lossy(&output).contains("hello"));
@@ -825,6 +863,56 @@ mod tests {
         assert!(body.contains("hello"));
         assert!(body.contains("data: [DONE]"));
         assert_eq!(media_kind.as_deref(), Some("text/event-stream"));
+    }
+
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_stream_echoes_capsule_nonce_headers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        server_task.await.expect("server task");
+
+        let output_text = String::from_utf8_lossy(&output);
+        assert!(
+            output_text.contains("x-capsule-client-nonce: nonce-under-test\r\n"),
+            "public-proxy SSE response must echo the client nonce header: {output_text}"
+        );
+        assert!(
+            output_text.contains("x-capsule-nonce-origin: frontend\r\n"),
+            "public-proxy SSE response must echo the nonce origin marker: {output_text}"
+        );
     }
 
     #[tokio::test]
@@ -977,6 +1065,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }
@@ -1032,6 +1121,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }
@@ -1083,6 +1173,7 @@ mod tests {
             RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }
         );
     }

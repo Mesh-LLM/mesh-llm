@@ -104,6 +104,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    maxWorkers: 2,
     globals: true,
     setupFiles: ['./src/lib/test/setup.ts'],
     css: true,

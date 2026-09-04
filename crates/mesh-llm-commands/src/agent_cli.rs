@@ -573,7 +573,8 @@ pub async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         "models": provider_models,
         "timeout_seconds": 600,
         "supports_streaming": true,
-        "requires_auth": false
+        "requires_auth": false,
+        "nonce_header": "x-capsule-client-nonce"
     });
 
     let provider_path = goose_config_dir.join("mesh.json");

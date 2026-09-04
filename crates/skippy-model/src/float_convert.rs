@@ -1,8 +1,10 @@
+//! Floating-point conversion used by checkpoint tensor views.
+
 use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use crate::types::ConvertOutputType;
+use crate::ConvertOutputType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FloatDType {
@@ -52,15 +54,11 @@ pub(crate) fn target_dtype_for_tensor(
     output_type: Option<ConvertOutputType>,
     shape: &[u64],
 ) -> Result<FloatDType> {
-    if shape.len() <= 1
-        && matches!(
-            output_type,
-            Some(ConvertOutputType::F16 | ConvertOutputType::Bf16)
-        )
-    {
+    let target_dtype = target_dtype_for(source_dtype, output_type)?;
+    if shape.len() <= 1 && matches!(target_dtype, FloatDType::F16 | FloatDType::Bf16) {
         return Ok(FloatDType::F32);
     }
-    target_dtype_for(source_dtype, output_type)
+    Ok(target_dtype)
 }
 
 pub(crate) fn convert_float_chunk<W: Write>(
@@ -199,7 +197,15 @@ mod tests {
     }
 
     #[test]
-    fn target_dtype_keeps_rank_one_tensors_f32_for_float16_outputs() {
+    fn target_dtype_keeps_rank_one_half_precision_tensors_f32() {
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, None, &[8]).unwrap(),
+            FloatDType::F32
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::F16, None, &[8]).unwrap(),
+            FloatDType::F32
+        );
         assert_eq!(
             target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8]).unwrap(),
             FloatDType::F32
@@ -212,6 +218,13 @@ mod tests {
             target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8, 8])
                 .unwrap(),
             FloatDType::Bf16
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, None, &[8, 8]).unwrap(),
+            FloatDType::Bf16
+        );
+        assert!(
+            target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Auto), &[8]).is_err()
         );
     }
 }

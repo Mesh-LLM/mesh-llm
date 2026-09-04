@@ -9,6 +9,8 @@ pub fn runtime_surface_help(surface: RuntimeSurface) -> String {
             "      --model <MODEL>          Startup model to serve from the catalog, a path, or a Hugging Face ref\n",
             "      --gguf <GGUF>            Raw local GGUF file to serve directly\n",
             "      --mmproj <MMPROJ>        Multimodal projector for the primary served model\n",
+            "      --quant <RECIPE>         Quantize SafeTensors weights while loading\n",
+            "                               Use --help-advanced to list every valid recipe\n",
             "      --auto                   Auto-join the best discovered mesh\n",
             "      --join <JOIN>            Join a mesh via invite token\n",
             "      --publish                Publish this mesh for discovery\n",
@@ -50,6 +52,7 @@ mod tests {
         assert!(help.contains("--model"));
         assert!(help.contains("--gguf"));
         assert!(help.contains("--local-model-only"));
+        assert!(help.contains("--quant"));
         assert!(help.contains("startup models"));
         assert!(!help.contains("Pool GPUs over the internet for LLM inference\n\nUsage: mesh-llm"));
     }

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "allowScripts": {
     "@parcel/watcher@2.5.1": true,
@@ -32,7 +32,7 @@
   "dependencies": {
     "animejs": "^4.5.0",
     "d3": "^7.9.0",
-    "highlight.js": "^11.11.1",
-    "lucide": "^1.22.0"
+    "highlight.js": "^11.12.0",
+    "lucide": "^1.40.0"
   }
 }

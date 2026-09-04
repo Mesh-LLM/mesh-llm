@@ -100,10 +100,13 @@ patch-apply failure it hands the queue to a non-interactive `opencode` agent
 via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
 `third_party/llama.cpp/patches`, runs the supported-families certification
 battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
-on `llama-canary/patch-queue-fix`. The same repair loop also runs when the
-queue applies but a certification lane fails (`battery` mode). After each agent
-turn the repair script
-itself runs the battery and, on failure, loops certify -> agent fix ->
+on `llama-canary/patch-queue-fix`. The deterministic wrapper writes the sole
+upstream selector, `third_party/llama.cpp/upstream.txt`, to the resolved repair
+target, prepares through the checked-in `pinned`
+selector, and verifies the prepared-upstream stamp before any repair branch is
+published or certified. The same repair loop also runs when the queue applies
+but a certification lane fails (`battery` mode). After each agent turn the
+repair script itself runs the battery and, on failure, loops certify -> agent fix ->
 recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
 succeeds when the wrapper's own battery run passes. Every outcome (battery
 green, queue still broken, battery exhausted) posts a status comment on the
@@ -114,7 +117,8 @@ PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
 the canary job itself remains `contents: read`. Any repair outcome keeps the
 canary run red: the certified fix must be merged from the repair PR before
 trusted main can certify. The upstream pin commit to
-`main` is gated on the battery passing.
+`main` is gated on the battery passing and writes the sole upstream pin from
+the validated SHA.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
@@ -151,7 +155,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that verify the producer-owned static ABI toolchain epoch and a pinned, digest-verified Skippy correctness fixture; related PR changes additionally compile one asserted, fully qualified runtime test and smoke an immutable SmolLM2 SafeTensors checkpoint through the complete Mesh config/resolver/server/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -237,11 +241,15 @@ class is invisible to `actionlint`.
 
 ### `job.container.id == ''` gating
 
-When a job has both a containerized and a bare-metal row (the two rows
-above), `actions/setup-python`, `actions/setup-node`, and
-`pnpm/action-setup` steps are gated `if: job.container.id == ''` rather than
-deleted, because the bare-metal row still needs them -- the image is not
-present there. **Deliberate exception: `actions/setup-java` in
+When a job has both a containerized and a bare-metal row, setup actions needed
+only by the bare-metal row are gated `if: job.container.id == ''` rather than
+allowed to shadow tools from the image. `sdk-smoke.yml`'s bare-metal Swift row
+consumes the immutable UI artifact with `--skip-build`, so it needs neither
+Node nor pnpm; those setup actions and their unused package cache are absent.
+Its smoke script temporarily creates the legacy protected-main workflow's
+computed pnpm store when that older workflow installed pnpm, preventing the
+setup-node post-job cache hook from failing before this workflow change lands
+on `main`. **Deliberate exception: `actions/setup-java` in
 `sdk-smoke.yml` is never gated.** `verify-runner-image`'s asserted tool list
 has no JDK, so the image provides nothing for it to shadow; gating it would
 break the Kotlin SDK smoke on the containerized row instead of protecting it.

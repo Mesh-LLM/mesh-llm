@@ -67,6 +67,12 @@ class SemverRangeTests(unittest.TestCase):
 
 
 class BuildUiScriptTests(unittest.TestCase):
+    def test_rust_build_script_does_not_watch_a_missing_dist_directory(self) -> None:
+        build_script = (UI_DIR / "build.rs").read_text(encoding="utf-8")
+
+        self.assertNotIn('cargo:rerun-if-changed=dist', build_script)
+        self.assertIn("Cargo's default package change detection", build_script)
+
     def test_ui_pnpm_workspace_names_root_package(self) -> None:
         workspace = ROOT / "crates" / "mesh-llm-ui" / "pnpm-workspace.yaml"
 

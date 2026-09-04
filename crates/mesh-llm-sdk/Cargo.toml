@@ -36,6 +36,6 @@ mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.76.0-rc9",
 mesh-llm-console-server = { path = "../mesh-llm-console-server", version = "0.76.0-rc9", optional = true }
 mesh-llm-embedded-runtime = { path = "../mesh-llm-embedded-runtime", version = "0.76.0-rc9", optional = true }
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.76.0-rc9", optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.13", features = ["json"], optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

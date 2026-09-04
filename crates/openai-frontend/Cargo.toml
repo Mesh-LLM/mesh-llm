@@ -16,7 +16,7 @@ mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.76.0-rc9" 
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.76.0-rc9" }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 

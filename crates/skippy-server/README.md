@@ -44,9 +44,32 @@ flowchart LR
 ```
 
 Stage configs bind `stage_id`, `stage_index`, `layer_start`, `layer_end`,
-`model_path`, `upstream`, `downstream`, optional K/V cache type settings, and
-runtime settings into one loaded stage. Model execution flows through
+`model_path`, `checkpoint_quantization`, `upstream`, `downstream`, optional K/V
+cache type settings, and runtime settings into one loaded stage. Model execution flows through
 `skippy-runtime` and the staged llama.cpp ABI.
+
+For a direct Hugging Face checkpoint, point `model_path` at the local checkpoint
+directory and optionally select load-time quantization:
+
+```json
+{
+  "model_path": "/srv/models/Qwen2.5-0.5B-Instruct",
+  "checkpoint_quantization": "IQ2_XXS",
+  "checkpoint_imatrix": "/srv/models/Qwen2.5-0.5B-Instruct/imatrix.gguf"
+}
+```
+
+The supported values are `preserve` (the default), `F32`, `F16`, `BF16`,
+and every quantization advertised by the pinned llama.cpp `llama-quantize`
+tool: `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `IQ2_XXS`, `IQ2_XS`,
+`IQ2_S`, `IQ2_M`, `IQ1_S`, `IQ1_M`, `TQ1_0`, `TQ2_0`, `Q2_K`, `Q2_K_S`,
+`IQ3_XS`, `IQ3_XXS`, `IQ3_S`, `IQ3_M`, `Q3_K_S`, `Q3_K_M`, `Q3_K_L`,
+`IQ4_NL`, `IQ4_XS`, `Q4_K_S`, `Q4_K_M`, `Q5_K_S`, `Q5_K_M`, `Q6_K`,
+`Q8_0`, and `MXFP4_MOE`. Importance-aware formats require
+`checkpoint_imatrix`. The checkpoint must contain `config.json`, tokenizer
+metadata, and a single or indexed set of SafeTensors shards. Quantization
+happens as each stage-owned tensor loads; no intermediate model-sized GGUF is
+written.
 
 ## Commands
 
@@ -133,8 +156,10 @@ deadline handling.
   at once and defaults to the config's KV-derived `lane_count`.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
-  `--generation-admission-timeout-secs` bounds predicted and actual queue wait
-  (default 60 seconds). KV restore and prefill-record work runs on a separate
+  `--generation-admission-timeout-secs` can bound predicted and actual queue
+  wait; the default `0` waits until client cancellation so capacity pressure
+  drains through the bounded queue instead of rejecting accepted work. KV
+  restore and prefill-record work runs on a separate
   prompt-scaled deadline: admission timeout plus about one minute per 4,000
   prompt tokens, clamped to at least 60 seconds and at most 30 minutes. A
   legitimate prompt-sized prefill is therefore not killed by the queue-wait

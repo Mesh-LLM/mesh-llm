@@ -12,8 +12,8 @@ use skippy_protocol::{
 };
 use skippy_runtime::MtpSource;
 use skippy_server::{
-    EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
-    NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults,
+    EmbeddedRuntimeOptions, NativeMtpProposalConfig, SpeculativeDecodeConfig, telemetry::Telemetry,
 };
 
 use super::super::{
@@ -133,6 +133,12 @@ impl ResolvedSkippyConfig {
         options.op_offload = self.hardware.op_offload;
         options.no_host_buffer = self.hardware.no_host_buffer;
         options.check_tensors = self.hardware.check_tensors;
+        options
+            .checkpoint_quantization
+            .clone_from(&self.hardware.checkpoint_quantization);
+        options
+            .checkpoint_imatrix
+            .clone_from(&self.hardware.checkpoint_imatrix);
         options.direct_io = self.hardware.direct_io;
         options.main_gpu = self.hardware.main_gpu;
         options.split_mode = self.hardware.split_mode;
@@ -649,7 +655,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             continuous_batching: self.continuous_batching,
             adaptive_generation_min_concurrency: None,
             generation_queue_capacity: self.generation_concurrency.saturating_mul(8).clamp(16, 256),
-            generation_admission_timeout_secs: 60,
+            generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
             prefill_chunk_size: self.prefill_chunk_size,
             prefill_chunk_policy: self.prefill_chunk_policy,
             prefill_chunk_schedule: self.prefill_chunk_schedule,

@@ -240,6 +240,8 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) speculative_stats: Option<OpenAiSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
+    pub(in crate::frontend) queue_wait_ms: f64,
+    pub(in crate::frontend) restore_ms: f64,
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) finish_reason: FinishReason,
     pub(in crate::frontend) detokenize_ms: f64,
@@ -272,6 +274,12 @@ impl GeneratedText {
         let mut timings = BTreeMap::from([
             ("prompt_n".to_string(), json!(self.prompt_tokens)),
             ("prompt_ms".to_string(), json!(self.prompt_ms)),
+            ("queue_wait_ms".to_string(), json!(self.queue_wait_ms)),
+            ("cache_restore_ms".to_string(), json!(self.restore_ms)),
+            (
+                "suffix_prefill_n".to_string(),
+                json!(self.suffix_prefill_tokens),
+            ),
             (
                 "prompt_per_second".to_string(),
                 json!(tokens_per_second(self.prompt_tokens, self.prompt_ms)),

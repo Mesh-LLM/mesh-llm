@@ -1,3 +1,4 @@
+// Minimal test-only GGUF parser.
 struct ParsedGguf {
     tensor_count: u64,
     metadata_count: u64,

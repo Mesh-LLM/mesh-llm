@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
 use serde::Serialize;
 
-use crate::gguf_metadata::{
+use skippy_model::gguf_metadata::{
     GGUF_TYPE_ARRAY, GGUF_TYPE_BOOL, GGUF_TYPE_FLOAT32, GGUF_TYPE_FLOAT64, GGUF_TYPE_INT8,
     GGUF_TYPE_INT32, GGUF_TYPE_INT64, GGUF_TYPE_STRING, GGUF_TYPE_UINT8, GGUF_TYPE_UINT16,
     GGUF_TYPE_UINT32, GGUF_TYPE_UINT64, GgufKv, write_kv,

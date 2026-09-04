@@ -19,10 +19,10 @@ pub use backend::{
     OpenAiResult,
 };
 pub use chat::{
-    AssistantMessage, ChatCompletionChoice, ChatCompletionChunk, ChatCompletionChunkChoice,
-    ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    MessageContent, MessageContentPart, ensure_tool_call_ids, message_content_to_text,
-    messages_to_plain_prompt,
+    AssistantMessage, CapsuleMarker, ChatCompletionChoice, ChatCompletionChunk,
+    ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse,
+    ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid, ensure_tool_call_ids,
+    message_content_to_text, messages_to_plain_prompt,
 };
 pub use common::{
     AgentSessionIdentity, AgentSessionSource, FinishReason, PromptCacheRetention, ReasoningConfig,
@@ -42,17 +42,18 @@ pub use guardrails::{
     StreamingGuardrailMode,
 };
 pub use hooks::{
-    ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef, GenerationHookSignals,
-    HookedOpenAiBackend, MESH_HOOKS_FIELD, OpenAiHookPolicy, PrefillHookSignals,
-    apply_chat_hook_outcome, chat_mesh_hooks_enabled, first_chat_media,
-    inject_text_into_chat_messages, set_chat_mesh_hooks_enabled,
+    ChatCompletionOutcome, ChatExchangeRoute, ChatHookAction, ChatHookOutcome, ChatMediaKind,
+    ChatMediaRef, GenerationHookSignals, HookedOpenAiBackend, MESH_HOOKS_FIELD, OpenAiHookPolicy,
+    PrefillHookSignals, TerminalGuard, TerminalGuardedChatStream, apply_chat_hook_outcome,
+    chat_mesh_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
+    set_chat_mesh_hooks_enabled,
 };
 pub use lifecycle::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
     OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
     OpenAiTerminalResult, OpenAiUsage, REQUEST_ID_HEADER, RequestId, generate_request_id,
-    parse_request_id, parse_request_id_header, parse_single_request_id,
-    request_id_from_headers_or_generate, request_id_response_header,
+    parse_client_nonce, parse_request_id, parse_request_id_header, parse_single_client_nonce,
+    parse_single_request_id, request_id_from_headers_or_generate, request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use responses::{

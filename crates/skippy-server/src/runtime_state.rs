@@ -424,6 +424,15 @@ fn runtime_config_from_stage_config(
         include_output: config.downstream.is_none(),
         mtp_source: overrides.mtp_source,
         filter_tensors_on_load: config.filter_tensors_on_load,
+        checkpoint_quantization: config
+            .checkpoint_quantization
+            .as_deref()
+            .unwrap_or("preserve")
+            .parse()
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("parse checkpoint_quantization for {}", config.stage_id))?,
+        checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
+        checkpoint_imatrix_sha256: config.checkpoint_imatrix_sha256.clone(),
     })
 }
 
@@ -468,8 +477,9 @@ mod tests {
         FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
     };
     use skippy_runtime::{
-        ActivationDesc, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
-        MtpSource, RuntimeActivationDType, RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
+        ActivationDesc, ActivationFrame, CheckpointQuantization,
+        FlashAttentionType as RuntimeFlashAttentionType, MtpSource, RuntimeActivationDType,
+        RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
     };
 
     use super::{
@@ -569,6 +579,47 @@ mod tests {
             RuntimeFlashAttentionType::Enabled
         );
         assert_eq!(runtime_config.mtp_source, MtpSource::External);
+    }
+
+    #[test]
+    fn runtime_config_parses_checkpoint_quantization() {
+        let config = StageConfig {
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            checkpoint_quantization: Some("Q4_K_M".to_string()),
+            ..StageConfig::default()
+        };
+
+        let runtime_config =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
+        assert_eq!(
+            runtime_config.checkpoint_quantization,
+            CheckpointQuantization::Q4KM
+        );
+    }
+
+    #[test]
+    fn runtime_config_accepts_importance_aware_checkpoint_quantization() {
+        let config = StageConfig {
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            checkpoint_quantization: Some("IQ2_XXS".to_string()),
+            checkpoint_imatrix: Some("/models/imatrix.gguf".to_string()),
+            checkpoint_imatrix_sha256: Some("a".repeat(64)),
+            ..StageConfig::default()
+        };
+
+        let runtime =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
+        assert_eq!(
+            runtime.checkpoint_quantization,
+            CheckpointQuantization::IQ2XXS
+        );
+        assert_eq!(
+            runtime.checkpoint_imatrix.as_deref(),
+            Some(std::path::Path::new("/models/imatrix.gguf"))
+        );
+        assert_eq!(runtime.checkpoint_imatrix_sha256, Some("a".repeat(64)));
     }
 
     fn fake_stage_config_with_cache_idle_slots(cache_idle_slots: Option<u32>) -> StageConfig {

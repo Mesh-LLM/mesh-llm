@@ -53,6 +53,7 @@ members = [
     "crates/skippy-server",
     "crates/metrics-server",
     "crates/skippy-model-package",
+    "crates/skippy-model",
     "crates/skippy-quantize",
     "crates/model-package",
     "crates/skippy-correctness",
@@ -84,7 +85,7 @@ mesh-llm-release-footer = { path = "crates/mesh-llm-release-footer", version = "
 mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.76.0-rc9" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 strum = { version = "0.28", features = ["derive"] }
 
 [workspace.lints.clippy]

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Strip common GGUF quantization suffixes from a lowercased stem.
 /// e.g. "qwen3vl-2b-instruct-q4_k_m" → "qwen3vl-2b-instruct"
@@ -113,9 +113,9 @@ fn choose_mmproj_candidate(candidates: &[PathBuf]) -> Option<PathBuf> {
 }
 
 pub fn find_mmproj_path(_model_name: &str, model_path: &Path) -> Option<PathBuf> {
-    // Scan the model's parent directory for a matching mmproj file.
-    // This is safe for the HF hub cache because each model lives in its own
-    // isolated snapshot subdirectory alongside only its companion files.
+    // Scan the model's parent directory for a matching mmproj file. Model-name-
+    // aware matching remains useful for arbitrary local directories, while the
+    // generic fallback below is safe only for isolated HF snapshot directories.
     //
     // Preferred resolution order within that exact directory:
     // 1. Model-name-aware matches (single → return immediately).
@@ -178,7 +178,19 @@ pub fn find_mmproj_path(_model_name: &str, model_path: &Path) -> Option<PathBuf>
         return choose_mmproj_candidate(&named_matches);
     }
 
-    // No named matches: try quant-aware selection among all siblings, then precision fallback
+    // A generic projector name carries no model identity. Only use it when the
+    // existing local-path layout logic recognizes the directory being scanned
+    // as an HF snapshot. Check the path as supplied so a symlink from a shared
+    // local directory cannot borrow the identity of its snapshot target.
+    if model_path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return None;
+    }
+    super::identity_from_snapshot_layout_ancestors(model_path)?;
+
+    // No named matches: try quant-aware selection among all siblings, then precision fallback.
     if mmproj_siblings.len() > 1
         && let Some(ref quant) = model_quant
         && let Some(candidate) = pick_quant_match(&mmproj_siblings, quant)
@@ -204,10 +216,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mmproj_path_falls_back_to_single_sibling_sidecar() {
+    fn mmproj_path_finds_single_named_sidecar_in_local_directory() {
         let temp = tempfile::tempdir().unwrap();
         let model = temp.path().join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
         let mmproj = temp.path().join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&mmproj, b"mmproj").unwrap();
+
+        let found = find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model);
+        assert_eq!(found.as_deref(), Some(mmproj.as_path()));
+    }
+
+    #[test]
+    fn mmproj_path_falls_back_to_single_generic_sidecar_in_hf_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let model = snapshot.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let mmproj = snapshot.join("mmproj-F16.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&mmproj, b"mmproj").unwrap();
 
@@ -231,10 +261,16 @@ mod tests {
     #[test]
     fn mmproj_path_prefers_bf16_generic_precision_variants() {
         let temp = tempfile::tempdir().unwrap();
-        let model = temp.path().join("Qwen3.5-0.8B-Q4_K_M.gguf");
-        let f32 = temp.path().join("mmproj-F32.gguf");
-        let f16 = temp.path().join("mmproj-F16.gguf");
-        let bf16 = temp.path().join("mmproj-BF16.gguf");
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let model = snapshot.join("Qwen3.5-0.8B-Q4_K_M.gguf");
+        let f32 = snapshot.join("mmproj-F32.gguf");
+        let f16 = snapshot.join("mmproj-F16.gguf");
+        let bf16 = snapshot.join("mmproj-BF16.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&f32, b"mmproj").unwrap();
         std::fs::write(&f16, b"mmproj").unwrap();
@@ -284,15 +320,82 @@ mod tests {
         // When there are no model-name-aware matches but the siblings include
         // a projector with the same quant as the model, select that one.
         let temp = tempfile::tempdir().unwrap();
-        let model = temp.path().join("my-model-Q4_K_M.gguf");
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let model = snapshot.join("my-model-Q4_K_M.gguf");
         // Generic projector names without a matching model prefix
-        let q4_mmproj = temp.path().join("mmproj-Q4_K_M.gguf");
-        let q8_mmproj = temp.path().join("mmproj-Q8_0.gguf");
+        let q4_mmproj = snapshot.join("mmproj-Q4_K_M.gguf");
+        let q8_mmproj = snapshot.join("mmproj-Q8_0.gguf");
         std::fs::write(&model, b"model").unwrap();
         std::fs::write(&q4_mmproj, b"mmproj").unwrap();
         std::fs::write(&q8_mmproj, b"mmproj").unwrap();
 
         let found = find_mmproj_path("my-model-Q4_K_M", &model);
         assert_eq!(found.as_deref(), Some(q4_mmproj.as_path()));
+    }
+
+    #[test]
+    fn mmproj_path_ignores_unrelated_sibling_in_local_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("Qwen3-8B-Q4_K_M.gguf");
+        let unrelated_mmproj = temp.path().join("mmproj-Qwen2.5-VL-7B-Instruct-BF16.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&unrelated_mmproj, b"mmproj").unwrap();
+
+        assert!(find_mmproj_path("Qwen3-8B-Q4_K_M", &model).is_none());
+    }
+
+    #[test]
+    fn mmproj_path_ignores_generic_sibling_for_lexically_traversing_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let shared = temp.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let model_name = "Qwen3-8B-Q4_K_M.gguf";
+        let model = snapshot
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("shared")
+            .join(model_name);
+        let unrelated_mmproj = shared.join("mmproj-Qwen2.5-VL-7B-Instruct-BF16.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&unrelated_mmproj, b"mmproj").unwrap();
+
+        assert!(find_mmproj_path("Qwen3-8B-Q4_K_M", &model).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mmproj_path_ignores_generic_sibling_for_symlinked_hf_model() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("models--org--repo")
+            .join("snapshots")
+            .join("revision");
+        std::fs::create_dir_all(&snapshot).unwrap();
+
+        let snapshot_model = snapshot.join("Qwen3-8B-Q4_K_M.gguf");
+        std::fs::write(&snapshot_model, b"model").unwrap();
+
+        let shared = temp.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let model = shared.join("Qwen3-8B-Q4_K_M.gguf");
+        std::os::unix::fs::symlink(&snapshot_model, &model).unwrap();
+        let unrelated_mmproj = shared.join("mmproj-Qwen2.5-VL-7B-Instruct-BF16.gguf");
+        std::fs::write(&unrelated_mmproj, b"mmproj").unwrap();
+
+        assert!(find_mmproj_path("Qwen3-8B-Q4_K_M", &model).is_none());
     }
 }

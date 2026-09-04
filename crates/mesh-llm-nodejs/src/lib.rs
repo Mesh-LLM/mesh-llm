@@ -1,4 +1,6 @@
-#![forbid(unsafe_code)]
+// napi 3's generated registration glue locally allows its required unsafe FFI.
+// `deny` still rejects handwritten unsafe code while permitting that macro expansion.
+#![deny(unsafe_code)]
 
 #[cfg(feature = "embedded-runtime")]
 use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};

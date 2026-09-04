@@ -1,22 +1,24 @@
+//! GGUF metadata encoding for canonical llama.cpp checkpoint metadata.
+
 use std::io::Write;
 
 use anyhow::{Result, ensure};
 
-pub(crate) const GGUF_TYPE_UINT8: u32 = 0;
-pub(crate) const GGUF_TYPE_INT8: u32 = 1;
-pub(crate) const GGUF_TYPE_UINT16: u32 = 2;
-pub(crate) const GGUF_TYPE_UINT32: u32 = 4;
-pub(crate) const GGUF_TYPE_INT32: u32 = 5;
-pub(crate) const GGUF_TYPE_FLOAT32: u32 = 6;
-pub(crate) const GGUF_TYPE_BOOL: u32 = 7;
-pub(crate) const GGUF_TYPE_STRING: u32 = 8;
-pub(crate) const GGUF_TYPE_ARRAY: u32 = 9;
-pub(crate) const GGUF_TYPE_UINT64: u32 = 10;
-pub(crate) const GGUF_TYPE_INT64: u32 = 11;
-pub(crate) const GGUF_TYPE_FLOAT64: u32 = 12;
+pub const GGUF_TYPE_UINT8: u32 = 0;
+pub const GGUF_TYPE_INT8: u32 = 1;
+pub const GGUF_TYPE_UINT16: u32 = 2;
+pub const GGUF_TYPE_UINT32: u32 = 4;
+pub const GGUF_TYPE_INT32: u32 = 5;
+pub const GGUF_TYPE_FLOAT32: u32 = 6;
+pub const GGUF_TYPE_BOOL: u32 = 7;
+pub const GGUF_TYPE_STRING: u32 = 8;
+pub const GGUF_TYPE_ARRAY: u32 = 9;
+pub const GGUF_TYPE_UINT64: u32 = 10;
+pub const GGUF_TYPE_INT64: u32 = 11;
+pub const GGUF_TYPE_FLOAT64: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GgufKv {
+pub enum GgufKv {
     ArrayBool {
         key: String,
         value: Vec<bool>,
@@ -74,91 +76,91 @@ pub(crate) enum GgufKv {
 }
 
 impl GgufKv {
-    pub(crate) fn array_bool(key: &str, value: Vec<bool>) -> Self {
+    pub fn array_bool(key: &str, value: Vec<bool>) -> Self {
         Self::ArrayBool {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn array_f32(key: &str, value: Vec<f32>) -> Self {
+    pub fn array_f32(key: &str, value: Vec<f32>) -> Self {
         Self::ArrayF32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn array_i32(key: &str, value: Vec<i32>) -> Self {
+    pub fn array_i32(key: &str, value: Vec<i32>) -> Self {
         Self::ArrayI32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn array_string(key: &str, value: Vec<String>) -> Self {
+    pub fn array_string(key: &str, value: Vec<String>) -> Self {
         Self::ArrayString {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn array_u32(key: &str, value: Vec<u32>) -> Self {
+    pub fn array_u32(key: &str, value: Vec<u32>) -> Self {
         Self::ArrayU32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn bool(key: &str, value: bool) -> Self {
+    pub fn bool(key: &str, value: bool) -> Self {
         Self::Bool {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn f32(key: &str, value: f32) -> Self {
+    pub fn f32(key: &str, value: f32) -> Self {
         Self::F32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn i32(key: &str, value: i32) -> Self {
+    pub fn i32(key: &str, value: i32) -> Self {
         Self::I32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn string(key: &str, value: &str) -> Self {
+    pub fn string(key: &str, value: &str) -> Self {
         Self::String {
             key: key.to_string(),
             value: value.to_string(),
         }
     }
 
-    pub(crate) fn u16(key: &str, value: u16) -> Self {
+    pub fn u16(key: &str, value: u16) -> Self {
         Self::U16 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn u32(key: &str, value: u32) -> Self {
+    pub fn u32(key: &str, value: u32) -> Self {
         Self::U32 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn u64(key: &str, value: u64) -> Self {
+    pub fn u64(key: &str, value: u64) -> Self {
         Self::U64 {
             key: key.to_string(),
             value,
         }
     }
 
-    pub(crate) fn u32_value_mut(&mut self) -> Option<&mut u32> {
+    pub fn u32_value_mut(&mut self) -> Option<&mut u32> {
         match self {
             GgufKv::U32 { value, .. } => Some(value),
             _ => None,
@@ -166,7 +168,7 @@ impl GgufKv {
     }
 }
 
-pub(crate) fn write_kv<W: Write>(writer: &mut W, kv: &GgufKv) -> Result<()> {
+pub fn write_kv<W: Write>(writer: &mut W, kv: &GgufKv) -> Result<()> {
     match kv {
         GgufKv::ArrayBool { key, value } => {
             write_array_header(writer, key, GGUF_TYPE_BOOL, value.len())?;

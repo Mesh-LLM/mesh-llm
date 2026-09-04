@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use argon2::{Argon2, Params};
-use chacha20poly1305::aead::{Aead, AeadCore, OsRng};
+use chacha20poly1305::aead::{Aead, Generate};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -249,8 +249,9 @@ fn build_encrypted_keystore(
     };
     let plaintext = serde_json::to_vec(&payload)?;
 
-    let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(sym_key.as_ref()));
-    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let key = chacha20poly1305::Key::from(*sym_key);
+    let cipher = ChaCha20Poly1305::new(&key);
+    let nonce = chacha20poly1305::Nonce::generate();
     let ct = cipher
         .encrypt(&nonce, plaintext.as_ref())
         .map_err(|_| CryptoError::DecryptionFailed)?;
@@ -394,10 +395,14 @@ fn decrypt_keystore(
     let p_cost = ks.argon2_p_cost.unwrap_or(ARGON2_P_COST);
 
     let sym_key = derive_key(pass, &salt, m_cost, t_cost, p_cost)?;
-    let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(sym_key.as_ref()));
-    let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
+    let key = chacha20poly1305::Key::from(*sym_key);
+    let cipher = ChaCha20Poly1305::new(&key);
+    let nonce_bytes: [u8; 12] = nonce_bytes
+        .try_into()
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    let nonce = chacha20poly1305::Nonce::from(nonce_bytes);
     let plaintext = cipher
-        .decrypt(nonce, ct.as_ref())
+        .decrypt(&nonce, ct.as_ref())
         .map_err(|_| CryptoError::DecryptionFailed)?;
 
     let payload: SecretPayload =
@@ -504,6 +509,28 @@ mod tests {
         let loaded = load_keystore(&path, Some("test-passphrase")).unwrap();
 
         assert_eq!(original_id, loaded.owner_id());
+        assert_eq!(kp.signing_bytes(), loaded.signing_bytes());
+        assert_eq!(kp.encryption_bytes(), loaded.encryption_bytes());
+
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn encrypted_keystore_without_explicit_kdf_parameters_remains_compatible() {
+        let path = temp_keystore_path();
+        let kp = OwnerKeypair::generate();
+
+        save_keystore(&path, &kp, Some("legacy-passphrase"), false).unwrap();
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let raw = raw.as_object_mut().unwrap();
+        raw.remove("argon2_m_cost");
+        raw.remove("argon2_t_cost");
+        raw.remove("argon2_p_cost");
+        fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+
+        let loaded = load_keystore(&path, Some("legacy-passphrase")).unwrap();
+        assert_eq!(kp.owner_id(), loaded.owner_id());
         assert_eq!(kp.signing_bytes(), loaded.signing_bytes());
         assert_eq!(kp.encryption_bytes(), loaded.encryption_bytes());
 
