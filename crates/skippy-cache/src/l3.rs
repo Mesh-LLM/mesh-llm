@@ -24,7 +24,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -395,7 +395,7 @@ pub struct StoreReconciliation {
 #[derive(Debug)]
 pub struct HandoffSegmentStore {
     root: PathBuf,
-    limits: StoreLimits,
+    limits: RwLock<StoreLimits>,
     /// Exclusive process-level ownership of this cache root. The manager
     /// shares one store between all stages in the node; a second process must
     /// not build an independent reservation/pin universe over the same files.
@@ -503,7 +503,7 @@ impl HandoffSegmentStore {
         let root_lock = acquire_root_lock(&root)?;
         Ok(Self {
             root,
-            limits,
+            limits: RwLock::new(limits),
             _root_lock: root_lock,
             admission: Mutex::new(()),
             reserved_inflight: AtomicU64::new(0),
@@ -519,7 +519,32 @@ impl HandoffSegmentStore {
     }
 
     pub fn limits(&self) -> StoreLimits {
-        self.limits
+        *self
+            .limits
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Replace the live hard cap and filesystem reserve. Admission is paused
+    /// while the pair changes, so a writer can never observe half of the new
+    /// policy. Shrinking evicts inactive entries immediately; pinned entries
+    /// remain valid and subsequent writes stay refused until usage fits.
+    pub fn update_limits(&self, limits: StoreLimits) -> Result<StoreLimits> {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut current = self
+            .limits
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = *current;
+        *current = limits;
+        drop(current);
+        if limits.budget_bytes > 0 {
+            self.enforce_budget_to(limits.budget_bytes)?;
+        }
+        Ok(previous)
     }
 
     /// Repair incomplete or invalid state left by an interrupted writer before
@@ -859,7 +884,8 @@ impl HandoffSegmentStore {
                 manifest.total_bytes
             );
         }
-        if self.limits.budget_bytes > 0 && manifest.total_bytes > self.limits.budget_bytes {
+        let limits = self.limits();
+        if limits.budget_bytes > 0 && manifest.total_bytes > limits.budget_bytes {
             return Ok(Err(WriteRefusal::SkippedOversize));
         }
         // Compact, not pretty: a 64-row window turns a long prefix into
@@ -977,25 +1003,26 @@ impl HandoffSegmentStore {
             .admission
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.limits.budget_bytes > 0 && bytes > self.limits.budget_bytes {
+        let limits = self.limits();
+        if limits.budget_bytes > 0 && bytes > limits.budget_bytes {
             return Ok(Err(WriteRefusal::SkippedOversize));
         }
         let available = fsinfo::available_bytes(&self.root)?;
-        if available.saturating_sub(bytes) < self.limits.minimum_free_bytes {
+        if available.saturating_sub(bytes) < limits.minimum_free_bytes {
             return Ok(Err(WriteRefusal::ReadOnlyLowSpace));
         }
-        if self.limits.budget_bytes > 0 {
+        if limits.budget_bytes > 0 {
             let used = self.managed_usage_bytes()?;
-            if used.saturating_add(bytes) > self.limits.budget_bytes {
+            if used.saturating_add(bytes) > limits.budget_bytes {
                 // Make room from inactive entries before refusing: a full
                 // cache is the normal steady state, not an error. Clear to the
                 // low-water mark, or further when this write alone needs more.
                 let target = self
                     .low_water_bytes()
-                    .min(self.limits.budget_bytes.saturating_sub(bytes));
+                    .min(limits.budget_bytes.saturating_sub(bytes));
                 self.enforce_budget_to(target)?;
                 let used = self.managed_usage_bytes()?;
-                if used.saturating_add(bytes) > self.limits.budget_bytes {
+                if used.saturating_add(bytes) > limits.budget_bytes {
                     return Ok(Err(WriteRefusal::InsufficientSpace));
                 }
             }
@@ -1029,6 +1056,7 @@ impl HandoffSegmentStore {
 
     /// What the store holds right now, for the status contract.
     pub fn usage(&self) -> Result<StoreUsage> {
+        let limits = self.limits();
         let manifests = self.list_manifests()?;
         let mut segments = std::collections::HashSet::new();
         for key in &manifests {
@@ -1039,11 +1067,11 @@ impl HandoffSegmentStore {
             }
         }
         Ok(StoreUsage {
-            budget_bytes: self.limits.budget_bytes,
+            budget_bytes: limits.budget_bytes,
             used_bytes: self.managed_usage_bytes()?,
             reserved_inflight_bytes: self.reserved_inflight.load(Ordering::Acquire),
             filesystem_available_bytes: fsinfo::available_bytes(&self.root)?,
-            minimum_free_bytes: self.limits.minimum_free_bytes,
+            minimum_free_bytes: limits.minimum_free_bytes,
             manifests: manifests.len() as u64,
             unique_segments: segments.len() as u64,
             evicted_manifests: self.evicted_manifests.load(Ordering::Relaxed),
@@ -1076,12 +1104,13 @@ impl HandoffSegmentStore {
     /// prefix that is hit constantly but never re-recorded is the last thing
     /// evicted rather than the first.
     pub fn enforce_budget(&self) -> Result<u64> {
-        if self.limits.budget_bytes == 0 {
+        let limits = self.limits();
+        if limits.budget_bytes == 0 {
             return Ok(0);
         }
         // Over the cap, evict below it: the pass is expensive enough that
         // paying it once per headroom refill beats paying it per commit.
-        if self.managed_usage_bytes()? <= self.limits.budget_bytes {
+        if self.managed_usage_bytes()? <= limits.budget_bytes {
             return Ok(0);
         }
         self.enforce_budget_to(self.low_water_bytes())
@@ -1089,7 +1118,7 @@ impl HandoffSegmentStore {
 
     /// The level eviction drops to once it runs.
     fn low_water_bytes(&self) -> u64 {
-        self.limits
+        self.limits()
             .budget_bytes
             .saturating_mul(EVICTION_LOW_WATER_PERCENT)
             / 100
@@ -1726,6 +1755,25 @@ mod tests {
         store.prune_to(before / 2).expect("prune");
         let after = store.managed_usage_bytes().expect("usage");
         assert!(after < before, "prune freed nothing ({before} -> {after})");
+    }
+
+    #[test]
+    fn live_limit_update_changes_the_pair_and_prunes_inactive_entries() {
+        let root = temp_root("live-limits");
+        let store = store(&root, 1_000_000);
+        for fill in 1u8..=3 {
+            let manifest = commit_payload(&store, &vec![fill; 8_000], 4096);
+            store.commit(&manifest).expect("commit");
+        }
+        let before = store.managed_usage_bytes().expect("usage");
+        let next = StoreLimits::new(before / 2, 4096);
+        let previous = store.update_limits(next).expect("update limits");
+        assert_eq!(previous, StoreLimits::new(1_000_000, 0));
+        assert_eq!(store.limits(), next);
+        assert!(
+            store.managed_usage_bytes().expect("usage after") <= next.budget_bytes,
+            "live shrink did not prune to the new cap"
+        );
     }
 
     #[test]

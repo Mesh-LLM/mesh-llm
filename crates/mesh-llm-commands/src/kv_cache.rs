@@ -1,0 +1,138 @@
+use std::io::{self, IsTerminal, Write};
+
+use anyhow::{Context, Result, bail};
+use mesh_llm_cli::KvCacheCommand;
+use serde_json::{Value, json};
+
+pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
+    match command {
+        KvCacheCommand::Status { port, json } => {
+            let value = request(*port, reqwest::Method::GET, "/api/runtime/kv-cache", None).await?;
+            print_response(&value, *json)
+        }
+        KvCacheCommand::Prune {
+            target,
+            model_identity,
+            yes,
+            port,
+            json: json_output,
+        } => {
+            confirm_destructive("prune inactive disk prompt-cache entries", *yes)?;
+            let target_bytes = target
+                .as_deref()
+                .map(mesh_llm_config::parse_iec_size)
+                .transpose()
+                .context("invalid --target")?;
+            let body = json!({
+                "target_bytes": target_bytes,
+                "model_identity": model_identity,
+            });
+            let value = request(
+                *port,
+                reqwest::Method::POST,
+                "/api/runtime/kv-cache/prune",
+                Some(body),
+            )
+            .await?;
+            print_response(&value, *json_output)
+        }
+        KvCacheCommand::Clear {
+            model_identity,
+            yes,
+            port,
+            json: json_output,
+        } => {
+            confirm_destructive("clear inactive disk prompt-cache entries", *yes)?;
+            let value = request(
+                *port,
+                reqwest::Method::DELETE,
+                "/api/runtime/kv-cache",
+                Some(json!({ "model_identity": model_identity })),
+            )
+            .await?;
+            print_response(&value, *json_output)
+        }
+    }
+}
+
+async fn request(
+    port: u16,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Value> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let mut request = client.request(method, &url);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("request disk prompt-cache endpoint {url}"))?;
+    let status = response.status();
+    let value = response
+        .json::<Value>()
+        .await
+        .with_context(|| format!("decode disk prompt-cache response from {url}"))?;
+    if !status.is_success() {
+        bail!(
+            "disk prompt-cache request failed ({status}): {}",
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        );
+    }
+    Ok(value)
+}
+
+fn confirm_destructive(action: &str, yes: bool) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        bail!("{action} requires --yes when stdin is not interactive");
+    }
+    eprint!("{action}? [y/N] ");
+    io::stderr().flush()?;
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    if !matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        bail!("operation cancelled");
+    }
+    Ok(())
+}
+
+fn print_response(value: &Value, json_output: bool) -> Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string(value)?);
+        return Ok(());
+    }
+    if let Some(freed) = value.get("freed_bytes").and_then(Value::as_u64) {
+        println!("Freed {freed} bytes");
+        return Ok(());
+    }
+    let configured = &value["configured"];
+    let effective = &value["effective"];
+    println!(
+        "Disk prompt cache: {} ({})",
+        effective["state"].as_str().unwrap_or("unknown"),
+        configured["mode"].as_str().unwrap_or("unknown")
+    );
+    println!(
+        "Root: {}",
+        configured["directory"].as_str().unwrap_or("unknown")
+    );
+    if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
+        println!(
+            "Used: {} / {} bytes",
+            usage["used_bytes"].as_u64().unwrap_or(0),
+            usage["budget_bytes"].as_u64().unwrap_or(0)
+        );
+    }
+    Ok(())
+}

@@ -3,6 +3,7 @@ mod control_apply_diagnostics;
 mod diagnostics;
 mod discover;
 mod health;
+mod kv_cache;
 pub(crate) mod logs;
 mod mcp;
 mod mesh_hook;
@@ -80,6 +81,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/stages")
                 | ("GET", "/api/runtime/config-schema")
                 | ("GET", "/api/runtime/config-control-state")
+                | ("GET", "/api/runtime/kv-cache")
                 | ("GET", "/api/runtime/control-bootstrap")
                 | ("GET", "/api/runtime/intents")
                 | ("GET", "/api/runtime/activity")
@@ -94,6 +96,8 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("POST", "/api/runtime/config/validate")
                 | ("POST", "/api/runtime/mesh-guardrails")
                 | ("POST", "/api/runtime/models")
+                | ("POST", "/api/runtime/kv-cache/prune")
+                | ("DELETE", "/api/runtime/kv-cache")
                 | ("PUT", "/api/runtime/activity/override")
                 | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {

@@ -446,7 +446,9 @@ impl L3Tier {
     /// itself. Full-state fills are whole-blob by nature; kv-recurrent
     /// fills could stream per segment later.
     pub fn load(&self, location: &L3Location) -> Result<L3Fill> {
-        let _operation = self.manager.operation_guard();
+        let Some(_operation) = self.manager.try_operation_guard() else {
+            bail!("disk cache lifecycle operation in progress");
+        };
         // Pinned for the whole load: eviction under a concurrent spill must
         // not remove the segments this fill is assembling.
         let _pin = self.store().pin(&location.manifest_key);
