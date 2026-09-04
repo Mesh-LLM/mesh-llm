@@ -11,6 +11,10 @@ use super::{
     records::add_reconstruct_stats,
 };
 
+fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
+    format!("{}:{}", l3.state_identity(), location.manifest_key)
+}
+
 impl KvStageIntegration {
     pub fn restore_exact_state(
         &self,
@@ -415,12 +419,17 @@ impl KvStageIntegration {
                 // recorded the reason for the status surface.
                 Ok(None) | Err(_) => return Ok(None),
             };
+        // Segment and manifest digests intentionally deduplicate bytes across
+        // numerical states. A fill claim must not: one state's fill cannot
+        // warm another state's radix namespace, even when their payload bytes
+        // happen to be identical.
+        let fill_claim = l3_fill_claim_key(l3, &location);
         {
             let mut inflight = self
                 .inflight_fills
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !inflight.insert(location.manifest_key.clone()) {
+            if !inflight.insert(fill_claim.clone()) {
                 return Ok(None);
             }
         }
@@ -434,7 +443,7 @@ impl KvStageIntegration {
             self.inflight_fills
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&location.manifest_key);
+                .remove(&fill_claim);
         }
         outcome
     }
@@ -547,7 +556,7 @@ impl KvStageIntegration {
             extra: ExactStateExtra { kv_desc },
             namespace: identity.namespace.clone(),
             token_ids: identity.token_ids[..token_count as usize].to_vec(),
-            l3_fill_claim: Some(location.manifest_key.clone()),
+            l3_fill_claim: Some(l3_fill_claim_key(l3, location)),
         });
         let rewarm_enqueued = matches!(admission, ExactStateRecordAdmission::Queued);
         Ok(Some(ExactStateRestore {

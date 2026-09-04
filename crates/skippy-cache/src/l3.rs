@@ -38,6 +38,7 @@ const SEGMENT_DIR: &str = "segments";
 const MANIFEST_DIR: &str = "manifests";
 const PREFIX_INDEX_DIR: &str = "prefixes";
 const QUARANTINE_DIR: &str = "quarantine";
+const ROOT_LOCK_FILE: &str = ".owner.lock";
 
 /// Evict to this percentage of the budget rather than exactly to it.
 ///
@@ -310,11 +311,17 @@ pub struct SegmentHold<'store> {
 
 impl Drop for SegmentHold<'_> {
     fn drop(&mut self) {
-        self.store
+        let mut holds = self
+            .store
             .inflight_segments
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.digest);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = holds.get_mut(&self.digest) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                holds.remove(&self.digest);
+            }
+        }
     }
 }
 
@@ -364,10 +371,27 @@ pub struct StoreUsage {
     pub quarantined_objects: u64,
 }
 
+/// Repairs performed before a node starts serving a cache root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct StoreReconciliation {
+    pub removed_temporary_files: u64,
+    pub quarantined_manifests: u64,
+    pub removed_prefix_links: u64,
+    pub removed_orphan_bytes: u64,
+}
+
 #[derive(Debug)]
 pub struct HandoffSegmentStore {
     root: PathBuf,
     limits: StoreLimits,
+    /// Exclusive process-level ownership of this cache root. The manager
+    /// shares one store between all stages in the node; a second process must
+    /// not build an independent reservation/pin universe over the same files.
+    _root_lock: fs::File,
+    /// Makes the admission check and reservation increment one transaction.
+    /// Without this, two stages can both observe the same free budget before
+    /// either publishes its reservation.
+    admission: Mutex<()>,
     /// Bytes reserved by in-flight writes. Part of the managed total, so the
     /// cap holds across concurrent writers rather than only at rest.
     reserved_inflight: AtomicU64,
@@ -386,11 +410,45 @@ pub struct HandoffSegmentStore {
     /// collect them out from under the commit that is about to reference
     /// them. Left unprotected this fails as "manifest references missing
     /// segment" under exactly the pressure the cache is for.
-    inflight_segments: Mutex<std::collections::BTreeSet<String>>,
+    inflight_segments: Mutex<std::collections::BTreeMap<String, usize>>,
 }
 
 pub fn segment_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+fn acquire_root_lock(root: &Path) -> Result<fs::File> {
+    let path = root.join(ROOT_LOCK_FILE);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("failed to open cache root lock {}", path.display()))?;
+    fsinfo::restrict_to_owner(&path, 0o600)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        // SAFETY: `file` owns a valid open descriptor for the lifetime of the
+        // store. `flock` neither retains the pointer nor accesses Rust memory.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                bail!(
+                    "cache root {} is already owned by another manager",
+                    root.display()
+                );
+            }
+            return Err(error)
+                .with_context(|| format!("failed to lock cache root {}", root.display()));
+        }
+    }
+
+    Ok(file)
 }
 
 impl HandoffSegmentStore {
@@ -409,6 +467,9 @@ impl HandoffSegmentStore {
     /// every later guarantee rests on, and neither is worth a partial mode.
     pub fn open_with_limits(root: impl Into<PathBuf>, limits: StoreLimits) -> Result<Self> {
         let root = root.into();
+        if !root.is_absolute() {
+            bail!("cache root must be absolute: {}", root.display());
+        }
         fsinfo::refuse_symlink(&root)?;
         fs::create_dir_all(&root)
             .with_context(|| format!("failed to create cache root {}", root.display()))?;
@@ -427,15 +488,95 @@ impl HandoffSegmentStore {
             fsinfo::restrict_to_owner(&path, 0o700)?;
         }
         fsinfo::restrict_to_owner(&root, 0o700)?;
+        let root_lock = acquire_root_lock(&root)?;
         Ok(Self {
             root,
             limits,
+            _root_lock: root_lock,
+            admission: Mutex::new(()),
             reserved_inflight: AtomicU64::new(0),
             pins: Mutex::new(std::collections::BTreeMap::new()),
             evicted_manifests: AtomicU64::new(0),
             quarantined_objects: AtomicU64::new(0),
-            inflight_segments: Mutex::new(std::collections::BTreeSet::new()),
+            inflight_segments: Mutex::new(std::collections::BTreeMap::new()),
         })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn limits(&self) -> StoreLimits {
+        self.limits
+    }
+
+    /// Repair incomplete or invalid state left by an interrupted writer before
+    /// the manager exposes this root to any stage.
+    pub fn reconcile_startup(&self) -> Result<StoreReconciliation> {
+        let mut report = StoreReconciliation::default();
+        for directory in [SEGMENT_DIR, MANIFEST_DIR, PREFIX_INDEX_DIR] {
+            report.removed_temporary_files = report
+                .removed_temporary_files
+                .saturating_add(remove_temporary_files(&self.root.join(directory))?);
+        }
+
+        for key in self.list_manifests()? {
+            if self.validate_committed_manifest(&key).is_err() {
+                self.quarantine(&self.manifest_path(&key))?;
+                report.quarantined_manifests += 1;
+            }
+        }
+        report.removed_prefix_links = self.remove_dangling_prefix_links()?;
+        report.removed_orphan_bytes = self.collect_unreferenced_segments()?;
+        Ok(report)
+    }
+
+    fn validate_committed_manifest(&self, key: &str) -> Result<()> {
+        let manifest = self.load_manifest(key)?;
+        if manifest.payload_digest != key {
+            bail!(
+                "manifest key {key} disagrees with payload digest {}",
+                manifest.payload_digest
+            );
+        }
+        let mut expected_offset = 0u64;
+        for (position, segment) in manifest.segments.iter().enumerate() {
+            if segment.index as usize != position || segment.offset != expected_offset {
+                bail!("manifest {key} has invalid segment ordering");
+            }
+            let metadata = fs::metadata(self.segment_path(&segment.digest))
+                .with_context(|| format!("manifest {key} references a missing segment"))?;
+            if metadata.len() != segment.bytes {
+                bail!("manifest {key} references a truncated segment");
+            }
+            expected_offset = expected_offset
+                .checked_add(segment.bytes)
+                .context("manifest segment offsets overflow")?;
+        }
+        if expected_offset != manifest.total_bytes {
+            bail!("manifest {key} does not tile its payload");
+        }
+        Ok(())
+    }
+
+    fn remove_dangling_prefix_links(&self) -> Result<u64> {
+        let root = self.root.join(PREFIX_INDEX_DIR);
+        let mut removed = 0u64;
+        for path in files_recursive(&root)? {
+            let digest = match fs::read_to_string(&path) {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if digest.is_empty() || !self.manifest_path(&digest).is_file() {
+                match fs::remove_file(&path) {
+                    Ok(()) => removed += 1,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        Ok(removed)
     }
 
     fn segment_path(&self, digest: &str) -> PathBuf {
@@ -525,14 +666,14 @@ impl HandoffSegmentStore {
         let manifest_path = self.manifest_path(&payload_digest);
         match fs::read(&manifest_path) {
             Ok(bytes) => {
-                let manifest: HandoffManifest =
-                    serde_json::from_slice(&bytes).context("malformed manifest")?;
-                if manifest.version != MANIFEST_VERSION {
-                    bail!(
-                        "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
-                        manifest.version
-                    );
-                }
+                let manifest = match decode_manifest(&payload_digest, &bytes) {
+                    Ok(manifest) => manifest,
+                    Err(_) => {
+                        self.quarantine(&manifest_path)?;
+                        let _ = fs::remove_file(&path);
+                        return Ok(None);
+                    }
+                };
                 // A hit is a use. Recording it here is what makes eviction
                 // least-recently-*used* rather than least-recently-written.
                 self.touch_manifest(&payload_digest);
@@ -568,12 +709,12 @@ impl HandoffSegmentStore {
     /// callers can record a miss with its reason and carry on.
     pub fn try_put_segment(&self, bytes: &[u8]) -> Result<Result<StoredSegment<'_>, WriteRefusal>> {
         let digest = segment_digest(bytes);
+        // Establish the GC hold before observing or publishing the file. This
+        // closes the rename-to-hold window where a concurrent clear could see
+        // an unreferenced segment and remove it before its manifest commits.
+        let hold = self.hold_segment(&digest);
         let path = self.segment_path(&digest);
         if path.exists() {
-            // Already stored, but possibly unreferenced: hold it too, or a
-            // concurrent eviction can collect it before this writer's manifest
-            // names it.
-            let hold = self.hold_segment(&digest);
             return Ok(Ok(StoredSegment {
                 digest,
                 put: SegmentPut {
@@ -591,7 +732,6 @@ impl HandoffSegmentStore {
         };
         write_atomically(&path, bytes)?;
         fsinfo::restrict_to_owner(&path, 0o600)?;
-        let hold = self.hold_segment(&digest);
         drop(reservation);
         Ok(Ok(StoredSegment {
             digest,
@@ -739,15 +879,7 @@ impl HandoffSegmentStore {
     pub fn load_manifest(&self, payload_digest: &str) -> Result<HandoffManifest> {
         let bytes = fs::read(self.manifest_path(payload_digest))
             .with_context(|| format!("failed to read manifest {payload_digest}"))?;
-        let manifest: HandoffManifest =
-            serde_json::from_slice(&bytes).context("malformed manifest")?;
-        if manifest.version != MANIFEST_VERSION {
-            bail!(
-                "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
-                manifest.version
-            );
-        }
-        Ok(manifest)
+        decode_manifest(payload_digest, &bytes)
     }
 
     /// Manifest keys, newest first by modification time.
@@ -817,6 +949,7 @@ impl HandoffSegmentStore {
         total = total.saturating_add(directory_bytes_recursive(
             &self.root.join(PREFIX_INDEX_DIR),
         )?);
+        total = total.saturating_add(directory_bytes_recursive(&self.root.join(QUARANTINE_DIR))?);
         Ok(total.saturating_add(self.reserved_inflight.load(Ordering::Acquire)))
     }
 
@@ -827,6 +960,10 @@ impl HandoffSegmentStore {
     /// are mid-write. The returned guard releases the reservation on drop,
     /// including on the error paths.
     pub fn reserve(&self, bytes: u64) -> Result<Result<Reservation<'_>, WriteRefusal>> {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.limits.budget_bytes > 0 && bytes > self.limits.budget_bytes {
             return Ok(Err(WriteRefusal::SkippedOversize));
         }
@@ -1007,6 +1144,7 @@ impl HandoffSegmentStore {
         if !evicted_any {
             return Ok(0);
         }
+        self.remove_dangling_prefix_links()?;
         self.collect_unreferenced_segments()?;
         let usage_after = self.managed_usage_bytes()?;
         Ok(usage_before.saturating_sub(usage_after))
@@ -1040,16 +1178,18 @@ impl HandoffSegmentStore {
                 }
             }
         }
+        self.remove_dangling_prefix_links()?;
         self.collect_unreferenced_segments()?;
         let after = self.managed_usage_bytes()?;
         Ok(before.saturating_sub(after))
     }
 
     fn hold_segment(&self, digest: &str) -> SegmentHold<'_> {
-        self.inflight_segments
+        let mut holds = self
+            .inflight_segments
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(digest.to_string());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *holds.entry(digest.to_string()).or_insert(0) += 1;
         SegmentHold {
             store: self,
             digest: digest.to_string(),
@@ -1080,7 +1220,7 @@ impl HandoffSegmentStore {
                 .inflight_segments
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains(&stem);
+                .contains_key(&stem);
             if !referenced.contains(&stem) && !held {
                 freed = freed.saturating_add(entry.metadata()?.len());
                 fs::remove_file(&path)
@@ -1089,6 +1229,64 @@ impl HandoffSegmentStore {
         }
         Ok(freed)
     }
+}
+
+fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
+    let manifest: HandoffManifest = serde_json::from_slice(bytes).context("malformed manifest")?;
+    if manifest.version != MANIFEST_VERSION {
+        bail!(
+            "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
+            manifest.version
+        );
+    }
+    if manifest.payload_digest != payload_digest {
+        bail!(
+            "manifest key {payload_digest} disagrees with payload digest {}",
+            manifest.payload_digest
+        );
+    }
+    Ok(manifest)
+}
+
+fn files_recursive(directory: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_file() {
+            files.push(entry.path());
+        } else if file_type.is_dir() {
+            files.extend(files_recursive(&entry.path())?);
+        }
+    }
+    Ok(files)
+}
+
+fn remove_temporary_files(directory: &Path) -> Result<u64> {
+    let mut removed = 0u64;
+    for path in files_recursive(directory)? {
+        let is_temporary = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".tmp-"));
+        if !is_temporary {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to remove stale temp {}", path.display()));
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Bytes held by the files directly inside `directory`. Missing directories
@@ -1241,6 +1439,14 @@ mod tests {
         assert!(first.put.new);
         assert!(!second.put.new);
         assert_eq!(store.segment_footprint_bytes().expect("footprint"), 10);
+        drop(first);
+        assert_eq!(
+            store.collect_unreferenced_segments().unwrap(),
+            0,
+            "one writer released a segment still held by another writer"
+        );
+        drop(second);
+        assert_eq!(store.collect_unreferenced_segments().unwrap(), 10);
     }
 
     #[test]
@@ -1447,13 +1653,23 @@ mod tests {
     fn clear_removes_every_unpinned_entry() {
         let root = temp_root("clear");
         let store = store(&root, 0);
-        commit_payload(&store, &vec![1u8; 4096], 4096);
+        let linked = commit_payload(&store, &vec![1u8; 4096], 4096);
+        store
+            .link_prefix("namespace", 128, "prefix", &linked.payload_digest)
+            .unwrap();
         commit_payload(&store, &vec![2u8; 4096], 4096);
 
         let freed = store.clear().expect("clear");
         assert!(freed > 0, "clear freed nothing");
         assert!(store.list_manifests().expect("list").is_empty());
         assert_eq!(store.segment_footprint_bytes().expect("footprint"), 0);
+        assert!(
+            store
+                .recorded_prefix_lengths("namespace")
+                .unwrap()
+                .is_empty(),
+            "clear left a dangling prefix link"
+        );
     }
 
     #[test]
