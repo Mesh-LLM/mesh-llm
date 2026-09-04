@@ -1,6 +1,7 @@
 mod decode_step;
 mod linear_decode;
 mod native_mtp_decode;
+mod receipt_lifecycle;
 mod resident_prefill;
 #[cfg(test)]
 mod tests;
