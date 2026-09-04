@@ -218,9 +218,9 @@ The lane projections pass smaller PR max-parallel values to Clippy, tests,
 hosts, runtimes and platform checks and wider bounded values to main. Host, ABI
 and runtime producer identities are not duplicated. The full Swift target
 matrix is a deliberate fan-out of seven distinct architecture/platform inputs,
-bounded to two concurrent jobs for PR profiles and four for main/manual; a
-single assembly job restores those libraries and publishes the verified
-XCFramework. Separate run-scoped graphs
+bounded to two concurrent jobs for PR profiles and four for main/manual and
+release; a single assembly job restores those libraries and publishes the
+verified XCFramework. Separate run-scoped graphs
 build one prepared UI artifact per active platform lane; that is the accepted
 readability tradeoff, while UI tests remain owned by the Website graph. Every
 heavy job has a timeout and a deterministic row identity.

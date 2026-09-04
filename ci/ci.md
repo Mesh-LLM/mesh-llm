@@ -327,10 +327,11 @@ main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
 by a blanket PR fan-out. Host, ABI and runtime producers remain unique per
 selected row. The full Swift target matrix is the intentional exception: its
 seven architecture/platform libraries are independent producer inputs and use
-the existing macOS cap (two for PR profiles and four for main/manual profiles)
-before one assembly join. The readability tradeoff is one UI artifact build per active
-platform workflow because artifacts are run-scoped; UI tests still execute
-only in the Website graph and host producers never rebuild the UI themselves.
+the existing macOS cap (two for PR profiles and four for main/manual and
+release profiles) before one assembly join. The readability tradeoff is one UI
+artifact build per active platform workflow because artifacts are run-scoped;
+UI tests still execute only in the Website graph and host producers never
+rebuild the UI themselves.
 
 Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
