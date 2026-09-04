@@ -24,7 +24,16 @@ pub struct Inventory {
     pub terminal_outcome_mappings: Vec<TerminalMapping>,
     pub same_fact_rulings: Vec<SameFactRuling>,
     pub families: Vec<Family>,
+    pub native_family_mappings: Vec<NativeFamilyMapping>,
     pub catalog: Catalog,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct NativeFamilyMapping {
+    pub feature_bit: u32,
+    pub native_kind: u32,
+    pub native_kind_name: String,
+    pub event_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

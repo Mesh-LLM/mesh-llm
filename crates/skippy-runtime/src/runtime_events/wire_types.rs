@@ -22,6 +22,9 @@ pub enum RuntimeEventCategory {
     Session,
     Kv,
     Warning,
+    Device,
+    Diagnostic,
+    Unload,
     Unknown(u32),
 }
 
@@ -33,6 +36,9 @@ impl From<RawRuntimeEventCategory> for RuntimeEventCategory {
             RawRuntimeEventCategory::SESSION => Self::Session,
             RawRuntimeEventCategory::KV => Self::Kv,
             RawRuntimeEventCategory::WARNING => Self::Warning,
+            RawRuntimeEventCategory::DEVICE => Self::Device,
+            RawRuntimeEventCategory::DIAGNOSTIC => Self::Diagnostic,
+            RawRuntimeEventCategory::UNLOAD => Self::Unload,
             RawRuntimeEventCategory(raw) => Self::Unknown(raw),
         }
     }
@@ -45,6 +51,35 @@ pub enum RuntimeEventKind {
     BackendDeviceSelected,
     ModelOpenFinished,
     ModelOpenFailedHandled,
+    ModelLoadPhaseChanged,
+    ModelLoadMemoryAllocated,
+    ModelLoadTensorsOffloaded,
+    ModelLoadTokenizerReady,
+    ModelLoadAuxComponentReady,
+    KvInitialized,
+    KvPressureCrossed,
+    KvPressureCleared,
+    KvContextApproachingCapacity,
+    KvContextCapacityExhausted,
+    DeviceBackendInitialized,
+    DeviceReady,
+    DeviceDegraded,
+    DeviceUnavailable,
+    DeviceRecovered,
+    DeviceLost,
+    DeviceResourceAllocated,
+    DeviceOutOfMemory,
+    DeviceFallbackActivated,
+    DiagnosticWarningRaised,
+    DiagnosticWarningCleared,
+    DiagnosticRecoverableFailure,
+    DiagnosticFatalFailure,
+    DiagnosticInvariantViolation,
+    UnloadStarted,
+    UnloadCompleted,
+    UnloadFailed,
+    UnloadForced,
+    UnloadSessionDraining,
     Unknown(u32),
 }
 
@@ -56,6 +91,41 @@ impl From<RawRuntimeEventKind> for RuntimeEventKind {
             RawRuntimeEventKind::BACKEND_DEVICE_SELECTED => Self::BackendDeviceSelected,
             RawRuntimeEventKind::MODEL_OPEN_FINISHED => Self::ModelOpenFinished,
             RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED => Self::ModelOpenFailedHandled,
+            RawRuntimeEventKind::MODEL_LOAD_PHASE_CHANGED => Self::ModelLoadPhaseChanged,
+            RawRuntimeEventKind::MODEL_LOAD_MEMORY_ALLOCATED => Self::ModelLoadMemoryAllocated,
+            RawRuntimeEventKind::MODEL_LOAD_TENSORS_OFFLOADED => Self::ModelLoadTensorsOffloaded,
+            RawRuntimeEventKind::MODEL_LOAD_TOKENIZER_READY => Self::ModelLoadTokenizerReady,
+            RawRuntimeEventKind::MODEL_LOAD_AUX_COMPONENT_READY => Self::ModelLoadAuxComponentReady,
+            RawRuntimeEventKind::KV_INITIALIZED => Self::KvInitialized,
+            RawRuntimeEventKind::KV_PRESSURE_CROSSED => Self::KvPressureCrossed,
+            RawRuntimeEventKind::KV_PRESSURE_CLEARED => Self::KvPressureCleared,
+            RawRuntimeEventKind::KV_CONTEXT_APPROACHING_CAPACITY => {
+                Self::KvContextApproachingCapacity
+            }
+            RawRuntimeEventKind::KV_CONTEXT_CAPACITY_EXHAUSTED => Self::KvContextCapacityExhausted,
+            RawRuntimeEventKind::DEVICE_BACKEND_INITIALIZED => Self::DeviceBackendInitialized,
+            RawRuntimeEventKind::DEVICE_READY => Self::DeviceReady,
+            RawRuntimeEventKind::DEVICE_DEGRADED => Self::DeviceDegraded,
+            RawRuntimeEventKind::DEVICE_UNAVAILABLE => Self::DeviceUnavailable,
+            RawRuntimeEventKind::DEVICE_RECOVERED => Self::DeviceRecovered,
+            RawRuntimeEventKind::DEVICE_LOST => Self::DeviceLost,
+            RawRuntimeEventKind::DEVICE_RESOURCE_ALLOCATED => Self::DeviceResourceAllocated,
+            RawRuntimeEventKind::DEVICE_OUT_OF_MEMORY => Self::DeviceOutOfMemory,
+            RawRuntimeEventKind::DEVICE_FALLBACK_ACTIVATED => Self::DeviceFallbackActivated,
+            RawRuntimeEventKind::DIAGNOSTIC_WARNING_RAISED => Self::DiagnosticWarningRaised,
+            RawRuntimeEventKind::DIAGNOSTIC_WARNING_CLEARED => Self::DiagnosticWarningCleared,
+            RawRuntimeEventKind::DIAGNOSTIC_RECOVERABLE_FAILURE => {
+                Self::DiagnosticRecoverableFailure
+            }
+            RawRuntimeEventKind::DIAGNOSTIC_FATAL_FAILURE => Self::DiagnosticFatalFailure,
+            RawRuntimeEventKind::DIAGNOSTIC_INVARIANT_VIOLATION => {
+                Self::DiagnosticInvariantViolation
+            }
+            RawRuntimeEventKind::UNLOAD_STARTED => Self::UnloadStarted,
+            RawRuntimeEventKind::UNLOAD_COMPLETED => Self::UnloadCompleted,
+            RawRuntimeEventKind::UNLOAD_FAILED => Self::UnloadFailed,
+            RawRuntimeEventKind::UNLOAD_FORCED => Self::UnloadForced,
+            RawRuntimeEventKind::UNLOAD_SESSION_DRAINING => Self::UnloadSessionDraining,
             RawRuntimeEventKind(raw) => Self::Unknown(raw),
         }
     }

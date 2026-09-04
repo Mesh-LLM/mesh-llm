@@ -1,5 +1,7 @@
 #[cfg(feature = "dynamic-native-runtime")]
 mod dynamic {
+    use crate::runtime_events::engine::{RuntimeEventEngine, SyntheticTerminal};
+    use crate::runtime_events::runtime_event_engine;
     use crate::system::native_runtime_install::{
         NativeRuntimeInstallOptions, NativeRuntimeInstallOutcome,
     };
@@ -8,6 +10,15 @@ mod dynamic {
         HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, NativeRuntimeCache,
         NativeRuntimeLoadPlan, NativeRuntimeReleaseManifest, RuntimeSelection,
     };
+    use mesh_llm_runtime_event_contracts::{
+        BoundedNumericSummaries, DeliveryClass, DiagnosticEventKind, DiagnosticFact, FactData,
+        HumanSummary, KvRuntimeStateEventKind, KvRuntimeStateFact, ModelLoadingEventKind,
+        ModelLoadingFact, ModelUnloadingEventKind, ModelUnloadingFact, NumericSummary,
+        NumericSummaryKey, NumericValue, OperationId, OperationScope, Outcome, ReasonCode,
+        ResourceHealthEventKind, ResourceHealthFact, RuntimeEventIngress, RuntimeFact,
+    };
+    use skippy_runtime::{RuntimeEvent, RuntimeEventKind};
+    use std::sync::Arc;
     use std::{future::Future, path::PathBuf};
 
     #[derive(Clone, Debug)]
@@ -156,9 +167,343 @@ mod dynamic {
     /// differently-composed runtimes simply keep operating without this
     /// reporter, matching the model-open feature-probe fallback contract.
     fn install_runtime_scoped_event_reporter() {
-        skippy_runtime::install_runtime_event_reporter(|event| {
-            skippy_runtime::write_native_log_note(format!("runtime event: {event:?}"));
-        });
+        skippy_runtime::install_runtime_event_reporter(runtime_scoped_native_event_sink);
+    }
+
+    /// The installed callback (D7, `.omo/plans/event-system-fixes.md` task
+    /// 10). Runs on the native worker thread that raised the event: maps it
+    /// to a `RuntimeFact` (`native_family_fact`, a pure function -- no
+    /// I/O, no logging, every byte it allocates becomes part of the
+    /// returned fact) and submits it (`submit_native_family_fact`). Kind
+    /// values 1-5 (`SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_*`) belong to the
+    /// separate per-call model-open reporter and structurally never reach
+    /// this process-global one (`events_internal.h`'s `dispatch()` seam is
+    /// only called by `skippy_emit_{kv,device,diagnostic,unload}_event`/
+    /// `skippy_emit_model_load_event_v2`); `native_family_fact` still
+    /// returns `None` for them defensively rather than assuming that holds
+    /// forever.
+    fn runtime_scoped_native_event_sink(event: RuntimeEvent) {
+        let Some(fact) = native_family_fact(&event) else {
+            return;
+        };
+        let Some(engine) = runtime_event_engine() else {
+            return;
+        };
+        submit_native_family_fact(&engine, fact);
+    }
+
+    /// One numeric correlation field carried from the native envelope. The
+    /// key allocation becomes part of the `NumericSummary` stored on the
+    /// returned fact -- not a transient/logging-only allocation.
+    fn native_numeric_summary(key: &str, value: u64) -> Option<NumericSummary> {
+        NumericSummaryKey::new(key)
+            .ok()
+            .map(|key| NumericSummary::new(key, NumericValue::Unsigned(value)))
+    }
+
+    /// `FactData` carrying only what the current `try_submit(RuntimeFact)`
+    /// boundary can transport (README, `mesh-llm-runtime-event-contracts`:
+    /// `NativeSourceEnvelope` lives on `RuntimeEventEnvelope`, which
+    /// `try_submit` does not accept -- same limit `frames.rs::producer_str`
+    /// documents). The native model/stage/session ids and numeric
+    /// summaries are therefore threaded through as bounded
+    /// `numeric_summaries` rather than dropped.
+    fn native_fact_data(event: &RuntimeEvent) -> FactData {
+        let summaries = [
+            native_numeric_summary("native_sequence", event.sequence),
+            native_numeric_summary("native_model_id", event.model_id),
+            native_numeric_summary("native_stage_id", event.stage_id),
+            native_numeric_summary("native_session_id", event.session_id),
+            event
+                .numeric_summary_0
+                .and_then(|value| native_numeric_summary("native_numeric_summary_0", value)),
+            event
+                .numeric_summary_1
+                .and_then(|value| native_numeric_summary("native_numeric_summary_1", value)),
+            event
+                .numeric_summary_2
+                .and_then(|value| native_numeric_summary("native_numeric_summary_2", value)),
+            event
+                .numeric_summary_3
+                .and_then(|value| native_numeric_summary("native_numeric_summary_3", value)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let summary = (!event.detail_bytes.is_empty())
+            .then(|| String::from_utf8_lossy(&event.detail_bytes).into_owned())
+            .and_then(|text| HumanSummary::new(&text).ok());
+        FactData {
+            numeric_summaries: BoundedNumericSummaries::new(summaries).unwrap_or_default(),
+            summary,
+            ..FactData::default()
+        }
+    }
+
+    fn native_terminal_failure_data(event: &RuntimeEvent, reason: ReasonCode) -> FactData {
+        FactData {
+            outcome: Some(Outcome::Failure),
+            reason: Some(reason),
+            ..native_fact_data(event)
+        }
+    }
+
+    fn native_success_data(event: &RuntimeEvent) -> FactData {
+        FactData {
+            outcome: Some(Outcome::Success),
+            ..native_fact_data(event)
+        }
+    }
+
+    /// The `native_family_mappings` table (`inventory/runtime_events.toml`)
+    /// realized as code: exactly the mapping the inventory contract test
+    /// (`native_family_mappings.rs`) cross-checks against the native patch
+    /// queue's kind literals. Pure: no I/O, no logging, no lock -- every
+    /// allocation this function or its helpers perform ends up owned by
+    /// the returned `RuntimeFact`.
+    fn native_family_fact(event: &RuntimeEvent) -> Option<RuntimeFact> {
+        let fact = match event.kind {
+            RuntimeEventKind::ModelLoadPhaseChanged
+            | RuntimeEventKind::ModelLoadTensorsOffloaded
+            | RuntimeEventKind::ModelLoadTokenizerReady
+            | RuntimeEventKind::ModelLoadAuxComponentReady => {
+                RuntimeFact::ModelLoading(ModelLoadingFact::with_data(
+                    ModelLoadingEventKind::ModelLoadPhaseChanged,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::ModelLoadMemoryAllocated => {
+                RuntimeFact::ModelLoading(ModelLoadingFact::with_data(
+                    ModelLoadingEventKind::ModelMemoryAllocationSummary,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::KvInitialized => {
+                RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+                    KvRuntimeStateEventKind::KvCacheInitializationCompleted,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::KvPressureCrossed => {
+                RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+                    KvRuntimeStateEventKind::CachePressureCrossed,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::KvPressureCleared => {
+                RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+                    KvRuntimeStateEventKind::CachePressureCleared,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::KvContextApproachingCapacity => {
+                RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+                    KvRuntimeStateEventKind::ContextCapacityApproachingLimit,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::KvContextCapacityExhausted => {
+                RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+                    KvRuntimeStateEventKind::ContextExhausted,
+                    native_terminal_failure_data(event, ReasonCode::ContextExhausted),
+                ))
+            }
+            RuntimeEventKind::DeviceBackendInitialized => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::BackendInitializationCompleted,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceReady => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::DeviceReady,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceDegraded => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::DeviceDegraded,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceUnavailable => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::DeviceUnavailable,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceRecovered => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::DeviceRecovered,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceLost => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::DeviceLost,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceResourceAllocated => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::ResourceAllocationCompleted,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DeviceOutOfMemory => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::OutOfMemoryCondition,
+                    native_terminal_failure_data(event, ReasonCode::OutOfMemory),
+                ))
+            }
+            RuntimeEventKind::DeviceFallbackActivated => {
+                RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+                    ResourceHealthEventKind::BackendFallbackActivated,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DiagnosticWarningRaised => {
+                RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+                    DiagnosticEventKind::WarningRaised,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DiagnosticWarningCleared => {
+                RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+                    DiagnosticEventKind::WarningCleared,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DiagnosticRecoverableFailure => {
+                RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+                    DiagnosticEventKind::RecoverableNativeFailure,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::DiagnosticFatalFailure => {
+                RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+                    DiagnosticEventKind::FatalNativeFailure,
+                    native_terminal_failure_data(event, ReasonCode::InternalRuntimeFailure),
+                ))
+            }
+            RuntimeEventKind::DiagnosticInvariantViolation => {
+                RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+                    DiagnosticEventKind::InvariantProtocolViolation,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::UnloadStarted => {
+                RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+                    ModelUnloadingEventKind::UnloadStarted,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::UnloadCompleted => {
+                RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+                    ModelUnloadingEventKind::UnloadCompleted,
+                    native_success_data(event),
+                ))
+            }
+            RuntimeEventKind::UnloadFailed => {
+                RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+                    ModelUnloadingEventKind::UnloadFailed,
+                    native_terminal_failure_data(event, ReasonCode::InternalRuntimeFailure),
+                ))
+            }
+            RuntimeEventKind::UnloadForced => {
+                RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+                    ModelUnloadingEventKind::ForcedUnload,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::UnloadSessionDraining => {
+                RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+                    ModelUnloadingEventKind::SessionDrainingStarted,
+                    native_fact_data(event),
+                ))
+            }
+            RuntimeEventKind::ModelOpenStarted
+            | RuntimeEventKind::ModelOpenProgress
+            | RuntimeEventKind::BackendDeviceSelected
+            | RuntimeEventKind::ModelOpenFinished
+            | RuntimeEventKind::ModelOpenFailedHandled
+            | RuntimeEventKind::Unknown(_) => return None,
+        };
+        Some(fact)
+    }
+
+    fn native_family_terminal_not_delivered() -> FactData {
+        FactData {
+            outcome: Some(Outcome::Unknown),
+            reason: Some(ReasonCode::TerminalNotDelivered),
+            ..FactData::default()
+        }
+    }
+
+    fn synthetic_kv_runtime_state_terminal() -> RuntimeFact {
+        RuntimeFact::KvRuntimeState(KvRuntimeStateFact::with_data(
+            KvRuntimeStateEventKind::ContextExhausted,
+            native_family_terminal_not_delivered(),
+        ))
+    }
+
+    fn synthetic_resource_health_terminal() -> RuntimeFact {
+        RuntimeFact::ResourceHealth(ResourceHealthFact::with_data(
+            ResourceHealthEventKind::OutOfMemoryCondition,
+            native_family_terminal_not_delivered(),
+        ))
+    }
+
+    fn synthetic_diagnostic_terminal() -> RuntimeFact {
+        RuntimeFact::Diagnostic(DiagnosticFact::with_data(
+            DiagnosticEventKind::FatalNativeFailure,
+            native_family_terminal_not_delivered(),
+        ))
+    }
+
+    fn synthetic_native_unloading_terminal() -> RuntimeFact {
+        RuntimeFact::ModelUnloading(ModelUnloadingFact::with_data(
+            ModelUnloadingEventKind::UnloadFailed,
+            native_family_terminal_not_delivered(),
+        ))
+    }
+
+    fn synthetic_terminal_for(fact: &RuntimeFact) -> SyntheticTerminal {
+        match fact {
+            RuntimeFact::KvRuntimeState(_) => synthetic_kv_runtime_state_terminal,
+            RuntimeFact::ResourceHealth(_) => synthetic_resource_health_terminal,
+            RuntimeFact::ModelUnloading(_) => synthetic_native_unloading_terminal,
+            _ => synthetic_diagnostic_terminal,
+        }
+    }
+
+    /// Submits one native-derived fact. `Terminal`-class facts reserve a
+    /// fresh, throwaway root and submit through it -- the reservation
+    /// settles in the same call (its `Drop` synthesizes nothing further
+    /// once a terminal was written) so it never lives past this function.
+    /// Every other class goes through `unreserved_ingress`
+    /// (`engine/mod.rs`'s own documented boundary: an unreserved
+    /// `Terminal`-class submission always reports `TerminalDeliveryFailed`,
+    /// which is why that path is reserved for exactly the non-Terminal
+    /// classes here), mirroring the existing
+    /// `runtime::model_lifecycle::events::emit_available_model_set_changed`
+    /// fire-and-forget pattern: a fresh `OperationId` per submission, no
+    /// reservation-table pressure, bounded by the reducer's existing
+    /// `UNRESERVED_OPERATION_BOUND`. Reservation exhaustion degrades to a
+    /// silent no-op (engine health already counts it), matching every
+    /// other producer in this codebase -- never blocks or fails primary
+    /// native work.
+    fn submit_native_family_fact(engine: &Arc<RuntimeEventEngine>, fact: RuntimeFact) {
+        if fact.delivery_class() == DeliveryClass::Terminal {
+            if let Some(reservation) =
+                engine.reserve_root(OperationId::new(), synthetic_terminal_for(&fact))
+            {
+                let _ = reservation.ingress().try_submit(fact);
+            }
+        } else {
+            let ingress = engine.unreserved_ingress(OperationScope::root_only(OperationId::new()));
+            let _ = ingress.try_submit(fact);
+        }
     }
 
     async fn try_load_installed_native_runtime_with<
@@ -1058,6 +1403,412 @@ mod dynamic {
             assert_eq!(
                 startup_install_message(false),
                 "Discovered native runtime bundles take precedence over installed runtimes; attempting one-shot startup install"
+            );
+        }
+    }
+
+    /// Task 10 (D7, `.omo/plans/event-system-fixes.md`): the runtime-scoped
+    /// native event reporter's decode-and-map sink. Named to satisfy the
+    /// plan's own focused command
+    /// (`cargo test -p mesh-llm-host-runtime system::native_runtime_events`);
+    /// verified to actually match that filter as part of this task's QA
+    /// rather than assumed.
+    #[cfg(test)]
+    mod native_runtime_events_tests {
+        use super::*;
+        use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
+        use mesh_llm_runtime_event_contracts::ReasonCode;
+        use skippy_runtime::{
+            RuntimeEventCategory, RuntimeEventEmitterKind, RuntimeEventFailureCode,
+            RuntimeEventProgressUnit, Status,
+        };
+        use std::thread;
+
+        fn install_test_engine() -> Arc<RuntimeEventEngine> {
+            clear_runtime_event_engine();
+            let engine = RuntimeEventEngine::new();
+            install_runtime_event_engine(engine.clone());
+            engine
+        }
+
+        /// A well-formed decoded event for one native kind. `RuntimeEvent`
+        /// is the SAFE, already-decoded type this sink actually receives
+        /// (its `pub` fields are the crate's own contract; the raw FFI
+        /// struct's `from_raw_ptr` decoder is `pub(crate)` to
+        /// `skippy-runtime` and this crate never needs to duplicate it).
+        fn event(kind: RuntimeEventKind, sequence: u64) -> RuntimeEvent {
+            RuntimeEvent {
+                abi_version: 1,
+                category: RuntimeEventCategory::Unknown(0),
+                kind,
+                emitter: RuntimeEventEmitterKind::WorkerThread,
+                sequence,
+                timestamp_mono_ns: sequence,
+                model_id: 7,
+                stage_id: 0,
+                session_id: 3,
+                progress_current: 0,
+                progress_total: 0,
+                progress_unit: RuntimeEventProgressUnit::None,
+                failure_code: RuntimeEventFailureCode::None,
+                status: Status::Ok,
+                detail_bytes: Vec::new(),
+                numeric_summary_0: Some(sequence),
+                numeric_summary_1: None,
+                numeric_summary_2: None,
+                numeric_summary_3: None,
+            }
+        }
+
+        /// One row per `native_family_mappings` entry, the same 29 pairs
+        /// the inventory contract test cross-checks, plus whether the
+        /// target inventory id is Terminal-class.
+        fn mapping_cases() -> Vec<(RuntimeEventKind, &'static str, bool)> {
+            vec![
+                (
+                    RuntimeEventKind::ModelLoadPhaseChanged,
+                    "model_load_phase_changed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::ModelLoadMemoryAllocated,
+                    "model_memory_allocation_summary",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::ModelLoadTensorsOffloaded,
+                    "model_load_phase_changed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::ModelLoadTokenizerReady,
+                    "model_load_phase_changed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::ModelLoadAuxComponentReady,
+                    "model_load_phase_changed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::KvInitialized,
+                    "kv_cache_initialization_completed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::KvPressureCrossed,
+                    "cache_pressure_crossed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::KvPressureCleared,
+                    "cache_pressure_cleared",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::KvContextApproachingCapacity,
+                    "context_capacity_approaching_limit",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::KvContextCapacityExhausted,
+                    "context_exhausted",
+                    true,
+                ),
+                (
+                    RuntimeEventKind::DeviceBackendInitialized,
+                    "backend_initialization_completed",
+                    false,
+                ),
+                (RuntimeEventKind::DeviceReady, "device_ready", false),
+                (RuntimeEventKind::DeviceDegraded, "device_degraded", false),
+                (
+                    RuntimeEventKind::DeviceUnavailable,
+                    "device_unavailable",
+                    false,
+                ),
+                (RuntimeEventKind::DeviceRecovered, "device_recovered", false),
+                (RuntimeEventKind::DeviceLost, "device_lost", false),
+                (
+                    RuntimeEventKind::DeviceResourceAllocated,
+                    "resource_allocation_completed",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::DeviceOutOfMemory,
+                    "out_of_memory_condition",
+                    true,
+                ),
+                (
+                    RuntimeEventKind::DeviceFallbackActivated,
+                    "backend_fallback_activated",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::DiagnosticWarningRaised,
+                    "warning_raised",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::DiagnosticWarningCleared,
+                    "warning_cleared",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::DiagnosticRecoverableFailure,
+                    "recoverable_native_failure",
+                    false,
+                ),
+                (
+                    RuntimeEventKind::DiagnosticFatalFailure,
+                    "fatal_native_failure",
+                    true,
+                ),
+                (
+                    RuntimeEventKind::DiagnosticInvariantViolation,
+                    "invariant_protocol_violation",
+                    false,
+                ),
+                (RuntimeEventKind::UnloadStarted, "unload_started", false),
+                (RuntimeEventKind::UnloadCompleted, "unload_completed", true),
+                (RuntimeEventKind::UnloadFailed, "unload_failed", true),
+                (RuntimeEventKind::UnloadForced, "forced_unload", false),
+                (
+                    RuntimeEventKind::UnloadSessionDraining,
+                    "session_draining_started",
+                    false,
+                ),
+            ]
+        }
+
+        #[test]
+        fn every_mapped_kind_produces_the_expected_event_id_and_delivery_class() {
+            for (kind, expected_id, expected_terminal) in mapping_cases() {
+                let fact = native_family_fact(&event(kind, 1))
+                    .unwrap_or_else(|| panic!("{kind:?} should map to a fact"));
+                assert_eq!(fact.kind_id(), expected_id, "kind {kind:?}");
+                assert_eq!(
+                    fact.delivery_class() == DeliveryClass::Terminal,
+                    expected_terminal,
+                    "kind {kind:?} delivery class"
+                );
+            }
+        }
+
+        #[test]
+        fn model_open_kinds_and_unknown_kinds_are_not_this_sinks_family() {
+            for kind in [
+                RuntimeEventKind::ModelOpenStarted,
+                RuntimeEventKind::ModelOpenProgress,
+                RuntimeEventKind::BackendDeviceSelected,
+                RuntimeEventKind::ModelOpenFinished,
+                RuntimeEventKind::ModelOpenFailedHandled,
+                RuntimeEventKind::Unknown(9999),
+            ] {
+                assert!(
+                    native_family_fact(&event(kind, 1)).is_none(),
+                    "kind {kind:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn native_correlation_fields_land_on_the_fact_not_a_side_channel() {
+            let fact = native_family_fact(&event(RuntimeEventKind::DeviceReady, 42))
+                .expect("device_ready maps");
+            let keys = fact
+                .data()
+                .numeric_summaries
+                .as_slice()
+                .iter()
+                .map(|summary| summary.key.as_str())
+                .collect::<Vec<_>>();
+            assert!(keys.contains(&"native_sequence"));
+            assert!(keys.contains(&"native_model_id"));
+            assert!(keys.contains(&"native_session_id"));
+        }
+
+        #[test]
+        #[serial_test::serial(runtime_event_engine_state)]
+        fn non_terminal_facts_submit_unreserved_and_reach_the_state_lane() {
+            let engine = install_test_engine();
+            let fact = native_family_fact(&event(RuntimeEventKind::DeviceReady, 1))
+                .expect("device_ready maps");
+            submit_native_family_fact(&engine, fact);
+            assert_eq!(
+                engine.occupied_count(),
+                0,
+                "a StateTransition-class native fact must never consume a reservation slot"
+            );
+            assert!(engine.state_lane_kinds().contains(&"device_ready"));
+            clear_runtime_event_engine();
+        }
+
+        #[test]
+        #[serial_test::serial(runtime_event_engine_state)]
+        fn terminal_facts_reserve_submit_and_settle_in_one_call() {
+            let engine = install_test_engine();
+            let fact = native_family_fact(&event(RuntimeEventKind::UnloadCompleted, 1))
+                .expect("unload_completed maps");
+            submit_native_family_fact(&engine, fact);
+            engine.drain();
+            assert_eq!(
+                engine.occupied_count(),
+                0,
+                "the one-shot reservation must settle, not linger"
+            );
+            let delivered = engine.replay().snapshot().into_iter().any(|frame| {
+                matches!(
+                    frame.fact.as_ref(),
+                    RuntimeFact::ModelUnloading(fact)
+                        if *fact.kind() == ModelUnloadingEventKind::UnloadCompleted
+                            && fact.data().outcome == Some(Outcome::Success)
+                )
+            });
+            assert!(delivered, "unload_completed must actually reach replay");
+            clear_runtime_event_engine();
+        }
+
+        #[test]
+        #[serial_test::serial(runtime_event_engine_state)]
+        fn a_kv_context_exhausted_terminal_carries_the_context_exhausted_reason() {
+            let engine = install_test_engine();
+            let fact = native_family_fact(&event(RuntimeEventKind::KvContextCapacityExhausted, 1))
+                .expect("context_exhausted maps");
+            submit_native_family_fact(&engine, fact);
+            engine.drain();
+            let reason = engine.replay().snapshot().into_iter().find_map(|frame| {
+                let RuntimeFact::KvRuntimeState(fact) = frame.fact.as_ref() else {
+                    return None;
+                };
+                (*fact.kind() == KvRuntimeStateEventKind::ContextExhausted)
+                    .then(|| fact.data().reason.clone())
+            });
+            assert_eq!(reason, Some(Some(ReasonCode::ContextExhausted)));
+            clear_runtime_event_engine();
+        }
+
+        /// Acceptance: concurrent callbacks from two threads submit in
+        /// order. Each thread submits a run of Terminal-class native facts
+        /// with strictly increasing `native_sequence` values in its own
+        /// disjoint range; the replay stream (itself in ingress-sequence,
+        /// i.e. real submission, order) must show each thread's own
+        /// sequence values still strictly increasing -- proof that this
+        /// sink never reorders or drops within one thread's callback
+        /// stream under concurrent native worker-thread traffic.
+        #[test]
+        #[serial_test::serial(runtime_event_engine_state)]
+        fn concurrent_two_thread_callbacks_submit_every_fact_in_order() {
+            let engine = install_test_engine();
+            const PER_THREAD: u64 = 200;
+            let engine_a = engine.clone();
+            let engine_b = engine.clone();
+            let thread_a = thread::spawn(move || {
+                for sequence in 0..PER_THREAD {
+                    let fact = native_family_fact(&event(
+                        RuntimeEventKind::DiagnosticFatalFailure,
+                        sequence,
+                    ))
+                    .expect("fatal_native_failure maps");
+                    submit_native_family_fact(&engine_a, fact);
+                }
+            });
+            let thread_b = thread::spawn(move || {
+                for sequence in 0..PER_THREAD {
+                    let fact = native_family_fact(&event(
+                        RuntimeEventKind::DiagnosticFatalFailure,
+                        sequence + 1_000_000,
+                    ))
+                    .expect("fatal_native_failure maps");
+                    submit_native_family_fact(&engine_b, fact);
+                }
+            });
+            thread_a.join().expect("thread a");
+            thread_b.join().expect("thread b");
+            engine.drain();
+
+            let sequences_in_replay_order = engine
+                .replay()
+                .snapshot()
+                .into_iter()
+                .filter_map(|frame| {
+                    let RuntimeFact::Diagnostic(fact) = frame.fact.as_ref() else {
+                        return None;
+                    };
+                    fact.data()
+                        .numeric_summaries
+                        .as_slice()
+                        .iter()
+                        .find(|summary| summary.key.as_str() == "native_sequence")
+                        .and_then(|summary| match summary.value {
+                            NumericValue::Unsigned(value) => Some(value),
+                            _ => None,
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            let thread_a_sequences = sequences_in_replay_order
+                .iter()
+                .copied()
+                .filter(|&value| value < 1_000_000)
+                .collect::<Vec<_>>();
+            let thread_b_sequences = sequences_in_replay_order
+                .iter()
+                .copied()
+                .filter(|&value| value >= 1_000_000)
+                .collect::<Vec<_>>();
+            assert_eq!(thread_a_sequences.len(), PER_THREAD as usize);
+            assert_eq!(thread_b_sequences.len(), PER_THREAD as usize);
+            assert!(
+                thread_a_sequences.windows(2).all(|pair| pair[0] < pair[1]),
+                "thread A's own submissions must stay in order: {thread_a_sequences:?}"
+            );
+            assert!(
+                thread_b_sequences.windows(2).all(|pair| pair[0] < pair[1]),
+                "thread B's own submissions must stay in order: {thread_b_sequences:?}"
+            );
+            clear_runtime_event_engine();
+        }
+
+        /// Acceptance: a callback after clear is impossible. This sink
+        /// installs through the unmodified `skippy_runtime::install_
+        /// runtime_event_reporter`/`clear_runtime_event_reporter` pair,
+        /// whose native quiescence contract
+        /// (`third_party/llama.cpp/patches/0043-*`'s `test_clear_is_
+        /// quiescent`, and this crate's own
+        /// `runtime_event_reporter::tests::clear_is_a_safe_no_op_when_
+        /// nothing_was_installed`) already guarantees no callback fires
+        /// after `clear_runtime_event_reporter()` returns; this sink adds
+        /// no deferred work of its own (no spawned thread, no queue) that
+        /// could outlive that guarantee, so the property carries over
+        /// unmodified. (`clear_runtime_event_reporter()` itself is not
+        /// re-exercised here: with `dynamic-native-runtime` active and no
+        /// library loaded, its symbol lookup panics by design --
+        /// `skippy_ffi::dynamic::symbols()` -- so only `skippy-runtime`'s
+        /// own suite, which runs without that feature, calls it directly.)
+        /// This test only proves this sink's install call, with no
+        /// confirmed native family present, degrades without panicking --
+        /// the same contract `install_returns_false_without_a_confirmed_
+        /// family` pins in `runtime_event_reporter.rs`.
+        #[test]
+        fn install_never_panics_without_a_confirmed_native_family() {
+            install_runtime_scoped_event_reporter();
+        }
+
+        /// Acceptance: "no I/O (no D7-era native-side log-note symbol
+        /// reachable from it)". A lexical, mechanical proof: this sink's
+        /// own source file no longer CALLS that symbol anywhere (the
+        /// pre-task-10 log-note closure this file used to install is
+        /// gone). Checks the call form specifically (name immediately
+        /// followed by `(`), not mere mentions in prose -- this test's own
+        /// doc comments legitimately name the removed symbol above.
+        #[test]
+        fn the_removed_native_log_note_call_is_not_reachable_from_this_file() {
+            let source = include_str!("native_runtime.rs");
+            let removed_call = ["write_native", "_log_note("].concat();
+            assert!(
+                !source.contains(removed_call.as_str()),
+                "system::native_runtime must not call the D7-era log-note symbol"
             );
         }
     }

@@ -160,6 +160,9 @@ ruling = "The callback fact derives the Rust availability input but does not imp
 [[same_fact_rulings]]
 ids = ["backend_device_selected", "device_selected"]
 ruling = "Model-open selection and node-local device health are separate projections of one native observation."
+[[same_fact_rulings]]
+ids = ["unload_started", "unload_completed", "unload_failed", "forced_unload", "session_draining_started"]
+ruling = "The native_family_mappings sink (system::native_runtime, feature bit 34) and the Rust ModelUnloading producer (runtime::model_lifecycle::events::UnloadOperation) submit independent observations of one physical unload under separate operation scopes; the family's authoritative_outcome (Rust teardown and process supervision) governs the tracked model lifecycle state, native facts are corroborating diagnostics."
 
 [[families]]
 section = "8.1"
@@ -371,6 +374,170 @@ default_delivery_class = "state_transition"
 default_projection_profile = "health"
 test = "inventory_contract"
 migration_task = 3
+
+# Task 10 (`.omo/plans/event-system-fixes.md`, defect D7): the
+# runtime-scoped native event reporter's family map. Each row pins one
+# native (feature_bit, native_kind) pair -- feature_bit is the
+# `SKIPPY_FEATURE_*` bit (30-34) gating the emitting `skippy_emit_*_event`
+# function, native_kind is the raw `SKIPPY_RUNTIME_EVENT_KIND_*` numeric
+# value from `third_party/llama.cpp/patches/0044-0048-skippy-add-*-events-
+# family-bit-*.patch` (mirrored by `skippy_ffi::abi::SkippyRuntimeEventKind`
+# and `skippy_runtime::RuntimeEventKind`) -- to exactly one event_id already
+# present in this file's families/catalog. Unlike `state_projection_amendments`
+# and `reducer_bound_amendments` below, this table IS read by the Rust
+# `Inventory` struct (`tests/inventory_contract/support.rs`) and validated by
+# `tests/inventory_contract/native_family_mappings.rs`: every row's
+# (feature_bit, native_kind) pair is unique, every feature_bit is in 30..=34,
+# and every event_id is a real id from `mesh_llm_runtime_event_contracts::
+# families::all_event_ids()`. Kind values 1-5 (`SKIPPY_RUNTIME_EVENT_KIND_
+# MODEL_OPEN_*`, feature bit 24/`native_callback_kinds` above) are the
+# separate per-call model-open reporter's family and are deliberately absent
+# here.
+[[native_family_mappings]]
+feature_bit = 30
+native_kind = 100
+native_kind_name = "MODEL_LOAD_PHASE_CHANGED"
+event_id = "model_load_phase_changed"
+[[native_family_mappings]]
+feature_bit = 30
+native_kind = 101
+native_kind_name = "MODEL_LOAD_MEMORY_ALLOCATED"
+event_id = "model_memory_allocation_summary"
+[[native_family_mappings]]
+feature_bit = 30
+native_kind = 102
+native_kind_name = "MODEL_LOAD_TENSORS_OFFLOADED"
+event_id = "model_load_phase_changed"
+[[native_family_mappings]]
+feature_bit = 30
+native_kind = 103
+native_kind_name = "MODEL_LOAD_TOKENIZER_READY"
+event_id = "model_load_phase_changed"
+[[native_family_mappings]]
+feature_bit = 30
+native_kind = 104
+native_kind_name = "MODEL_LOAD_AUX_COMPONENT_READY"
+event_id = "model_load_phase_changed"
+[[native_family_mappings]]
+feature_bit = 31
+native_kind = 200
+native_kind_name = "KV_INITIALIZED"
+event_id = "kv_cache_initialization_completed"
+[[native_family_mappings]]
+feature_bit = 31
+native_kind = 201
+native_kind_name = "KV_PRESSURE_CROSSED"
+event_id = "cache_pressure_crossed"
+[[native_family_mappings]]
+feature_bit = 31
+native_kind = 202
+native_kind_name = "KV_PRESSURE_CLEARED"
+event_id = "cache_pressure_cleared"
+[[native_family_mappings]]
+feature_bit = 31
+native_kind = 203
+native_kind_name = "KV_CONTEXT_APPROACHING_CAPACITY"
+event_id = "context_capacity_approaching_limit"
+[[native_family_mappings]]
+feature_bit = 31
+native_kind = 204
+native_kind_name = "KV_CONTEXT_CAPACITY_EXHAUSTED"
+event_id = "context_exhausted"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 300
+native_kind_name = "DEVICE_BACKEND_INITIALIZED"
+event_id = "backend_initialization_completed"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 301
+native_kind_name = "DEVICE_READY"
+event_id = "device_ready"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 302
+native_kind_name = "DEVICE_DEGRADED"
+event_id = "device_degraded"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 303
+native_kind_name = "DEVICE_UNAVAILABLE"
+event_id = "device_unavailable"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 304
+native_kind_name = "DEVICE_RECOVERED"
+event_id = "device_recovered"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 305
+native_kind_name = "DEVICE_LOST"
+event_id = "device_lost"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 306
+native_kind_name = "DEVICE_RESOURCE_ALLOCATED"
+event_id = "resource_allocation_completed"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 307
+native_kind_name = "DEVICE_OUT_OF_MEMORY"
+event_id = "out_of_memory_condition"
+[[native_family_mappings]]
+feature_bit = 32
+native_kind = 308
+native_kind_name = "DEVICE_FALLBACK_ACTIVATED"
+event_id = "backend_fallback_activated"
+[[native_family_mappings]]
+feature_bit = 33
+native_kind = 400
+native_kind_name = "DIAGNOSTIC_WARNING_RAISED"
+event_id = "warning_raised"
+[[native_family_mappings]]
+feature_bit = 33
+native_kind = 401
+native_kind_name = "DIAGNOSTIC_WARNING_CLEARED"
+event_id = "warning_cleared"
+[[native_family_mappings]]
+feature_bit = 33
+native_kind = 402
+native_kind_name = "DIAGNOSTIC_RECOVERABLE_FAILURE"
+event_id = "recoverable_native_failure"
+[[native_family_mappings]]
+feature_bit = 33
+native_kind = 403
+native_kind_name = "DIAGNOSTIC_FATAL_FAILURE"
+event_id = "fatal_native_failure"
+[[native_family_mappings]]
+feature_bit = 33
+native_kind = 404
+native_kind_name = "DIAGNOSTIC_INVARIANT_VIOLATION"
+event_id = "invariant_protocol_violation"
+[[native_family_mappings]]
+feature_bit = 34
+native_kind = 500
+native_kind_name = "UNLOAD_STARTED"
+event_id = "unload_started"
+[[native_family_mappings]]
+feature_bit = 34
+native_kind = 501
+native_kind_name = "UNLOAD_COMPLETED"
+event_id = "unload_completed"
+[[native_family_mappings]]
+feature_bit = 34
+native_kind = 502
+native_kind_name = "UNLOAD_FAILED"
+event_id = "unload_failed"
+[[native_family_mappings]]
+feature_bit = 34
+native_kind = 503
+native_kind_name = "UNLOAD_FORCED"
+event_id = "forced_unload"
+[[native_family_mappings]]
+feature_bit = 34
+native_kind = 504
+native_kind_name = "UNLOAD_SESSION_DRAINING"
+event_id = "session_draining_started"
 
 # Task 6-fix defect B (`.omo/plans/event-system-fixes.md`): disclosure
 # record for an undisclosed `runtime_state` wire-shape change task 6

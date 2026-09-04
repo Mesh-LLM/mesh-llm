@@ -23,7 +23,9 @@
 //! task's ownership (Tasks 4/5/9). `producer`/`severity` are therefore
 //! DERIVED here, deterministically, from data already on every
 //! `RuntimeFact`/`ReplayFrame` (see `producer_str`/`severity_str` below) —
-//! real, principled projections, not fabricated placeholders.
+//! real, principled projections, not fabricated placeholders. Task 10
+//! (D7) narrows that limit for exactly the two families it gives their
+//! first producer at all; see `producer_str`'s own doc comment.
 
 use mesh_llm_runtime_event_contracts::{
     NumericValue, OperationScope, Outcome, ProcessInstanceId, ProgressUnit, ReasonCode, RuntimeFact,
@@ -353,16 +355,39 @@ fn reason_code_str(reason: &ReasonCode) -> String {
     }
 }
 
-/// Every fact reaches the engine through `RuntimeEventIngress::try_submit`,
-/// and every current call site — including the native-callback trampolines
-/// such as `skippy_runtime::runtime_events::model_open_event_trampoline` —
-/// is Rust code decoding an envelope and calling `try_submit` itself; there
-/// is no native-thread-to-wire path yet (review defect D7, task 10).
-/// `"rust"` is therefore the correct, non-fabricated value for every event
-/// this module can project today; task 10 is where a real per-submission
-/// producer tag would first exist to derive from instead.
-fn producer_str(_fact: &RuntimeFact) -> &'static str {
-    "rust"
+/// Task 10 (D7, `.omo/plans/event-system-fixes.md`) closes
+/// `system::native_runtime`'s log-note-only sink and gives `ResourceHealth`
+/// and `Diagnostic` their first producer at all: a decode-and-submit path
+/// that runs synchronously on the native callback thread with no Rust-side
+/// hop. For exactly those two families this is now a real, provable
+/// derivation, not a guess: `RuntimeFact::ResourceHealth`/`::Diagnostic`
+/// have no other call site in this workspace (`rg 'RuntimeFact::
+/// ResourceHealth\(|RuntimeFact::Diagnostic\('` outside
+/// `native_family_fact`/the reducer's/presentation's read-side `match`
+/// arms returns nothing), so every fact in either family is native by
+/// construction.
+///
+/// Every other family stays `"rust"`, which remains true for every
+/// event id already producible on it, and is INCOMPLETE rather than wrong
+/// for the family-level minority `system::native_runtime` newly submits
+/// into (`ModelLoading::{ModelLoadPhaseChanged,ModelMemoryAllocationSummary}`,
+/// `ModelUnloading::{UnloadStarted,UnloadCompleted,UnloadFailed,
+/// ForcedUnload,SessionDrainingStarted}`, `KvRuntimeState::
+/// {KvCacheInitializationCompleted,CachePressureCrossed,
+/// CachePressureCleared,ContextCapacityApproachingLimit,ContextExhausted}`):
+/// a genuine per-submission producer tag for a MIXED family would require
+/// carrying `ProducerSource` through `RuntimeEventIngress::try_submit`
+/// and `ReplayFrame` (`runtime_events/engine/drain.rs`,
+/// `runtime_events/replay.rs`) -- both outside this task's ownership grant
+/// (`.omo/plans/event-system-fixes.md` task 10's DO-NOT-TOUCH list) and,
+/// for `try_submit`'s signature, a change that would ripple through every
+/// existing producer call site in this workspace. Named, not silent: see
+/// `.omo/evidence/event-system-fixes/task-10/producer-note.txt`.
+fn producer_str(fact: &RuntimeFact) -> &'static str {
+    match fact {
+        RuntimeFact::ResourceHealth(_) | RuntimeFact::Diagnostic(_) => "native",
+        _ => "rust",
+    }
 }
 
 /// Derived from data already on `FactData`, never fabricated: an explicit

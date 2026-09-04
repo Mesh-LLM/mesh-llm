@@ -74,7 +74,10 @@ fn translate_skippy_native_runtime_event_snapshot(
             message: "Native runtime reported a handled model-open failure".to_string(),
             context,
         }),
-        SkippyNativeRuntimeEventKind::Unknown(_) => None,
+        // Every other kind, including the runtime-scoped reporter's own
+        // families (task 10, `.omo/plans/event-system-fixes.md`), never
+        // reaches this per-call model-open bridge.
+        _ => None,
     }
 }
 
@@ -106,8 +109,10 @@ fn native_skippy_operational_event(
             Some(NativeSkippyOperationalEvent::ModelOpenFailed)
         }
         SkippyNativeRuntimeEventKind::ModelOpenProgress
-        | SkippyNativeRuntimeEventKind::BackendDeviceSelected
-        | SkippyNativeRuntimeEventKind::Unknown(_) => None,
+        | SkippyNativeRuntimeEventKind::BackendDeviceSelected => None,
+        // Every other kind, including the runtime-scoped reporter's own
+        // families, never reaches this per-call model-open bridge.
+        _ => None,
     }
 }
 
