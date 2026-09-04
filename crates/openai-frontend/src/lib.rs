@@ -52,8 +52,8 @@ pub use lifecycle::{
     OpenAiBackendOperation, OpenAiFailure, OpenAiFrontendRoute, OpenAiLifecycleContext,
     OpenAiLifecycleEvent, OpenAiLifecycleObserver, OpenAiRejection, OpenAiRequestMethod,
     OpenAiTerminalResult, OpenAiUsage, REQUEST_ID_HEADER, RequestId, generate_request_id,
-    parse_request_id, parse_request_id_header, parse_single_request_id,
-    request_id_from_headers_or_generate, request_id_response_header,
+    parse_client_nonce, parse_request_id, parse_request_id_header, parse_single_client_nonce,
+    parse_single_request_id, request_id_from_headers_or_generate, request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use responses::{

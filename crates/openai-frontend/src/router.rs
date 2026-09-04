@@ -26,8 +26,9 @@ use crate::{
     completions::CompletionRequest,
     errors::OpenAiError,
     lifecycle::{
-        OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-        OpenAiLifecycleObserver, OpenAiRequestMethod, OpenAiUsage,
+        CLIENT_NONCE_HEADER, CLIENT_NONCE_ORIGIN_HEADER, OpenAiBackendOperation,
+        OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
+        OpenAiRequestMethod, OpenAiUsage, client_nonce_from_headers_or_generate,
         request_id_from_headers_or_generate, request_id_response_header,
     },
     models::ModelsResponse,
@@ -879,11 +880,36 @@ async fn method_not_allowed(method: Method) -> OpenAiError {
     OpenAiError::method_not_allowed(method)
 }
 
+/// Ensure every request past this ingress carries a client nonce: forward one
+/// the harness already sent unchanged, or mint a fresh one and mark its
+/// origin. This is the one seam every harness talking to the local frontend
+/// goes through, mirroring how `x-request-id` is already guaranteed present
+/// by this same middleware. Returns the resolved nonce and, only when this
+/// call minted it, the origin-marker value — both echoed onto the response
+/// as well, so the resolution is externally observable in either direction.
+fn apply_client_nonce_headers(request: &mut Request<Body>) -> (HeaderValue, Option<HeaderValue>) {
+    let (nonce_value, nonce_origin) = client_nonce_from_headers_or_generate(request.headers());
+    // The origin marker asserts this frontend minted the nonce. Always remove
+    // an inbound marker first so a caller can never forge a `frontend` origin on
+    // a nonce it supplied itself — only re-insert it when we minted the value.
+    request.headers_mut().remove(&CLIENT_NONCE_ORIGIN_HEADER);
+    request
+        .headers_mut()
+        .insert(CLIENT_NONCE_HEADER.clone(), nonce_value.clone());
+    if let Some(origin_value) = &nonce_origin {
+        request
+            .headers_mut()
+            .insert(CLIENT_NONCE_ORIGIN_HEADER.clone(), origin_value.clone());
+    }
+    (nonce_value, nonce_origin)
+}
+
 async fn frontend_lifecycle_middleware(
     State(state): State<FrontendState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let (nonce_value, nonce_origin) = apply_client_nonce_headers(&mut request);
     let request_id = request_id_from_headers_or_generate(request.headers());
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -897,6 +923,14 @@ async fn frontend_lifecycle_middleware(
     let mut response = next.run(request).await;
     let (header_name, header_value) = request_id_response_header(&request_id);
     response.headers_mut().insert(header_name, header_value);
+    response
+        .headers_mut()
+        .insert(CLIENT_NONCE_HEADER.clone(), nonce_value);
+    if let Some(origin_value) = nonce_origin {
+        response
+            .headers_mut()
+            .insert(CLIENT_NONCE_ORIGIN_HEADER.clone(), origin_value);
+    }
     if let Some(marker) = response
         .extensions()
         .get::<CapsuleMarkerExtension>()
