@@ -49,6 +49,57 @@ fn streams_expert_tensors_as_merged_gguf_tensor() {
 }
 
 #[test]
+fn promotes_half_precision_scalar_expert_groups_to_f32() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[
+            (
+                "model.layers.1.mlp.experts.1.gate_proj.weight",
+                "BF16",
+                &[],
+                &[0x00, 0x40],
+            ),
+            (
+                "model.layers.1.mlp.experts.0.gate_proj.weight",
+                "BF16",
+                &[],
+                &[0x80, 0x3f],
+            ),
+        ],
+    );
+    let output = root.join("scalar-experts.gguf");
+
+    write_raw_safetensors_gguf(
+        &root,
+        &output,
+        RawGgufWriteOptions {
+            buffer_size: 3,
+            metadata: None,
+            tensor_name_map: TensorNameMap::HfToGguf,
+            split: None,
+            output_type: None,
+            tensor_selection: TensorSelection::All,
+        },
+    )
+    .unwrap();
+
+    let bytes = fs::read(&output).unwrap();
+    let parsed = parse_test_gguf(&bytes);
+    let merged_experts = parsed.tensor("blk.1.ffn_gate_exps.weight");
+    assert_eq!(merged_experts.dims, vec![2]);
+    assert_eq!(merged_experts.ggml_type, GGML_TYPE_F32);
+    assert_f32_tensor(
+        &bytes,
+        &parsed,
+        "blk.1.ffn_gate_exps.weight",
+        &[1.0, 2.0],
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn writes_only_selected_split_with_split_metadata() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();

@@ -1067,7 +1067,14 @@ impl ExpertGroup {
         let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
             format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
         })?;
-        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, tensor.shape())?;
+        // The expert dimension is appended when the group becomes a GGUF
+        // tensor. Choose precision from that merged shape so rank-one source
+        // shards retain matrix precision while scalar shards become F32
+        // rank-one runtime operands.
+        let mut merged_shape = Vec::with_capacity(tensor.shape().len() + 1);
+        merged_shape.push(1);
+        merged_shape.extend_from_slice(tensor.shape());
+        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, &merged_shape)?;
         let element_count = tensor_element_count(tensor)?;
         Ok(Self {
             key,

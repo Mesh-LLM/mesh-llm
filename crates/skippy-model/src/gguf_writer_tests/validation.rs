@@ -90,6 +90,34 @@ fn direct_checkpoint_preserves_mixed_float_precisions() {
 }
 
 #[test]
+fn direct_checkpoint_promotes_half_precision_rank_one_tensors_to_f32() {
+    let root = unique_temp_dir();
+    fs::create_dir_all(&root).unwrap();
+    write_qwen_config_and_tokenizer(&root);
+    let bf16_bits = [0x3f80_u16, 0x4000_u16];
+    let bf16_bytes = bf16_bits
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    write_safetensor(
+        &root.join("model.safetensors"),
+        &[("model.norm.weight", "BF16", &[2], &bf16_bytes)],
+    );
+
+    let checkpoint = DirectCheckpoint::open(&root, 4).unwrap();
+    let parsed = parse_test_gguf(checkpoint.metadata_gguf());
+    let output_norm = parsed.tensor("output_norm.weight");
+    let mut decoded = [0.0_f32; 2];
+    checkpoint
+        .read_tensor_f32("output_norm.weight", &mut decoded)
+        .unwrap();
+
+    assert_eq!(output_norm.ggml_type, GGML_TYPE_F32);
+    assert_eq!(decoded, [1.0, 2.0]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn validates_qwen_dense_native_conversion_fixture() {
     let root = unique_temp_dir();
     fs::create_dir_all(&root).unwrap();

@@ -522,6 +522,9 @@ class SccacheEvidenceTests(unittest.TestCase):
             WORKFLOWS["host"],
             WORKFLOWS["runtime"],
         )
+        expected_restore_counts = {
+            "ci-rust-tests-slice.yml": 2,
+        }
         for path in consumers:
             with self.subTest(workflow=path.name):
                 workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -531,9 +534,13 @@ class SccacheEvidenceTests(unittest.TestCase):
                     for step in job.get("steps", [])
                     if step.get("uses") == "./.github/actions/restore-sccache-seed"
                 ]
-                self.assertEqual(len(keys), 1)
-                self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(keys[0]))
-                self.assertEqual(keys[0], expected_key)
+                self.assertEqual(
+                    len(keys),
+                    expected_restore_counts.get(path.name, 1),
+                )
+                for key in keys:
+                    self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(key))
+                    self.assertEqual(key, expected_key)
         warmer = SEED_WARMER.read_text(encoding="utf-8")
         self.assertIn("run: just ci-sccache-seed-build", warmer)
         self.assertNotIn(
