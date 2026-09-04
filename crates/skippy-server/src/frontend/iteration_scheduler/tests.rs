@@ -40,6 +40,8 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
+            direct_arbitration: DirectArbitrationPolicy::Alternate,
+            consecutive_direct_prefill_batches: 0,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
         .run();
@@ -210,6 +212,8 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         telemetry: None,
         last_served_direct: false,
         last_served_cache_runtime: false,
+        direct_arbitration: DirectArbitrationPolicy::Alternate,
+        consecutive_direct_prefill_batches: 0,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
     let (reply_a, events_a) = std_mpsc::channel();
@@ -356,6 +360,8 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         telemetry: None,
         last_served_direct: false,
         last_served_cache_runtime: false,
+        direct_arbitration: DirectArbitrationPolicy::Alternate,
+        consecutive_direct_prefill_batches: 0,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
     let (reply, events) = std_mpsc::channel();
@@ -413,6 +419,8 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         telemetry: None,
         last_served_direct: false,
         last_served_cache_runtime: false,
+        direct_arbitration: DirectArbitrationPolicy::Alternate,
+        consecutive_direct_prefill_batches: 0,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
     worker
@@ -468,6 +476,8 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
+            direct_arbitration: DirectArbitrationPolicy::Alternate,
+            consecutive_direct_prefill_batches: 0,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
         .run();
@@ -512,6 +522,8 @@ fn detached_runtime_operation_returns_before_work_completes() {
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
+            direct_arbitration: DirectArbitrationPolicy::Alternate,
+            consecutive_direct_prefill_batches: 0,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
         .run();
@@ -653,6 +665,8 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         telemetry: None,
         last_served_direct: true,
         last_served_cache_runtime: false,
+        direct_arbitration: DirectArbitrationPolicy::Alternate,
+        consecutive_direct_prefill_batches: 0,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
     worker.cache_runtime_queue.enqueue_with_payload(
@@ -698,6 +712,8 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         telemetry: None,
         last_served_direct: true,
         last_served_cache_runtime: false,
+        direct_arbitration: DirectArbitrationPolicy::Alternate,
+        consecutive_direct_prefill_batches: 0,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
     worker.cache_runtime_queue.enqueue(
@@ -738,6 +754,50 @@ fn direct_and_planned_work_alternate_without_starvation() {
     assert!(should_serve_direct(true, false, true));
     assert!(!should_serve_direct(false, true, false));
     assert!(!should_serve_direct(false, false, false));
+}
+
+#[test]
+fn budgeted_arbitration_serves_direct_decode_first() {
+    // Direct decode always wins the turn, regardless of prefill backlog or
+    // the alternation state the legacy policy tracks.
+    assert!(should_serve_direct_budgeted(
+        true, /* direct decode pending */
+        true, /* direct prefill pending */
+        true, /* planned decode pending */
+        0,    /* consecutive prefill batches */
+        4     /* prefill limit */
+    ));
+    assert!(should_serve_direct_budgeted(true, true, true, 100, 4));
+}
+
+#[test]
+fn budgeted_arbitration_runs_prefill_only_when_decode_is_idle() {
+    // No decode anywhere: prefill may run while under the fairness bound.
+    assert!(should_serve_direct_budgeted(false, true, true, 0, 4));
+    // At the bound with planned decode waiting, the turn yields to planned.
+    assert!(!should_serve_direct_budgeted(false, true, true, 4, 4));
+    // Without planned work the bound does not apply: prefill still runs.
+    assert!(should_serve_direct_budgeted(false, true, false, 4, 4));
+    // Nothing pending anywhere: no turn.
+    assert!(!should_serve_direct_budgeted(false, false, true, 0, 4));
+}
+
+#[test]
+fn budgeted_arbitration_never_starves_planned_decode() {
+    // A prefill backlog can hold the turn for at most the configured limit
+    // of consecutive batches before a planned decode turn is forced.
+    let limit = 4;
+    let mut consecutive = 0;
+    let mut planned_turns = 0;
+    for _ in 0..1000 {
+        if should_serve_direct_budgeted(false, true, true, consecutive, limit) {
+            consecutive += 1;
+        } else {
+            planned_turns += 1;
+            consecutive = 0;
+        }
+    }
+    assert!(planned_turns >= 1000 / (limit + 1));
 }
 
 #[test]
@@ -790,6 +850,8 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             telemetry: None,
             last_served_direct: false,
             last_served_cache_runtime: false,
+            direct_arbitration: DirectArbitrationPolicy::Alternate,
+            consecutive_direct_prefill_batches: 0,
             last_emitted_lifecycle_counters: (0, 0, 0, 0),
         }
         .run();

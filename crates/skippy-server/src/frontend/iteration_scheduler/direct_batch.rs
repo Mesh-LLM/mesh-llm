@@ -1,6 +1,48 @@
-use super::{DirectIteration, MAX_NATIVE_ITERATION_TOKENS};
+use super::{
+    DEFAULT_MAX_CONSECUTIVE_PREFILL_BATCHES, DIRECT_ARBITRATION_POLICY_ENV,
+    DIRECT_ARBITRATION_PREFILL_LIMIT_ENV, DirectIteration, MAX_NATIVE_ITERATION_TOKENS,
+};
 use openai_frontend::{OpenAiError, OpenAiResult};
 use std::collections::{BTreeSet, VecDeque};
+use std::env;
+
+/// Outer arbitration policy between the direct queue (prefill chunks and
+/// direct decode) and the planned decode queue.
+///
+/// `alternate` is the historical one-direct/one-planned turn behavior.
+/// `budgeted` is vLLM-style step composition: direct decode work is always
+/// served before planned work, and direct prefill chunks only run when no
+/// direct decode is pending, bounded by a hard prefill-progress limit so
+/// planned decode cannot starve behind a long prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DirectArbitrationPolicy {
+    Alternate,
+    Budgeted {
+        /// Maximum consecutive direct prefill batches before one planned
+        /// decode iteration is forced.
+        max_consecutive_prefill_batches: usize,
+    },
+}
+
+impl DirectArbitrationPolicy {
+    pub(super) fn from_env() -> Self {
+        match env::var(DIRECT_ARBITRATION_POLICY_ENV)
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("budgeted") => Self::Budgeted {
+                max_consecutive_prefill_batches: env::var(DIRECT_ARBITRATION_PREFILL_LIMIT_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(DEFAULT_MAX_CONSECUTIVE_PREFILL_BATCHES),
+            },
+            _ => Self::Alternate,
+        }
+    }
+}
 
 pub(super) fn should_serve_direct(
     has_direct: bool,
@@ -12,6 +54,30 @@ pub(super) fn should_serve_direct(
     } else {
         has_direct
     }
+}
+
+/// `budgeted` arbitration: direct decode always wins the turn. Direct prefill
+/// runs only when no direct decode is queued, and yields to planned decode
+/// after `max_consecutive_prefill_batches` consecutive prefill batches.
+pub(super) fn should_serve_direct_budgeted(
+    direct_decode_pending: bool,
+    direct_prefill_pending: bool,
+    has_planned: bool,
+    consecutive_prefill_batches: usize,
+    max_consecutive_prefill_batches: usize,
+) -> bool {
+    if direct_decode_pending {
+        return true;
+    }
+    if !direct_prefill_pending {
+        return false;
+    }
+    // Prefill is pending and decode (direct or planned) is not: run prefill
+    // unless the fairness bound forces a planned turn.
+    if has_planned && consecutive_prefill_batches >= max_consecutive_prefill_batches {
+        return false;
+    }
+    true
 }
 
 pub(super) fn direct_coalesce_target(

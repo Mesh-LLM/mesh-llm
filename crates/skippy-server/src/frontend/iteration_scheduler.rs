@@ -8,8 +8,9 @@ use self::cache_runtime::{
     should_suppress_cache_runtime,
 };
 use self::direct_batch::{
-    direct_coalesce_target, effective_scheduler_lane_count, scheduler_safe_mode_from_value,
-    should_serve_direct, take_direct_iteration_batch, validate_direct_iteration,
+    DirectArbitrationPolicy, direct_coalesce_target, effective_scheduler_lane_count,
+    scheduler_safe_mode_from_value, should_serve_direct, should_serve_direct_budgeted,
+    take_direct_iteration_batch, validate_direct_iteration,
 };
 use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
@@ -43,6 +44,9 @@ const MAX_COMMANDS_PER_TURN: usize = 64;
 const DIRECT_ITERATION_COALESCE_WINDOW: Duration = Duration::from_millis(2);
 const CACHE_AGING_COST_PER_TURN: u64 = 4_096;
 const SAFE_MODE_ENV: &str = "SKIPPY_ITERATION_SCHEDULER_SAFE_MODE";
+const DIRECT_ARBITRATION_POLICY_ENV: &str = "SKIPPY_DIRECT_ARBITRATION_POLICY";
+const DIRECT_ARBITRATION_PREFILL_LIMIT_ENV: &str = "SKIPPY_DIRECT_ARBITRATION_PREFILL_LIMIT";
+const DEFAULT_MAX_CONSECUTIVE_PREFILL_BATCHES: usize = 4;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct ScheduledGenerationStats {
@@ -369,6 +373,8 @@ struct SchedulerWorker {
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
     last_served_cache_runtime: bool,
+    direct_arbitration: DirectArbitrationPolicy,
+    consecutive_direct_prefill_batches: usize,
     last_emitted_lifecycle_counters: (u64, u64, u64, u64),
 }
 
@@ -450,6 +456,7 @@ impl IterationScheduler {
             ]),
         );
         let (commands, receiver) = std_mpsc::sync_channel(command_queue_capacity);
+        let direct_arbitration = DirectArbitrationPolicy::from_env();
         let worker = thread::Builder::new()
             .name("skippy-iteration-scheduler".to_string())
             .spawn(move || {
@@ -470,6 +477,8 @@ impl IterationScheduler {
                     telemetry: Some(telemetry),
                     last_served_direct: false,
                     last_served_cache_runtime: false,
+                    direct_arbitration,
+                    consecutive_direct_prefill_batches: 0,
                     last_emitted_lifecycle_counters: (0, 0, 0, 0),
                 }
                 .run();
@@ -1236,13 +1245,47 @@ impl SchedulerWorker {
         // Decide which queue owns this turn before planning scheduler work:
         // plan_iteration mutates sequence cursors and must only be called when
         // the resulting plan will actually execute.
-        let serve_direct = should_serve_direct(has_direct, has_planned, self.last_served_direct);
+        let serve_direct = match self.direct_arbitration {
+            DirectArbitrationPolicy::Alternate => {
+                should_serve_direct(has_direct, has_planned, self.last_served_direct)
+            }
+            DirectArbitrationPolicy::Budgeted {
+                max_consecutive_prefill_batches,
+            } => {
+                let direct_decode_pending = self
+                    .direct_iterations
+                    .iter()
+                    .any(|iteration| iteration.phase == IterationBatchPhase::Decode);
+                let direct_prefill_pending = self
+                    .direct_iterations
+                    .iter()
+                    .any(|iteration| iteration.phase == IterationBatchPhase::Prefill);
+                should_serve_direct_budgeted(
+                    direct_decode_pending,
+                    direct_prefill_pending,
+                    has_planned,
+                    self.consecutive_direct_prefill_batches,
+                    max_consecutive_prefill_batches,
+                )
+            }
+        };
 
         if serve_direct {
             self.last_served_direct = true;
+            let batch_was_prefill_only = self
+                .direct_iterations
+                .iter()
+                .all(|iteration| iteration.phase == IterationBatchPhase::Prefill);
+            if batch_was_prefill_only {
+                self.consecutive_direct_prefill_batches =
+                    self.consecutive_direct_prefill_batches.saturating_add(1);
+            } else {
+                self.consecutive_direct_prefill_batches = 0;
+            }
             self.run_direct_iteration_batch();
             return;
         }
+        self.consecutive_direct_prefill_batches = 0;
 
         let iteration_started = Instant::now();
         let mut plan = self.scheduler.plan_iteration();
