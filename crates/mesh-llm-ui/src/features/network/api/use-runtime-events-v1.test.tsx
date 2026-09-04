@@ -105,6 +105,30 @@ describe('runtime events v1 wire constants', () => {
     expect(parsed.event.producer).toBe('rust')
     expect(parsed.event.severity).toBe('info')
   })
+
+  // Task 8 (`.omo/plans/event-system-fixes.md`): the previous suite only
+  // proved the runtime_health sample decodes as SOME `runtime_health`
+  // frame (see the mutation-matrix gap task-07's coverage-correction
+  // recorded: dropping `shutdown_degraded` or mutating `replay_evicted`
+  // 0->77 both passed undetected). `bounds` is a nested object and
+  // `ingress_p99_us` is nullable, so pin both by exact value here.
+  it('exposes versioned health with bounds and a nullable ingress p99 on the runtime_health sample', () => {
+    const samples = FRAMES_FIXTURE.sample_frames as Record<string, string>
+    const chunk = parseSseBlock(samples.runtime_health)!
+    const parsed = parseRuntimeEventsV1Frame(chunk)
+    if (parsed.type !== 'runtime_health') throw new Error('expected a runtime_health sample')
+    expect(parsed.health.version).toBe(0)
+    expect(parsed.health.ingress_p99_us).toBeNull()
+    expect(parsed.health.bounds).toEqual({
+      reservation_table_capacity: 3136,
+      state_transition_lane_depth: 4096,
+      diagnostic_lane_depth: 2048,
+      wake_list_depth: 3136,
+      replay_max_frames: 4096,
+      subscriber_lag_max_frames: 1024,
+      max_concurrent_subscribers: 32
+    })
+  })
 })
 
 // ─── B. cursor grammar, fixture-driven ─────────────────────────────────────

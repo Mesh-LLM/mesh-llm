@@ -3,7 +3,7 @@
 //! or its lag bound is exceeded.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -13,6 +13,7 @@ use crate::api::http::respond_error;
 use crate::api::management_lifecycle::record_response_status;
 use crate::runtime_events::config::KEEPALIVE_INTERVAL;
 use crate::runtime_events::engine::RuntimeEventEngine;
+use crate::runtime_events::health::HealthDeliveryGate;
 use crate::runtime_events::subscribers::{SubscribeError, SubscriptionHandle, lag_bound_exceeded};
 
 use super::cursor::Cursor;
@@ -42,7 +43,14 @@ pub(super) async fn run(
     record_response_status(200);
 
     if write_initial_frames(stream, engine, &shape).await {
-        live_loop(stream, engine, &mut subscription).await;
+        // Task 8 (`.omo/plans/event-system-fixes.md`, defect D9): this
+        // connection's own independent health-delivery gate, seeded from
+        // the version `write_initial_frames` already sent above so the
+        // live loop's first eligible check does not immediately re-deliver
+        // the same snapshot (see `HealthDeliveryGate::seeded`).
+        let health_gate =
+            HealthDeliveryGate::seeded(engine.health().snapshot().version, Instant::now());
+        live_loop(stream, engine, &mut subscription, health_gate).await;
     }
     Ok(())
 }
@@ -85,10 +93,17 @@ async fn write_initial_frames(
     }
 }
 
+/// Task 8 (`.omo/plans/event-system-fixes.md`, defect D9): `health_gate` is
+/// checked on every keepalive tick AND after every delivered event frame —
+/// not gated by the removed engine-global `publish_at` cadence, which let a
+/// busy OTHER subscriber's own tick consume the one shared publish window
+/// and starve this connection for up to ~50 minutes under load. This
+/// connection owns its gate independently of every other connection.
 async fn live_loop(
     stream: &mut TcpStream,
     engine: &Arc<RuntimeEventEngine>,
     subscription: &mut SubscriptionHandle,
+    mut health_gate: HealthDeliveryGate,
 ) {
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -100,6 +115,9 @@ async fn live_loop(
                 if !write_frame(stream, KEEPALIVE_FRAME.to_string()).await {
                     break;
                 }
+                if !maybe_write_health(stream, engine, &mut health_gate, current_cursor(engine)).await {
+                    break;
+                }
             }
             received = subscription.recv() => match received {
                 Ok(frame) => {
@@ -108,18 +126,16 @@ async fn live_loop(
                     // have no channel-native equivalent, so check them
                     // explicitly against every received frame — first
                     // limit wins, same disconnect + health-bump contract.
-                    if lag_bound_exceeded(&frame, subscription.backlog_len(), std::time::Instant::now()) {
+                    if lag_bound_exceeded(&frame, subscription.backlog_len(), Instant::now()) {
                         subscription.record_disconnect(engine.health());
                         break;
                     }
                     if !write_frame(stream, frames::event_frame(engine, &frame)).await {
                         break;
                     }
-                    if engine.health().publish_at(std::time::Instant::now()).is_some() {
-                        let cursor = Cursor::new(engine.process_instance(), frame.sequence.get());
-                        if !write_frame(stream, frames::health_frame(engine, cursor)).await {
-                            break;
-                        }
+                    let cursor = Cursor::new(engine.process_instance(), frame.sequence.get());
+                    if !maybe_write_health(stream, engine, &mut health_gate, cursor).await {
+                        break;
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
@@ -130,6 +146,24 @@ async fn live_loop(
             },
         }
     }
+}
+
+/// Deliver a `runtime_health` frame only when `health_gate` says this
+/// connection's last-delivered version is stale. Returns `false` only on a
+/// write failure, matching every other frame writer in this loop so the
+/// caller's `break` handling stays uniform; a gate-suppressed check (nothing
+/// to deliver) returns `true`.
+async fn maybe_write_health(
+    stream: &mut TcpStream,
+    engine: &Arc<RuntimeEventEngine>,
+    health_gate: &mut HealthDeliveryGate,
+    cursor: Cursor,
+) -> bool {
+    let snapshot = engine.health().snapshot();
+    if !health_gate.should_deliver(&snapshot, Instant::now()) {
+        return true;
+    }
+    write_frame(stream, frames::health_frame(engine, cursor)).await
 }
 
 async fn write_frame(stream: &mut TcpStream, frame: String) -> bool {

@@ -9,6 +9,7 @@ use mesh_llm_runtime_event_contracts::{
     ScopeIdentities,
 };
 
+use crate::runtime_events::config::EngineConfig;
 use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::replay::ReplayFrame;
 
@@ -195,6 +196,64 @@ fn every_frame_is_exactly_id_event_data_blank_line() {
 #[test]
 fn keepalive_frame_has_no_id_or_data() {
     assert_eq!(super::frames::KEEPALIVE_FRAME, ": keepalive\n\n");
+}
+
+// ─── Task 8: versioned health with bounds and a nullable ingress p99 ───
+
+#[test]
+fn health_projection_bounds_equal_the_frozen_engine_config() {
+    let engine = RuntimeEventEngine::new();
+    let projection: super::frames::HealthProjection = engine.health().snapshot().into();
+    let bounds = EngineConfig::FROZEN;
+    assert_eq!(
+        projection.bounds.reservation_table_capacity,
+        bounds.reservation_table_capacity
+    );
+    assert_eq!(
+        projection.bounds.state_transition_lane_depth,
+        bounds.state_transition_lane_depth
+    );
+    assert_eq!(
+        projection.bounds.diagnostic_lane_depth,
+        bounds.diagnostic_lane_depth
+    );
+    assert_eq!(projection.bounds.wake_list_depth, bounds.wake_list_depth);
+    assert_eq!(
+        projection.bounds.replay_max_frames,
+        bounds.replay_max_frames
+    );
+    assert_eq!(
+        projection.bounds.subscriber_lag_max_frames,
+        bounds.subscriber_lag_max_frames
+    );
+    assert_eq!(
+        projection.bounds.max_concurrent_subscribers,
+        bounds.max_concurrent_subscribers
+    );
+}
+
+#[test]
+fn health_frame_wire_json_carries_version_bounds_and_a_null_ingress_p99() {
+    let engine = RuntimeEventEngine::new();
+    let cursor = Cursor::new(engine.process_instance(), 0);
+    let frame = super::frames::health_frame(&engine, cursor);
+    let data_line = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("data line present");
+    let value: serde_json::Value = serde_json::from_str(data_line).expect("valid JSON");
+    let health = value["health"].as_object().expect("health is an object");
+
+    assert!(health.contains_key("version"), "version must be present");
+    let bounds = health["bounds"]
+        .as_object()
+        .expect("bounds is a present object");
+    assert!(bounds.contains_key("reservation_table_capacity"));
+    assert!(bounds.contains_key("max_concurrent_subscribers"));
+    assert!(
+        health["ingress_p99_us"].is_null(),
+        "task 8 lands this field as always-nullable until task 13"
+    );
 }
 
 // ─── Shared Rust/TS fixture round-trip ─────────────────────────────────

@@ -30,6 +30,7 @@ use mesh_llm_runtime_event_contracts::{
 };
 use serde::Serialize;
 
+use crate::runtime_events::config::EngineConfig;
 use crate::runtime_events::engine::RuntimeEventEngine;
 use crate::runtime_events::health::EngineHealthSnapshot;
 use crate::runtime_events::replay::ReplayFrame;
@@ -125,8 +126,37 @@ pub(super) fn state_frame(engine: &RuntimeEventEngine, cursor: Cursor) -> String
 
 // ─── runtime_health ─────────────────────────────────────────────────────
 
+/// Every value of the frozen engine-bounds table (`runtime_events::config`),
+/// task 8's `bounds` wire addition -- makes the certification bounds
+/// visible without cross-referencing `config.rs` out of band.
+#[derive(Debug, Serialize)]
+pub(super) struct HealthBoundsProjection {
+    pub(super) reservation_table_capacity: usize,
+    pub(super) state_transition_lane_depth: usize,
+    pub(super) diagnostic_lane_depth: usize,
+    pub(super) wake_list_depth: usize,
+    pub(super) replay_max_frames: usize,
+    pub(super) subscriber_lag_max_frames: usize,
+    pub(super) max_concurrent_subscribers: usize,
+}
+
+impl From<EngineConfig> for HealthBoundsProjection {
+    fn from(config: EngineConfig) -> Self {
+        Self {
+            reservation_table_capacity: config.reservation_table_capacity,
+            state_transition_lane_depth: config.state_transition_lane_depth,
+            diagnostic_lane_depth: config.diagnostic_lane_depth,
+            wake_list_depth: config.wake_list_depth,
+            replay_max_frames: config.replay_max_frames,
+            subscriber_lag_max_frames: config.subscriber_lag_max_frames,
+            max_concurrent_subscribers: config.max_concurrent_subscribers,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct HealthProjection {
+    pub(super) version: u64,
     pub(super) rebuild_generation: u64,
     pub(super) reservation_exhausted: u64,
     pub(super) terminal_delivery_failed: u64,
@@ -136,11 +166,18 @@ pub(super) struct HealthProjection {
     pub(super) subscriber_disconnected: u64,
     pub(super) shutdown_degraded: u64,
     pub(super) reducer_rejected: u64,
+    pub(super) bounds: HealthBoundsProjection,
+    /// Task 13 (`.omo/plans/event-system-fixes.md`) populates this from the
+    /// engine's ingress-duration reservoir once 100 samples exist; task 8
+    /// lands the wire field as always-nullable so the shape is stable
+    /// before that reservoir exists.
+    pub(super) ingress_p99_us: Option<u64>,
 }
 
 impl From<EngineHealthSnapshot> for HealthProjection {
     fn from(snapshot: EngineHealthSnapshot) -> Self {
         Self {
+            version: snapshot.version,
             rebuild_generation: snapshot.rebuild_generation,
             reservation_exhausted: snapshot.reservation_exhausted,
             terminal_delivery_failed: snapshot.terminal_delivery_failed,
@@ -150,6 +187,8 @@ impl From<EngineHealthSnapshot> for HealthProjection {
             subscriber_disconnected: snapshot.subscriber_disconnected,
             shutdown_degraded: snapshot.shutdown_degraded,
             reducer_rejected: snapshot.reducer_rejected,
+            bounds: EngineConfig::FROZEN.into(),
+            ingress_p99_us: None,
         }
     }
 }

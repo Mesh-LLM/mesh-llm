@@ -40,7 +40,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::runtime_events::config::TUI_RENDER_TICK;
 use crate::runtime_events::engine::RuntimeEventEngine;
-use crate::runtime_events::health::EngineHealth;
+use crate::runtime_events::health::{EngineHealth, HealthDeliveryGate};
 use crate::runtime_events::replay::ReplayFrame;
 use crate::runtime_events::subscribers::{SubscribeError, SubscriptionHandle};
 
@@ -86,19 +86,38 @@ pub(super) fn route_fact(
 }
 
 /// Flush `coalescer`'s per-operation latest progress values (bounded to at
-/// most once per its own configured interval) and forward `health`'s
-/// cadence-gated snapshot, both immediately -- neither is queued again
-/// downstream of this call.
+/// most once per its own configured interval) and, if `health_gate` says
+/// this subscriber's last-delivered health version is stale, forward a
+/// fresh snapshot -- both immediately, neither is queued again downstream
+/// of this call. Task 8 (`.omo/plans/event-system-fixes.md`, defect D9):
+/// `health_gate` replaces the removed engine-global `EngineHealth::publish_at`
+/// cadence with THIS subscriber's own independent gate.
 pub(super) fn flush_tick(
     coalescer: &ProgressCoalescer,
     health: &EngineHealth,
+    health_gate: &mut HealthDeliveryGate,
     sink: &dyn PresentationSink,
     now: Instant,
 ) {
     for (_scope, fact) in coalescer.flush_at(now) {
         sink.emit(fact_projection_event(&fact));
     }
-    if let Some(snapshot) = health.publish_at(now) {
+    maybe_emit_health(health, health_gate, sink, now);
+}
+
+/// Emit a coalesced health snapshot through `sink` only when `health_gate`
+/// says the last-delivered version is stale. Shared by [`flush_tick`] (the
+/// render-tick path) and [`drive_presentation_subscriber`]'s own recv arm
+/// (the after-every-frame path), so a health change is never starved behind
+/// either cadence alone.
+fn maybe_emit_health(
+    health: &EngineHealth,
+    health_gate: &mut HealthDeliveryGate,
+    sink: &dyn PresentationSink,
+    now: Instant,
+) {
+    let snapshot = health.snapshot();
+    if health_gate.should_deliver(&snapshot, now) {
         sink.emit(health_projection_event(snapshot));
     }
 }
@@ -125,13 +144,17 @@ pub async fn drive_presentation_subscriber(
     sink: Arc<dyn PresentationSink>,
 ) {
     let coalescer = ProgressCoalescer::new();
+    let mut health_gate = HealthDeliveryGate::new();
     let mut tick = tokio::time::interval(TUI_RENDER_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             received = subscription.recv() => {
                 match received {
-                    Ok(frame) => route_fact(&coalescer, sink.as_ref(), &frame),
+                    Ok(frame) => {
+                        route_fact(&coalescer, sink.as_ref(), &frame);
+                        maybe_emit_health(engine.health(), &mut health_gate, sink.as_ref(), Instant::now());
+                    }
                     Err(RecvError::Lagged(_)) => {
                         subscription.record_disconnect(engine.health());
                         return;
@@ -140,7 +163,7 @@ pub async fn drive_presentation_subscriber(
                 }
             }
             _ = tick.tick() => {
-                flush_tick(&coalescer, engine.health(), sink.as_ref(), Instant::now());
+                flush_tick(&coalescer, engine.health(), &mut health_gate, sink.as_ref(), Instant::now());
             }
         }
     }

@@ -14,6 +14,7 @@ use mesh_llm_runtime_event_contracts::{
     StateTransition,
 };
 
+use crate::runtime_events::config::EngineConfig;
 use crate::runtime_events::health::EngineHealthSnapshot;
 
 /// Every fragment key [`projected_fragments`] may ever emit. Used by the
@@ -217,15 +218,29 @@ pub fn fact_projection_event(fact: &RuntimeFact) -> OutputEvent {
 }
 
 /// Project a coalesced engine-health snapshot into the same privacy-safe
-/// shape. Health counters are already bounded/aggregate by construction
-/// (`EngineHealthSnapshot`), so nothing further needs allowlisting here.
+/// shape -- the `event_system_health` log line. Health counters are
+/// already bounded/aggregate by construction (`EngineHealthSnapshot`), so
+/// nothing further needs allowlisting here. Task 8
+/// (`.omo/plans/event-system-fixes.md`) adds `version` plus the same
+/// `bounds`/`ingress_p99_us` additions the wire `runtime_health` frame's
+/// `HealthProjection` carries, so the log line and the wire frame never
+/// diverge in shape. `ingress_p99_us` has no source yet (task 13 lands the
+/// reservoir); it always logs as `null` here, matching the wire frame's
+/// always-nullable field.
 #[must_use]
 pub fn health_projection_event(snapshot: EngineHealthSnapshot) -> OutputEvent {
+    let bounds = EngineConfig::FROZEN;
+    let ingress_p99_us: Option<u64> = None;
     OutputEvent::Info {
         message: format!(
-            "reservation_exhausted={} terminal_delivery_failed={} dropped_progress={} \
+            "version={} reservation_exhausted={} terminal_delivery_failed={} dropped_progress={} \
              dropped_diagnostic={} replay_evicted={} subscriber_disconnected={} \
-             shutdown_degraded={} reducer_rejected={} rebuild_generation={}",
+             shutdown_degraded={} reducer_rejected={} rebuild_generation={} \
+             bounds.reservation_table_capacity={} bounds.state_transition_lane_depth={} \
+             bounds.diagnostic_lane_depth={} bounds.wake_list_depth={} \
+             bounds.replay_max_frames={} bounds.subscriber_lag_max_frames={} \
+             bounds.max_concurrent_subscribers={} ingress_p99_us={}",
+            snapshot.version,
             snapshot.reservation_exhausted,
             snapshot.terminal_delivery_failed,
             snapshot.dropped_progress,
@@ -235,6 +250,14 @@ pub fn health_projection_event(snapshot: EngineHealthSnapshot) -> OutputEvent {
             snapshot.shutdown_degraded,
             snapshot.reducer_rejected,
             snapshot.rebuild_generation,
+            bounds.reservation_table_capacity,
+            bounds.state_transition_lane_depth,
+            bounds.diagnostic_lane_depth,
+            bounds.wake_list_depth,
+            bounds.replay_max_frames,
+            bounds.subscriber_lag_max_frames,
+            bounds.max_concurrent_subscribers,
+            ingress_p99_us.map_or_else(|| "null".to_string(), |value| value.to_string()),
         ),
         context: Some("event_system_health".to_string()),
     }

@@ -27,7 +27,7 @@ use mesh_llm_runtime_event_contracts::{
 };
 
 use super::engine::RuntimeEventEngine;
-use super::health::EngineHealthSnapshot;
+use super::health::{EngineHealthSnapshot, HealthDeliveryGate};
 
 /// A privacy-safe, ID-free structured telemetry sample. Every variant here
 /// is bounded discrete data (an enum, a count, a duration) -- never an
@@ -47,8 +47,8 @@ pub enum RuntimeEventTelemetrySample {
         ingress_elapsed: Duration,
     },
     /// A coalesced `EngineHealth` snapshot, sampled at the same
-    /// once-per-second-or-less cadence `EngineHealth::publish_at` already
-    /// enforces (task 3 precedent) -- never sampled per-event.
+    /// once-per-second-or-less cadence the sampler's own `HealthDeliveryGate`
+    /// enforces (task 8) -- never sampled per-event.
     EngineHealth(EngineHealthSnapshot),
     /// Point-in-time reservation-table occupancy, sampled at the same
     /// cadence as `EngineHealth`. The "queue depth" signal.
@@ -181,20 +181,24 @@ impl<I: RuntimeEventIngress> RuntimeEventIngress for ObservingIngress<I> {
 }
 
 /// Sample `engine`'s coalesced health and reservation occupancy into
-/// `queue`, gated by the same publish cadence `EngineHealth::publish_at`
-/// already enforces -- a no-op call when the cadence window has not
-/// elapsed. Safe to call from a periodic (e.g. once-per-second) task; the
-/// occupancy scan is a linear pass over the reservation table, the same
+/// `queue`, gated by `gate` -- this sampler's OWN independent
+/// [`HealthDeliveryGate`] (task 8, `.omo/plans/event-system-fixes.md`,
+/// defect D9, replacing the removed engine-global `EngineHealth::publish_at`
+/// cadence): a no-op call when `gate` says nothing has changed since the
+/// last delivery. Safe to call from a periodic (e.g. once-per-second) task;
+/// the occupancy scan is a linear pass over the reservation table, the same
 /// cost profile `RuntimeEventEngine::occupied_count` already accepts for
 /// test use, bounded here to at most once per publish cadence.
 pub fn sample_engine(
     engine: &RuntimeEventEngine,
     now: Instant,
+    gate: &mut HealthDeliveryGate,
     queue: &RuntimeEventTelemetryQueue,
 ) {
-    let Some(snapshot) = engine.health().publish_at(now) else {
+    let snapshot = engine.health().snapshot();
+    if !gate.should_deliver(&snapshot, now) {
         return;
-    };
+    }
     queue.push(RuntimeEventTelemetrySample::EngineHealth(snapshot));
     let table = engine.table();
     let capacity = table.capacity();
@@ -366,10 +370,11 @@ mod tests {
     fn sample_engine_is_coalesced_by_the_same_health_publish_cadence() {
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(8);
+        let mut gate = HealthDeliveryGate::new();
         let start = Instant::now();
 
-        sample_engine(&engine, start, &queue);
-        sample_engine(&engine, start + Duration::from_millis(1), &queue);
+        sample_engine(&engine, start, &mut gate, &queue);
+        sample_engine(&engine, start + Duration::from_millis(1), &mut gate, &queue);
 
         // Coalesced: the second call lands inside the same publish window
         // as the first and must not push again.
@@ -380,11 +385,12 @@ mod tests {
     fn sample_engine_reports_real_reservation_occupancy() {
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(8);
+        let mut gate = HealthDeliveryGate::new();
         let reservation = engine
             .reserve_root(OperationId::new(), || terminal_fact())
             .expect("reserve");
 
-        sample_engine(&engine, Instant::now(), &queue);
+        sample_engine(&engine, Instant::now(), &mut gate, &queue);
 
         let drained = queue.drain();
         let occupancy = drained.iter().find_map(|sample| match sample {
@@ -401,6 +407,7 @@ mod tests {
         // time (sampling itself never reserves/submits).
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(64);
+        let mut gate = HealthDeliveryGate::new();
         let reservation = engine
             .reserve_root(OperationId::new(), || terminal_fact())
             .expect("reserve");
@@ -410,6 +417,7 @@ mod tests {
             sample_engine(
                 &engine,
                 Instant::now() + Duration::from_secs(u64::from(tick) + 1),
+                &mut gate,
                 &queue,
             );
         }

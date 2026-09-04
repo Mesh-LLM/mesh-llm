@@ -1,14 +1,24 @@
 //! Coalesced engine health counters.
 //!
 //! Health is out-of-band from the primary terminal/state/progress lanes: it
-//! is never recursively submitted through those lanes, and publication is
-//! cadence-gated (at most one frame per second) rather than emitted per
-//! counter increment.
+//! is never recursively submitted through those lanes. Task 8
+//! (`.omo/plans/event-system-fixes.md`, defect D9) replaced the old
+//! engine-global "publish at most once per second" gate
+//! (`EngineHealth::publish_at`) with a monotonically increasing
+//! `health_version`, bumped on every counter mutation: the engine itself
+//! never gates delivery at all now. Each independent consumer -- the v1 SSE
+//! loop (`api/routes/runtime_events/stream.rs`), the presentation
+//! subscriber (`presentation/subscriber.rs`), and the OTLP telemetry
+//! sampler (`runtime_events::telemetry::sample_engine`) -- owns its own
+//! [`HealthDeliveryGate`] instance and decides for itself when to actually
+//! deliver a snapshot ("changed since I last delivered, and at least a
+//! second has passed"), so one consumer's cadence can never starve
+//! another's: under the old shared gate, a v1 subscriber served entirely
+//! from `stream.rs`'s own per-frame check could see as little as one health
+//! frame per ~50 minutes when the presentation-subscriber tick kept
+//! consuming the ONE shared publish window first.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(test)]
-use std::time::Duration;
 use std::time::Instant;
 
 use super::config::HEALTH_PUBLISH_MIN_INTERVAL;
@@ -16,6 +26,10 @@ use super::config::HEALTH_PUBLISH_MIN_INTERVAL;
 /// Point-in-time counters, safe to clone and hand to a consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EngineHealthSnapshot {
+    /// Monotonically increasing; bumped on every counter mutation below.
+    /// Compared by [`HealthDeliveryGate`] to decide whether a consumer's
+    /// last-delivered snapshot is now stale.
+    pub version: u64,
     pub rebuild_generation: u64,
     pub reservation_exhausted: u64,
     pub terminal_delivery_failed: u64,
@@ -44,67 +58,97 @@ struct Counters {
     reducer_eviction_stalled: AtomicU64,
 }
 
-/// Engine health: coalesced counters plus a cadence-gated publish gate.
-#[derive(Debug)]
+/// Engine health: coalesced counters plus a monotonic version.
+#[derive(Debug, Default)]
 pub struct EngineHealth {
     counters: Counters,
-    last_published: Mutex<Option<Instant>>,
-}
-
-impl Default for EngineHealth {
-    fn default() -> Self {
-        Self {
-            counters: Counters::default(),
-            last_published: Mutex::new(None),
-        }
-    }
+    health_version: AtomicU64,
 }
 
 impl EngineHealth {
+    fn bump_version(&self) {
+        self.health_version.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn bump_reservation_exhausted(&self) {
         self.counters
             .reservation_exhausted
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_terminal_delivery_failed(&self) {
         self.counters
             .terminal_delivery_failed
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_dropped_progress(&self) {
         self.counters
             .dropped_progress
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_dropped_diagnostic(&self) {
         self.counters
             .dropped_diagnostic
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
+    /// One increment, matching the contract every existing call site
+    /// (`runtime_events::engine::drain`, out of task 8's file ownership)
+    /// still relies on. See [`Self::bump_replay_evicted_by`] for the
+    /// count-aware primitive this task adds so a caller that evicts several
+    /// frames in one operation can report the real count instead of one
+    /// bump per call -- BLOCKED from being wired into the one production
+    /// call site that needs it (`engine/drain.rs`'s `apply_and_publish_fact`)
+    /// because both that file and `replay.rs` (whose `push`/`push_at`
+    /// would need to return the evicted count instead of a `bool`) are
+    /// outside task 8's ownership; see the task 8 DoneClaim for the full
+    /// analysis and the exact diff a follow-up task can apply.
     pub fn bump_replay_evicted(&self) {
         self.counters.replay_evicted.fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
+    }
+
+    /// Frozen `replay_evicted` semantics (task 8,
+    /// `.omo/plans/event-system-fixes.md`): one increment per evicted
+    /// frame, not per push. Adds `count` in a single atomic op so a caller
+    /// that evicted several frames in one operation reports the real
+    /// count. `count == 0` is a no-op, including no version bump -- there
+    /// is nothing to report.
+    pub fn bump_replay_evicted_by(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.counters
+            .replay_evicted
+            .fetch_add(count, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_subscriber_disconnected(&self) {
         self.counters
             .subscriber_disconnected
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_shutdown_degraded(&self) {
         self.counters
             .shutdown_degraded
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn bump_reducer_rejected(&self) {
         self.counters
             .reducer_rejected
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     /// Task 6 (`.omo/plans/event-system-fixes.md`, defect D14): a
@@ -116,6 +160,7 @@ impl EngineHealth {
         self.counters
             .event_cutover_divergence
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     /// Task 6-fix (`.omo/plans/event-system-fixes.md`, "also required" review
@@ -145,18 +190,21 @@ impl EngineHealth {
         self.counters
             .reducer_eviction_stalled
             .fetch_add(1, Ordering::Relaxed);
+        self.bump_version();
     }
 
     pub fn set_rebuild_generation(&self, value: u64) {
         self.counters
             .rebuild_generation
             .store(value, Ordering::Relaxed);
+        self.bump_version();
     }
 
-    /// Snapshot counters without applying the publish cadence gate.
+    /// Snapshot every counter plus the current version.
     #[must_use]
     pub fn snapshot(&self) -> EngineHealthSnapshot {
         EngineHealthSnapshot {
+            version: self.health_version.load(Ordering::Relaxed),
             rebuild_generation: self.counters.rebuild_generation.load(Ordering::Relaxed),
             reservation_exhausted: self.counters.reservation_exhausted.load(Ordering::Relaxed),
             terminal_delivery_failed: self
@@ -182,55 +230,153 @@ impl EngineHealth {
                 .load(Ordering::Relaxed),
         }
     }
+}
 
-    /// Cadence-gated publish: `Some(snapshot)` at most once per
-    /// [`HEALTH_PUBLISH_MIN_INTERVAL`], `None` otherwise (coalesced).
-    ///
-    /// `now` is caller-supplied so tests stay deterministic without sleeping
-    /// on the wall clock.
-    pub fn publish_at(&self, now: Instant) -> Option<EngineHealthSnapshot> {
-        let mut last = self
-            .last_published
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let due = match *last {
+/// Per-consumer cadence gate (task 8, replacing the removed engine-global
+/// `EngineHealth::publish_at`): each independent health consumer owns its
+/// OWN instance rather than sharing the engine's single gate, so one
+/// consumer's cadence can never starve another's.
+#[derive(Debug, Default)]
+pub struct HealthDeliveryGate {
+    last_delivered_version: Option<u64>,
+    last_delivered_at: Option<Instant>,
+}
+
+impl HealthDeliveryGate {
+    /// A gate that has never delivered: the next [`Self::should_deliver`]
+    /// call always fires, regardless of the snapshot's version.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A gate that already considers `version` delivered as of `at` -- for
+    /// a consumer that already sent an initial health snapshot through some
+    /// OTHER path (the v1 SSE loop's `write_initial_frames`, outside this
+    /// gate's own bookkeeping), so the gate's first eligible check does not
+    /// immediately re-deliver the same snapshot moments later.
+    #[must_use]
+    pub fn seeded(version: u64, at: Instant) -> Self {
+        Self {
+            last_delivered_version: Some(version),
+            last_delivered_at: Some(at),
+        }
+    }
+
+    /// `true` exactly when `snapshot.version` differs from the last
+    /// delivered version AND at least [`HEALTH_PUBLISH_MIN_INTERVAL`] has
+    /// passed since the last delivery (or none has happened yet). Records
+    /// the delivery on `true`, so an immediate repeated call with the same
+    /// `now` returns `false`.
+    pub fn should_deliver(&mut self, snapshot: &EngineHealthSnapshot, now: Instant) -> bool {
+        let changed = self.last_delivered_version != Some(snapshot.version);
+        let elapsed_ok = match self.last_delivered_at {
             None => true,
             Some(previous) => now.duration_since(previous) >= HEALTH_PUBLISH_MIN_INTERVAL,
         };
-        if !due {
-            return None;
+        if !(changed && elapsed_ok) {
+            return false;
         }
-        *last = Some(now);
-        Some(self.snapshot())
-    }
-
-    #[cfg(test)]
-    pub fn min_interval() -> Duration {
-        HEALTH_PUBLISH_MIN_INTERVAL
+        self.last_delivered_version = Some(snapshot.version);
+        self.last_delivered_at = Some(now);
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
-    fn publish_is_coalesced_within_the_cadence_window() {
+    fn health_version_bumps_on_every_counter_mutation() {
         let health = EngineHealth::default();
-        let start = Instant::now();
+        assert_eq!(health.snapshot().version, 0);
         health.bump_reservation_exhausted();
+        assert_eq!(health.snapshot().version, 1);
+        health.bump_replay_evicted_by(4);
+        assert_eq!(health.snapshot().version, 2);
+        health.set_rebuild_generation(7);
+        assert_eq!(health.snapshot().version, 3);
+    }
 
-        assert!(health.publish_at(start).is_some());
-        assert!(
-            health
-                .publish_at(start + Duration::from_millis(1))
-                .is_none()
+    #[test]
+    fn bump_replay_evicted_by_credits_every_evicted_frame_in_one_call() {
+        let health = EngineHealth::default();
+        health.bump_replay_evicted_by(4);
+        assert_eq!(
+            health.snapshot().replay_evicted,
+            4,
+            "eviction of four frames must count four"
         );
+    }
+
+    #[test]
+    fn bump_replay_evicted_by_zero_is_a_no_op_including_the_version() {
+        let health = EngineHealth::default();
+        health.bump_replay_evicted_by(0);
+        let snapshot = health.snapshot();
+        assert_eq!(snapshot.replay_evicted, 0);
+        assert_eq!(snapshot.version, 0);
+    }
+
+    #[test]
+    fn health_delivery_gate_delivers_on_the_first_check_from_new() {
+        let mut gate = HealthDeliveryGate::new();
+        assert!(gate.should_deliver(&EngineHealthSnapshot::default(), Instant::now()));
+    }
+
+    #[test]
+    fn health_delivery_gate_never_delivers_the_same_version_twice() {
+        let mut gate = HealthDeliveryGate::new();
+        let snapshot = EngineHealthSnapshot {
+            version: 3,
+            ..Default::default()
+        };
+        let now = Instant::now();
+        assert!(gate.should_deliver(&snapshot, now));
+        assert!(!gate.should_deliver(&snapshot, now + HEALTH_PUBLISH_MIN_INTERVAL));
+        assert!(!gate.should_deliver(&snapshot, now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn health_delivery_gate_waits_out_the_cadence_window_even_when_the_version_changed_again() {
+        let mut gate = HealthDeliveryGate::new();
+        let now = Instant::now();
+        let first = EngineHealthSnapshot {
+            version: 1,
+            ..Default::default()
+        };
+        assert!(gate.should_deliver(&first, now));
+        let second = EngineHealthSnapshot {
+            version: 2,
+            ..Default::default()
+        };
         assert!(
-            health
-                .publish_at(start + EngineHealth::min_interval())
-                .is_some()
+            !gate.should_deliver(&second, now + Duration::from_millis(1)),
+            "a changed version inside the cadence window must still wait"
         );
+        assert!(gate.should_deliver(&second, now + HEALTH_PUBLISH_MIN_INTERVAL));
+    }
+
+    #[test]
+    fn health_delivery_gate_seeded_treats_the_seed_version_as_already_delivered() {
+        let now = Instant::now();
+        let mut gate = HealthDeliveryGate::seeded(5, now);
+        let unchanged = EngineHealthSnapshot {
+            version: 5,
+            ..Default::default()
+        };
+        assert!(
+            !gate.should_deliver(&unchanged, now + HEALTH_PUBLISH_MIN_INTERVAL),
+            "a seeded gate must not immediately re-deliver the version it was seeded with"
+        );
+        let changed = EngineHealthSnapshot {
+            version: 6,
+            ..Default::default()
+        };
+        assert!(gate.should_deliver(&changed, now + HEALTH_PUBLISH_MIN_INTERVAL));
     }
 
     #[test]
@@ -252,6 +398,7 @@ mod tests {
         assert_eq!(
             snapshot,
             EngineHealthSnapshot {
+                version: 11,
                 rebuild_generation: 2,
                 reservation_exhausted: 1,
                 terminal_delivery_failed: 1,
