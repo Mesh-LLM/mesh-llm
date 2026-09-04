@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Run ONE side of the event-system A/B benchmark matrix (spec §17.5,
-`.omo/plans/event-system.md` task 19).
+"""Run BOTH sides of one event-system A/B benchmark comparison, in ONE
+invocation, interleaved per pair (spec §17.5, `.omo/plans/event-system.md`
+task 19; `.omo/plans/event-system-fixes.md` task 14).
 
-One invocation drives a fixed, deterministic set of paired trials against
-ONE binary in ONE trial mode (`production` or `event-disabled`) and writes a
-manifest the paired comparator (`compare-event-benchmark-matrix.py`)
-consumes. Certification runs this script three times with the SAME `--seed`:
-production on the current binary, `event-disabled` on the current binary,
-and production on the verified baseline release binary -- the same script
-serves the baseline binary because a manifest records binary identity
-(path/sha256/`--version`) rather than assuming which binary produced it.
+One invocation drives a fixed, deterministic set of paired trials for
+EITHER comparison A (`--mode production --mode event-disabled` on one
+`--binary`: the two sides differ by trial mode) OR comparison B (one
+`--mode`, `--binary`/`--baseline-binary`: the two sides differ by binary)
+-- see `resolve_comparison_sides`. For every pair, both sides' trials run
+back to back in the seeded per-pair order (`build_trial_plan`'s
+`side_order_first`, executed by `run_paired_trial_plan`), and the manifest
+records the REAL observed `executed_order` -- never a label with no
+execution effect. Full certification therefore runs this script twice:
+once for comparison A (writing `manifest-production.json` +
+`manifest-event-disabled.json`) and once for comparison B (writing
+`manifest-current.json` + `manifest-baseline.json`), and the paired
+comparator (`compare-event-benchmark-matrix.py`) consumes the resulting
+manifests. A manifest records binary identity (path/sha256/`--version`)
+rather than assuming which binary produced it.
 
 `--mode event-disabled` forwards the hidden, TEST-ONLY selector
 `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=event-disabled` to the spawned process,
@@ -24,10 +32,13 @@ Trial unit (mirrors `benchmark_trial_unit_definition()` in
 fresh process launch, one readiness wait, one warmup request excluded from
 metrics, one measured streaming request, and one shutdown. A pair is two
 trials, one per side, with the same prompt and seed, side order randomized
-per pair. This script produces one SIDE of each pair; running it again with
-the identical `--seed`/`--pairs-primary`/`--pairs-scenario`/`--scenario`
-arguments for the other side yields an index-aligned trial plan the
-comparator pairs by (scenario, pair_index).
+per pair. Every trial's subject process is launched with `--log-format
+json`; after its shutdown, `parse_final_event_system_health` reads back
+its captured log for the FINAL `event_system_health` line, populating each
+side's manifest `health`/`callback_ingress_p99_us` from that side's LAST
+trial -- absence stays an honest JSON `null` that the comparator's
+`health_is_available`/`evaluate_p99_gate` block on, never a fabricated
+value.
 
 This module deliberately never runs the real benchmark end-to-end as part of
 its own test suite (see `scripts/tests/test_run_event_benchmark_matrix.py`):
@@ -282,6 +293,8 @@ def build_trial_plan(
     pairs_primary: int,
     pairs_scenario: int,
     scenarios: Sequence[str],
+    *,
+    sides: tuple[str, str] = VALID_MODES,
 ) -> list[TrialPlanEntry]:
     """Deterministic trial plan from `seed`: `pairs_primary` entries in the
     synthetic `__primary__` group, then `pairs_scenario` entries per named
@@ -291,16 +304,19 @@ def build_trial_plan(
     produce an IDENTICAL plan, so the comparator can pair trial i of one
     manifest with trial i of another by (scenario, pair_index): "same
     prompt and seed" pairing without the two sides needing to run in the
-    same process. Each entry also carries `side_order_first` -- which mode
-    (`VALID_MODES`) is nominally "first" for that pair -- minted from the
-    SAME seeded `rng` as `prompt_seed`. Because `--mode production` and
-    `--mode event-disabled` are separate process invocations of this
-    script, side order cannot be randomized within one run; encoding it
-    into this shared deterministic plan is what makes "side order
-    randomized per pair" (`TRIAL_UNIT_DEFINITION["pair"]`) reproducible:
-    every invocation with the same seed/counts/scenarios independently
-    derives the IDENTICAL per-pair ordering, so the comparator can verify
-    two manifests agree on it."""
+    same process. Each entry also carries `side_order_first` -- which
+    `sides` value is nominally "first" for that pair -- minted from the
+    SAME seeded `rng` as `prompt_seed`. `sides` defaults to `VALID_MODES`
+    (comparison A: one binary, two trial modes); pass
+    `(side_a.side_id, side_b.side_id)` from `resolve_comparison_sides` for
+    comparison B (one mode, two binaries -- e.g. `("current",
+    "baseline")`), so the same deterministic-plan machinery covers both
+    invocation shapes. Since Task 14, ONE invocation runs both sides of
+    every pair back to back (see `run_paired_trial_plan`), so
+    `side_order_first` is no longer just a label with no execution effect:
+    it is the literal order `run_paired_trial_plan` executes trials in,
+    and `executed_order` on the resulting manifests records what actually
+    ran."""
     if pairs_primary < 1:
         raise ValueError("--pairs-primary must be at least 1")
     if pairs_scenario < 1:
@@ -310,11 +326,69 @@ def build_trial_plan(
     rng = random.Random(seed)
     plan: list[TrialPlanEntry] = []
     for index in range(pairs_primary):
-        plan.append(TrialPlanEntry(PRIMARY_SCENARIO, index, rng.getrandbits(64), rng.choice(VALID_MODES)))
+        plan.append(TrialPlanEntry(PRIMARY_SCENARIO, index, rng.getrandbits(64), rng.choice(sides)))
     for scenario in scenarios:
         for index in range(pairs_scenario):
-            plan.append(TrialPlanEntry(scenario, index, rng.getrandbits(64), rng.choice(VALID_MODES)))
+            plan.append(TrialPlanEntry(scenario, index, rng.getrandbits(64), rng.choice(sides)))
     return plan
+
+
+@dataclass(frozen=True)
+class SideSpec:
+    """One side of a paired comparison run by ONE invocation of this
+    script: a (binary, trial mode) pair plus a short `side_id` used both
+    to mint the seeded per-pair order (`build_trial_plan`'s `sides`) and
+    to name this side's output manifest file
+    (`manifest-<side_id>.json`). Comparison A varies `mode` (both sides
+    share `binary`, side_id == mode, e.g. "production"/"event-disabled");
+    comparison B varies `binary` (both sides share `mode`, side_id ==
+    "current"/"baseline")."""
+
+    binary: Path
+    mode: str
+    side_id: str
+
+
+def resolve_comparison_sides(
+    binary: Path, baseline_binary: Path | None, modes: Sequence[str]
+) -> tuple[SideSpec, SideSpec]:
+    """Resolves the CLI's repeatable `--mode` and optional
+    `--baseline-binary` into the invocation's two sides. Exactly one of
+    two shapes is accepted -- see the module docstring -- any other
+    combination is a hard `ValueError` (never a silent default, never a
+    silent pick-one-and-ignore-the-rest):
+
+    - Comparison B (`--baseline-binary` given): exactly one `--mode`
+      value is required (both sides run the SAME mode; only the binary
+      differs). Sides: `(binary, mode, "current")`,
+      `(baseline_binary, mode, "baseline")`.
+    - Comparison A (`--baseline-binary` omitted): `--mode` must be given
+      exactly twice, covering both `VALID_MODES` with no repeat (the two
+      sides differ by mode on the SAME binary). Sides:
+      `(binary, modes[0], modes[0])`, `(binary, modes[1], modes[1])`.
+    """
+    if baseline_binary is not None:
+        if len(modes) != 1:
+            raise ValueError(
+                "--baseline-binary (comparison B) requires exactly one --mode value "
+                f"(both sides run the same mode); got {len(modes)}: {list(modes)!r}"
+            )
+        (mode,) = modes
+        if mode not in VALID_MODES:
+            raise ValueError(f"unknown --mode {mode!r}; expected one of {VALID_MODES}")
+        return (
+            SideSpec(binary=binary, mode=mode, side_id="current"),
+            SideSpec(binary=baseline_binary, mode=mode, side_id="baseline"),
+        )
+    if len(modes) != 2 or set(modes) != set(VALID_MODES):
+        raise ValueError(
+            "without --baseline-binary (comparison A), --mode must be given exactly "
+            f"twice, once for each of {VALID_MODES}; got {len(modes)}: {list(modes)!r}"
+        )
+    return (
+        SideSpec(binary=binary, mode=modes[0], side_id=modes[0]),
+        SideSpec(binary=binary, mode=modes[1], side_id=modes[1]),
+    )
 
 
 def compute_decode_only_tok_s(
@@ -530,11 +604,128 @@ def prompt_for_entry(entry: TrialPlanEntry) -> str:
     return f"Respond with a short factual sentence. token={entry.prompt_seed:016x}"
 
 
+HEALTH_LOG_CONTEXT = "event_system_health"
+
+# Verbatim field names from `health_projection_event()` in
+# `crates/mesh-llm-host-runtime/src/runtime_events/presentation/projection.rs`
+# -- the space-separated `key=value` tokens inside the JSON log line's
+# `message` string (NOT nested JSON; the envelope is flat: `timestamp`,
+# `level`, `event`, `message`, `context`, with `context ==
+# "event_system_health"` identifying this line). Persisted into the
+# manifest's `health` dict verbatim (as ints) when present; `bounds.*` and
+# `ingress_p99_us` are intentionally excluded here -- p99 has its own
+# manifest field (`callback_ingress_p99_us`) and `bounds` is a
+# certification-tooling concern the comparator does not consume from this
+# manifest.
+HEALTH_COUNTER_FIELDS: tuple[str, ...] = (
+    "version",
+    "rebuild_generation",
+    "reservation_exhausted",
+    "terminal_delivery_failed",
+    "dropped_progress",
+    "dropped_diagnostic",
+    "replay_evicted",
+    "subscriber_disconnected",
+    "shutdown_degraded",
+    "reducer_rejected",
+)
+
+INGRESS_P99_FIELD = "ingress_p99_us"
+
+
+def _coerce_health_field_value(raw_value: str) -> int | float | None:
+    """`null` (the literal token `health_projection_event` writes when
+    `ingress_p99_us` is unmeasured) becomes `None`; every other value is an
+    int when possible, else a float -- never a string, so callers never
+    have to re-parse a numeric-looking value themselves."""
+    if raw_value == "null":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return float(raw_value)
+
+
+def parse_event_system_health_message(message: str) -> dict[str, int | float | None]:
+    """Parses ONE `event_system_health` log line's `message` string (the
+    space-separated `key=value` tokens `health_projection_event` writes,
+    e.g. `"version=1 ... dropped_progress=0 ... ingress_p99_us=6"`) into a
+    flat dict keyed by field name. Unknown/malformed tokens (no `=`) are
+    skipped rather than raising -- a forward-compatible field this parser
+    does not yet know about must never abort the whole parse."""
+    fields: dict[str, int | float | None] = {}
+    for token in message.split():
+        if "=" not in token:
+            continue
+        key, _, raw_value = token.partition("=")
+        try:
+            fields[key] = _coerce_health_field_value(raw_value)
+        except ValueError:
+            continue
+    return fields
+
+
+def parse_final_event_system_health(log_text: str) -> dict[str, int | float | None] | None:
+    """Scans a subject process's `--log-format json` combined stdout/stderr
+    log, line by line, for `event_system_health` lines -- JSON envelopes
+    shaped `{"timestamp": ..., "level": ..., "event": ..., "message": "key=value
+    ...", "context": "event_system_health"}` -- and returns the FIELDS
+    parsed from the message of the FINAL such line, or `None` if no such
+    line appears anywhere in the log (e.g. the process crashed before its
+    startup health line, or never wrote one at all). This is the last line
+    the per-subscriber health-delivery gate allowed to be emitted before
+    the trial's shutdown, NOT a synthesized end-of-trial snapshot -- see
+    `health-parsing-note.txt` in this task's evidence for what that does
+    and does not prove. A line that fails to `json.loads` (partial write,
+    non-JSON TUI banner, etc.) is skipped, never fatal."""
+    last_fields: dict[str, int | float | None] | None = None
+    for raw_line in log_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            envelope = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(envelope, dict) or envelope.get("context") != HEALTH_LOG_CONTEXT:
+            continue
+        message = envelope.get("message")
+        if not isinstance(message, str):
+            continue
+        last_fields = parse_event_system_health_message(message)
+    return last_fields
+
+
+def derive_health_and_p99(
+    fields: dict[str, int | float | None] | None,
+) -> tuple[dict[str, int | float | None] | None, float | None]:
+    """Maps parsed `event_system_health` fields onto this manifest's
+    `health` dict and `callback_ingress_p99_us` shapes. Absence of a health
+    line at all (`fields is None`) stays an honest `(None, None)` -- never
+    a fabricated all-zero health or a zero p99 -- so
+    `health_is_available`/`evaluate_p99_gate` in the comparator keep
+    blocking exactly as they did before this task, now fed real data
+    instead of an always-`None` manifest. When a health line WAS found but
+    its `ingress_p99_us` token is the literal `null` (fewer than
+    `INGRESS_LATENCY_MIN_SAMPLES` submissions recorded in that trial's
+    process lifetime), `health` is still populated (real counters exist)
+    while `callback_ingress_p99_us` stays `None` -- these two null checks
+    are independent by design, matching the pre-existing comparator gates
+    this task does not change."""
+    if fields is None:
+        return None, None
+    health = {name: fields[name] for name in HEALTH_COUNTER_FIELDS if name in fields}
+    p99_raw = fields.get(INGRESS_P99_FIELD)
+    p99 = float(p99_raw) if isinstance(p99_raw, (int, float)) else None
+    return health, p99
+
+
 def execute_trial(
     binary: Path,
     model: str,
     mode: str,
     entry: TrialPlanEntry,
+    log_path: Path,
     *,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     readiness_timeout_secs: float = DEFAULT_READINESS_TIMEOUT_SECS,
@@ -545,8 +736,13 @@ def execute_trial(
     """Real trial execution: one fresh `<binary> --local-model-only`
     process launch, one readiness wait, one warmup request (excluded from
     metrics), one measured streaming request, one shutdown -- the exact
-    trial unit `TRIAL_UNIT_DEFINITION` describes. NEVER called by this
-    module's own test suite; `run_trial_plan` takes an injectable
+    trial unit `TRIAL_UNIT_DEFINITION` describes. `log_path` is where this
+    ONE trial's subject process combined stdout/stderr is captured
+    (`--log-format json` is always passed so the paired orchestrator,
+    `run_paired_trial_plan`, can parse the subject's own final
+    `event_system_health` line via `parse_final_event_system_health` after
+    shutdown -- Task 14's health/p99 plumbing). NEVER called by this
+    module's own test suite; `run_paired_trial_plan` takes an injectable
     `trial_executor` so tests exercise manifest assembly without spawning a
     real process (see the paired test file)."""
     port = reserve_local_port()
@@ -590,11 +786,20 @@ def execute_trial(
         str(port),
         "--speculative-strategy",
         "disabled",
+        "--log-format",
+        "json",
     ]
     prompt = prompt_for_entry(entry)
     setup_started = time.monotonic()
+    # `--log-format json` (added above) plus redirecting to a real FILE
+    # (never `subprocess.PIPE`, which this script never drains -- an
+    # undrained pipe deadlocks once the OS pipe buffer fills) is what lets
+    # `run_paired_trial_plan` read this trial's `event_system_health` line
+    # back after shutdown via `parse_final_event_system_health`.
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("wb")
     process = subprocess.Popen(  # noqa: S603 - trusted local binary under test
-        argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        argv, env=env, stdout=log_file, stderr=subprocess.STDOUT
     )
     setup_ms = (time.monotonic() - setup_started) * 1000.0
     try:
@@ -667,6 +872,7 @@ def execute_trial(
             process.kill()
             process.wait(timeout=shutdown_timeout_secs)
         shutdown_ms = (time.monotonic() - shutdown_started) * 1000.0
+        log_file.close()
 
     if parsed.malformed or parsed.completion_tokens is None:
         return TrialResult(
@@ -701,18 +907,124 @@ def execute_trial(
     )
 
 
-TrialExecutor = Callable[[Path, str, str, TrialPlanEntry], TrialResult]
+TrialExecutor = Callable[[Path, str, str, TrialPlanEntry, Path], TrialResult]
 
 
-def run_trial_plan(
-    binary: Path,
+@dataclass(frozen=True)
+class ExecutedOrderEntry:
+    """One pair's REAL observed execution order -- as opposed to the
+    plan's `side_order_first` label, which (before Task 14) was recorded
+    with no execution effect since production/event-disabled ran as
+    separate invocations. `order` is `(first.side_id, second.side_id)`,
+    the side_ids of the two trials `run_paired_trial_plan` actually
+    launched back to back for this pair, in launch order."""
+
+    scenario: str
+    pair_index: int
+    order: tuple[str, str]
+
+
+@dataclass(frozen=True)
+class PairedTrialPlanResult:
+    """Everything one interleaved invocation produces for its two sides:
+    each side's trial results (for its own manifest), the shared
+    `executed_order` record (written identically onto both manifests --
+    see `evaluate_executed_order_consistency` in the comparator), and each
+    side's `health`/`ingress_p99_us` as parsed from that side's OWN LAST
+    trial's `event_system_health` log line (see
+    `health_and_p99_from_trial_log`)."""
+
+    side_a_results: list[TrialResult]
+    side_b_results: list[TrialResult]
+    executed_order: list[ExecutedOrderEntry]
+    side_a_health: dict[str, int | float | None] | None
+    side_a_ingress_p99_us: float | None
+    side_b_health: dict[str, int | float | None] | None
+    side_b_ingress_p99_us: float | None
+
+
+def health_and_p99_from_trial_log(log_path: Path) -> tuple[dict[str, int | float | None] | None, float | None]:
+    """Reads back ONE trial's captured `--log-format json` log file and
+    extracts health/p99 via `parse_final_event_system_health` +
+    `derive_health_and_p99`. A missing file (e.g. the trial never even
+    launched) is treated identically to an empty log: an honest `(None,
+    None)`, never an exception that would abort the whole run over one
+    unreadable trial log."""
+    if not log_path.is_file():
+        return None, None
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    return derive_health_and_p99(parse_final_event_system_health(log_text))
+
+
+def run_paired_trial_plan(
     model: str,
-    mode: str,
     plan: Sequence[TrialPlanEntry],
+    side_a: SideSpec,
+    side_b: SideSpec,
     *,
+    log_dir: Path,
     trial_executor: TrialExecutor = execute_trial,
-) -> list[TrialResult]:
-    return [trial_executor(binary, model, mode, entry) for entry in plan]
+) -> PairedTrialPlanResult:
+    """Runs BOTH sides of every pair in ONE invocation -- the fix for
+    D13's "each invocation runs one side" defect. For each pair, in the
+    SEEDED per-pair order (`entry.side_order_first`, which names one of
+    `side_a.side_id`/`side_b.side_id`), executes that side's trial THEN
+    the other side's trial immediately after (back to back: pair 0's two
+    trials, then pair 1's two trials, ... -- never all of side A's trials
+    followed by all of side B's, which is what running the two sides as
+    separate invocations produced before this task). `executed_order`
+    records, for every pair, the two side_ids in the order they were
+    ACTUALLY launched -- by construction equal to the plan, since this is
+    the same loop that both decides and executes that order. Each side's
+    `health`/`ingress_p99_us` come from that side's LAST trial's captured
+    log (each trial is a fresh process, per `TRIAL_UNIT_DEFINITION`, so a
+    fresh trial's own health line is the only honest per-side reading
+    available without a live console API)."""
+    side_a_results: list[TrialResult] = []
+    side_b_results: list[TrialResult] = []
+    executed_order: list[ExecutedOrderEntry] = []
+    side_a_last_log: Path | None = None
+    side_b_last_log: Path | None = None
+    for entry in plan:
+        first, second = (side_a, side_b) if entry.side_order_first == side_a.side_id else (side_b, side_a)
+
+        first_log = log_dir / f"{entry.scenario}-{entry.pair_index}-{first.side_id}.log"
+        first_result = trial_executor(first.binary, model, first.mode, entry, first_log)
+        if first is side_a:
+            side_a_results.append(first_result)
+            side_a_last_log = first_log
+        else:
+            side_b_results.append(first_result)
+            side_b_last_log = first_log
+
+        second_log = log_dir / f"{entry.scenario}-{entry.pair_index}-{second.side_id}.log"
+        second_result = trial_executor(second.binary, model, second.mode, entry, second_log)
+        if second is side_a:
+            side_a_results.append(second_result)
+            side_a_last_log = second_log
+        else:
+            side_b_results.append(second_result)
+            side_b_last_log = second_log
+
+        executed_order.append(
+            ExecutedOrderEntry(scenario=entry.scenario, pair_index=entry.pair_index, order=(first.side_id, second.side_id))
+        )
+
+    side_a_health, side_a_p99 = (
+        health_and_p99_from_trial_log(side_a_last_log) if side_a_last_log is not None else (None, None)
+    )
+    side_b_health, side_b_p99 = (
+        health_and_p99_from_trial_log(side_b_last_log) if side_b_last_log is not None else (None, None)
+    )
+    return PairedTrialPlanResult(
+        side_a_results=side_a_results,
+        side_b_results=side_b_results,
+        executed_order=executed_order,
+        side_a_health=side_a_health,
+        side_a_ingress_p99_us=side_a_p99,
+        side_b_health=side_b_health,
+        side_b_ingress_p99_us=side_b_p99,
+    )
 
 
 def summarize_health_expectations(mode: str, results: Sequence[TrialResult]) -> dict[str, int]:
@@ -748,6 +1060,7 @@ def build_manifest(
     host: dict[str, Any] | None = None,
     callback_ingress_p99_us: float | None = None,
     health: dict[str, int] | None = None,
+    executed_order: Sequence[ExecutedOrderEntry] | None = None,
 ) -> dict[str, Any]:
     expectations = summarize_health_expectations(mode, results)
     return {
@@ -767,24 +1080,32 @@ def build_manifest(
         "environment": capture_environment_snapshot(environ),
         "trial_unit": dict(TRIAL_UNIT_DEFINITION),
         "callback_ingress_p99_us": callback_ingress_p99_us,
-        # Honest reporting, not fabrication: `--local-model-only` starts no
-        # console/management API, so real health counters
-        # (dropped_progress/dropped_diagnostic/terminal_delivery_failed/
-        # state_lane_evictions) are genuinely unreachable by ANY current
-        # call site -- the same architectural wall as
-        # `callback_ingress_p99_us` above. A caller that never collected
+        # Honest reporting, not fabrication: a caller that never collected
         # health data must leave `health` as `None` (JSON null), which the
         # comparator's `health_is_available` reads as "unmeasured" and
         # BLOCKS on -- never as a silently-zero `{}`, which would let a
         # missing `!= 0` invariant check vacuously pass. `health` stays
-        # unchanged when a caller supplies one, so a future collector that
-        # CAN reach these counters (e.g. by parsing the subject process's
-        # own `event_system_health:` log line) works without a manifest
-        # shape change.
+        # unchanged when a caller supplies one; since Task 14,
+        # `run_paired_trial_plan` supplies a real value parsed from the
+        # subject process's own `event_system_health` log line whenever
+        # that line was found (see `health_and_p99_from_trial_log`).
         "health": health,
         "expected_dropped_progress": expectations["expected_dropped_progress"],
         "expected_dropped_diagnostic": expectations["expected_dropped_diagnostic"],
         "trials": [asdict(result) for result in results],
+        # Present on BOTH sides' manifests from the SAME invocation --
+        # see `evaluate_executed_order_consistency` in the comparator.
+        # `None` (JSON null) when the caller never ran an interleaved plan
+        # (e.g. a unit test building a manifest in isolation) -- never a
+        # fabricated empty list standing in for "never executed".
+        "executed_order": (
+            [
+                {"scenario": entry.scenario, "pair_index": entry.pair_index, "order": list(entry.order)}
+                for entry in executed_order
+            ]
+            if executed_order is not None
+            else None
+        ),
     }
 
 
@@ -792,14 +1113,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run-event-benchmark-matrix.py",
         description=(
-            "Run one side (one binary, one trial mode) of the event-system "
-            "paired benchmark matrix and write a deterministic manifest."
+            "Run BOTH sides of one event-system paired-benchmark comparison in ONE "
+            "invocation, interleaved back to back per pair in the seeded order, and "
+            "write one manifest per side. Accepts EITHER `--mode production --mode "
+            "event-disabled` on one --binary (comparison A) OR one --mode with "
+            "--binary/--baseline-binary (comparison B)."
         ),
     )
     parser.add_argument("--binary", required=True, type=Path, help="Path to the mesh-llm binary under test.")
+    parser.add_argument(
+        "--baseline-binary",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the verified baseline release binary. When given, selects "
+            "comparison B (--mode must then be given exactly once; both sides run "
+            "that same mode, one per binary)."
+        ),
+    )
     parser.add_argument("--model", required=True, help="Approved deterministic local model reference.")
     parser.add_argument(
-        "--output-dir", required=True, type=Path, help="Directory to write the manifest and evidence into."
+        "--output-dir", required=True, type=Path, help="Directory to write the manifests and evidence into."
     )
     parser.add_argument(
         "--pairs-primary", required=True, type=int, help="Number of primary-comparison trial pairs (>=1)."
@@ -815,9 +1149,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
+        dest="modes",
+        action="append",
         required=True,
         choices=list(VALID_MODES),
-        help="Hidden trial selector forwarded as MESH_LLM_EVENT_SYSTEM_TRIAL_MODE (also sets MESH_LLM_BENCHMARK_TUNE_TRIAL=1).",
+        help=(
+            "Hidden trial selector forwarded as MESH_LLM_EVENT_SYSTEM_TRIAL_MODE (also "
+            "sets MESH_LLM_BENCHMARK_TUNE_TRIAL=1). Repeatable: give it twice (once per "
+            "value) for comparison A, or once for comparison B."
+        ),
     )
     parser.add_argument(
         "--scenario",
@@ -842,21 +1182,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
-    try:
-        validate_seed(args.seed)
-        plan = build_trial_plan(args.seed, args.pairs_primary, args.pairs_scenario, args.scenarios)
-    except ValueError as exc:
-        parser.error(str(exc))
-        return 2
-
-    results = run_trial_plan(args.binary, args.model, args.mode, plan)
-    manifest = build_manifest(
-        binary=args.binary,
+def _build_side_manifest(
+    *,
+    side: SideSpec,
+    args: argparse.Namespace,
+    plan_result: PairedTrialPlanResult,
+    results: Sequence[TrialResult],
+    health: dict[str, int | float | None] | None,
+    ingress_p99_us: float | None,
+    generated_at: str,
+) -> dict[str, Any]:
+    return build_manifest(
+        binary=side.binary,
         model=args.model,
-        mode=args.mode,
+        mode=side.mode,
         seed=args.seed,
         pairs_primary=args.pairs_primary,
         pairs_scenario=args.pairs_scenario,
@@ -864,12 +1203,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         results=results,
         environ=os.environ,
         attempt=args.attempt,
-        generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        generated_at=generated_at,
+        callback_ingress_p99_us=ingress_p99_us,
+        health=health,
+        executed_order=plan_result.executed_order,
     )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    try:
+        validate_seed(args.seed)
+        side_a, side_b = resolve_comparison_sides(args.binary, args.baseline_binary, args.modes)
+        plan = build_trial_plan(
+            args.seed, args.pairs_primary, args.pairs_scenario, args.scenarios, sides=(side_a.side_id, side_b.side_id)
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+        return 2
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = args.output_dir / f"manifest-{args.mode}.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"manifest_path": str(manifest_path)}))
+    log_dir = args.output_dir / "trial-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    plan_result = run_paired_trial_plan(args.model, plan, side_a, side_b, log_dir=log_dir)
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    manifest_paths: dict[str, str] = {}
+    for side, results, health, ingress_p99_us in (
+        (side_a, plan_result.side_a_results, plan_result.side_a_health, plan_result.side_a_ingress_p99_us),
+        (side_b, plan_result.side_b_results, plan_result.side_b_health, plan_result.side_b_ingress_p99_us),
+    ):
+        manifest = _build_side_manifest(
+            side=side,
+            args=args,
+            plan_result=plan_result,
+            results=results,
+            health=health,
+            ingress_p99_us=ingress_p99_us,
+            generated_at=generated_at,
+        )
+        manifest_path = args.output_dir / f"manifest-{side.side_id}.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        manifest_paths[side.side_id] = str(manifest_path)
+
+    print(json.dumps({"manifest_paths": manifest_paths}))
     return 0
 
 

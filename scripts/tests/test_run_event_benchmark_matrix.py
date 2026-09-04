@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -199,6 +200,21 @@ class TrialPlanDeterminismTests(unittest.TestCase):
         for entry in plan:
             self.assertIn(entry.side_order_first, harness.VALID_MODES)
 
+    def test_sides_kwarg_overrides_the_default_mode_domain(self):
+        """`build_trial_plan(sides=...)` -- added for comparison B, where
+        the two sides differ by BINARY (e.g. "current"/"baseline"), not by
+        trial mode -- must mint `side_order_first` from the GIVEN domain,
+        not the default `VALID_MODES`."""
+        harness = load_module()
+        plan = harness.build_trial_plan(7, 3, 2, ["alpha"], sides=("current", "baseline"))
+        for entry in plan:
+            self.assertIn(entry.side_order_first, ("current", "baseline"))
+        observed = {
+            harness.build_trial_plan(seed, 1, 1, ["s"], sides=("current", "baseline"))[0].side_order_first
+            for seed in range(50)
+        }
+        self.assertEqual(observed, {"current", "baseline"})
+
     def test_side_order_first_uses_both_modes_across_many_seeds(self):
         """Side order is minted from the SAME deterministic per-plan rng
         that mints prompt_seed (see build_trial_plan), so re-running with
@@ -213,6 +229,143 @@ class TrialPlanDeterminismTests(unittest.TestCase):
             harness.build_trial_plan(seed, 1, 1, ["s"])[0].side_order_first for seed in range(50)
         }
         self.assertEqual(observed, set(harness.VALID_MODES))
+
+
+class ResolveComparisonSidesTests(unittest.TestCase):
+    """`resolve_comparison_sides` is what turns the CLI's repeatable
+    `--mode` plus optional `--baseline-binary` into the invocation's two
+    sides -- see the runner module docstring for the two accepted shapes."""
+
+    def test_comparison_a_requires_exactly_two_modes_no_baseline_binary(self):
+        harness = load_module()
+        side_a, side_b = harness.resolve_comparison_sides(
+            Path("/bin/mesh-llm"), None, ["production", "event-disabled"]
+        )
+        self.assertEqual((side_a.mode, side_a.side_id), ("production", "production"))
+        self.assertEqual((side_b.mode, side_b.side_id), ("event-disabled", "event-disabled"))
+        self.assertEqual(side_a.binary, side_b.binary)
+
+    def test_comparison_a_rejects_a_single_mode(self):
+        harness = load_module()
+        with self.assertRaises(ValueError):
+            harness.resolve_comparison_sides(Path("/bin/mesh-llm"), None, ["production"])
+
+    def test_comparison_a_rejects_a_repeated_mode(self):
+        harness = load_module()
+        with self.assertRaises(ValueError):
+            harness.resolve_comparison_sides(Path("/bin/mesh-llm"), None, ["production", "production"])
+
+    def test_comparison_b_requires_exactly_one_mode_with_baseline_binary(self):
+        harness = load_module()
+        side_a, side_b = harness.resolve_comparison_sides(
+            Path("/bin/current"), Path("/bin/baseline"), ["production"]
+        )
+        self.assertEqual((side_a.binary, side_a.side_id), (Path("/bin/current"), "current"))
+        self.assertEqual((side_b.binary, side_b.side_id), (Path("/bin/baseline"), "baseline"))
+        self.assertEqual(side_a.mode, side_b.mode)
+
+    def test_comparison_b_rejects_two_modes(self):
+        harness = load_module()
+        with self.assertRaises(ValueError):
+            harness.resolve_comparison_sides(
+                Path("/bin/current"), Path("/bin/baseline"), ["production", "event-disabled"]
+            )
+
+
+class EventSystemHealthLogParsingTests(unittest.TestCase):
+    """Proves `parse_final_event_system_health` against FIXTURE log text
+    (never a real process) -- the manifest-populated-from-a-fixture-log
+    acceptance criterion."""
+
+    HEALTH_LINE_NO_P99 = (
+        '{"context":"event_system_health","event":"info","level":"info",'
+        '"message":"version=0 reservation_exhausted=0 terminal_delivery_failed=0 '
+        "dropped_progress=0 dropped_diagnostic=0 replay_evicted=0 "
+        "subscriber_disconnected=0 shutdown_degraded=0 reducer_rejected=0 "
+        "rebuild_generation=0 bounds.reservation_table_capacity=3136 "
+        "bounds.state_transition_lane_depth=4096 bounds.diagnostic_lane_depth=2048 "
+        "bounds.wake_list_depth=3136 bounds.replay_max_frames=4096 "
+        "bounds.subscriber_lag_max_frames=1024 bounds.max_concurrent_subscribers=32 "
+        'ingress_p99_us=null","timestamp":"2026-09-04T17:14:57.966Z"}'
+    )
+    HEALTH_LINE_WITH_P99 = (
+        '{"context":"event_system_health","event":"info","level":"info",'
+        '"message":"version=1 reservation_exhausted=0 terminal_delivery_failed=2 '
+        "dropped_progress=7 dropped_diagnostic=3 replay_evicted=0 "
+        "subscriber_disconnected=0 shutdown_degraded=0 reducer_rejected=0 "
+        "rebuild_generation=0 bounds.reservation_table_capacity=3136 "
+        "bounds.state_transition_lane_depth=4096 bounds.diagnostic_lane_depth=2048 "
+        "bounds.wake_list_depth=3136 bounds.replay_max_frames=4096 "
+        "bounds.subscriber_lag_max_frames=1024 bounds.max_concurrent_subscribers=32 "
+        'ingress_p99_us=6","timestamp":"2026-09-04T17:15:25.088Z"}'
+    )
+
+    def test_no_health_line_at_all_returns_none(self):
+        harness = load_module()
+        log_text = '{"context":"other","event":"info","level":"info","message":"unrelated","timestamp":"x"}\n'
+        self.assertIsNone(harness.parse_final_event_system_health(log_text))
+
+    def test_single_health_line_is_parsed(self):
+        harness = load_module()
+        fields = harness.parse_final_event_system_health(self.HEALTH_LINE_NO_P99 + "\n")
+        self.assertEqual(fields["version"], 0)
+        self.assertIsNone(fields["ingress_p99_us"])
+        self.assertEqual(fields["dropped_progress"], 0)
+
+    def test_repeated_health_lines_take_the_final_one(self):
+        """The docstring's core promise: with MULTIPLE health lines in one
+        log (the version bumps as counters change), the FINAL line wins --
+        never the first."""
+        harness = load_module()
+        log_text = "\n".join(
+            [
+                '{"context":"other","event":"info","level":"info","message":"noise","timestamp":"x"}',
+                self.HEALTH_LINE_NO_P99,
+                '{"context":"other","event":"info","level":"info","message":"noise2","timestamp":"y"}',
+                self.HEALTH_LINE_WITH_P99,
+            ]
+        )
+        fields = harness.parse_final_event_system_health(log_text)
+        self.assertEqual(fields["version"], 1)
+        self.assertEqual(fields["ingress_p99_us"], 6)
+
+    def test_malformed_json_line_is_skipped_not_fatal(self):
+        harness = load_module()
+        log_text = "\n".join(["not json at all {{{", self.HEALTH_LINE_WITH_P99])
+        fields = harness.parse_final_event_system_health(log_text)
+        self.assertEqual(fields["version"], 1)
+
+    def test_derive_health_and_p99_absent_line_is_honest_none_none(self):
+        """The absence-stays-null contract this task's Must-NOT forbids
+        relaxing: no health line anywhere in the log means BOTH `health`
+        and `callback_ingress_p99_us` must come back `None` -- never a
+        fabricated zero-filled health dict and never a fabricated p99."""
+        harness = load_module()
+        health, p99 = harness.derive_health_and_p99(None)
+        self.assertIsNone(health)
+        self.assertIsNone(p99)
+
+    def test_derive_health_and_p99_null_p99_token_stays_none_but_health_populates(self):
+        """A health line CAN exist (real counters collected) while
+        `ingress_p99_us` is still the literal `null` token (fewer than 100
+        submissions in that trial's process lifetime) -- `health` must
+        populate while `callback_ingress_p99_us` independently stays
+        `None`; these two null checks are NOT the same claim."""
+        harness = load_module()
+        fields = harness.parse_final_event_system_health(self.HEALTH_LINE_NO_P99)
+        health, p99 = harness.derive_health_and_p99(fields)
+        self.assertIsNotNone(health)
+        self.assertEqual(health["terminal_delivery_failed"], 0)
+        self.assertIsNone(p99)
+
+    def test_derive_health_and_p99_populates_both_when_present(self):
+        harness = load_module()
+        fields = harness.parse_final_event_system_health(self.HEALTH_LINE_WITH_P99)
+        health, p99 = harness.derive_health_and_p99(fields)
+        self.assertEqual(health["terminal_delivery_failed"], 2)
+        self.assertEqual(health["dropped_progress"], 7)
+        self.assertEqual(health["dropped_diagnostic"], 3)
+        self.assertEqual(p99, 6.0)
 
 
 class DecodeOnlyTokSTests(unittest.TestCase):
@@ -458,18 +611,74 @@ class ManifestBuildingTests(unittest.TestCase):
         )
         self.assertEqual(manifest["health"], supplied)
 
+    def test_manifest_executed_order_is_null_when_not_supplied(self):
+        """A caller that never ran an interleaved plan (e.g. this test,
+        building a manifest in isolation) must see `executed_order` as
+        JSON null -- never a fabricated empty list standing in for "this
+        pair's real order was never recorded"."""
+        harness = load_module()
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="production",
+            seed=1,
+            pairs_primary=1,
+            pairs_scenario=1,
+            scenarios=["s"],
+            results=[],
+            environ={},
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+        )
+        self.assertIsNone(manifest["executed_order"])
+
+    def test_manifest_executed_order_is_populated_and_json_serializable(self):
+        harness = load_module()
+        entries = [
+            harness.ExecutedOrderEntry(scenario=harness.PRIMARY_SCENARIO, pair_index=0, order=("production", "event-disabled")),
+            harness.ExecutedOrderEntry(scenario=harness.PRIMARY_SCENARIO, pair_index=1, order=("event-disabled", "production")),
+        ]
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="production",
+            seed=1,
+            pairs_primary=2,
+            pairs_scenario=1,
+            scenarios=["s"],
+            results=[],
+            environ={},
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+            executed_order=entries,
+        )
+        self.assertEqual(len(manifest["executed_order"]), 2)
+        self.assertEqual(manifest["executed_order"][0]["order"], ["production", "event-disabled"])
+        # Must round-trip through json.dumps without a custom encoder --
+        # this is exactly what main() does when writing the manifest file.
+        json.dumps(manifest)
+
 
 class MainThreadsAttemptIntoManifestTests(unittest.TestCase):
     """`main()` must forward the parsed `--attempt` value into
-    `build_manifest` -- a source-level check (rather than invoking `main()`,
-    which spawns a REAL trial subprocess by default) mirroring this file's
+    `build_manifest` (via `_build_side_manifest`, its one-side-at-a-time
+    helper) -- a source-level check (rather than invoking `main()`, which
+    spawns REAL trial subprocesses by default) mirroring this file's
     existing source-inspection convention (see `HiddenSelectorWiringTests`)."""
 
-    def test_main_passes_attempt_from_args_to_build_manifest(self):
+    def test_build_side_manifest_passes_attempt_from_args_to_build_manifest(self):
+        source = SCRIPT.read_text()
+        helper_start = source.index("def _build_side_manifest(")
+        helper_end = source.index("\ndef ", helper_start + 1)
+        helper_body = source[helper_start:helper_end]
+        self.assertIn("attempt=args.attempt", helper_body)
+
+    def test_main_calls_build_side_manifest_for_both_sides(self):
         source = SCRIPT.read_text()
         main_start = source.index("def main(")
         main_body = source[main_start:]
-        self.assertIn("attempt=args.attempt", main_body)
+        self.assertEqual(main_body.count("_build_side_manifest("), 1)
+        self.assertIn("for side, results, health, ingress_p99_us in (", main_body)
 
 
 class TrialUnitDefinitionMatchesRustSourceTests(unittest.TestCase):
@@ -562,6 +771,7 @@ class CliParsingTests(unittest.TestCase):
         help_text = parser.format_help()
         for flag in (
             "--binary",
+            "--baseline-binary",
             "--model",
             "--output-dir",
             "--pairs-primary",
@@ -572,7 +782,7 @@ class CliParsingTests(unittest.TestCase):
         ):
             self.assertIn(flag, help_text)
 
-    def test_mode_choices_are_exactly_production_and_event_disabled(self):
+    def test_mode_is_repeatable_for_comparison_a(self):
         harness = load_module()
         parser = harness.build_arg_parser()
         args = parser.parse_args(
@@ -590,13 +800,44 @@ class CliParsingTests(unittest.TestCase):
                 "--seed",
                 "42",
                 "--mode",
+                "production",
+                "--mode",
                 "event-disabled",
                 "--scenario",
                 "chat_short",
             ]
         )
-        self.assertEqual(args.mode, "event-disabled")
+        self.assertEqual(args.modes, ["production", "event-disabled"])
         self.assertEqual(args.scenarios, ["chat_short"])
+        self.assertIsNone(args.baseline_binary)
+
+    def test_baseline_binary_accepted_alongside_a_single_mode(self):
+        harness = load_module()
+        parser = harness.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--binary",
+                "/bin/current",
+                "--baseline-binary",
+                "/bin/baseline",
+                "--model",
+                "fixture-model",
+                "--output-dir",
+                "/tmp/out",
+                "--pairs-primary",
+                "20",
+                "--pairs-scenario",
+                "10",
+                "--seed",
+                "42",
+                "--mode",
+                "production",
+                "--scenario",
+                "chat_short",
+            ]
+        )
+        self.assertEqual(args.modes, ["production"])
+        self.assertEqual(args.baseline_binary, Path("/bin/baseline"))
 
     def test_attempt_defaults_to_one(self):
         harness = load_module()
@@ -685,16 +926,20 @@ class CliParsingTests(unittest.TestCase):
         self.assertIn("--mode", result.stdout)
 
 
-class RunTrialPlanInjectionTests(unittest.TestCase):
-    def test_run_trial_plan_never_calls_the_real_executor_by_default_in_tests(self):
-        """This module's tests must never spawn a real mesh-llm process --
-        every call into run_trial_plan below injects a fake executor."""
-        harness = load_module()
-        plan = harness.build_trial_plan(1, 1, 1, ["s"])
-        calls = []
+class RunPairedTrialPlanInterleavingTests(unittest.TestCase):
+    """`run_paired_trial_plan` is the D13 fix: ONE invocation must run BOTH
+    sides of every pair BACK TO BACK, in the seeded per-pair order --
+    never all of side A's trials followed by all of side B's (the old
+    "separate invocations" shape). Every call here injects a fake
+    executor; this module's tests must never spawn a real mesh-llm
+    process (see the module docstring)."""
 
-        def fake_executor(binary, model, mode, entry):
-            calls.append((binary, model, mode, entry))
+    @staticmethod
+    def _make_fake_executor(harness, call_log):
+        def fake_executor(binary, model, mode, entry, log_path):
+            call_log.append((mode, entry.scenario, entry.pair_index))
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("")
             return harness.TrialResult(
                 scenario=entry.scenario,
                 pair_index=entry.pair_index,
@@ -710,11 +955,177 @@ class RunTrialPlanInjectionTests(unittest.TestCase):
                 shutdown_ms=1.0,
             )
 
-        results = harness.run_trial_plan(
-            Path("/nonexistent"), "model", "production", plan, trial_executor=fake_executor
-        )
-        self.assertEqual(len(results), len(plan))
-        self.assertEqual(len(calls), len(plan))
+        return fake_executor
+
+    def test_never_calls_the_real_executor_by_default_in_tests(self):
+        harness = load_module()
+        plan = harness.build_trial_plan(1, 1, 1, ["s"])
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            result = harness.run_paired_trial_plan(
+                "model",
+                plan,
+                side_a,
+                side_b,
+                log_dir=Path(tmp),
+                trial_executor=self._make_fake_executor(harness, calls),
+            )
+        self.assertEqual(len(result.side_a_results) + len(result.side_b_results), 2 * len(plan))
+        self.assertEqual(len(calls), 2 * len(plan))
+
+    def test_each_pairs_two_trials_run_back_to_back_in_plan_order(self):
+        """For a 3-pair plan, the fake executor's call sequence must be
+        [pair0-first, pair0-second, pair1-first, pair1-second, pair2-first,
+        pair2-second] -- NEVER [pair0-first, pair1-first, pair2-first,
+        pair0-second, ...] (all of one side, then all of the other),
+        which is what running the two sides as separate invocations
+        produced before this task. The expected sequence is reconstructed
+        directly from the plan's own `side_order_first` labels."""
+        harness = load_module()
+        plan = harness.build_trial_plan(3, 3, 1, ["s"])
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            harness.run_paired_trial_plan(
+                "model",
+                plan,
+                side_a,
+                side_b,
+                log_dir=Path(tmp),
+                trial_executor=self._make_fake_executor(harness, calls),
+            )
+        expected: list[tuple[str, str, int]] = []
+        for entry in plan:
+            other = side_b.mode if entry.side_order_first == side_a.mode else side_a.mode
+            expected.append((entry.side_order_first, entry.scenario, entry.pair_index))
+            expected.append((other, entry.scenario, entry.pair_index))
+        self.assertEqual(calls, expected)
+
+    def test_executed_order_records_the_real_first_and_second_side_ids(self):
+        harness = load_module()
+        plan = harness.build_trial_plan(9, 2, 1, ["s"])
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            result = harness.run_paired_trial_plan(
+                "model",
+                plan,
+                side_a,
+                side_b,
+                log_dir=Path(tmp),
+                trial_executor=self._make_fake_executor(harness, calls),
+            )
+        self.assertEqual(len(result.executed_order), len(plan))
+        for order_entry, plan_entry in zip(result.executed_order, plan):
+            self.assertEqual(order_entry.scenario, plan_entry.scenario)
+            self.assertEqual(order_entry.pair_index, plan_entry.pair_index)
+            self.assertEqual(order_entry.order[0], plan_entry.side_order_first)
+            self.assertEqual({order_entry.order[0], order_entry.order[1]}, {"production", "event-disabled"})
+
+    def test_side_a_and_side_b_results_are_bucketed_correctly_regardless_of_launch_order(self):
+        harness = load_module()
+        # 4 primary pairs, no named scenarios beyond the required minimum
+        # one pair -- keeps `pair_index` unique-by-position across the
+        # whole plan so this test can assert positional correspondence
+        # directly, rather than conflating the primary group's indices
+        # with a named scenario's own independently-numbered indices.
+        plan = harness.build_trial_plan(2, 4, 1, ["s"])
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            result = harness.run_paired_trial_plan(
+                "model",
+                plan,
+                side_a,
+                side_b,
+                log_dir=Path(tmp),
+                trial_executor=self._make_fake_executor(harness, calls),
+            )
+        self.assertEqual(len(result.side_a_results), len(plan))
+        self.assertEqual(len(result.side_b_results), len(plan))
+        for position, plan_entry in enumerate(plan):
+            self.assertEqual(result.side_a_results[position].scenario, plan_entry.scenario)
+            self.assertEqual(result.side_a_results[position].pair_index, plan_entry.pair_index)
+            self.assertEqual(result.side_b_results[position].scenario, plan_entry.scenario)
+            self.assertEqual(result.side_b_results[position].pair_index, plan_entry.pair_index)
+
+    def test_health_and_p99_are_derived_from_each_sides_own_last_trial_log(self):
+        """`run_paired_trial_plan` must read health/p99 from a REAL fixture
+        log written by the (fake) executor for the LAST trial of each
+        side -- proving `execute_trial`'s `log_path` plumbing round-trips
+        through `health_and_p99_from_trial_log` end to end, without ever
+        spawning a real process."""
+        harness = load_module()
+        plan = harness.build_trial_plan(1, 2, 1, ["s"])
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+
+        health_line_by_mode = {
+            "production": (
+                '{"context":"event_system_health","message":'
+                '"version=1 reservation_exhausted=0 terminal_delivery_failed=0 '
+                "dropped_progress=0 dropped_diagnostic=0 replay_evicted=0 "
+                "subscriber_disconnected=0 shutdown_degraded=0 reducer_rejected=0 "
+                'rebuild_generation=0 ingress_p99_us=12"}'
+            ),
+            "event-disabled": (
+                '{"context":"event_system_health","message":'
+                '"version=1 reservation_exhausted=0 terminal_delivery_failed=0 '
+                "dropped_progress=1 dropped_diagnostic=1 replay_evicted=0 "
+                "subscriber_disconnected=0 shutdown_degraded=0 reducer_rejected=0 "
+                'rebuild_generation=0 ingress_p99_us=null"}'
+            ),
+        }
+
+        def fake_executor(binary, model, mode, entry, log_path):
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(health_line_by_mode[mode] + "\n")
+            return harness.TrialResult(
+                scenario=entry.scenario,
+                pair_index=entry.pair_index,
+                side_order_first=entry.side_order_first,
+                status="succeeded",
+                completion_tokens=1,
+                elapsed_ms=1.0,
+                decode_tok_s=1.0,
+                ttft_ms=1.0,
+                decode_only_tok_s=1.0,
+                setup_ms=1.0,
+                readiness_ms=1.0,
+                shutdown_ms=1.0,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = harness.run_paired_trial_plan(
+                "model", plan, side_a, side_b, log_dir=Path(tmp), trial_executor=fake_executor
+            )
+        self.assertEqual(result.side_a_ingress_p99_us, 12.0)
+        self.assertIsNotNone(result.side_a_health)
+        self.assertIsNone(result.side_b_ingress_p99_us)
+        self.assertIsNotNone(result.side_b_health)
+        self.assertEqual(result.side_b_health["dropped_progress"], 1)
+
+    def test_health_unavailable_when_no_trial_ran_for_a_side(self):
+        """Degenerate but honest: if a side never ran a single trial (e.g.
+        an empty plan), health/p99 must stay `None`, not raise or
+        fabricate -- `health_and_p99_from_trial_log` is never called with
+        a nonexistent path guess."""
+        harness = load_module()
+        side_a = harness.SideSpec(binary=Path("/nonexistent"), mode="production", side_id="production")
+        side_b = harness.SideSpec(binary=Path("/nonexistent"), mode="event-disabled", side_id="event-disabled")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = harness.run_paired_trial_plan(
+                "model", [], side_a, side_b, log_dir=Path(tmp), trial_executor=self._make_fake_executor(harness, [])
+            )
+        self.assertIsNone(result.side_a_health)
+        self.assertIsNone(result.side_a_ingress_p99_us)
+        self.assertIsNone(result.side_b_health)
+        self.assertIsNone(result.side_b_ingress_p99_us)
 
 
 class SideOrderThreadingTests(unittest.TestCase):

@@ -54,10 +54,27 @@ def alternating_trials(scenario, count):
     """Trial fixtures with a genuinely-varied (non-constant)
     `side_order_first`, matching what a real deterministic plan produces --
     use this instead of the `make_trial` default in any fixture that feeds
-    `build_report`, so the new side-order-variety gate doesn't spuriously
-    fire for tests that aren't exercising that gate."""
+    `build_report`, so the side-order-variety gate doesn't spuriously fire
+    for tests that aren't exercising that gate."""
     return [
         make_trial(scenario, i, side_order_first="production" if i % 2 == 0 else "event-disabled")
+        for i in range(count)
+    ]
+
+
+def alternating_executed_order(scenario, count):
+    """Manifest-level `executed_order` fixture matching what
+    `run_paired_trial_plan` (the runner) actually records: a genuinely
+    varied (non-constant) order across pairs -- use this as `make_manifest`'s
+    default so the `evaluate_executed_order_consistency` gate doesn't
+    spuriously fire for tests that feed `build_report` without exercising
+    that gate directly."""
+    return [
+        {
+            "scenario": scenario,
+            "pair_index": i,
+            "order": ["production", "event-disabled"] if i % 2 == 0 else ["event-disabled", "production"],
+        }
         for i in range(count)
     ]
 
@@ -81,9 +98,15 @@ def make_manifest(
     expected_dropped_diagnostic=0,
     attempt=1,
     binary_path="/fixtures/mesh-llm",
+    executed_order=_UNSET,
 ):
     scenarios = scenarios if scenarios is not None else []
     trials = trials if trials is not None else alternating_trials("__primary__", pairs_primary)
+    if executed_order is _UNSET:
+        executed_order = alternating_executed_order("__primary__", pairs_primary)
+    # `executed_order=None` (distinct from omitting the arg) explicitly
+    # represents a manifest that never ran an interleaved plan -- passed
+    # through unchanged, never defaulted to a fabricated list.
     environment = (
         environment
         if environment is not None
@@ -132,6 +155,7 @@ def make_manifest(
         "expected_dropped_progress": expected_dropped_progress,
         "expected_dropped_diagnostic": expected_dropped_diagnostic,
         "trials": trials,
+        "executed_order": executed_order,
     }
 
 
@@ -503,32 +527,65 @@ class HealthAvailabilityTests(unittest.TestCase):
         self.assertEqual(harness.evaluate_health_expectations(manifest), [])
 
 
-class SideOrderConsistencyTests(unittest.TestCase):
+class EvaluateExecutedOrderConsistencyTests(unittest.TestCase):
+    """Replaces `SideOrderConsistencyTests`: since Task 14,
+    `evaluate_executed_order_consistency` reads the manifest-level
+    `executed_order` field (populated from REAL interleaved execution),
+    not a per-trial `side_order_first` label."""
+
     def test_agreeing_and_varied_order_has_no_violations(self):
         harness = load_module()
-        baseline_trials = alternating_trials("__primary__", 4)
-        candidate_trials = alternating_trials("__primary__", 4)
-        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
+        production = make_manifest(executed_order=alternating_executed_order("__primary__", 4))
+        event_disabled = make_manifest(executed_order=alternating_executed_order("__primary__", 4))
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
         self.assertEqual(violations, [])
+
+    def test_missing_on_production_manifest_is_a_violation(self):
+        harness = load_module()
+        production = make_manifest(executed_order=None)
+        event_disabled = make_manifest(executed_order=alternating_executed_order("__primary__", 4))
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
+        self.assertTrue(any("production manifest is missing" in v for v in violations))
+
+    def test_missing_on_event_disabled_manifest_is_a_violation(self):
+        harness = load_module()
+        production = make_manifest(executed_order=alternating_executed_order("__primary__", 4))
+        event_disabled = make_manifest(executed_order=None)
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
+        self.assertTrue(any("event_disabled manifest is missing" in v for v in violations))
+
+    def test_missing_on_both_reports_both_reasons(self):
+        harness = load_module()
+        production = make_manifest(executed_order=None)
+        event_disabled = make_manifest(executed_order=None)
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
+        self.assertEqual(len(violations), 2)
 
     def test_disagreement_between_manifests_is_a_violation(self):
         harness = load_module()
-        baseline_trials = [
-            make_trial("__primary__", 0, side_order_first="production"),
-            make_trial("__primary__", 1, side_order_first="event-disabled"),
-        ]
-        candidate_trials = [
-            make_trial("__primary__", 0, side_order_first="event-disabled"),
-            make_trial("__primary__", 1, side_order_first="event-disabled"),
-        ]
-        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
-        self.assertTrue(any("disagreement" in v for v in violations))
+        production = make_manifest(
+            executed_order=[
+                {"scenario": "__primary__", "pair_index": 0, "order": ["production", "event-disabled"]},
+                {"scenario": "__primary__", "pair_index": 1, "order": ["event-disabled", "production"]},
+            ]
+        )
+        event_disabled = make_manifest(
+            executed_order=[
+                {"scenario": "__primary__", "pair_index": 0, "order": ["event-disabled", "production"]},
+                {"scenario": "__primary__", "pair_index": 1, "order": ["event-disabled", "production"]},
+            ]
+        )
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
+        self.assertTrue(any("disagrees" in v for v in violations))
 
     def test_constant_order_across_all_pairs_is_a_violation(self):
         harness = load_module()
-        baseline_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(5)]
-        candidate_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(5)]
-        violations = harness.evaluate_side_order_consistency(baseline_trials, candidate_trials)
+        constant_order = [
+            {"scenario": "__primary__", "pair_index": i, "order": ["production", "event-disabled"]} for i in range(5)
+        ]
+        production = make_manifest(executed_order=constant_order)
+        event_disabled = make_manifest(executed_order=constant_order)
+        violations = harness.evaluate_executed_order_consistency(production, event_disabled)
         self.assertTrue(any("constant" in v for v in violations))
 
 
@@ -690,27 +747,27 @@ class HealthUnavailableBlockingTests(unittest.TestCase):
             self.assertEqual(report["certification_status"], "blocked")
 
 
-class SideOrderBlockingTests(unittest.TestCase):
-    def test_constant_side_order_blocks_with_a_clearly_named_reason(self):
+class ExecutedOrderBlockingTests(unittest.TestCase):
+    def test_constant_executed_order_blocks_with_a_clearly_named_reason(self):
         harness = load_module()
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            constant_trials = [make_trial("__primary__", i, side_order_first="production") for i in range(20)]
+            constant_order = [
+                {"scenario": "__primary__", "pair_index": i, "order": ["production", "event-disabled"]}
+                for i in range(20)
+            ]
             production = write_manifest(
-                directory, "production.json", make_manifest(mode="production", trials=constant_trials)
+                directory, "production.json", make_manifest(mode="production", executed_order=constant_order)
             )
             event_disabled = write_manifest(
                 directory,
                 "event-disabled.json",
-                make_manifest(
-                    mode="event-disabled",
-                    trials=[make_trial("__primary__", i, side_order_first="production") for i in range(20)],
-                ),
+                make_manifest(mode="event-disabled", executed_order=constant_order),
             )
             baseline = write_manifest(
                 directory,
                 "baseline.json",
-                make_manifest(mode="production", trials=constant_trials, binary_path="/fixtures/baseline"),
+                make_manifest(mode="production", binary_path="/fixtures/baseline"),
             )
             args = harness.build_arg_parser().parse_args(
                 [
@@ -737,7 +794,47 @@ class SideOrderBlockingTests(unittest.TestCase):
                 ]
             )
             report = harness.build_report(args)
-            self.assertIn("side_order_inconsistent", report["blocking_reasons"])
+            self.assertIn("executed_order_inconsistent", report["blocking_reasons"])
+
+    def test_missing_executed_order_blocks_with_a_clearly_named_reason(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            production = write_manifest(
+                directory, "production.json", make_manifest(mode="production", executed_order=None)
+            )
+            event_disabled = write_manifest(
+                directory, "event-disabled.json", make_manifest(mode="event-disabled", executed_order=None)
+            )
+            baseline = write_manifest(
+                directory, "baseline.json", make_manifest(mode="production", binary_path="/fixtures/baseline")
+            )
+            args = harness.build_arg_parser().parse_args(
+                [
+                    "--production",
+                    str(production),
+                    "--event-disabled",
+                    str(event_disabled),
+                    "--baseline",
+                    str(baseline),
+                    "--output",
+                    str(directory / "report.json"),
+                    "--bootstrap-samples",
+                    "200",
+                    "--seed",
+                    "42",
+                    "--max-degradation-percent",
+                    "3",
+                    "--min-primary-pairs",
+                    "20",
+                    "--min-scenario-pairs",
+                    "10",
+                    "--max-mdd-percent",
+                    "10",
+                ]
+            )
+            report = harness.build_report(args)
+            self.assertIn("executed_order_inconsistent", report["blocking_reasons"])
 
 
 class EndToEndReportTests(unittest.TestCase):

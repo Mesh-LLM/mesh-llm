@@ -135,40 +135,45 @@ def index_trials_by_key(trials: Sequence[dict[str, Any]]) -> dict[tuple[str, int
     return {(trial["scenario"], trial["pair_index"]): trial for trial in trials}
 
 
-def evaluate_side_order_consistency(
-    baseline_trials: Sequence[dict[str, Any]],
-    candidate_trials: Sequence[dict[str, Any]],
+def evaluate_executed_order_consistency(
+    production_manifest: dict[str, Any],
+    event_disabled_manifest: dict[str, Any],
 ) -> list[str]:
-    """Verifies the runner's deterministic per-pair `side_order_first` plan
-    (see `build_trial_plan` in the runner) actually held for the pair of
-    manifests it is a "side" of: the production and event-disabled
-    manifests must (a) agree on `side_order_first` for every matched
-    (scenario, pair_index) key, since both were built from the SAME
-    `--seed`/`--pairs-primary`/`--pairs-scenario`/`--scenario` arguments
-    and must therefore independently reconstruct the identical plan, and
-    (b) show a genuinely varied ordering across the matched pairs rather
-    than a degenerate constant one -- a constant ordering means the "side
-    order randomized per pair" trial-unit requirement was not actually
-    honored, even though the plan-derivation code ran."""
-    baseline_index = index_trials_by_key(baseline_trials)
-    candidate_index = index_trials_by_key(candidate_trials)
-    keys = sorted(set(baseline_index) & set(candidate_index))
+    """Replaces the label-only `side_order_first` consistency check: since
+    Task 14, ONE runner invocation executes both sides of every pair back
+    to back (see `run_paired_trial_plan` in the runner) and records the
+    REAL observed order as a manifest-level `executed_order` list (`[{
+    "scenario", "pair_index", "order": [first_side_id, second_side_id]},
+    ...]`), rather than a per-trial `side_order_first` label with no
+    execution effect. Both manifests come from the SAME invocation's SAME
+    plan, so this verifies: (a) `executed_order` is present (non-null,
+    non-empty) on BOTH manifests -- an absent value here means the runner
+    never actually ran an interleaved plan for this pair of manifests; (b)
+    the two manifests' `executed_order` lists are byte-equal -- any
+    divergence means one side's manifest was corrupted or built from a
+    different plan than the other; and (c) the recorded order is
+    genuinely varied across pairs rather than a degenerate constant one --
+    a constant ordering means the "side order randomized per pair"
+    trial-unit requirement was not actually honored, even though the
+    plan-derivation code ran."""
+    production_order = production_manifest.get("executed_order")
+    event_disabled_order = event_disabled_manifest.get("executed_order")
     violations: list[str] = []
-    observed_orders: set[str] = set()
-    for key in keys:
-        baseline_order = baseline_index[key].get("side_order_first")
-        candidate_order = candidate_index[key].get("side_order_first")
-        if baseline_order != candidate_order:
-            violations.append(
-                f"{key}: side_order_first disagreement between manifests "
-                f"({baseline_order!r} vs {candidate_order!r})"
-            )
-            continue
-        if baseline_order is not None:
-            observed_orders.add(baseline_order)
-    if keys and len(observed_orders) < 2:
+    if not production_order:
+        violations.append("production manifest is missing executed_order")
+    if not event_disabled_order:
+        violations.append("event_disabled manifest is missing executed_order")
+    if violations:
+        return violations
+    if production_order != event_disabled_order:
         violations.append(
-            "side_order_first is constant across all matched pairs "
+            "executed_order disagrees between the production and event_disabled manifests"
+        )
+        return violations
+    observed_orders = {tuple(pair_entry["order"]) for pair_entry in production_order}
+    if len(observed_orders) < 2:
+        violations.append(
+            "executed_order is constant across all matched pairs "
             f"(observed: {sorted(observed_orders)}); the 'randomized per pair' "
             "trial-unit requirement is not honored"
         )
@@ -620,9 +625,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     any_health_unavailable = not all(health_availability.values())
     any_health_violation = any(health_violations.values())
 
-    side_order_violations = evaluate_side_order_consistency(
-        production.get("trials", []), event_disabled.get("trials", [])
-    )
+    executed_order_violations = evaluate_executed_order_consistency(production, event_disabled)
 
     attempt = int(production.get("attempt", 1))
     overall_adverse = comparison_a_status != "pass" or comparison_b_status != "pass"
@@ -647,8 +650,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         blocking_reasons.append("health_unavailable")
     if any_health_violation:
         blocking_reasons.append("health_expectation_violation")
-    if side_order_violations:
-        blocking_reasons.append("side_order_inconsistent")
+    if executed_order_violations:
+        blocking_reasons.append("executed_order_inconsistent")
     if retry.action == "blocked_retry_exhausted":
         blocking_reasons.append("retry_exhausted")
 
@@ -709,7 +712,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "callback_ingress_p99": p99_results,
         "health": health_violations,
         "health_availability": health_availability,
-        "side_order_violations": side_order_violations,
+        "executed_order_violations": executed_order_violations,
         "retry": {"attempt": attempt, "action": retry.action, "reason": retry.reason},
         "binary_identity": {
             "production": production.get("binary"),
