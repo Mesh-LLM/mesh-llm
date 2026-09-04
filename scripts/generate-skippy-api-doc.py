@@ -74,7 +74,9 @@ def parse_header(path: Path) -> Header:
         raise ValueError(f"missing @brief for {path}")
 
     functions: list[Function] = []
-    function_pattern = re.compile(r"LLAMA_API\s+.*?;", re.DOTALL)
+    function_pattern = re.compile(
+        r"(?:LLAMA_API|SKIPPY_COMMON_API)\s+.*?;", re.DOTALL
+    )
     for match in function_pattern.finditer(text):
         declaration = normalize_declaration(match.group(0))
         name_match = re.search(r"\b(skippy_[a-zA-Z0-9_]+)\s*\(", declaration)
@@ -135,10 +137,11 @@ def render(headers: list[Header], include_dir: Path) -> str:
     for header in headers:
         if not header.functions:
             continue
+        function_label = "function" if len(header.functions) == 1 else "functions"
         lines.extend(
             [
                 '    <section class="skippy-api-index__group">',
-                f'      <a class="skippy-api-index__group-title" href="#{header_anchor(header)}"><code>{header.name}</code><span>{len(header.functions)} functions</span></a>',
+                f'      <a class="skippy-api-index__group-title" href="#{header_anchor(header)}"><code>{header.name}</code><span>{len(header.functions)} {function_label}</span></a>',
                 '      <div class="skippy-api-index__functions">',
             ]
         )

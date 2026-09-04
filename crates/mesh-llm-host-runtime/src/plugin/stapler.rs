@@ -1,7 +1,5 @@
 use super::proto;
-use rmcp::model::{
-    AnnotateAble, Prompt, RawResource, RawResourceTemplate, Resource, ResourceTemplate, Tool,
-};
+use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,25 +32,25 @@ pub(crate) fn prompt(exposed_name: String, manifest: &proto::PromptManifest) -> 
 }
 
 pub(crate) fn resource(manifest: &proto::ResourceManifest) -> Resource {
-    let mut resource = RawResource::new(&manifest.uri, &manifest.name);
+    let mut resource = Resource::new(&manifest.uri, &manifest.name);
     if let Some(description) = &manifest.description {
         resource = resource.with_description(description.clone());
     }
     if let Some(mime_type) = &manifest.mime_type {
         resource = resource.with_mime_type(mime_type.clone());
     }
-    resource.no_annotation()
+    resource
 }
 
 pub(crate) fn resource_template(manifest: &proto::ResourceTemplateManifest) -> ResourceTemplate {
-    let mut resource = RawResourceTemplate::new(&manifest.uri_template, &manifest.name);
+    let mut resource = ResourceTemplate::new(&manifest.uri_template, &manifest.name);
     if let Some(description) = &manifest.description {
         resource = resource.with_description(description.clone());
     }
     if let Some(mime_type) = &manifest.mime_type {
         resource = resource.with_mime_type(mime_type.clone());
     }
-    resource.no_annotation()
+    resource
 }
 
 pub(crate) fn http_binding_route(
@@ -141,8 +139,8 @@ mod tests {
             mime_type: Some("application/json".into()),
         };
         let resource = resource(&manifest);
-        assert_eq!(resource.raw.description.as_deref(), Some("Current state"));
-        assert_eq!(resource.raw.mime_type.as_deref(), Some("application/json"));
+        assert_eq!(resource.description.as_deref(), Some("Current state"));
+        assert_eq!(resource.mime_type.as_deref(), Some("application/json"));
     }
 
     #[test]

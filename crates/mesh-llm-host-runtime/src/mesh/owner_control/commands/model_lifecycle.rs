@@ -30,6 +30,7 @@ pub(crate) async fn execute_load(
         ModelIntent::Load {
             intent_id: Some(intent_id.clone()),
             spec: model_ref.canonical_model_ref.clone(),
+            config_model_id: Some(model_ref.canonical_model_ref.clone()),
             profile,
             source: IntentSource::OwnerLoad,
             completion: None,
@@ -89,6 +90,7 @@ pub(crate) async fn execute_ensure(
         ModelIntent::Load {
             intent_id: Some(intent_id.clone()),
             spec: model_ref.canonical_model_ref.clone(),
+            config_model_id: Some(model_ref.canonical_model_ref.clone()),
             profile,
             source: IntentSource::OwnerEnsure,
             completion: None,

@@ -1,14 +1,15 @@
 use std::io;
 
-use super::{
-    activation::{decode_f16_to_f32_bytes, decode_q8_to_f32_bytes_with_state_flags},
-    invalid_data,
-};
+use super::invalid_data;
 
-// v12 adds per-stage prefill compute calibration fields to reply statistics. Stage peers must be
-// upgraded together so older fixed-width reply readers reject the changed payload contract.
-pub const STAGE_STATE_VERSION: i32 = 12;
+// v15 combines main's v14 expansion of the fixed StageReplyStats payload from 23 to 27 i64 fields
+// with per-stage prefill compute calibration fields. Stage peers must be upgraded together so
+// older fixed-width reply readers reject the changed payload contract before decoding it.
+pub const STAGE_STATE_VERSION: i32 = 15;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
+pub const MAX_STAGE_SAMPLERS: usize = 16;
+pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
+pub const MAX_STAGE_SAMPLING_STRING_BYTES: usize = 64;
 pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
 pub const MAX_STAGE_SIDEBAND_VALUES: usize = 1_048_576;
 pub const MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES: usize = 8 * 1024 * 1024;
@@ -17,31 +18,10 @@ pub const MAX_STAGE_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const READY_MAGIC: i32 = 0x5352_4459; // "SRDY"
 pub const LLAMA_TOKEN_NULL: i32 = -1;
-pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
-pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 10 * 4;
+pub const STAGE_STATE_HEADER_BYTES: usize = 9 * 4;
+pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 27 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 5 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum WireActivationDType {
-    F32 = 0,
-    F16 = 1,
-    Q8 = 2,
-}
-
-impl TryFrom<i32> for WireActivationDType {
-    type Error = io::Error;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::F32),
-            1 => Ok(Self::F16),
-            2 => Ok(Self::Q8),
-            _ => Err(invalid_data("unknown activation wire dtype")),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -235,7 +215,6 @@ pub struct StageStateHeader {
     pub decode_step: i32,
     pub current_token: i32,
     pub source_stage_index: i32,
-    pub reserved: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -266,6 +245,27 @@ pub struct StageSamplingConfig {
     pub repeat_penalty: f32,
     pub penalty_last_n: i32,
     pub logit_bias: Vec<StageLogitBias>,
+    pub typical_p: f32,
+    pub top_nsigma: f32,
+    pub dynatemp_range: f32,
+    pub dynatemp_exponent: f32,
+    pub dry_multiplier: f32,
+    pub dry_base: f32,
+    pub dry_allowed_length: i32,
+    pub dry_penalty_last_n: i32,
+    pub dry_sequence_breakers: Vec<String>,
+    pub xtc_probability: f32,
+    pub xtc_threshold: f32,
+    pub mirostat_mode: i32,
+    pub mirostat_entropy: f32,
+    pub mirostat_learning_rate: f32,
+    pub samplers: Vec<String>,
+    pub ignore_eos: bool,
+}
+
+pub mod sampling_flags {
+    pub const ENABLED: u32 = 1 << 0;
+    pub const IGNORE_EOS: u32 = 1 << 1;
 }
 
 impl Default for StageSamplingConfig {
@@ -282,18 +282,44 @@ impl Default for StageSamplingConfig {
             repeat_penalty: 1.0,
             penalty_last_n: -1,
             logit_bias: Vec::new(),
+            typical_p: 1.0,
+            top_nsigma: -1.0,
+            dynatemp_range: 0.0,
+            dynatemp_exponent: 1.0,
+            dry_multiplier: 0.0,
+            dry_base: 1.75,
+            dry_allowed_length: 2,
+            dry_penalty_last_n: 64,
+            dry_sequence_breakers: vec!["\n".into(), ":".into(), "\"".into(), "*".into()],
+            xtc_probability: 0.0,
+            xtc_threshold: 0.1,
+            mirostat_mode: 0,
+            mirostat_entropy: 5.0,
+            mirostat_learning_rate: 0.1,
+            samplers: vec![
+                "penalties".into(),
+                "dry".into(),
+                "top_n_sigma".into(),
+                "top_k".into(),
+                "typical_p".into(),
+                "top_p".into(),
+                "min_p".into(),
+                "xtc".into(),
+                "temperature".into(),
+            ],
+            ignore_eos: false,
         }
     }
 }
 
 impl StageSamplingConfig {
     pub fn enabled(&self) -> bool {
-        self.flags != 0
+        (self.flags & sampling_flags::ENABLED) != 0
     }
 }
 
 impl StageStateHeader {
-    pub fn new(kind: WireMessageKind, dtype: WireActivationDType) -> Self {
+    pub fn new(kind: WireMessageKind) -> Self {
         let mut header = Self {
             version: STAGE_STATE_VERSION,
             seq_id: 0,
@@ -304,7 +330,6 @@ impl StageStateHeader {
             decode_step: -1,
             current_token: LLAMA_TOKEN_NULL,
             source_stage_index: -1,
-            reserved: dtype as i32,
         };
         if matches!(
             kind,
@@ -316,10 +341,6 @@ impl StageStateHeader {
             header.flags |= state_flags::LIGHT_CONTEXT;
         }
         header
-    }
-
-    pub fn dtype(self) -> io::Result<WireActivationDType> {
-        WireActivationDType::try_from(self.reserved)
     }
 
     pub fn matches_kind(self, kind: WireMessageKind) -> bool {
@@ -348,7 +369,7 @@ impl StageStateHeader {
 
 impl Default for StageStateHeader {
     fn default() -> Self {
-        Self::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32)
+        Self::new(WireMessageKind::PrefillEmbd)
     }
 }
 
@@ -437,6 +458,11 @@ impl StageWireMessage {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
                 + sampling.logit_bias.len().min(MAX_STAGE_LOGIT_BIAS) * STAGE_LOGIT_BIAS_WIRE_BYTES
+                + sampling_string_list_wire_bytes(
+                    &sampling.dry_sequence_breakers,
+                    MAX_STAGE_DRY_SEQUENCE_BREAKERS,
+                )
+                + sampling_string_list_wire_bytes(&sampling.samplers, MAX_STAGE_SAMPLERS)
         });
         let chat_metadata_bytes = self
             .chat_sampling_metadata
@@ -473,20 +499,16 @@ impl StageWireMessage {
         }
     }
 
-    pub fn stop(dtype: WireActivationDType) -> Self {
-        Self::stop_with_identity(dtype, 0, 0)
+    pub fn stop() -> Self {
+        Self::stop_with_identity(0, 0)
     }
 
-    pub fn stop_with_identity(
-        dtype: WireActivationDType,
-        request_id: u64,
-        session_id: u64,
-    ) -> Self {
+    pub fn stop_with_identity(request_id: u64, session_id: u64) -> Self {
         Self {
             kind: WireMessageKind::Stop,
             pos_start: 0,
             token_count: 0,
-            state: StageStateHeader::new(WireMessageKind::Stop, dtype),
+            state: StageStateHeader::new(WireMessageKind::Stop),
             request_id,
             session_id,
             sampling: None,
@@ -499,14 +521,13 @@ impl StageWireMessage {
     }
 
     pub fn configure_generation(
-        dtype: WireActivationDType,
         request_id: u64,
         session_id: u64,
         prompt_token_count: i32,
         sampling: Option<StageSamplingConfig>,
         chat_sampling_metadata: Option<String>,
     ) -> Self {
-        let mut state = StageStateHeader::new(WireMessageKind::ConfigureGeneration, dtype);
+        let mut state = StageStateHeader::new(WireMessageKind::ConfigureGeneration);
         state.prompt_token_count = prompt_token_count;
         Self {
             kind: WireMessageKind::ConfigureGeneration,
@@ -524,51 +545,37 @@ impl StageWireMessage {
         }
     }
 
-    pub fn activation_f32_payload(&self, n_embd: i32) -> io::Result<Vec<u8>> {
+    pub fn activation_f32_payload(&self) -> io::Result<Vec<u8>> {
         if self.activation.is_empty() {
             return Ok(Vec::new());
         }
-        match self.state.dtype()? {
-            WireActivationDType::F32 => {
-                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-                    return Err(invalid_data(
-                        "decoded activation payload byte count exceeds maximum",
-                    ));
-                }
-                Ok(self.activation.clone())
-            }
-            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
-            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
-                &self.activation,
-                self.token_count,
-                n_embd,
-                self.state.flags,
-            ),
+        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+            return Err(invalid_data(
+                "decoded activation payload byte count exceeds maximum",
+            ));
         }
+        Ok(self.activation.clone())
     }
 
-    pub fn take_activation_f32_payload(&mut self, n_embd: i32) -> io::Result<Vec<u8>> {
+    pub fn take_activation_f32_payload(&mut self) -> io::Result<Vec<u8>> {
         if self.activation.is_empty() {
             return Ok(Vec::new());
         }
-        match self.state.dtype()? {
-            WireActivationDType::F32 => {
-                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
-                    return Err(invalid_data(
-                        "decoded activation payload byte count exceeds maximum",
-                    ));
-                }
-                Ok(std::mem::take(&mut self.activation))
-            }
-            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
-            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
-                &self.activation,
-                self.token_count,
-                n_embd,
-                self.state.flags,
-            ),
+        if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+            return Err(invalid_data(
+                "decoded activation payload byte count exceeds maximum",
+            ));
         }
+        Ok(std::mem::take(&mut self.activation))
     }
+}
+
+fn sampling_string_list_wire_bytes(values: &[String], maximum_count: usize) -> usize {
+    values
+        .iter()
+        .take(maximum_count)
+        .map(|value| std::mem::size_of::<u32>() + value.len())
+        .sum()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

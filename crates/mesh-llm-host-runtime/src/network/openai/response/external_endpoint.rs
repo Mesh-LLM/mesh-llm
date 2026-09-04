@@ -5,11 +5,11 @@ use super::common::{
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
 use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
 use mesh_llm_events::logging::identifiers::RequestId;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use url::Url;
 
 struct ExternalEndpointTarget {
@@ -19,7 +19,7 @@ struct ExternalEndpointTarget {
 }
 
 pub(in crate::network::openai) async fn route_http_endpoint_attempt(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     base_url: &str,
     prefetched: &[u8],
     request_path: &str,
@@ -57,8 +57,8 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
 async fn connect_external_endpoint(
     base_url: &str,
     target: &ExternalEndpointTarget,
-) -> std::result::Result<TcpStream, RouteAttemptResult> {
-    match TcpStream::connect(format!("{}:{}", target.host, target.port)).await {
+) -> std::result::Result<ClientStream, RouteAttemptResult> {
+    match ClientStream::connect(format!("{}:{}", target.host, target.port)).await {
         Ok(upstream) => Ok(upstream),
         Err(err) => {
             tracing::warn!(
@@ -76,7 +76,7 @@ async fn connect_external_endpoint(
 }
 
 async fn forward_external_endpoint_request(
-    upstream: &mut TcpStream,
+    upstream: &mut ClientStream,
     base_url: &str,
     target: &ExternalEndpointTarget,
 ) -> std::result::Result<(), RouteAttemptResult> {
@@ -95,8 +95,8 @@ async fn forward_external_endpoint_request(
 }
 
 async fn route_http_endpoint_attempt_after_forward(
-    tcp_stream: &mut TcpStream,
-    upstream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
+    upstream: &mut ClientStream,
     base_url: &str,
     request_id: RequestId,
     retry_policy: ResponseRetryPolicy,

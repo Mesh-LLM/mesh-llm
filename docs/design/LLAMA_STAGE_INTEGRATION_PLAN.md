@@ -213,8 +213,7 @@ Build scripts should prepare llama.cpp by:
 4. applying patches with `git am --3way`
 5. writing prepared and patched SHAs for diagnostics
 
-The existing `LLAMA_CPP_SHA` file is kept temporarily as a compatibility mirror
-of `upstream.txt` while release and CI scripts are updated.
+`third_party/llama.cpp/upstream.txt` is the sole upstream version selector.
 
 ### Phase 2: Use One Backend Build Matrix
 

@@ -372,6 +372,45 @@ const schemaDrivenControlSettings = [
     }
   },
   {
+    id: 'topology-stages',
+    categoryId: 'runtime',
+    icon: 'layers',
+    label: 'Topology stages',
+    description: 'Schema-defined locked topology stages.',
+    inheritedLabel: 'Inherited by locked model placements',
+    canonicalPath: 'defaults.topology.stages',
+    tomlSection: 'defaults.topology',
+    tomlKey: 'stages',
+    valueSchema: {
+      kind: 'array',
+      items: {
+        kind: 'object',
+        properties: [
+          {
+            name: 'node',
+            label: 'Node',
+            required: true,
+            value_schema: {
+              kind: 'object',
+              properties: [
+                { name: 'endpoint_id', label: 'Endpoint ID', required: false, value_schema: { kind: 'string' } },
+                { name: 'hostname', label: 'Hostname', required: false, value_schema: { kind: 'string' } }
+              ]
+            }
+          },
+          { name: 'layer_start', label: 'Layer start', required: true, value_schema: { kind: 'integer' } },
+          { name: 'layer_end', label: 'Layer end', required: true, value_schema: { kind: 'integer' } }
+        ]
+      }
+    },
+    control: {
+      kind: 'text',
+      name: 'stages',
+      value:
+        '[{"node":{"endpoint_id":"endpoint-a"},"layer_start":0,"layer_end":16},{"node":{"hostname":"worker-b"},"layer_start":16,"layer_end":32}]'
+    }
+  },
+  {
     id: 'schema-conflict',
     categoryId: 'advanced',
     icon: 'filter',

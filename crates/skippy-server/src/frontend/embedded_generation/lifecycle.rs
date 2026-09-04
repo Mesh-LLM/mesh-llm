@@ -150,7 +150,6 @@ pub(super) fn open_upstream_prediction_return(request: &EmbeddedStageZeroGenerat
         request.config,
         request.ids.request_id,
         request.ids.session_id,
-        request.wire_dtype,
     ) {
         Ok(stream) => {
             prediction_return.attach_opened_stream(stream);
@@ -429,12 +428,7 @@ impl StageOpenAiBackend {
 
         let stop_result = write_stage_message(
             &mut lane.stream,
-            &StageWireMessage::stop_with_identity(
-                request.wire_dtype,
-                request.ids.request_id,
-                request.ids.session_id,
-            ),
-            request.wire_dtype,
+            &StageWireMessage::stop_with_identity(request.ids.request_id, request.ids.session_id),
         )
         .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
         .and_then(|kind| {

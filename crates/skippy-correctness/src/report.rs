@@ -30,7 +30,6 @@ pub struct SplitReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
-    pub wire_dtype: String,
     pub boundary: BoundaryReport,
 }
 
@@ -106,7 +105,6 @@ pub struct ChainReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_mtp_verification: Option<NativeMtpVerificationReport>,
     pub activation_width: i32,
-    pub wire_dtype: String,
     pub stages: Vec<ChainStageReport>,
     pub stage_models: Vec<StageModelReport>,
 }
@@ -146,17 +144,6 @@ pub struct SplitScanReport {
     pub model_identity: ModelIdentity,
     pub baseline: BaselineReport,
     pub split_count: usize,
-    pub mismatch_count: usize,
-    pub results: Vec<SingleStepReport>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DtypeMatrixReport {
-    pub mode: &'static str,
-    pub status: &'static str,
-    pub model_identity: ModelIdentity,
-    pub baseline: BaselineReport,
-    pub dtype_count: usize,
     pub mismatch_count: usize,
     pub results: Vec<SingleStepReport>,
 }
@@ -258,7 +245,6 @@ pub struct NativeMtpOpenAiAbReport {
     pub split_layer: u32,
     pub layer_end: u32,
     pub activation_width: i32,
-    pub activation_wire_dtype: String,
     pub exact_content_match: bool,
     pub batched_events_required: bool,
     pub batched_events_present: bool,
@@ -335,7 +321,6 @@ pub struct GlmDsaStage0TraceReport {
     pub case_root: String,
     pub stage_layer_end: u32,
     pub activation_width: i32,
-    pub activation_wire_dtype: String,
     pub prefill_chunk_size: u32,
     pub max_new_tokens: u32,
     pub trace_filter: String,

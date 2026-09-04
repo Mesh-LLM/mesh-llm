@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
 
-use super::super::{KvCachePolicy, StageWireDType};
+use super::super::KvCachePolicy;
 use super::types::{
     BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_UBATCH, ResolvedStageKvCache,
     ResolvedStageKvCacheTemplate,
@@ -51,12 +51,8 @@ pub(super) fn reject_unsupported_model_fit_controls(
     let Some(config) = config else {
         return Ok(());
     };
-    reject_auto_only_bool(config.kv_unified.as_ref(), "model_fit.kv_unified")?;
     if config.cache_ram_mib.unwrap_or(0) > 0 {
         bail!("skippy model_fit.cache_ram_mib is not supported by the pinned runtime");
-    }
-    if config.cache_idle_slots.unwrap_or(0) > 0 {
-        bail!("skippy model_fit.cache_idle_slots is not supported by the pinned runtime");
     }
     if config.keep_tokens.unwrap_or(0) > 0 {
         bail!("skippy model_fit.keep_tokens is not supported by the pinned runtime");
@@ -99,6 +95,28 @@ fn reject_auto_only_bool(value: Option<&BoolOrAuto>, label: &str) -> Result<()> 
         Some(BoolOrAuto::String(mode)) if mode.eq_ignore_ascii_case("auto") => Ok(()),
         Some(BoolOrAuto::Bool(false)) => Ok(()),
         Some(_) => bail!("skippy {label} is not supported by the pinned runtime"),
+    }
+}
+
+pub(super) fn resolve_bool_or_auto(
+    value: Option<&BoolOrAuto>,
+    label: &str,
+) -> Result<Option<bool>> {
+    Ok(match value {
+        None => None,
+        Some(BoolOrAuto::Bool(value)) => Some(*value),
+        Some(BoolOrAuto::String(value)) if value.eq_ignore_ascii_case("auto") => None,
+        Some(BoolOrAuto::String(_)) => bail!("skippy {label} must be a boolean or \"auto\""),
+    })
+}
+
+pub(super) fn parse_kv_offload_string(value: &str) -> Option<bool> {
+    if value.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -234,19 +252,6 @@ pub(super) fn throughput_macro_defaults(policy: &str) -> ThroughputMacroDefaults
             parallel: Some(BUILTIN_PARALLEL),
             continuous_batching: Some("auto".to_string()),
         },
-    }
-}
-
-pub(super) fn resolve_wire_dtype(
-    model_value: Option<&str>,
-    global_value: Option<&str>,
-    policy_value: StageWireDType,
-) -> StageWireDType {
-    match pick_string(model_value, global_value, Some("auto")) {
-        "f32" => StageWireDType::F32,
-        "q8" => StageWireDType::Q8,
-        "f16" => StageWireDType::F16,
-        _ => policy_value,
     }
 }
 

@@ -4,7 +4,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
-        model_id: "org/model:Q4_K_M".to_string(),
+        model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
@@ -25,9 +25,20 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         n_gpu_layers: 0,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: false,
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -48,6 +59,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
         }),
+        ..StageConfig::default()
     }
 }
 
@@ -60,7 +72,7 @@ pub(super) fn prefix_cache_test_base() -> MessageBase {
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         topology_id: "topology".to_string(),
-        model_id: Some("org/model:Q4_K_M".to_string()),
+        model_id: Some("hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string()),
         tokenizer_id: None,
         chat_template_id: Some("template".to_string()),
         seq: Some(1),
@@ -123,6 +135,7 @@ pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
         reasoning_format: Some(EmbeddedReasoningFormat::Hidden),
         reasoning_enabled: Some(EmbeddedReasoningEnabled::Enabled),
         reasoning_budget: Some(EmbeddedReasoningBudget::Tokens(256)),
+        ..EmbeddedOpenAiRequestDefaults::default()
     }
 }
 

@@ -109,6 +109,94 @@ pub(crate) fn test_meaningfully_changed_stage_protocol_generation_support() {
 }
 
 #[test]
+pub(crate) fn test_meaningfully_changed_local_gguf_content_id_support() {
+    let old_peer = test_peer(Some(100));
+    let mut new_peer = test_peer(Some(100));
+    new_peer.local_gguf_content_id_supported = !old_peer.local_gguf_content_id_supported;
+
+    assert!(peer_meaningfully_changed(&old_peer, &new_peer));
+}
+
+#[test]
+pub(crate) fn test_meaningfully_changed_ignores_cache_refresh_timestamp() {
+    let mut old_peer = test_peer(Some(100));
+    old_peer.cache_affinity = Some(
+        mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+            salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
+            epoch: 7,
+            generated_at_unix_ms: 1_000,
+            ttl_ms: 120_000,
+            entries: Vec::new(),
+        },
+    );
+    let mut new_peer = old_peer.clone();
+    new_peer
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .generated_at_unix_ms = 2_000;
+
+    assert!(!peer_meaningfully_changed(&old_peer, &new_peer));
+    new_peer
+        .cache_affinity
+        .as_mut()
+        .expect("cache advertisement")
+        .epoch = 8;
+    assert!(peer_meaningfully_changed(&old_peer, &new_peer));
+}
+
+#[test]
+pub(crate) fn test_transitive_merge_rejects_replayed_cache_advertisement() {
+    let mut existing = test_peer(Some(100));
+    existing.cache_affinity = Some(cache_advertisement(2_000, 8));
+    let mut ann = test_announcement(Some(100));
+    ann.cache_affinity = Some(cache_advertisement(1_000, 99));
+
+    apply_transitive_ann(
+        &mut existing,
+        &test_addr(0x33),
+        &ann,
+        test_endpoint_id(0xee),
+    );
+
+    let retained = existing.cache_affinity.expect("cache advertisement");
+    assert_eq!((retained.generated_at_unix_ms, retained.epoch), (2_000, 8));
+}
+
+#[tokio::test]
+pub(crate) async fn test_direct_merge_accepts_only_newer_cache_advertisements() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x47);
+    let addr = test_addr(0x47);
+    let now = crate::mesh::current_time_unix_ms();
+    let mut ann = test_announcement(Some(100));
+    ann.cache_affinity = Some(cache_advertisement(now, 7));
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+
+    ann.cache_affinity = Some(cache_advertisement(now.saturating_sub(1), 99));
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+    {
+        let state = node.state.lock().await;
+        let retained = state
+            .peers
+            .get(&peer_id)
+            .and_then(|peer| peer.cache_affinity.as_ref())
+            .expect("cache advertisement");
+        assert_eq!((retained.generated_at_unix_ms, retained.epoch), (now, 7));
+    }
+
+    ann.cache_affinity = Some(cache_advertisement(now.saturating_add(1), 8));
+    node.add_peer(peer_id, addr, &ann, None).await;
+    let state = node.state.lock().await;
+    let updated = state
+        .peers
+        .get(&peer_id)
+        .and_then(|peer| peer.cache_affinity.as_ref())
+        .expect("cache advertisement");
+    assert_eq!((updated.generated_at_unix_ms, updated.epoch), (now + 1, 8));
+}
+
+#[test]
 pub(crate) fn test_apply_transitive_ann_refreshes_explicit_model_interests() {
     let mut existing = test_peer(Some(100));
     let mut ann = test_announcement(Some(100));
@@ -159,6 +247,75 @@ pub(crate) fn test_apply_transitive_ann_refreshes_stage_protocol_generation_supp
     );
 
     assert!(existing.stage_protocol_generation_supported);
+}
+
+#[test]
+pub(crate) fn test_apply_transitive_ann_cannot_promote_local_gguf_content_id_support() {
+    let mut existing = test_peer(Some(100));
+    existing.local_gguf_content_id_supported = false;
+    let mut ann = test_announcement(Some(100));
+    ann.local_gguf_content_id_supported = true;
+
+    apply_transitive_ann(
+        &mut existing,
+        &test_addr(0x33),
+        &ann,
+        test_endpoint_id(0xee),
+    );
+
+    assert!(!existing.local_gguf_content_id_supported);
+}
+
+#[test]
+pub(crate) fn test_apply_transitive_ann_preserves_direct_local_gguf_content_id_support() {
+    let mut existing = test_peer(Some(100));
+    existing.local_gguf_content_id_supported = true;
+    let mut old_relay_ann = test_announcement(Some(100));
+    old_relay_ann.local_gguf_content_id_supported = false;
+
+    apply_transitive_ann(
+        &mut existing,
+        &test_addr(0x33),
+        &old_relay_ann,
+        test_endpoint_id(0xee),
+    );
+
+    assert!(existing.local_gguf_content_id_supported);
+}
+
+#[tokio::test]
+pub(crate) async fn test_transitive_peer_cannot_establish_local_gguf_content_id_support() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x4a);
+    let addr = test_addr(0x4a);
+    let bridge_id = test_endpoint_id(0xeb);
+    let mut ann = test_announcement(Some(100));
+    ann.addr = addr.clone();
+    ann.local_gguf_content_id_supported = true;
+
+    node.update_transitive_peer(peer_id, &addr, &ann, bridge_id)
+        .await;
+    {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+        assert!(!peer.local_gguf_content_id_supported);
+        assert!(!peer.is_admitted());
+    }
+
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+    {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+        assert!(peer.local_gguf_content_id_supported);
+        assert!(peer.is_admitted());
+    }
+
+    ann.local_gguf_content_id_supported = false;
+    node.update_transitive_peer(peer_id, &addr, &ann, bridge_id)
+        .await;
+    let state = node.state.lock().await;
+    let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+    assert!(peer.local_gguf_content_id_supported);
 }
 
 #[test]
@@ -219,6 +376,40 @@ pub(crate) async fn test_add_peer_refreshes_stage_protocol_generation_support() 
 }
 
 #[tokio::test]
+pub(crate) async fn test_add_peer_refreshes_local_gguf_content_id_support() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x48);
+    let addr = test_addr(0x48);
+    let mut ann = test_announcement(Some(100));
+    ann.local_gguf_content_id_supported = false;
+
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+    ann.local_gguf_content_id_supported = true;
+    node.add_peer(peer_id, addr, &ann, None).await;
+
+    let state = node.state.lock().await;
+    let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+    assert!(peer.local_gguf_content_id_supported);
+}
+
+#[tokio::test]
+pub(crate) async fn test_direct_announcement_clears_local_gguf_content_id_support() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x49);
+    let addr = test_addr(0x49);
+    let mut ann = test_announcement(Some(100));
+    ann.local_gguf_content_id_supported = true;
+
+    node.add_peer(peer_id, addr.clone(), &ann, None).await;
+    ann.local_gguf_content_id_supported = false;
+    node.add_peer(peer_id, addr, &ann, None).await;
+
+    let state = node.state.lock().await;
+    let peer = state.peers.get(&peer_id).expect("peer should be tracked");
+    assert!(!peer.local_gguf_content_id_supported);
+}
+
+#[tokio::test]
 pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
     let peer_id = test_endpoint_id(0x46);
@@ -262,4 +453,16 @@ pub(crate) async fn test_collect_announcements_includes_self_explicit_model_inte
         self_announcement.explicit_model_interests,
         vec!["Qwen/Qwen3-Coder-Next-GGUF@main:Q4_K_M".to_string()]
     );
+}
+fn cache_advertisement(
+    generated_at_unix_ms: u64,
+    epoch: u64,
+) -> mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+    mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+        salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
+        epoch,
+        generated_at_unix_ms,
+        ttl_ms: 120_000,
+        entries: Vec::new(),
+    }
 }

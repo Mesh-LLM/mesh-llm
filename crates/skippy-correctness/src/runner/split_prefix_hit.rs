@@ -1,5 +1,6 @@
 use std::{
     fs::{self, File},
+    io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -15,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     cli::SplitPrefixHitArgs,
     report::{SplitPrefixHitCaseReport, SplitPrefixHitReport},
-    support::{ChildGuard, connect_ready, generate_run_id},
+    support::{ChildGuard, connect_ready_child, generate_run_id},
 };
 
 use super::{
@@ -196,7 +197,7 @@ fn run_split_prefix_hit_case(
     write_config(&stage1_config_path, &stage1_config)?;
     write_config(&topology_path, &topology)?;
 
-    let _stage1 = spawn_prefix_hit_stage(
+    let mut stage1 = spawn_prefix_hit_stage(
         args,
         &stage1_config_path,
         &topology_path,
@@ -205,8 +206,12 @@ fn run_split_prefix_hit_case(
         true,
     )?;
     drop(
-        connect_ready(stage1_bind_addr, args.server.startup_timeout_secs)
-            .context("stage 1 binary server did not become ready")?,
+        connect_ready_child(
+            stage1_bind_addr,
+            args.server.startup_timeout_secs,
+            &mut stage1,
+        )
+        .context("stage 1 binary server did not become ready")?,
     );
     let _stage0 = spawn_prefix_hit_stage(
         args,
@@ -244,7 +249,7 @@ fn run_split_prefix_hit_case(
     .context("extended-prompt chat completion failed")?;
 
     drop(_stage0);
-    drop(_stage1);
+    drop(stage1);
 
     let metrics = read_prefix_hit_metrics(&stage0_log, &stage1_log)?;
     Ok(SplitPrefixHitCaseReport {
@@ -267,9 +272,17 @@ fn source_model_sha256(model: &Path) -> Result<String> {
     let mut file =
         fs::File::open(model).with_context(|| format!("failed to open {}", model.display()))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .with_context(|| format!("failed to hash {}", model.display()))?;
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash {}", model.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn merge_stage_config(base: &Value, stage: Value) -> Value {
@@ -308,8 +321,6 @@ fn spawn_prefix_hit_stage(
         topology_path
             .to_str()
             .context("topology path is not valid UTF-8")?,
-        "--activation-width",
-        &args.activation_width.to_string(),
         "--telemetry-level",
         "debug",
     ]);

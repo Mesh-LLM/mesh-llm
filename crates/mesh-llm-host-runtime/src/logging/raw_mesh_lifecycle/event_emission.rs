@@ -88,6 +88,7 @@ impl RawMeshLifecycleOwners {
                 usage.completion_tokens,
                 usage.total_tokens,
             )
+            .map(|normalized| normalized.with_cached_prompt_tokens(usage.cached_prompt_tokens))
         });
         let should_emit = {
             let mut coordination = lock_recover(&self.coordination);

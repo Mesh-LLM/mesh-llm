@@ -25,6 +25,7 @@ type SettingsSummaryBannerProps = {
 type SettingsCategoryRailProps = {
   categories: readonly SettingsCategoryItem[]
   activeId: string
+  className?: string
   footer: ReactNode
   onSelect: (id: string) => void
 }
@@ -89,12 +90,12 @@ export function SettingsSummaryBanner({
   )
 }
 
-export function SettingsCategoryRail({ categories, activeId, footer, onSelect }: SettingsCategoryRailProps) {
+export function SettingsCategoryRail({ categories, activeId, className, footer, onSelect }: SettingsCategoryRailProps) {
   return (
     <SidebarNavigation
       activeId={activeId}
       ariaLabel="Defaults sections"
-      className="static self-start lg:sticky lg:top-[72px]"
+      className={className ?? 'static self-start lg:sticky lg:top-[72px]'}
       eyebrow="Categories"
       footer={footer}
       items={categories.map((category) => ({

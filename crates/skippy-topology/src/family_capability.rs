@@ -1,529 +1,436 @@
 use crate::{
     ExactStateMobility, FamilyCapabilityRecord, LayerRange, LayerSpec, ReviewedCapabilityRecord,
     SidebandKind, SidebandRequirement, SplitConstraint, SplitConstraintKind,
-    StageRuntimeFamilyExpectation, WireDType, WireValidation,
 };
 
-pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectation] = &[
-    StageRuntimeFamilyExpectation {
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TestLlamaArchitecture {
+    pub(crate) llama_architecture: &'static str,
+    pub(crate) family_id: &'static str,
+}
+
+#[cfg(test)]
+pub(crate) const TEST_LLAMA_ARCHITECTURE_CATALOG: &[TestLlamaArchitecture] = &[
+    TestLlamaArchitecture {
         llama_architecture: "baichuan",
         family_id: "baichuan",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "bloom",
         family_id: "bloom",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "cohere2",
         family_id: "cohere2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "command-r",
         family_id: "command_r",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "deepseek2",
         family_id: "deepseek2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "deepseek2-ocr",
         family_id: "deepseek2ocr",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "exaone",
         family_id: "exaone",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "exaone4",
         family_id: "exaone4",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "falcon",
         family_id: "falcon",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "falcon-h1",
         family_id: "falcon_h1",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gemma",
         family_id: "gemma",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gemma2",
         family_id: "gemma2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gemma3",
         family_id: "gemma3",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gemma3n",
         family_id: "gemma3n",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gemma4",
         family_id: "gemma4",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "glm4",
         family_id: "glm4",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gpt2",
         family_id: "gpt2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "gptneox",
         family_id: "gptneox",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "granite",
         family_id: "granite",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "granitehybrid",
         family_id: "granite_hybrid",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "granitemoe",
         family_id: "granite_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "hunyuan-dense",
         family_id: "hunyuan_dense",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "hunyuan-moe",
         family_id: "hunyuan_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "hunyuan-vl",
         family_id: "hunyuan_vl",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "inkling",
         family_id: "inkling",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "internlm2",
         family_id: "internlm2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "jais",
         family_id: "jais",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "jais2",
         family_id: "jais2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "jamba",
         family_id: "jamba",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "laguna",
         family_id: "laguna",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "lfm2",
         family_id: "lfm2",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "llama",
         family_id: "llama",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "mamba",
         family_id: "mamba",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "mamba2",
         family_id: "mamba2",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "minimax-m2",
         family_id: "minimax_m27",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "mistral3",
         family_id: "mistral",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "mpt",
         family_id: "mpt",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "olmo",
         family_id: "olmo",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "olmo2",
         family_id: "olmo2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "olmoe",
         family_id: "olmoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "phi2",
         family_id: "phi2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "phi3",
         family_id: "phi",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "phimoe",
         family_id: "phimoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen2",
         family_id: "qwen2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen2moe",
         family_id: "qwen2moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen2vl",
         family_id: "qwen2vl",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen3",
         family_id: "qwen3_dense",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen3moe",
         family_id: "qwen3moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen3next",
         family_id: "qwen3next",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
+        llama_architecture: "qwen4exp",
+        family_id: "qwen4exp",
+    },
+    TestLlamaArchitecture {
         llama_architecture: "qwen3vl",
         family_id: "qwen3vl",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen3vlmoe",
         family_id: "qwen3vlmoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen35",
         family_id: "qwen35",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen35moe",
         family_id: "qwen35moe",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "rwkv6",
         family_id: "rwkv6",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "rwkv7",
         family_id: "rwkv7",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "arwkv7",
         family_id: "rwkv7",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "afmoe",
         family_id: "afmoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "apertus",
         family_id: "apertus",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "arcee",
         family_id: "arcee",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "arctic",
         family_id: "arctic",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "bailingmoe",
         family_id: "bailingmoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "bailingmoe2",
         family_id: "bailingmoe2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "bitnet",
         family_id: "bitnet",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "chatglm",
         family_id: "chatglm",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "codeshell",
         family_id: "codeshell",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "dbrx",
         family_id: "dbrx",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "deci",
         family_id: "deci",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "dots1",
         family_id: "dots1",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "dream",
         family_id: "dream",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "ernie4-5",
         family_id: "ernie4_5",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "ernie4-5-moe",
         family_id: "ernie4_5_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "exaone-moe",
         family_id: "exaone_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "grok",
         family_id: "grok",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "grovemoe",
         family_id: "grovemoe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "kimi-linear",
         family_id: "kimi_linear",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "lfm2moe",
         family_id: "lfm2moe",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "llada",
         family_id: "llada",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "llada-moe",
         family_id: "llada_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "maincoder",
         family_id: "maincoder",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "mimo2",
         family_id: "mimo2",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "minicpm",
         family_id: "minicpm",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "minicpm3",
         family_id: "minicpm3",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "nemotron",
         family_id: "nemotron",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "nemotron-h",
         family_id: "nemotron_h",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "nemotron-h-moe",
         family_id: "nemotron_h_moe",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "openai-moe",
         family_id: "openai_moe",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "openelm",
         family_id: "openelm",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "orion",
         family_id: "orion",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "plamo",
         family_id: "plamo",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "plamo2",
         family_id: "plamo2",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "plamo3",
         family_id: "plamo3",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "plm",
         family_id: "plm",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "qwen",
         family_id: "qwen",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "refact",
         family_id: "refact",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "rnd1",
         family_id: "rnd1",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "rwkv6qwen2",
         family_id: "rwkv6qwen2",
-        recurrent_or_hybrid: true,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "seed-oss",
         family_id: "seed_oss",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "smallthinker",
         family_id: "smallthinker",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "smollm3",
         family_id: "smollm3",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "starcoder",
         family_id: "starcoder",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "step35",
         family_id: "step35",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "xverse",
         family_id: "xverse",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "stablelm",
         family_id: "stablelm",
-        recurrent_or_hybrid: false,
     },
-    StageRuntimeFamilyExpectation {
+    TestLlamaArchitecture {
         llama_architecture: "starcoder2",
         family_id: "starcoder2",
-        recurrent_or_hybrid: false,
     },
 ];
 pub fn qwen3_dense_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
@@ -531,7 +438,6 @@ pub fn qwen3_dense_capability(layer_count: u32, activation_width: u32) -> Family
         "qwen3_dense",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -541,7 +447,6 @@ pub fn qwen2moe_capability(layer_count: u32, activation_width: u32) -> FamilyCap
         "qwen2moe",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -551,7 +456,6 @@ pub fn qwen3moe_capability(layer_count: u32, activation_width: u32) -> FamilyCap
         "qwen3moe",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -561,7 +465,6 @@ pub fn laguna_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "laguna",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -570,15 +473,12 @@ pub fn dense_family_capability(
     family_id: impl Into<String>,
     layer_count: u32,
     activation_width: u32,
-    q8_wire_validation: WireValidation,
     exact_state_mobility: ExactStateMobility,
 ) -> FamilyCapabilityRecord {
     FamilyCapabilityRecord {
         family_id: family_id.into(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation,
         exact_state_mobility,
         recurrent_ranges: Vec::new(),
         split_constraints: Vec::new(),
@@ -591,7 +491,6 @@ pub fn llama_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         "llama",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -601,7 +500,6 @@ pub fn deepseek2_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         "deepseek2",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -611,7 +509,6 @@ pub fn deepseek2ocr_capability(layer_count: u32, activation_width: u32) -> Famil
         "deepseek2ocr",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -621,7 +518,6 @@ pub fn deepseek3_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         "deepseek3",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -631,7 +527,6 @@ pub fn glm47_flash_capability(layer_count: u32, activation_width: u32) -> Family
         "glm47_flash",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -641,7 +536,6 @@ pub fn glm4_capability(layer_count: u32, activation_width: u32) -> FamilyCapabil
         "glm4",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -651,7 +545,6 @@ pub fn gemma2_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "gemma2",
         layer_count,
         activation_width,
-        WireValidation::Validated,
         ExactStateMobility::Accepted,
     )
 }
@@ -661,7 +554,6 @@ pub fn gemma3_capability(layer_count: u32, activation_width: u32) -> FamilyCapab
         "gemma3",
         layer_count,
         activation_width,
-        WireValidation::Rejected,
         ExactStateMobility::Accepted,
     )
 }
@@ -671,8 +563,6 @@ pub fn gemma3n_capability(layer_count: u32, activation_width: u32) -> FamilyCapa
         family_id: "gemma3n".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Validated,
         exact_state_mobility: ExactStateMobility::Accepted,
         recurrent_ranges: Vec::new(),
         split_constraints: vec![SplitConstraint {
@@ -698,7 +588,6 @@ pub fn gemma4_a4b_capability(layer_count: u32, activation_width: u32) -> FamilyC
         "gemma4_a4b",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -708,7 +597,6 @@ pub fn olmo_capability(layer_count: u32, activation_width: u32) -> FamilyCapabil
         "olmo",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Untested,
     )
 }
@@ -718,7 +606,6 @@ pub fn minimax_m27_capability(layer_count: u32, activation_width: u32) -> Family
         "minimax_m27",
         layer_count,
         activation_width,
-        WireValidation::Untested,
         ExactStateMobility::Accepted,
     )
 }
@@ -728,8 +615,6 @@ pub fn falcon_h1_capability(layer_count: u32, activation_width: u32) -> FamilyCa
         family_id: "falcon_h1".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -756,8 +641,6 @@ pub fn qwen35_series_capability(
         family_id: family_id.to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -773,8 +656,6 @@ pub fn inkling_capability(layer_count: u32, activation_width: u32) -> FamilyCapa
         family_id: "inkling".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F32,
-        q8_wire_validation: WireValidation::Rejected,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -794,12 +675,34 @@ pub fn qwen3next_capability(
         family_id: "qwen3next".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges,
         split_constraints: Vec::new(),
         sidebands: Vec::new(),
+    }
+}
+
+/// Conservative Qwen4 experimental / Qwen3.8 Flash-Next capability.
+///
+/// QWEN4EXP combines indexed attention with recurrent Gated DeltaNet state.
+/// Until per-layer ownership is derived from artifact metadata and certified,
+/// keep the complete trunk sticky and reject exact state mobility.
+pub fn qwen4exp_capability(layer_count: u32, activation_width: u32) -> FamilyCapabilityRecord {
+    FamilyCapabilityRecord {
+        family_id: "qwen4exp".to_string(),
+        layer_count,
+        activation_width,
+        exact_state_mobility: ExactStateMobility::RejectedTooLarge,
+        recurrent_ranges: vec![LayerRange {
+            start: 0,
+            end: layer_count,
+        }],
+        split_constraints: Vec::new(),
+        sidebands: vec![SidebandRequirement {
+            kind: SidebandKind::TokenIds,
+            first_required_layer: 1,
+            reason: "Qwen4Exp downstream PLE layers require original token ids to compute n-gram rows and preserve token history in attention cache cells".to_string(),
+        }],
     }
 }
 
@@ -818,8 +721,6 @@ pub fn kimi_linear_capability(layer_count: u32, activation_width: u32) -> Family
         family_id: "kimi_linear".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Validated,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges,
         split_constraints: Vec::new(),
@@ -836,8 +737,6 @@ pub fn recurrent_family_capability(
         family_id: family_id.to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::Accepted,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -853,8 +752,6 @@ pub fn rwkv6_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         family_id: "rwkv6".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -870,8 +767,6 @@ pub fn rwkv7_capability(layer_count: u32, activation_width: u32) -> FamilyCapabi
         family_id: "rwkv7".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Untested,
         exact_state_mobility: ExactStateMobility::RejectedTooLarge,
         recurrent_ranges: vec![LayerRange {
             start: 0,
@@ -891,8 +786,6 @@ pub fn gemma4_e4b_capability(layer_count: u32, activation_width: u32) -> FamilyC
         family_id: "gemma4_e4b".to_string(),
         layer_count,
         activation_width,
-        default_wire_dtype: WireDType::F16,
-        q8_wire_validation: WireValidation::Rejected,
         exact_state_mobility: ExactStateMobility::Untested,
         recurrent_ranges: Vec::new(),
         split_constraints: vec![SplitConstraint {
@@ -963,9 +856,6 @@ pub fn infer_family_capability(
         .or_else(|| infer_recurrent_capability(&compact, layer_count, activation_width))
         .or_else(|| infer_qwen_capability(&release_form, &compact, layer_count, activation_width))
         .or_else(|| infer_remaining_family_capability(&compact, layer_count, activation_width))
-        .or_else(|| {
-            infer_stage_runtime_fallback_capability(&compact, layer_count, activation_width)
-        })
 }
 
 fn infer_granite_gemma_capability(
@@ -985,7 +875,6 @@ fn infer_granite_gemma_capability(
             "granite_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -994,7 +883,6 @@ fn infer_granite_gemma_capability(
             "granite",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1009,7 +897,6 @@ fn infer_granite_gemma_capability(
             "gemma4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1027,7 +914,6 @@ fn infer_granite_gemma_capability(
             "gemma",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1057,7 +943,6 @@ fn infer_falcon_minimax_glm_deepseek_capability(
             "glm4_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1090,7 +975,6 @@ fn infer_mistral_olmo_llama_capability(
             "mistral4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1099,7 +983,6 @@ fn infer_mistral_olmo_llama_capability(
             "mistral",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1108,7 +991,6 @@ fn infer_mistral_olmo_llama_capability(
             "olmoe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1117,7 +999,6 @@ fn infer_mistral_olmo_llama_capability(
             "olmo2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1222,6 +1103,15 @@ fn infer_qwen_capability(
     layer_count: u32,
     activation_width: u32,
 ) -> Option<FamilyCapabilityRecord> {
+    // Flash-Next's GGUF metadata names the upstream llama.cpp architecture
+    // explicitly. Check it before release-name routing: other Qwen3.8 models
+    // still load as qwen35/qwen35moe and must retain that separate policy.
+    if compact.contains("qwen4exp")
+        || compact.contains("qwen3.8flashnext")
+        || compact.contains("qwen38flashnext")
+    {
+        return Some(qwen4exp_capability(layer_count, activation_width));
+    }
     if compact.contains("qwen2moe") {
         return Some(qwen2moe_capability(layer_count, activation_width));
     }
@@ -1240,7 +1130,6 @@ fn infer_qwen_capability(
             "qwen2vl",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Untested,
         ));
     }
@@ -1249,7 +1138,6 @@ fn infer_qwen_capability(
             "qwen3vlmoe",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1258,7 +1146,6 @@ fn infer_qwen_capability(
             "qwen3vl",
             layer_count,
             activation_width,
-            WireValidation::Validated,
             ExactStateMobility::Untested,
         ));
     }
@@ -1270,7 +1157,6 @@ fn infer_qwen_capability(
             "qwen2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1300,7 +1186,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1309,7 +1194,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_vl",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1318,7 +1202,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "hunyuan_dense",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1327,7 +1210,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phimoe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1336,7 +1218,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phi2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::RejectedTooLarge,
         ));
     }
@@ -1345,7 +1226,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "phi",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1354,7 +1234,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "gptneox",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1363,7 +1242,6 @@ fn infer_hunyuan_phi_gpt_capability(
             "gpt2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1381,7 +1259,6 @@ fn infer_mid_remaining_capability(
             "muse_glimmer",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Untested,
         ));
     }
@@ -1390,7 +1267,6 @@ fn infer_mid_remaining_capability(
             "mpt",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1399,7 +1275,6 @@ fn infer_mid_remaining_capability(
             "bloom",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1408,7 +1283,6 @@ fn infer_mid_remaining_capability(
             "baichuan",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1417,7 +1291,6 @@ fn infer_mid_remaining_capability(
             "command_r",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1426,7 +1299,6 @@ fn infer_mid_remaining_capability(
             "cohere2",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1435,7 +1307,6 @@ fn infer_mid_remaining_capability(
             "falcon",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1444,7 +1315,6 @@ fn infer_mid_remaining_capability(
             "internlm2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1462,7 +1332,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone_moe",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::RejectedTooLarge,
         ));
     }
@@ -1471,7 +1340,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone4",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1480,7 +1348,6 @@ fn infer_exaone_stable_starcoder_capability(
             "exaone",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1489,7 +1356,6 @@ fn infer_exaone_stable_starcoder_capability(
             "stablelm",
             layer_count,
             activation_width,
-            WireValidation::Rejected,
             ExactStateMobility::Accepted,
         ));
     }
@@ -1498,48 +1364,8 @@ fn infer_exaone_stable_starcoder_capability(
             "starcoder2",
             layer_count,
             activation_width,
-            WireValidation::Untested,
             ExactStateMobility::Accepted,
         ));
-    }
-
-    None
-}
-
-fn infer_stage_runtime_fallback_capability(
-    compact: &str,
-    layer_count: u32,
-    activation_width: u32,
-) -> Option<FamilyCapabilityRecord> {
-    let mut fallback: Option<(&StageRuntimeFamilyExpectation, usize)> = None;
-    for expected in STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS {
-        let architecture = expected
-            .llama_architecture
-            .replace(['_', '-', '/', ' '], "");
-        let family = expected.family_id.replace(['_', '-', '/', ' '], "");
-        let matched_len = if compact.contains(&architecture) {
-            architecture.len()
-        } else if compact.contains(&family) {
-            family.len()
-        } else {
-            continue;
-        };
-        if fallback.is_none_or(|(_, previous_len)| matched_len > previous_len) {
-            fallback = Some((expected, matched_len));
-        }
-    }
-    if let Some((expected, _)) = fallback {
-        return Some(if expected.recurrent_or_hybrid {
-            recurrent_family_capability(expected.family_id, layer_count, activation_width)
-        } else {
-            dense_family_capability(
-                expected.family_id,
-                layer_count,
-                activation_width,
-                WireValidation::Untested,
-                ExactStateMobility::Accepted,
-            )
-        });
     }
 
     None
@@ -1717,7 +1543,11 @@ fn capability_for_request(
 ) -> FamilyCapabilityRecord {
     let stored_layer_count = capability.layer_count;
     capability.layer_count = layer_count;
-    if activation_width != 0 {
+    // This is a per-request fallback, not a persistent latch: the reviewed
+    // record is deserialized into a fresh capability above on every lookup.
+    // A reviewed nonzero width therefore always remains authoritative, while
+    // a reviewed zero width can use the current package estimate on each call.
+    if capability.activation_width == 0 && activation_width != 0 {
         capability.activation_width = activation_width;
     }
     for range in &mut capability.recurrent_ranges {

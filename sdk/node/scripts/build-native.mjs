@@ -31,7 +31,10 @@ if (build.status !== 0) {
 }
 
 const platformArch = `${process.platform}-${process.arch}`
-const targetDir = join(repoRoot, 'target', profile)
+const cargoTargetRoot = process.env.CARGO_TARGET_DIR
+  ? resolve(repoRoot, process.env.CARGO_TARGET_DIR)
+  : join(repoRoot, 'target')
+const targetDir = join(cargoTargetRoot, profile)
 const source = join(targetDir, nativeLibraryName())
 const destinationDir = join(repoRoot, 'sdk', 'node', 'native', platformArch)
 mkdirSync(destinationDir, { recursive: true })

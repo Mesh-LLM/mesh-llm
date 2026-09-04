@@ -162,6 +162,44 @@ async fn generation_admission_waits_for_released_lane() {
     drop(permit);
 }
 
+#[test]
+fn queued_arrival_cannot_be_overtaken_when_a_lane_opens() {
+    let queue = Arc::new(GenerationAdmissionQueue::new());
+    let generation_limit = Arc::new(Semaphore::new(0));
+    let generation_queue_depth = Arc::new(AtomicUsize::new(0));
+    let token_budget = Arc::new(GenerationTokenBudget::new(128));
+
+    let first = queue
+        .claim_or_enqueue(
+            generation_limit.clone(),
+            token_budget.clone(),
+            GenerationTokenBudgetRequest::new(1, 1),
+            GenerationAdmissionScheduling::default(),
+            generation_queue_depth.clone(),
+            2,
+        )
+        .unwrap();
+    assert!(matches!(&first, GenerationAdmissionClaim::Queued(_)));
+
+    generation_limit.add_permits(1);
+    let second = queue
+        .claim_or_enqueue(
+            generation_limit.clone(),
+            token_budget,
+            GenerationTokenBudgetRequest::new(1, 1),
+            GenerationAdmissionScheduling::default(),
+            generation_queue_depth.clone(),
+            2,
+        )
+        .unwrap();
+
+    assert!(matches!(&second, GenerationAdmissionClaim::Queued(_)));
+    assert_eq!(generation_limit.available_permits(), 1);
+    assert_eq!(generation_queue_depth.load(Ordering::Acquire), 2);
+    drop((first, second));
+    assert_eq!(generation_queue_depth.load(Ordering::Acquire), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_worker_stops_before_the_next_request_acquires_the_only_lane() {
     let generation_limit = Arc::new(Semaphore::new(1));

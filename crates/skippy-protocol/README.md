@@ -37,14 +37,18 @@ sequenceDiagram
     S0-->>D: PredictedToken
 ```
 
-Activation payloads dominate the wire path. The protocol supports `f32`, `f16`,
-and `q8` activation wire dtypes so transport experiments can reduce payload
-size without changing the stage execution contract.
+Activation payloads dominate the wire path. Protocol generation 7 fixes every
+activation frame to raw little-endian `f32`; there is no negotiated or
+per-request activation dtype.
+
+Generation 7 requires mesh-subprotocol control, list-valued status responses,
+and strict local-content identity as one fail-closed capability bundle. The
+dedicated `skippy-stage/2` ALPN accepts activation transport only.
 
 ## Responsibilities
 
 - binary stage message and reply codecs
-- activation wire dtype conversion
+- fixed-f32 activation framing
 - ready handshake encoding
 - stage config fields that must survive JSON generation, including K/V cache
   type strings consumed by the runtime layer

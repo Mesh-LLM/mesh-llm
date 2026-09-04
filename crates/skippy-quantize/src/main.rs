@@ -9,15 +9,9 @@ use clap::{Parser, Subcommand};
 mod artifacts;
 mod backend;
 mod command_reports;
+mod compose_mtp;
 mod direct_convert;
 mod direct_quantize;
-mod float_convert;
-mod gguf_metadata;
-mod gguf_template;
-mod gguf_writer;
-mod hf_checkpoint;
-mod imatrix;
-mod inkling_metadata;
 mod llama_load;
 mod locking;
 mod manifest;
@@ -32,9 +26,8 @@ mod projector_validate;
 mod quantize;
 mod records;
 mod residency;
+mod safetensors_load;
 mod splits;
-mod tensor_map;
-mod tokenizer_metadata;
 mod tool_paths;
 mod type_catalog;
 mod types;
@@ -48,9 +41,9 @@ use backend::{
     BackendArgs, BackendKind, ensure_convert_backend, ensure_quant_backend, ensure_success,
 };
 use command_reports::{ConvertWindowPlan, QuantWindowPlan};
+use compose_mtp::{ComposeMtpArgs, run_compose_mtp};
 use direct_convert::{DirectConvertArgs, run_direct_convert};
 use direct_quantize::{DirectQuantizeArgs, run_direct_quantize};
-use hf_checkpoint::resolve_auto_output_type;
 use llama_load::{ValidateLlamaLoadArgs, run_validate_llama_load};
 use locking::with_manifest_lock;
 use manifest::{
@@ -72,6 +65,8 @@ use preflight::run_job_preflight;
 use projector_validate::{ValidateProjectorArgs, run_validate_projector};
 use records::{WindowRunRecordInput, unix_timestamp_ms, write_window_record};
 use residency::remove_dir_if_exists;
+use safetensors_load::{ValidateSafetensorsLoadArgs, run_validate_safetensors_load};
+use skippy_model::hf_checkpoint::resolve_auto_output_type;
 use splits::{
     SplitWindow, find_first_shard, next_missing_window_in_range, split_status, stage_source_window,
     validate_split_window,
@@ -104,6 +99,7 @@ enum Command {
     Convert(DirectConvertArgs),
     PlanConvert(PlanConvertArgs),
     Quantize(DirectQuantizeArgs),
+    ComposeMtp(ComposeMtpArgs),
     QuantizeLayerPackage(QuantizeLayerPackageArgs),
     ConvertJob(ConvertJobArgs),
     QuantJob(QuantJobArgs),
@@ -119,6 +115,7 @@ enum Command {
     ValidateProjector(ValidateProjectorArgs),
     ValidateTensorTypes(ValidateTensorTypesArgs),
     ValidateSplits(ValidateSplitsArgs),
+    ValidateSafetensorsLoad(ValidateSafetensorsLoadArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -501,6 +498,7 @@ fn main() -> Result<()> {
         Command::Convert(args) => run_direct_convert(args),
         Command::PlanConvert(args) => run_plan_convert(args),
         Command::Quantize(args) => run_direct_quantize(args),
+        Command::ComposeMtp(args) => run_compose_mtp(args),
         Command::QuantizeLayerPackage(args) => quantize_layer_package(args),
         Command::ConvertJob(args) => convert_job(args),
         Command::QuantJob(args) => quant_job(args),
@@ -528,6 +526,7 @@ fn main() -> Result<()> {
             args.basename.as_deref(),
             args.json,
         ),
+        Command::ValidateSafetensorsLoad(args) => run_validate_safetensors_load(args),
     }
 }
 

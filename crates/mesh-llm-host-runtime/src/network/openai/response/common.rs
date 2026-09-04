@@ -1,3 +1,4 @@
+use super::cache_cost::CacheCostObservation;
 use crate::inference::election;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::request_normalize::ResponseAdapter;
@@ -5,6 +6,22 @@ use crate::network::openai::response_quality::{self, ResponseQualityFailure};
 use crate::network::target_health::TargetHealthOutcome;
 use mesh_llm_events::logging::events::TokenUsage;
 use mesh_llm_events::logging::identifiers::RequestId;
+
+/// Detect an OpenAI-shaped error body carried as an SSE `data:` frame.
+///
+/// Embedded backends report mid-stream failures this way: HTTP stays 200 and
+/// the terminal failure is a `{"error": {...}}` JSON frame. Recognizing it
+/// lets stream relays distinguish a failed stream from a completed one in the
+/// operations log instead of silently counting a contentless stream as
+/// delivered.
+pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    value
+        .get("error")
+        .is_some_and(|error| error.is_object() || error.is_string())
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::network::openai) struct RouteAttemptLoggingContext<'a> {
@@ -19,6 +36,7 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     Delivered {
         status_code: u16,
         usage: Option<TokenUsage>,
+        cache_cost: Option<CacheCostObservation>,
     },
     RetryableTimeout,
     RetryableUnavailable,
@@ -164,6 +182,11 @@ pub(in crate::network::openai) fn parse_token_usage_from_json_body(
 ) -> Option<TokenUsage> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let usage = json.get("usage")?;
+    let cached_prompt_tokens = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(serde_json::Value::as_u64);
     TokenUsage::from_counts(
         usage
             .get("prompt_tokens")
@@ -177,6 +200,7 @@ pub(in crate::network::openai) fn parse_token_usage_from_json_body(
             .get("total_tokens")
             .and_then(serde_json::Value::as_u64),
     )
+    .map(|usage| usage.with_cached_prompt_tokens(cached_prompt_tokens))
 }
 
 pub(in crate::network::openai::response) fn retryable_quality_result(
@@ -283,6 +307,7 @@ mod tests {
             route_attempt_result_label(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             "delivered"
         );
@@ -316,6 +341,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 200,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Success
         );
@@ -323,6 +349,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 503,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Unavailable
         );
@@ -330,6 +357,7 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
                 status_code: 400,
                 usage: None,
+                cache_cost: None,
             }),
             TargetHealthOutcome::Rejected
         );
@@ -351,7 +379,12 @@ mod tests {
     #[test]
     fn token_usage_parser_supports_chat_responses_and_absence() {
         let chat = serde_json::json!({
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+            "usage": {
+                "prompt_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 4},
+                "completion_tokens": 3,
+                "total_tokens": 8
+            }
         });
         let responses = serde_json::json!({
             "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9}
@@ -361,6 +394,7 @@ mod tests {
             parse_token_usage_from_json_body(chat.to_string().as_bytes()),
             Some(TokenUsage {
                 prompt_tokens: Some(5),
+                cached_prompt_tokens: Some(4),
                 completion_tokens: Some(3),
                 total_tokens: Some(8),
             })
@@ -369,6 +403,7 @@ mod tests {
             parse_token_usage_from_json_body(responses.to_string().as_bytes()),
             Some(TokenUsage {
                 prompt_tokens: Some(5),
+                cached_prompt_tokens: None,
                 completion_tokens: Some(4),
                 total_tokens: Some(9),
             })
@@ -385,6 +420,7 @@ mod tests {
         );
         assert_eq!(parse_token_usage_from_json_body(br#"{"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":1,"total_tokens":0}}"#), None);
     }
+
     #[tokio::test]
     async fn test_is_timeout_error_accepts_concrete_timeout_types_only() {
         let io_timeout = anyhow::Error::from(std::io::Error::new(

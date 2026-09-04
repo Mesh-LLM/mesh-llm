@@ -57,8 +57,6 @@ pub(super) fn spawn_remote_stage1(
         remote_topology: &remote_topology,
         remote_log: &remote_log,
         remote_pid: &remote_pid,
-        activation_width: args.activation_width,
-        activation_wire_dtype: &args.activation_wire_dtype,
         native_mtp_enabled,
         batched_verify_enabled,
     });
@@ -103,8 +101,6 @@ struct RemoteStageCommand<'a> {
     remote_topology: &'a str,
     remote_log: &'a str,
     remote_pid: &'a str,
-    activation_width: i32,
-    activation_wire_dtype: &'a str,
     native_mtp_enabled: bool,
     batched_verify_enabled: bool,
 }
@@ -128,10 +124,6 @@ fn remote_stage_command(args: RemoteStageCommand<'_>) -> String {
     command.push_str(&shell_quote(args.remote_config));
     command.push_str(" --topology ");
     command.push_str(&shell_quote(args.remote_topology));
-    command.push_str(" --activation-width ");
-    command.push_str(&args.activation_width.to_string());
-    command.push_str(" --activation-wire-dtype ");
-    command.push_str(&shell_quote(args.activation_wire_dtype));
     command.push_str(" --telemetry-level debug > ");
     command.push_str(&shell_quote(args.remote_log));
     command.push_str(" 2>&1 < /dev/null & pid=$!; echo $pid > ");
@@ -258,8 +250,6 @@ mod tests {
             remote_topology: "/tmp/run/topology.json",
             remote_log: "/tmp/run/stage1.log",
             remote_pid: "/tmp/run/stage1.pid",
-            activation_width: 2048,
-            activation_wire_dtype: "f16",
             native_mtp_enabled: true,
             batched_verify_enabled: false,
         });
@@ -279,8 +269,6 @@ mod tests {
                 remote_topology: "/tmp/topology.json",
                 remote_log: "/tmp/stage1.log",
                 remote_pid: "/tmp/stage1.pid",
-                activation_width: 2048,
-                activation_wire_dtype: "f16",
                 native_mtp_enabled: true,
                 batched_verify_enabled: false,
             }

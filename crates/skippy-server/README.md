@@ -15,7 +15,7 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, and activations flow through the stage chain. Stage protocol generation 4
+tip, and activations flow through the stage chain. Stage protocol generation 7
 is a compatibility-breaking contract: prediction-bearing replies return
 directly from the final/readout tip to the driver-facing stage instead of being
 relayed back through intermediate stages. Middle-out is the prefill optimization
@@ -44,18 +44,41 @@ flowchart LR
 ```
 
 Stage configs bind `stage_id`, `stage_index`, `layer_start`, `layer_end`,
-`model_path`, `upstream`, `downstream`, optional K/V cache type settings, and
-runtime settings into one loaded stage. Model execution flows through
+`model_path`, `checkpoint_quantization`, `upstream`, `downstream`, optional K/V
+cache type settings, and runtime settings into one loaded stage. Model execution flows through
 `skippy-runtime` and the staged llama.cpp ABI.
+
+For a direct Hugging Face checkpoint, point `model_path` at the local checkpoint
+directory and optionally select load-time quantization:
+
+```json
+{
+  "model_path": "/srv/models/Qwen2.5-0.5B-Instruct",
+  "checkpoint_quantization": "IQ2_XXS",
+  "checkpoint_imatrix": "/srv/models/Qwen2.5-0.5B-Instruct/imatrix.gguf"
+}
+```
+
+The supported values are `preserve` (the default), `F32`, `F16`, `BF16`,
+and every quantization advertised by the pinned llama.cpp `llama-quantize`
+tool: `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `IQ2_XXS`, `IQ2_XS`,
+`IQ2_S`, `IQ2_M`, `IQ1_S`, `IQ1_M`, `TQ1_0`, `TQ2_0`, `Q2_K`, `Q2_K_S`,
+`IQ3_XS`, `IQ3_XXS`, `IQ3_S`, `IQ3_M`, `Q3_K_S`, `Q3_K_M`, `Q3_K_L`,
+`IQ4_NL`, `IQ4_XS`, `Q4_K_S`, `Q4_K_M`, `Q5_K_S`, `Q5_K_M`, `Q6_K`,
+`Q8_0`, and `MXFP4_MOE`. Importance-aware formats require
+`checkpoint_imatrix`. The checkpoint must contain `config.json`, tokenizer
+metadata, and a single or indexed set of SafeTensors shards. Quantization
+happens as each stage-owned tensor loads; no intermediate model-sized GGUF is
+written.
 
 ## Commands
 
 ```bash
 skippy-server example-config
 skippy-server serve --config stage.json
-skippy-server serve-binary --config stage.json --activation-width 576
+skippy-server serve-binary --config stage.json
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
-skippy-server serve-binary --config stage-0.json --topology topology.json --activation-width 576 --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
+skippy-server serve-binary --config stage-0.json --topology topology.json --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
 
 ## Embedding API
@@ -103,11 +126,13 @@ deadline handling.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
-- `serve-binary` participates in the breaking generation-4 stage protocol.
-  Stage compatibility requires `stage-generation-4`; direct prediction return and
+- `serve-binary` participates in the breaking generation-7 stage protocol.
+  Stage compatibility requires the complete `stage-generation-7` control,
+  status-list, and strict-content-identity bundle; direct prediction return and
   exact verify-checkpoint retirement are part of that generation's contract, so
   older peers are rejected during split planning instead of being mixed into a
-  generation-4 topology.
+  generation-7 topology. Generation 6 is historical and is not accepted by the
+  current serve binary.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the
@@ -123,13 +148,26 @@ deadline handling.
   `/v1/completions` using the shared `openai-frontend` crate for a local
   final/single-stage config with no downstream peer. Split serving uses
   embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
-  generation-4 prediction returns flow directly from the final stage to stage 0.
+  generation-7 prediction returns flow directly from the final stage to stage 0.
   The older standalone `serve-openai --first-stage-addr` adapter is no longer
   supported. `--model-id` is the exact served model id to advertise
   and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
   `--generation-concurrency` controls how many chat generation requests may run
-  at once; keep it explicit in benchmark reports because it can serialize or
-  expose concurrent stage-chain behavior.
+  at once and defaults to the config's KV-derived `lane_count`.
+  `--generation-queue-capacity` independently bounds additional waiting
+  requests (default `clamp(8 * lanes, 16, 256)`), while
+  `--generation-admission-timeout-secs` can bound predicted and actual queue
+  wait; the default `0` waits until client cancellation so capacity pressure
+  drains through the bounded queue instead of rejecting accepted work. KV
+  restore and prefill-record work runs on a separate
+  prompt-scaled deadline: admission timeout plus about one minute per 4,000
+  prompt tokens, clamped to at least 60 seconds and at most 30 minutes. A
+  legitimate prompt-sized prefill is therefore not killed by the queue-wait
+  bound; when the work deadline does expire the request fails with a
+  `timeout` error frame in the stream, not an empty response. Embedded serving
+  exposes the same controls with the
+  `--openai-` prefix. Keep all three explicit in benchmark reports because
+  they determine active execution, overload behavior, and tail latency.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface
   telemetry when `--metrics-otlp-grpc` and `--telemetry-level debug` are set.
   The spans account for the full request path visible to the backend:
@@ -249,9 +287,8 @@ sequenceDiagram
 ```
 
 This is topology dependent; use `--no-async-prefill-forward` to benchmark the
-synchronous baseline on a target link. The conservative exact default is `f16`;
-`q8` should stay per-family/per-split opt-in until a correctness smoke validates
-it.
+synchronous baseline on a target link. Activation frames use raw little-endian
+`f32`; compression is not selected per family or split.
 
 Debug telemetry includes middle-out timing spans:
 
@@ -263,8 +300,8 @@ Debug telemetry includes middle-out timing spans:
   compute, downstream write, downstream wait, upstream reply, credit, and
   deferred-reply timestamps. It also carries runtime lock wait and session
   counts for the executable message. Activation conversion is reported with
-  `input_activation_decode_ms` for wire-to-f32 materialization and
-  `activation_encode_ms` for f32-to-wire forwarding so transfer cost can be
+  `input_activation_decode_ms` for wire materialization and
+  `activation_encode_ms` for f32 wire framing so transfer cost can be
   separated from compute and socket write time.
 - `stage.binary_session_stop` records logical session reset timing when a
   persistent lane receives `Stop`; the TCP stream remains open after the reset.

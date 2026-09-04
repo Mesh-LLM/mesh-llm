@@ -40,6 +40,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
         model_id: "model-a".to_string(),
+        runtime_profile: Some(String::new()),
         backend: "skippy".to_string(),
         package_ref: match load_mode {
             LoadMode::LayerPackage => "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
@@ -54,13 +55,21 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         layer_end: 36,
         model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(4_900_000_000),
+        source_model_sha256: None,
+        local_source_required: false,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+        generation_signal_window: None,
         selected_device: None,
         bind_addr: "127.0.0.1:0".to_string(),
-        activation_width: 4096,
-        wire_dtype: skippy::StageWireDType::F16,
         ctx_size: 8192,
         lane_count: 4,
+        continuous_batching: true,
         n_batch: Some(2048),
         n_ubatch: Some(512),
         n_gpu_layers: -1,
@@ -69,6 +78,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: FlashAttentionType::Auto,
+        runtime_settings: Default::default(),
         native_mtp_enabled: true,
         shutdown_generation: 1,
         coordinator_term: 1,
@@ -78,6 +88,36 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         upstream: None,
         downstream: None,
     }
+}
+
+#[test]
+fn split_generation_cli_device_override_survives_pinned_stage_selection() {
+    let mut config = skippy_protocol::StageConfig {
+        selected_device: Some(skippy_protocol::StageDevice {
+            backend_device: "CPU".to_string(),
+            stable_id: None,
+            index: None,
+            vram_bytes: None,
+        }),
+        ..Default::default()
+    };
+    let pinned_gpu = crate::runtime::StartupPinnedGpuTarget {
+        index: 0,
+        stable_id: "pci:0000:65:00.0".to_string(),
+        backend_device: "CUDA0".to_string(),
+        vram_bytes: 24_000_000_000,
+        reserved_bytes: None,
+    };
+
+    apply_split_generation_pinned_device(&mut config, Some(&pinned_gpu), Some("CPU"));
+
+    assert_eq!(
+        config
+            .selected_device
+            .as_ref()
+            .map(|device| device.backend_device.as_str()),
+        Some("CPU")
+    );
 }
 
 pub(super) fn split_test_peer(
@@ -129,7 +169,9 @@ pub(super) fn split_test_peer(
         artifact_transfer_supported: false,
         stage_protocol_generation_supported,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: stage_protocol_generation_supported,
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,
@@ -140,7 +182,7 @@ pub(super) fn split_test_peer(
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
@@ -296,8 +338,8 @@ pub(super) fn runtime_status_for_stage(
         layer_end: stage.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: 896,
-        wire_dtype: skippy::StageWireDType::F16,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 512,
         lane_count: 4,
@@ -326,17 +368,35 @@ pub(super) fn local_stage(
 }
 
 #[tokio::test]
-async fn split_generation_load_settings_consumes_resolved_skippy_config() {
+async fn split_generation_load_settings_preserves_unpinned_budget_and_resolved_config() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
+    let draft_model_path = temp_dir.path().join("qwen-draft.gguf");
     let projector_path = temp_dir.path().join("config-mmproj.gguf");
     write_fake_gguf_model(&model_path);
+    write_fake_gguf_model(&draft_model_path);
     fs::write(&projector_path, b"mmproj").unwrap();
+    let model_path_toml =
+        toml::Value::String(model_path.to_string_lossy().into_owned()).to_string();
+    let draft_model_path_toml =
+        toml::Value::String(draft_model_path.to_string_lossy().into_owned()).to_string();
+    let projector_path_toml =
+        toml::Value::String(projector_path.to_string_lossy().into_owned()).to_string();
     let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
         r#"
+[[models]]
+model = "other/model"
+
+[models.hardware]
+model_path = {model_path}
+
+[models.throughput]
+threads = 17
+threads_batch = 13
+
 [[models]]
 model = "Qwen"
 
@@ -348,10 +408,10 @@ cache_type_k = "q4_0"
 cache_type_v = "q5_0"
 
 [models.hardware]
-model_path = "{model_path}"
+model_path = {model_path}
 device = "CUDA0"
 gpu_layers = 77
-mmproj = "{projector_path}"
+mmproj = {projector_path}
 
 [models.throughput]
 parallel = 2
@@ -359,14 +419,13 @@ threads = 6
 threads_batch = 3
 
 [models.skippy]
-activation_wire_dtype = "q8"
 prefill_chunking = "fixed"
 prefill_chunk_size = 96
 
 [models.speculative]
 strategy = "disabled"
 mode = "draft"
-draft_model_path = "/models/draft.gguf"
+draft_model_path = {draft_model_path}
 draft_max_tokens = 7
 draft_gpu_layers = 11
 
@@ -375,8 +434,9 @@ max_tokens = 321
 temperature = 0.35
 stop = ["END"]
 "#,
-        model_path = model_path.display(),
-        projector_path = projector_path.display()
+        model_path = model_path_toml,
+        draft_model_path = draft_model_path_toml,
+        projector_path = projector_path_toml
     ))
     .expect("test mesh config should parse");
     let mut package = package(40);
@@ -384,6 +444,8 @@ stop = ["END"]
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("qwen.gguf");
     write_fake_gguf_model(&model_path);
+    let compact_meta =
+        crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
     let local_id = node.id();
     let generation = SplitTopologyGeneration::new(
         "resolver-topology".into(),
@@ -396,16 +458,21 @@ stop = ["END"]
         ],
     );
 
-    let spec = SplitGenerationLoadSpec {
+    let mut spec = SplitGenerationLoadSpec {
         node: &node,
         mesh_config: &mesh_config,
-        model_ref: "Qwen",
+        model_ref: "served-qwen",
+        config_model_id: Some("Qwen"),
+        runtime_profile: "",
         model_path: &model_path,
         package: &package,
         generation: &generation,
         projector_path: Some("/models/fallback-mmproj.gguf".to_string()),
         ctx_size: 8192,
+        compact_meta: &compact_meta,
+        capacity_budget_bytes: Some(6_000_000_000),
         pinned_gpu: None,
+        device_override: None,
         slots: 4,
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -418,12 +485,15 @@ stop = ["END"]
         skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
         survey_telemetry: survey::SurveyTelemetry::disabled(),
         serving_hooks_factory: None,
+        local_source_required: false,
     };
-    let settings = split_generation_load_settings(&spec).expect("split settings should resolve");
+    let settings = split_generation_load_settings(&spec)
+        .await
+        .expect("split settings should resolve");
 
+    assert_eq!(split_allocatable_memory_bytes(&spec), Some(6_000_000_000));
     assert_eq!(settings.load_mode, LoadMode::LayerPackage);
-    assert_eq!(settings.activation_width, 2048);
-    assert_eq!(settings.activation_wire_dtype, skippy::StageWireDType::Q8);
+    assert_eq!(settings.embedded_openai.activation_width, 0);
     assert_eq!(settings.runtime_options.n_threads, Some(6));
     assert_eq!(settings.runtime_options.n_threads_batch, Some(3));
     assert_eq!(settings.runtime_options.config.ctx_size, 8192);
@@ -462,14 +532,133 @@ stop = ["END"]
     assert_eq!(settings.embedded_openai.prefill_chunk_size, 96);
     assert_eq!(
         settings.embedded_openai.draft_model_path.as_deref(),
-        Some(Path::new("/models/draft.gguf"))
+        Some(draft_model_path.as_path())
     );
     assert_eq!(settings.embedded_openai.speculative_window, 7);
     assert_eq!(settings.embedded_openai.draft_n_gpu_layers, Some(11));
+    spec.capacity_budget_bytes = Some(0);
+    assert_eq!(
+        split_allocatable_memory_bytes(&spec),
+        None,
+        "a zero optional budget is unset when no pinned-device fallback exists"
+    );
+}
+
+/// Split stage loading must resolve with the compact metadata scanned during
+/// planning: the architecture-driven K/V default gets the same compatibility
+/// guard as the planner, so a default the actual GGUF cannot load (here:
+/// Inkling → q4_0 with per-head widths not divisible by the q4_0 block size)
+/// degrades to f16 at stage load instead of failing the context build.
+///
+/// The package is deliberately small (10 GB) so the size-tiered policy alone
+/// would pick q8_0: the observed q4_0-vs-f16 swing can only come from actual
+/// Inkling metadata, pinning the plumbing rather than a model-name heuristic.
+/// Split load specifications require this metadata, so both the
+/// initial-load and coordinator-replan constructors must carry it; dropping
+/// the final resolver handoff would regress this test to q4_0.
+#[tokio::test]
+async fn split_stage_load_guards_metadata_kv_default_with_planned_metadata() {
+    let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9338 })
+        .await
+        .unwrap();
+    let mesh_config = plugin::MeshConfig::default();
+    // Non-existent path on purpose: only the supplied compact metadata may
+    // identify the architecture; the model ref must not influence policy.
+    let model_path = std::path::PathBuf::from("/models/inkling-ud-q2-k-xl.gguf");
+    let mut identity = package(66);
+    identity.package_ref = "hf://Mesh-LLM/test-inkling-package".to_string();
+    identity.source_model_bytes = 10 * 1024 * 1024 * 1024;
+    let local_id = node.id();
+    let generation = SplitTopologyGeneration::new(
+        "guard-topology".into(),
+        "guard-run".into(),
+        1,
+        vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
+        vec![
+            local_stage(local_id, 0, 0, 33),
+            local_stage(local_id, 1, 33, 66),
+        ],
+    );
+
+    // Per-head widths of 100 are not a multiple of the q4_0 block size (32),
+    // so the Inkling architecture's quantised default cannot load.
+    let incompatible_meta = crate::models::gguf::GgufCompactMeta {
+        architecture: "inkling".to_string(),
+        context_length: 65_536,
+        embedding_size: 4096,
+        head_count: 32,
+        kv_head_count: 8,
+        layer_count: 66,
+        key_length: 100,
+        value_length: 100,
+        ..Default::default()
+    };
+
+    // With the planned metadata, the unloadable architecture default degrades to
+    // f16 — the same cache the split planner budgets for.
+    let guarded_spec = SplitGenerationLoadSpec {
+        node: &node,
+        mesh_config: &mesh_config,
+        model_ref: "meshllm/inkling-UD-Q2_K_XL-layers",
+        config_model_id: None,
+        runtime_profile: "",
+        model_path: &model_path,
+        package: &identity,
+        generation: &generation,
+        projector_path: None,
+        ctx_size: 4096,
+        compact_meta: &incompatible_meta,
+        capacity_budget_bytes: None,
+        pinned_gpu: None,
+        device_override: None,
+        slots: 1,
+        cache_type_k_override: None,
+        cache_type_v_override: None,
+        n_batch_override: None,
+        n_ubatch_override: None,
+        flash_attention_override: FlashAttentionType::Auto,
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            openai_frontend::GuardrailMode::Disabled,
+        ),
+        skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        serving_hooks_factory: None,
+        local_source_required: false,
+    };
+    let guarded = split_generation_load_settings(&guarded_spec)
+        .await
+        .expect("guarded split settings should resolve");
+    assert_eq!(
+        guarded.runtime_options.config.cache_type_k, "f16",
+        "incompatible architecture default must degrade to f16 at stage load"
+    );
+    assert_eq!(guarded.runtime_options.config.cache_type_v, "f16");
+
+    // Without metadata the model name carries no architecture authority, so
+    // the generic q8_0 size tier remains in effect.
+    let unguarded = skippy::resolve_skippy_config_for_selector(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: &mesh_config,
+            model_id: "meshllm/inkling-UD-Q2_K_XL-layers",
+            model_path: &model_path,
+            model_bytes: identity.source_model_bytes,
+            allocatable_memory_bytes: None,
+            request_defaults: None,
+            package_generation: None,
+            compact_meta: None,
+        },
+        None,
+    )
+    .expect("unguarded resolver settings should resolve");
+    assert_eq!(
+        unguarded.model_fit.cache_type_k, "q8_0",
+        "no-metadata stage load keeps the generic size-tier default"
+    );
+    assert_eq!(unguarded.model_fit.cache_type_v, "q8_0");
 }
 
 #[tokio::test]
-async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
+async fn runtime_resolver_uses_config_identity_and_honors_device_override() {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
@@ -478,6 +667,17 @@ async fn runtime_resolver_uses_config_model_id_but_preserves_served_model_id() {
     write_fake_gguf_model(&model_path);
     let mesh_config: plugin::MeshConfig = toml::from_str(&format!(
         r#"
+[[models]]
+model = "other/model-ref"
+
+[models.hardware]
+model_path = "{model_path}"
+device = "CUDA1"
+
+[models.throughput]
+threads = 17
+threads_batch = 13
+
 [[models]]
 model = "configured/model-ref"
 
@@ -503,6 +703,7 @@ max_tokens = 222
         mmproj_override: None,
         ctx_size_override: None,
         pinned_gpu: None,
+        device_override: Some("CPU".to_string()),
         capacity_budget_bytes: node.vram_bytes(),
         cache_type_k_override: None,
         cache_type_v_override: None,
@@ -528,6 +729,7 @@ max_tokens = 222
         4096,
         3,
         None,
+        None,
     )
     .expect("runtime config should resolve through configured model id");
 
@@ -537,6 +739,55 @@ max_tokens = 222
     assert_eq!(resolved.request_defaults.max_tokens, 222);
     assert_eq!(resolved.model_fit.ctx_size, 4096);
     assert_eq!(resolved.throughput.parallel, 3);
+    assert_eq!(resolved.hardware.device.as_deref(), Some("CPU"));
+    // An explicit CLI artifact may use the same served name as a configured
+    // model, but must not inherit that entry's path or runtime tuning.
+    let cli_model_path = temp_dir.path().join("cli-selected.gguf");
+    write_fake_gguf_model(&cli_model_path);
+    let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
+    let cli_spec = LocalOpenAiModelStartSpec {
+        mesh_config: &mesh_config,
+        config_model_id: None,
+        model_path: &cli_model_path,
+        model_bytes: cli_model_bytes,
+        mmproj_override: None,
+        ctx_size_override: None,
+        pinned_gpu: None,
+        device_override: None,
+        capacity_budget_bytes: node.vram_bytes(),
+        cache_type_k_override: None,
+        cache_type_v_override: None,
+        n_batch_override: None,
+        n_ubatch_override: None,
+        flash_attention_override: FlashAttentionType::Auto,
+        parallel_override: None,
+        planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            openai_frontend::GuardrailMode::Disabled,
+        ),
+        skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        hook_policy: None,
+        serving_hooks_factory: None,
+        http_bind_addr: "127.0.0.1:0".parse().expect("valid loopback address"),
+    };
+    let cli_resolved = resolve_local_openai_skippy_config(
+        &cli_spec,
+        "configured/model-ref",
+        cli_model_bytes,
+        4096,
+        3,
+        None,
+        None,
+    )
+    .expect("explicit CLI runtime config should not consult model entries");
+    assert_eq!(cli_resolved.hardware.resolved_model_path, cli_model_path);
+    assert_eq!(cli_resolved.throughput.threads, None);
+    assert_eq!(cli_resolved.throughput.threads_batch, None);
+    assert_eq!(
+        cli_resolved.request_defaults.max_tokens,
+        skippy_server::CONTEXT_BUDGET_MAX_TOKENS
+    );
 }
 
 #[test]
@@ -611,6 +862,15 @@ pub(super) fn test_stage_status_from_load(
     load: &skippy::StageLoadRequest,
     state: skippy::StageRuntimeState,
 ) -> skippy::StageStatusSnapshot {
+    let boundary = Some(skippy_runtime::ActivationBoundaryDesc {
+        version: 1,
+        ggml_type: 0,
+        layout: 1,
+        elements_per_token: 4096,
+        bytes_per_token: 4096 * std::mem::size_of::<f32>() as u64,
+        required_frame_flags: 0,
+        required_sidebands: 0,
+    });
     skippy::StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -630,8 +890,8 @@ pub(super) fn test_stage_status_from_load(
         layer_end: load.layer_end,
         state,
         bind_addr: "127.0.0.1:31000".to_string(),
-        activation_width: load.activation_width as u32,
-        wire_dtype: load.wire_dtype,
+        input_activation_boundary: boundary.filter(|_| load.layer_start > 0),
+        output_activation_boundary: load.downstream.as_ref().and(boundary),
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -644,6 +904,16 @@ pub(super) fn test_stage_status_from_load(
         coordinator_id: load.coordinator_id,
         lease_until_unix_ms: load.lease_until_unix_ms,
     }
+}
+
+#[test]
+fn staged_status_fixture_exposes_input_boundary_for_middle_consumers() {
+    let middle = stage_load_request(LoadMode::RuntimeSlice);
+    assert!(middle.layer_start > 0);
+    assert!(middle.upstream.is_none());
+
+    let status = test_stage_status_from_load(&middle, skippy::StageRuntimeState::Ready);
+    assert!(status.input_activation_boundary.is_some());
 }
 
 pub(super) fn test_stage_status_from_stop(
@@ -668,8 +938,8 @@ pub(super) fn test_stage_status_from_stop(
         layer_end: 0,
         state: skippy::StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
-        wire_dtype: skippy::StageWireDType::F16,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,
@@ -727,6 +997,8 @@ pub(super) fn test_inventory_from_request(
         preparing_ranges: Vec::new(),
         source_model_path: Some("/models/qwen.gguf".to_string()),
         source_model_bytes: Some(40_000_000),
+        source_model_sha256: None,
+        content_addressed_local_source: None,
         source_model_kind: skippy::SourceModelKind::LayerPackage,
     }
 }

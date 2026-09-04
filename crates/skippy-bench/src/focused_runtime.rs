@@ -672,7 +672,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,

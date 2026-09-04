@@ -100,7 +100,17 @@ Discovery finds a candidate mesh. Admission decides whether the node is allowed 
 
 ### Transport and compatibility
 
-Mesh transport uses QUIC through iroh. A connection is multiplexed into control, gossip, route, tunnel, and lifecycle streams. The current protobuf lane uses ALPN `mesh-llm/1`; legacy JSON peers can still negotiate `mesh-llm/0` for mixed-version operation.
+Mesh transport uses QUIC through iroh. QUIC provides end-to-end encryption and
+authenticates the remote node's endpoint identity for all peer traffic,
+including inference requests, responses, control messages, gossip, and
+split-model activations. This remains end-to-end encrypted when iroh uses a
+relay: the relay forwards encrypted packets but does not terminate the QUIC
+connection or read its payload. This transport guarantee covers traffic between
+Mesh nodes; the local `http://localhost` API is a separate loopback hop.
+
+A connection is multiplexed into control, gossip, route, tunnel, and lifecycle
+streams. The current protobuf lane uses ALPN `mesh-llm/1`; legacy JSON peers can
+still negotiate `mesh-llm/0` for mixed-version operation.
 
 Protocol changes should be additive: older nodes must be able to ignore new optional fields, and newer nodes must continue to understand the legacy lane where compatibility is required. See the [protocol deep dive](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/design/message_protocol.md) for the wire-level contract.
 

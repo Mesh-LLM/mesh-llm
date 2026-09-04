@@ -41,6 +41,7 @@ env:
   CACHE_NAMESPACE: mesh-llm
   LLAMA_WINDOWS_CACHE_RETENTION: ${{ github.event.inputs.retention || vars.LLAMA_WINDOWS_CACHE_RETENTION || '2' }}
   WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
+  MESH_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}
   WINDOWS_VULKAN_SDK_VERSION: ${{ vars.VULKAN_SDK_VERSION || '1.4.328.1' }}
   ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
 
@@ -59,7 +60,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.x'
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
@@ -149,7 +150,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.x'
-      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Resolve Windows native toolchain epoch
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch

@@ -1,7 +1,7 @@
 use std::{io, thread, time::Duration};
 
 use anyhow::{Result, bail};
-use skippy_protocol::binary::{StageWireMessage, WireActivationDType, write_stage_message};
+use skippy_protocol::binary::{StageWireMessage, write_stage_message};
 
 #[derive(Clone, Copy, Debug)]
 pub struct WireCondition {
@@ -43,21 +43,19 @@ impl WireCondition {
 pub(crate) fn write_stage_message_conditioned(
     writer: impl io::Write,
     message: &StageWireMessage,
-    dtype: WireActivationDType,
     condition: WireCondition,
 ) -> io::Result<()> {
     condition.sleep_for(message);
-    write_stage_message(writer, message, dtype)
+    write_stage_message(writer, message)
 }
 
 pub(crate) fn write_stage_message_after_propagation(
     writer: impl io::Write,
     message: &StageWireMessage,
-    dtype: WireActivationDType,
     condition: WireCondition,
 ) -> io::Result<()> {
     condition.sleep_for_bandwidth(message);
-    write_stage_message(writer, message, dtype)
+    write_stage_message(writer, message)
 }
 
 #[cfg(test)]

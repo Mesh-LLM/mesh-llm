@@ -541,25 +541,16 @@ describe('ConfigurationPage live saving and diagnostics', () => {
                   value: 'carrack-mesh'
                 }
               }
-            : setting.id === 'activation-wire-dtype'
+            : setting.id === 'image-min-tokens'
               ? {
                   ...setting,
                   baselineValue: setting.control.value,
                   control: {
                     ...setting.control,
-                    value: 'q8'
+                    value: '64'
                   }
                 }
-              : setting.id === 'image-min-tokens'
-                ? {
-                    ...setting,
-                    baselineValue: setting.control.value,
-                    control: {
-                      ...setting.control,
-                      value: '64'
-                    }
-                  }
-                : setting
+              : setting
       )
     }
     const useConfigQuerySpy = vi.spyOn(configQueryModule, 'useConfigQuery').mockReturnValue({
@@ -583,8 +574,6 @@ describe('ConfigurationPage live saving and diagnostics', () => {
     const initialTomlSource = await openTomlOutput(user)
     expect(initialTomlSource.value).toContain('[defaults.request_defaults]')
     expect(initialTomlSource.value).toContain('temperature = 0.8')
-    expect(initialTomlSource.value).toContain('[defaults.skippy]')
-    expect(initialTomlSource.value).toContain('activation_wire_dtype = "q8"')
     expect(initialTomlSource.value).toContain('[defaults.multimodal]')
     expect(initialTomlSource.value).toContain('image_min_tokens = 64')
     expect(initialTomlSource.value).toContain('[defaults.advanced.server]')

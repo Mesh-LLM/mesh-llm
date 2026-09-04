@@ -23,9 +23,8 @@ use skippy_protocol::{
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage,
-        WireActivationDType, WireMessageKind, WireReplyKind,
-        activation_frame_flags_from_state_flags, send_ready,
+        READY_MAGIC, StageNativeMtpDraft, StageSamplingConfig, StageWireMessage, WireMessageKind,
+        WireReplyKind, activation_frame_flags_from_state_flags, sampling_flags, send_ready,
     },
 };
 use skippy_runtime::{
@@ -380,12 +379,8 @@ pub(crate) fn stage_output_activation_capacity(
     if config.downstream.is_none() || token_count <= 0 {
         return Ok(0);
     }
-    skippy_protocol::binary::activation_wire_bytes(
-        WireActivationDType::F32,
-        token_count,
-        activation_width,
-    )
-    .context("estimate output activation capacity")
+    skippy_protocol::binary::activation_wire_bytes(token_count, activation_width)
+        .context("estimate output activation capacity")
 }
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
@@ -764,6 +759,7 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
     let sampling = sampling?;
     let mut config = SamplingConfig {
         enabled: true,
+        ignore_eos: sampling.ignore_eos || (sampling.flags & sampling_flags::IGNORE_EOS) != 0,
         seed: sampling.seed,
         temperature: sampling.temperature,
         top_p: sampling.top_p,
@@ -773,6 +769,25 @@ pub(in crate::binary_transport) fn runtime_sampling_config(
         frequency_penalty: sampling.frequency_penalty,
         repeat_penalty: sampling.repeat_penalty,
         penalty_last_n: sampling.penalty_last_n,
+        typical_p: sampling.typical_p,
+        top_nsigma: sampling.top_nsigma,
+        dynatemp_range: sampling.dynatemp_range,
+        dynatemp_exponent: sampling.dynatemp_exponent,
+        dry: skippy_runtime::DrySamplingConfig {
+            multiplier: sampling.dry_multiplier,
+            base: sampling.dry_base,
+            allowed_length: sampling.dry_allowed_length,
+            penalty_last_n: sampling.dry_penalty_last_n,
+            sequence_breakers: sampling.dry_sequence_breakers.clone(),
+        },
+        xtc: skippy_runtime::XtcSamplingConfig {
+            probability: sampling.xtc_probability,
+            threshold: sampling.xtc_threshold,
+        },
+        mirostat_mode: sampling.mirostat_mode,
+        mirostat_entropy: sampling.mirostat_entropy,
+        mirostat_learning_rate: sampling.mirostat_learning_rate,
+        samplers: sampling.samplers.clone(),
         ..SamplingConfig::default()
     };
     config.logit_bias = sampling
@@ -791,13 +806,12 @@ pub(in crate::binary_transport) fn input_activation_frame(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &mut StageWireMessage,
-    activation_width: i32,
 ) -> Result<Option<ActivationFrame>> {
     if message.activation.is_empty() {
         return Ok(None);
     }
     let payload = message
-        .take_activation_f32_payload(activation_width)
+        .take_activation_f32_payload()
         .context("decode wire activation payload")?;
     let (layer_start, layer_end) = upstream_layer_range(config, topology, message);
     Ok(Some(ActivationFrame {
@@ -919,7 +933,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
         run_id: "run".to_string(),
         topology_id: "topology".to_string(),
-        model_id: "org/model:Q4_K_M".to_string(),
+        model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
         package_ref: None,
         manifest_sha256: None,
         source_model_path: None,
@@ -940,9 +954,20 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         n_gpu_layers: 0,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_protocol::SplitMode::Auto,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
+        cache_idle_slots: None,
         filter_tensors_on_load: false,
         selected_device: None,
         kv_cache: Some(StageKvCacheConfig {
@@ -963,13 +988,14 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
         }),
+        ..StageConfig::default()
     }
 }
 
 #[cfg(test)]
 pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideband()
 -> StageWireMessage {
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F16);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.prompt_token_count = 4;
     state.decode_step = 0;
     state.current_token = 104;
@@ -993,18 +1019,13 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, prepare_binary_stage_connection,
-        split_native_mtp_reply, take_ready_downstream, take_warm_or_connect_downstream,
-        token_sideband_or_fill, warm_downstream_is_healthy,
-        warm_downstream_preconnect_enabled_from,
+        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        take_ready_downstream, take_warm_or_connect_downstream, token_sideband_or_fill,
+        warm_downstream_is_healthy, warm_downstream_preconnect_enabled_from,
     };
-    use skippy_protocol::binary::{
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    };
+    use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     use std::{
-        io,
         net::{Shutdown, TcpListener, TcpStream},
-        os::fd::AsRawFd,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -1014,8 +1035,12 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    #[cfg(unix)]
     #[test]
     fn accepted_binary_stage_connection_is_blocking() {
+        use super::prepare_binary_stage_connection;
+        use std::{io, os::fd::AsRawFd};
+
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1237,7 +1262,7 @@ mod tests {
             kind,
             pos_start: 0,
             token_count,
-            state: StageStateHeader::new(kind, WireActivationDType::F16),
+            state: StageStateHeader::new(kind),
             request_id: 11,
             session_id: 13,
             sampling: None,

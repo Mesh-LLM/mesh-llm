@@ -15,6 +15,7 @@ use crate::{
 
 pub(crate) struct MediaProjector {
     pub(crate) raw: *mut skippy_ffi::MtmdContext,
+    marker: String,
 }
 
 type MediaFrameEval = (
@@ -30,19 +31,49 @@ type MediaFrameEval = (
 unsafe impl Send for MediaProjector {}
 
 impl MediaProjector {
-    pub(crate) fn open(path: &str, model: *mut RawModel) -> Result<Self> {
+    pub(crate) fn open(
+        path: &str,
+        model: *mut RawModel,
+        config: &crate::RuntimeConfig,
+    ) -> Result<Self> {
         let path = path_to_cstring(std::path::Path::new(path), "projector path")?;
         let raw_model = unsafe { skippy_ffi::skippy_model_llama_model(model) };
         if raw_model.is_null() {
             return Err(anyhow!("model did not expose a llama_model handle"));
         }
         let mut params = unsafe { skippy_ffi::mtmd_context_params_default() };
-        params.use_gpu = true;
+        if let Some(use_gpu) = config.projector_use_gpu {
+            params.use_gpu = use_gpu;
+        }
+        let marker = config
+            .media_marker
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .context("media_marker contains an interior NUL byte")?;
+        if let Some(marker) = marker.as_ref() {
+            params.media_marker = marker.as_ptr();
+        }
+        if let Some(value) = config.image_min_tokens {
+            params.image_min_tokens =
+                i32::try_from(value).context("image_min_tokens exceeds i32")?;
+        }
+        if let Some(value) = config.image_max_tokens {
+            params.image_max_tokens =
+                i32::try_from(value).context("image_max_tokens exceeds i32")?;
+        }
+        if let Some(value) = config.batch_max_tokens {
+            params.batch_max_tokens =
+                i32::try_from(value).context("batch_max_tokens exceeds i32")?;
+        }
         let raw = unsafe { skippy_ffi::mtmd_init_from_file(path.as_ptr(), raw_model, params) };
         if raw.is_null() {
             return Err(anyhow!("failed to load multimodal projector {path:?}"));
         }
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            marker: config.media_marker.clone().unwrap_or_else(Self::marker),
+        })
     }
 
     fn marker() -> String {
@@ -69,7 +100,10 @@ impl Drop for MediaProjector {
 
 impl StageModel {
     pub fn media_marker(&self) -> String {
-        MediaProjector::marker()
+        self.media
+            .as_ref()
+            .map(|projector| projector.marker.clone())
+            .unwrap_or_else(MediaProjector::marker)
     }
 
     pub fn has_media_projector(&self) -> bool {
@@ -95,12 +129,18 @@ impl StageModel {
 
         struct Bitmap {
             raw: *mut skippy_ffi::MtmdBitmap,
+            video: *mut skippy_ffi::MtmdHelperVideo,
         }
         impl Drop for Bitmap {
             fn drop(&mut self) {
                 if !self.raw.is_null() {
                     unsafe {
                         skippy_ffi::mtmd_bitmap_free(self.raw);
+                    }
+                }
+                if !self.video.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_helper_video_free(self.video);
                     }
                 }
             }
@@ -123,17 +163,25 @@ impl StageModel {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
-            let raw = unsafe {
+            let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
+                    false,
+                    skippy_ffi::mtmd_helper_init_opt_default(),
                 )
             };
-            if raw.is_null() {
+            // Take ownership before the null check: on a partial failure the
+            // wrapper can still carry a video context that has to be freed.
+            let bitmap = Bitmap {
+                raw: wrapper.bitmap,
+                video: wrapper.video_ctx,
+            };
+            if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
-            bitmaps.push(Bitmap { raw });
+            bitmaps.push(bitmap);
         }
 
         let chunks = Chunks {
@@ -146,6 +194,7 @@ impl StageModel {
             .context("multimodal prompt contains an interior NUL byte")?;
         let input_text = skippy_ffi::MtmdInputText {
             text: prompt.as_ptr(),
+            text_len: prompt.as_bytes().len(),
             add_special: true,
             parse_special: true,
         };
@@ -176,6 +225,7 @@ impl StageModel {
         if n_past < 0 {
             return Err(anyhow!("skippy session is not initialized"));
         }
+        let seq_id = session.native_sequence_id()?;
         let n_batch = unsafe { skippy_ffi::skippy_session_batch_size(session.raw) };
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
@@ -213,7 +263,7 @@ impl StageModel {
                 lctx,
                 chunks.raw,
                 n_past,
-                0,
+                seq_id,
                 n_batch,
                 true,
                 &mut new_n_past,
@@ -254,12 +304,18 @@ impl StageModel {
 
         struct Bitmap {
             raw: *mut skippy_ffi::MtmdBitmap,
+            video: *mut skippy_ffi::MtmdHelperVideo,
         }
         impl Drop for Bitmap {
             fn drop(&mut self) {
                 if !self.raw.is_null() {
                     unsafe {
                         skippy_ffi::mtmd_bitmap_free(self.raw);
+                    }
+                }
+                if !self.video.is_null() {
+                    unsafe {
+                        skippy_ffi::mtmd_helper_video_free(self.video);
                     }
                 }
             }
@@ -292,17 +348,25 @@ impl StageModel {
             if item.bytes.is_empty() {
                 return Err(anyhow!("media item must not be empty"));
             }
-            let raw = unsafe {
+            let wrapper = unsafe {
                 skippy_ffi::mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
+                    false,
+                    skippy_ffi::mtmd_helper_init_opt_default(),
                 )
             };
-            if raw.is_null() {
+            // Take ownership before the null check: on a partial failure the
+            // wrapper can still carry a video context that has to be freed.
+            let bitmap = Bitmap {
+                raw: wrapper.bitmap,
+                video: wrapper.video_ctx,
+            };
+            if bitmap.raw.is_null() {
                 return Err(anyhow!("failed to decode media item for projector"));
             }
-            bitmaps.push(Bitmap { raw });
+            bitmaps.push(bitmap);
         }
 
         let chunks = Chunks {
@@ -315,6 +379,7 @@ impl StageModel {
             .context("multimodal prompt contains an interior NUL byte")?;
         let input_text = skippy_ffi::MtmdInputText {
             text: prompt.as_ptr(),
+            text_len: prompt.as_bytes().len(),
             add_special: true,
             parse_special: true,
         };
@@ -345,6 +410,7 @@ impl StageModel {
         if n_past < 0 {
             return Err(anyhow!("skippy session is not initialized"));
         }
+        let seq_id = session.native_sequence_id()?;
         let n_batch = unsafe { skippy_ffi::skippy_session_batch_size(session.raw) };
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
@@ -460,7 +526,7 @@ impl StageModel {
                     lctx,
                     chunk,
                     n_past,
-                    0,
+                    seq_id,
                     n_batch,
                     false,
                     &mut new_n_past,

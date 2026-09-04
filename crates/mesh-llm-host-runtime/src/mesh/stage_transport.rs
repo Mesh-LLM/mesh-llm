@@ -425,8 +425,8 @@ pub struct StageRuntimeStatus {
     pub layer_end: u32,
     pub state: crate::inference::skippy::StageRuntimeState,
     pub bind_addr: String,
-    pub activation_width: u32,
-    pub wire_dtype: crate::inference::skippy::StageWireDType,
+    pub input_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    pub output_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
     pub selected_device: Option<skippy_protocol::StageDevice>,
     pub ctx_size: u32,
     pub lane_count: u32,
@@ -882,7 +882,9 @@ impl Node {
         mut request: crate::inference::skippy::StageControlRequest,
     ) -> Result<crate::inference::skippy::StageControlResponse> {
         self.prepare_stage_control_request(&mut request).await?;
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
@@ -924,28 +926,18 @@ impl Node {
         use prost::Message as _;
 
         let timeout = Self::stage_control_request_timeout(&request);
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(peer_id, load))
                 .await;
         }
-        let frame = stage_control_request_to_proto(self.endpoint.id(), request);
+        let frame = stage_control_request_to_proto(self.endpoint.id(), request)?;
         let response = tokio::time::timeout(timeout, async {
-            let (mut send, mut recv) = if self
-                .peer_supports_skippy_subprotocol_feature(
-                    peer_id,
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-                )
-                .await
-            {
-                self.open_skippy_stage_mesh_stream(peer_id, skippy_protocol::STAGE_STREAM_CONTROL)
-                    .await?
-            } else {
-                let conn = self.stage_connection_to_peer(peer_id).await?;
-                let (mut send, recv) = conn.open_bi().await?;
-                send.write_all(&[skippy_protocol::STAGE_STREAM_CONTROL])
-                    .await?;
-                (send, recv)
-            };
+            self.ensure_current_stage_control_peer(peer_id).await?;
+            let (mut send, mut recv) = self
+                .open_skippy_stage_mesh_stream(peer_id, skippy_protocol::STAGE_STREAM_CONTROL)
+                .await?;
             write_len_prefixed(&mut send, &frame.encode_to_vec()).await?;
             let buf = read_len_prefixed(&mut recv).await?;
             let response =
@@ -990,6 +982,9 @@ impl Node {
                 std::time::Duration::from_secs(30)
             }
             crate::inference::skippy::StageControlRequest::Load(load) => {
+                crate::inference::skippy::stage_load_timeout(load)
+            }
+            crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
                 crate::inference::skippy::stage_load_timeout(load)
             }
             crate::inference::skippy::StageControlRequest::Prepare(prepare) => {
@@ -1151,16 +1146,8 @@ impl Node {
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
     ) {
-        match stream_type {
-            skippy_protocol::STAGE_STREAM_CONTROL => {
-                let node = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = node.handle_stage_control(remote, send, recv).await {
-                        tracing::warn!("stage control error from {}: {e}", remote.fmt_short());
-                    }
-                });
-            }
-            skippy_protocol::STAGE_STREAM_TRANSPORT => {
+        match dedicated_stage_stream_kind(stream_type) {
+            Some(DedicatedStageStreamKind::ActivationTransport) => {
                 if self
                     .stage_transport_tx
                     .send((remote, send, recv))
@@ -1170,23 +1157,9 @@ impl Node {
                     tracing::warn!("Stage transport channel closed, dropping stream");
                 }
             }
-            skippy_protocol::STAGE_STREAM_ARTIFACT_TRANSFER => {
-                let node = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = node
-                        .handle_artifact_transfer_stream(remote, send, recv)
-                        .await
-                    {
-                        tracing::debug!(
-                            "legacy artifact transfer stream error from {}: {e}",
-                            remote.fmt_short()
-                        );
-                    }
-                });
-            }
-            other => {
+            None => {
                 tracing::warn!(
-                    "Unknown skippy stage stream type {other:#04x} from {}",
+                    "unsupported dedicated skippy stage stream type {stream_type:#04x} from {}; control and artifact streams require mesh subprotocol transport",
                     remote.fmt_short()
                 );
             }
@@ -1253,5 +1226,36 @@ impl Node {
             }
         };
         StageStreamAccept::Dispatch((send, recv), stream_type)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DedicatedStageStreamKind {
+    ActivationTransport,
+}
+
+fn dedicated_stage_stream_kind(stream_type: u8) -> Option<DedicatedStageStreamKind> {
+    (stream_type == skippy_protocol::STAGE_STREAM_TRANSPORT)
+        .then_some(DedicatedStageStreamKind::ActivationTransport)
+}
+
+#[cfg(test)]
+mod dedicated_stream_tests {
+    use super::{DedicatedStageStreamKind, dedicated_stage_stream_kind};
+
+    #[test]
+    fn dedicated_stage_alpn_accepts_activation_transport_only() {
+        assert_eq!(
+            dedicated_stage_stream_kind(skippy_protocol::STAGE_STREAM_TRANSPORT),
+            Some(DedicatedStageStreamKind::ActivationTransport)
+        );
+        assert_eq!(
+            dedicated_stage_stream_kind(skippy_protocol::STAGE_STREAM_CONTROL),
+            None
+        );
+        assert_eq!(
+            dedicated_stage_stream_kind(skippy_protocol::STAGE_STREAM_ARTIFACT_TRANSFER),
+            None
+        );
     }
 }

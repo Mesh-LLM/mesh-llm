@@ -5,8 +5,8 @@ use serde_json::json;
 use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
-        StageReply, StageReplyStats, StageStateHeader, StageWireMessage, WireActivationDType,
-        WireMessageKind, WireReplyKind,
+        StageReply, StageReplyStats, StageStateHeader, StageWireMessage, WireMessageKind,
+        WireReplyKind,
     },
 };
 
@@ -65,7 +65,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
     wire_session_id: u64,
     mut message: StageWireMessage,
     downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     activation_width: i32,
     control_started: Instant,
@@ -82,7 +81,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             topology,
             message.request_id,
             message.session_id,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_sinks,
             prediction_return_streams,
@@ -125,7 +123,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             config,
             topology,
             &message,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_streams,
             StageReply {
@@ -141,7 +138,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         return Ok(());
     }
 
-    let input = input_activation_frame(config, topology, &mut message, activation_width)?;
+    let input = input_activation_frame(config, topology, &mut message)?;
     let decode_message = restore_prefill_decode_as_decode_message(&message, current_token);
     let compute_started = Instant::now();
     let output_capacity =
@@ -196,13 +193,11 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
 
     if route == RestorePrefillDecodeRoute::ForwardHit {
         let downstream = downstream.expect("forward route requires downstream stage");
-        let forwarded =
-            forwarded_stage_message_timed(config, &message, &output, wire_dtype, activation_width)
-                .context("forward restore-decode activation")?;
+        let forwarded = forwarded_stage_message_timed(config, &message, &output, activation_width)
+            .context("forward restore-decode activation")?;
         write_stage_message_conditioned(
             &mut *downstream,
             &forwarded.message,
-            wire_dtype,
             downstream_wire_condition,
         )
         .context("forward restore-decode downstream")?;
@@ -262,7 +257,6 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
         config,
         topology,
         &message,
-        wire_dtype,
         downstream_connect_timeout_secs,
         prediction_return_streams,
         StageReply {
@@ -333,7 +327,6 @@ fn send_restore_decode_direct_reply(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-    wire_dtype: WireActivationDType,
     downstream_connect_timeout_secs: u64,
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
     reply: StageReply,
@@ -347,7 +340,6 @@ fn send_restore_decode_direct_reply(
         config,
         topology,
         message,
-        wire_dtype,
         downstream_connect_timeout_secs,
         reply,
     )
@@ -357,7 +349,6 @@ fn send_one_off_direct_return(
     config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-    wire_dtype: WireActivationDType,
     downstream_connect_timeout_secs: u64,
     reply: StageReply,
 ) -> Result<()> {
@@ -366,7 +357,6 @@ fn send_one_off_direct_return(
         topology,
         message.request_id,
         message.session_id,
-        wire_dtype,
         downstream_connect_timeout_secs,
     )?;
     direct_return::send_direct_prediction_return(&mut stream, reply)
@@ -393,11 +383,7 @@ pub(super) fn restore_prefill_decode_as_decode_message(
     decode.positions.clear();
     decode.activation.clear();
     decode.raw_bytes.clear();
-    decode.state.phase = StageStateHeader::new(
-        WireMessageKind::DecodeEmbd,
-        message.state.dtype().unwrap_or(WireActivationDType::F32),
-    )
-    .phase;
+    decode.state.phase = StageStateHeader::new(WireMessageKind::DecodeEmbd).phase;
     decode.state.current_token = current_token;
     decode
 }
@@ -439,10 +425,7 @@ mod tests {
             seed: 42,
             ..StageSamplingConfig::default()
         };
-        let mut state = StageStateHeader::new(
-            WireMessageKind::TryRestorePrefillDecode,
-            WireActivationDType::F16,
-        );
+        let mut state = StageStateHeader::new(WireMessageKind::TryRestorePrefillDecode);
         state.prompt_token_count = 4;
         state.decode_step = 0;
         state.current_token = 104;

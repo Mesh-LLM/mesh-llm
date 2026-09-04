@@ -1,11 +1,12 @@
 use super::{
     LocalOpenAiModelStartSpec, RuntimeOptions, RuntimeResourcePlanningProfile,
     SkippyNativeLogForwardingGuard, acquire_instance_runtime,
-    apply_runtime_cli_speculative_overrides, apply_runtime_config_options,
-    build_startup_model_specs, cleanup_run_auto_runtime_dir, configure_run_auto_process_state,
-    emit_shutdown, openai_guardrail_policy_handle, preflight_config_owned_startup_models,
-    resolve_local_model_only_startup_models, runtime_model_required_bytes,
-    skippy_telemetry_options, start_local_openai_model, wait_shutdown_signal,
+    apply_runtime_cli_checkpoint_overrides, apply_runtime_cli_speculative_overrides,
+    apply_runtime_config_options, build_startup_model_specs, cleanup_run_auto_runtime_dir,
+    configure_run_auto_process_state, emit_shutdown, openai_guardrail_policy_handle,
+    preflight_pinned_startup_models, resolve_local_model_only_startup_models,
+    runtime_model_required_bytes, skippy_telemetry_options, start_local_openai_model,
+    startup_device_override, wait_shutdown_signal,
 };
 use crate::inference::election;
 use crate::plugin;
@@ -111,6 +112,11 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    apply_runtime_cli_checkpoint_overrides(
+        &mut config,
+        options.checkpoint_quantization.as_deref(),
+        options.checkpoint_imatrix.as_deref(),
+    )?;
     apply_runtime_config_options(&mut options, &config);
 
     let startup_specs = build_startup_model_specs(&options, &config)?;
@@ -119,7 +125,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
         "--local-model-only requires exactly one startup model"
     );
     let mut startup_models = resolve_local_model_only_startup_models(&startup_specs).await?;
-    preflight_config_owned_startup_models(
+    preflight_pinned_startup_models(
         &config,
         &startup_specs,
         &mut startup_models,
@@ -156,14 +162,23 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
 
     let model_name = model.declared_ref.clone();
+    let survey_telemetry = survey::SurveyTelemetry::start(
+        &config,
+        hardware::survey(),
+        survey::SurveyTelemetrySource {
+            node_id: "local-model-only".into(),
+            node_role: "worker".into(),
+        },
+    );
     let launch = LocalOpenAiModelStartSpec {
         mesh_config: &config,
-        config_model_id: Some(&model.declared_ref),
+        config_model_id: model.config_model_id.as_deref(),
         model_path: &model.resolved_path,
         model_bytes,
         mmproj_override: model.mmproj_path.as_deref(),
         ctx_size_override: model.ctx_size,
         pinned_gpu: model.pinned_gpu.as_ref(),
+        device_override: startup_device_override(model.gpu_id.as_deref()),
         capacity_budget_bytes: local_capacity_bytes,
         cache_type_k_override: model.cache_type_k.as_deref(),
         cache_type_v_override: model.cache_type_v.as_deref(),
@@ -176,7 +191,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
             super::status::mesh_guardrail_mode_to_openai(options.mesh_guardrails),
         ),
         skippy_telemetry: skippy_telemetry_options(&options),
-        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        survey_telemetry,
         hook_policy: None,
         serving_hooks_factory,
         http_bind_addr: bind_addr,

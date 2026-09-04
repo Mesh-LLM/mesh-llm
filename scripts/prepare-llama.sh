@@ -8,7 +8,7 @@ LLAMA_UPSTREAM_URL="${LLAMA_UPSTREAM_URL:-https://github.com/ggml-org/llama.cpp.
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 PIN_FILE="${LLAMA_PIN_FILE:-$ROOT/third_party/llama.cpp/upstream.txt}"
 PATCH_DIR="${LLAMA_PATCH_DIR:-$ROOT/third_party/llama.cpp/patches}"
-PREPARE_SCHEMA=2
+PREPARE_SCHEMA=3
 
 if [[ ! -f "$PIN_FILE" ]]; then
   echo "missing llama upstream pin: $PIN_FILE" >&2
@@ -136,6 +136,32 @@ PATCHES=()
 while IFS= read -r patch; do
   PATCHES+=("$patch")
 done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' | sort)
+
+validate_patch_sequence() {
+  local expected=1
+  local expected_prefix filename patch prefix sequence
+
+  for patch in "${PATCHES[@]}"; do
+    filename="${patch##*/}"
+    if [[ ! "$filename" =~ ^([0-9]{4})-.+\.patch$ ]]; then
+      echo "invalid llama patch filename: $filename" >&2
+      echo "expected a four-digit sequence prefix such as 0001-description.patch" >&2
+      return 1
+    fi
+
+    prefix="${BASH_REMATCH[1]}"
+    sequence=$((10#$prefix))
+    printf -v expected_prefix '%04d' "$expected"
+    if (( sequence != expected )); then
+      echo "invalid llama patch sequence: expected $expected_prefix, found $prefix ($filename)" >&2
+      echo "patch numbers must be unique and contiguous" >&2
+      return 1
+    fi
+    expected=$((expected + 1))
+  done
+}
+
+validate_patch_sequence
 
 python_bin() {
   local candidate

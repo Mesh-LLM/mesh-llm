@@ -5,13 +5,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
+use skippy_protocol::{FlashAttentionType, LoadMode, SplitMode, StageConfig};
 use skippy_runtime::{
-    ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput, DecodeFrameBatchRequest,
-    FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow, IterationBatchPhase,
-    IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame, MtpSource, NativeMtpDraft,
-    RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel,
-    StageSession, TokenSignal, parse_cache_type,
+    ActivationBoundaryDesc, ActivationFrame, DecodeBatchRequest, DecodeFrameBatchOutput,
+    DecodeFrameBatchRequest, FlashAttentionType as RuntimeFlashAttentionType,
+    GenerationSignalWindow, GlmDsaPolicy as RuntimeGlmDsaPolicy, IterationBatchOutput,
+    IterationBatchPhase, IterationBatchRequest, MediaInput, MediaPrefill, MediaPrefillFrame,
+    ModelStateKind, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc,
+    RuntimeLoadMode, SamplingConfig, SplitMode as RuntimeSplitMode, StageModel, StageSession,
+    TokenSignal, parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -53,8 +55,14 @@ pub struct RuntimeState {
     free_lane_indices: Vec<usize>,
     sessions: BTreeMap<String, RuntimeLaneSession>,
     idle_sessions: Vec<RuntimeLaneSession>,
+    /// Upper bound on `idle_sessions.len()`, from `model_fit.cache_idle_slots`.
+    /// `None` preserves today's unbounded idle-pool behavior (bounded only by
+    /// `lane_count` through `prewarm_idle_sessions`'s admission check).
+    max_idle_sessions: Option<usize>,
     session_token_counts: BTreeMap<String, u64>,
     session_resident_prefixes: BTreeMap<String, ResidentLanePrefix>,
+    #[cfg(test)]
+    modelless_for_test: bool,
 }
 
 struct RuntimeLaneSession {
@@ -134,6 +142,13 @@ struct ResidentLanePrefix {
 }
 
 impl RuntimeState {
+    pub fn input_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.input_activation_boundary()
+    }
+
+    pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
+        self.model.output_activation_boundary()
+    }
     /// A runtime with no model behind it, for tests that exercise code paths
     /// which never touch the model.
     ///
@@ -158,13 +173,25 @@ impl RuntimeState {
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),
             idle_sessions: Vec::new(),
+            max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
+            modelless_for_test: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_session_tokens_for_test(&mut self, session_id: &str, token_count: u64) {
+        self.session_token_counts
+            .insert(session_id.to_string(), token_count);
     }
 
     pub fn lane_count(&self) -> u32 {
         self.lane_count
+    }
+
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     /// Total KV cell pool available to this context, in tokens (`n_ctx`).
@@ -175,6 +202,11 @@ impl RuntimeState {
     /// configured default.
     pub fn kv_pool_tokens(&self) -> u32 {
         self.ctx_size
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_modelless_for_test(&self) -> bool {
+        self.modelless_for_test
     }
 }
 
@@ -187,6 +219,22 @@ impl Drop for RuntimeState {
 
 pub fn load_runtime(config: &StageConfig) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     load_runtime_with_overrides(config, &RuntimeLaunchOverrides::default())
+}
+
+/// Return the state semantics captured from the model that was actually
+/// opened by llama.cpp. Callers use this after load so cache selection never
+/// depends on a repository name or pre-load family guess.
+pub fn loaded_model_state_kind(
+    runtime: Option<&Arc<Mutex<RuntimeState>>>,
+) -> Option<ModelStateKind> {
+    runtime.and_then(|runtime| {
+        runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .model
+            .capability()
+            .map(|capability| capability.state_kind)
+    })
 }
 
 pub fn load_runtime_with_overrides(
@@ -228,8 +276,11 @@ pub fn load_runtime_with_overrides(
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
         idle_sessions: Vec::new(),
+        max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
 }
 
@@ -277,9 +328,18 @@ pub fn load_runtime_with_overrides_and_open_events(
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
         idle_sessions: Vec::new(),
+        max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
+        #[cfg(test)]
+        modelless_for_test: false,
     }))))
+}
+
+/// Translates `model_fit.cache_idle_slots` into the idle-session-pool bound.
+/// `None`/unset preserves today's unbounded behavior.
+fn max_idle_sessions_from_stage_config(config: &StageConfig) -> Option<usize> {
+    config.cache_idle_slots.map(|slots| slots as usize)
 }
 
 fn should_attach_package_projector(config: &StageConfig) -> bool {
@@ -317,6 +377,19 @@ fn runtime_config_from_stage_config(
         n_gpu_layers: config.n_gpu_layers,
         mmap: config.mmap,
         mlock: config.mlock,
+        repack: config.repack,
+        op_offload: config.op_offload,
+        no_host_buffer: config.no_host_buffer,
+        check_tensors: config.check_tensors,
+        direct_io: config.direct_io,
+        main_gpu: config.main_gpu,
+        split_mode: match config.split_mode {
+            SplitMode::Auto => RuntimeSplitMode::Auto,
+            SplitMode::None => RuntimeSplitMode::None,
+            SplitMode::Layer => RuntimeSplitMode::Layer,
+            SplitMode::Row => RuntimeSplitMode::Row,
+            SplitMode::Tensor => RuntimeSplitMode::Tensor,
+        },
         selected_backend_device: config
             .selected_device
             .as_ref()
@@ -333,12 +406,33 @@ fn runtime_config_from_stage_config(
             LoadMode::LayerPackage => RuntimeLoadMode::LayerPackage,
             LoadMode::ArtifactSlice => RuntimeLoadMode::ArtifactSlice,
         },
+        kv_offload: config.kv_offload,
+        kv_unified: config.kv_unified,
+        swa_full: config.swa_full,
         projector_path: config.projector_path.clone(),
+        projector_use_gpu: config.projector_use_gpu,
+        media_marker: config.media_marker.clone(),
+        image_min_tokens: config.image_min_tokens,
+        image_max_tokens: config.image_max_tokens,
+        batch_max_tokens: config.batch_max_tokens,
+        glm_dsa_policy: match config.glm_dsa_policy {
+            skippy_protocol::GlmDsaPolicy::Auto => RuntimeGlmDsaPolicy::Auto,
+            skippy_protocol::GlmDsaPolicy::V1 => RuntimeGlmDsaPolicy::V1,
+        },
         include_embeddings: config.layer_start == 0
             || (config.load_mode == LoadMode::LayerPackage && config.downstream.is_none()),
         include_output: config.downstream.is_none(),
         mtp_source: overrides.mtp_source,
         filter_tensors_on_load: config.filter_tensors_on_load,
+        checkpoint_quantization: config
+            .checkpoint_quantization
+            .as_deref()
+            .unwrap_or("preserve")
+            .parse()
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("parse checkpoint_quantization for {}", config.stage_id))?,
+        checkpoint_imatrix: config.checkpoint_imatrix.as_deref().map(Into::into),
+        checkpoint_imatrix_sha256: config.checkpoint_imatrix_sha256.clone(),
     })
 }
 
@@ -379,15 +473,19 @@ fn open_stage_model_from_parts_with_events(
 
 #[cfg(test)]
 mod tests {
-    use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
+    use skippy_protocol::{
+        FlashAttentionType, LoadMode, PeerConfig, SplitMode, StageConfig, StageDevice,
+    };
     use skippy_runtime::{
-        ActivationDesc, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
-        MtpSource, RuntimeActivationDType, RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
+        ActivationDesc, ActivationFrame, CheckpointQuantization,
+        FlashAttentionType as RuntimeFlashAttentionType, MtpSource, RuntimeActivationDType,
+        RuntimeActivationLayout, RuntimeConfig, SamplingConfig,
     };
 
     use super::{
         RuntimeLaunchOverrides, RuntimeState, load_runtime_with_overrides,
-        runtime_config_from_stage_config, should_attach_package_projector,
+        max_idle_sessions_from_stage_config, runtime_config_from_stage_config,
+        should_attach_package_projector,
     };
 
     #[test]
@@ -427,9 +525,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: Some(false),
             mlock: true,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Enabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: Some(StageDevice {
                 backend_device: "Vulkan1".into(),
@@ -443,6 +552,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let overrides = RuntimeLaunchOverrides {
@@ -472,6 +582,114 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_parses_checkpoint_quantization() {
+        let config = StageConfig {
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            checkpoint_quantization: Some("Q4_K_M".to_string()),
+            ..StageConfig::default()
+        };
+
+        let runtime_config =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
+        assert_eq!(
+            runtime_config.checkpoint_quantization,
+            CheckpointQuantization::Q4KM
+        );
+    }
+
+    #[test]
+    fn runtime_config_accepts_importance_aware_checkpoint_quantization() {
+        let config = StageConfig {
+            stage_id: "stage-0".to_string(),
+            layer_end: 1,
+            checkpoint_quantization: Some("IQ2_XXS".to_string()),
+            checkpoint_imatrix: Some("/models/imatrix.gguf".to_string()),
+            checkpoint_imatrix_sha256: Some("a".repeat(64)),
+            ..StageConfig::default()
+        };
+
+        let runtime =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default()).unwrap();
+        assert_eq!(
+            runtime.checkpoint_quantization,
+            CheckpointQuantization::IQ2XXS
+        );
+        assert_eq!(
+            runtime.checkpoint_imatrix.as_deref(),
+            Some(std::path::Path::new("/models/imatrix.gguf"))
+        );
+        assert_eq!(runtime.checkpoint_imatrix_sha256, Some("a".repeat(64)));
+    }
+
+    fn fake_stage_config_with_cache_idle_slots(cache_idle_slots: Option<u32>) -> StageConfig {
+        StageConfig {
+            run_id: "run-a".to_string(),
+            topology_id: "topology-a".to_string(),
+            model_id: "model-a".to_string(),
+            package_ref: None,
+            manifest_sha256: None,
+            source_model_path: None,
+            source_model_sha256: None,
+            source_model_bytes: None,
+            materialized_path: None,
+            materialized_pinned: false,
+            model_path: Some("/tmp/model.gguf".to_string()),
+            projector_path: None,
+            stage_id: "stage-0".to_string(),
+            stage_index: 0,
+            layer_start: 0,
+            layer_end: 24,
+            ctx_size: 512,
+            lane_count: 4,
+            n_batch: None,
+            n_ubatch: None,
+            n_gpu_layers: -1,
+            mmap: None,
+            mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots,
+            filter_tensors_on_load: false,
+            selected_device: None,
+            kv_cache: None,
+            native_mtp_enabled: true,
+            load_mode: LoadMode::RuntimeSlice,
+            bind_addr: "127.0.0.1:0".to_string(),
+            upstream: None,
+            downstream: None,
+            ..StageConfig::default()
+        }
+    }
+
+    #[test]
+    fn cache_idle_slots_reaches_the_idle_session_pool_bound() {
+        let unset = fake_stage_config_with_cache_idle_slots(None);
+        let two = fake_stage_config_with_cache_idle_slots(Some(2));
+        let five = fake_stage_config_with_cache_idle_slots(Some(5));
+
+        assert_eq!(max_idle_sessions_from_stage_config(&unset), None);
+        assert_eq!(max_idle_sessions_from_stage_config(&two), Some(2));
+        assert_eq!(max_idle_sessions_from_stage_config(&five), Some(5));
+        assert_ne!(
+            max_idle_sessions_from_stage_config(&two),
+            max_idle_sessions_from_stage_config(&five),
+            "cache_idle_slots=2 and cache_idle_slots=5 must produce different idle-pool bounds"
+        );
+    }
+
+    #[test]
     fn runtime_config_keeps_package_embeddings_for_final_non_first_stage() {
         let config = StageConfig {
             run_id: "run-a".to_string(),
@@ -497,9 +715,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: Some(StageDevice {
                 backend_device: "CPU".into(),
@@ -517,6 +746,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19001".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         };
 
         let runtime_config =
@@ -565,9 +795,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: Some(true),
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: Some(StageDevice {
                 backend_device: "CPU".into(),
@@ -585,6 +826,7 @@ mod tests {
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
             }),
             downstream: None,
+            ..StageConfig::default()
         };
         Some((package_path, config))
     }
@@ -776,9 +1018,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -787,6 +1040,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let runtime_config =
@@ -796,6 +1050,49 @@ mod tests {
         assert_eq!(runtime_config.n_threads_batch, None);
         assert_eq!(runtime_config.n_batch, None);
         assert_eq!(runtime_config.n_ubatch, None);
+    }
+
+    #[test]
+    fn runtime_config_preserves_multimodal_and_glm_dsa_native_controls() {
+        let config: StageConfig = serde_json::from_value(serde_json::json!({
+            "run_id": "run-a",
+            "topology_id": "topology-a",
+            "model_id": "model-a",
+            "model_path": "/tmp/model.gguf",
+            "projector_path": "/tmp/mmproj.gguf",
+            "projector_use_gpu": false,
+            "media_marker": "<media>",
+            "image_min_tokens": 32,
+            "image_max_tokens": 1536,
+            "batch_max_tokens": 384,
+            "glm_dsa_policy": "v1",
+            "generation_signal_window": 20,
+            "stage_id": "stage-0",
+            "stage_index": 0,
+            "layer_start": 0,
+            "layer_end": 24,
+            "ctx_size": 512,
+            "lane_count": 1,
+            "n_gpu_layers": -1,
+            "cache_type_k": "f16",
+            "cache_type_v": "f16",
+            "native_mtp_enabled": true,
+            "load_mode": "runtime-slice",
+            "bind_addr": "127.0.0.1:0"
+        }))
+        .expect("stage config should deserialize");
+
+        let runtime_config =
+            runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
+                .expect("runtime config should build");
+        let debug = format!("{runtime_config:?}");
+
+        assert!(debug.contains("projector_use_gpu: Some(false)"));
+        assert!(debug.contains("media_marker: Some(\"<media>\")"));
+        assert!(debug.contains("image_min_tokens: Some(32)"));
+        assert!(debug.contains("image_max_tokens: Some(1536)"));
+        assert!(debug.contains("batch_max_tokens: Some(384)"));
+        assert!(debug.contains("glm_dsa_policy: V1"));
     }
 
     #[test]
@@ -824,9 +1121,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "auto".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: None,
@@ -835,6 +1143,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         };
 
         let error = runtime_config_from_stage_config(&config, &RuntimeLaunchOverrides::default())
@@ -872,9 +1181,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache: None,
@@ -887,6 +1207,7 @@ mod tests {
                 stage_index: 1,
                 endpoint: "tcp://127.0.0.1:19001".to_string(),
             }),
+            ..StageConfig::default()
         };
 
         assert!(should_attach_package_projector(&config));

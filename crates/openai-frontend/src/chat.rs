@@ -12,7 +12,7 @@ use crate::{
     errors::OpenAiError,
 };
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct ChatCompletionRequest {
     pub model: String,
     #[serde(default)]
@@ -266,7 +266,13 @@ pub fn message_content_to_text(content: &MessageContent) -> Option<String> {
     }
 }
 
+/// `#[non_exhaustive]`: a downstream crate that builds this via struct
+/// literal (rather than [`Self::new`]/[`Self::new_with_reason`]/
+/// [`Self::from_parts`]) would otherwise break every time this crate adds a
+/// field — as `capsule_marker` itself just did. New fields default through
+/// the constructors instead of requiring every caller to be updated.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChatCompletionResponse {
     pub id: String,
     pub object: &'static str,
@@ -276,6 +282,38 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// Rung-ladder response-leg marker, minted by
+    /// [`crate::hooks::OpenAiHookPolicy::capsule_marker_for_response`]. Never
+    /// serialized into the OpenAI-shaped JSON body — a real `X-Capsule-Id`
+    /// rides as an HTTP response header, set from this field by the router's
+    /// `frontend_lifecycle_middleware`, the same layer that already sets
+    /// `x-request-id`.
+    #[serde(skip)]
+    pub capsule_marker: Option<CapsuleMarker>,
+}
+
+/// A rung-ladder response-leg marker: the `capsule_id` written into the
+/// response as `X-Capsule-Id`, and the `nonce` the marker is correlated
+/// against, so an out-of-process plugin observing the terminal event (which
+/// carries this marker) knows what a later client ack must sign over to lift
+/// `acknowledged_receipt` -> `full_bilateral` (see
+/// `capsule-emit-mesh/README.md` "Bilateral attestation demo", move 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapsuleMarker {
+    pub capsule_id: String,
+    pub nonce: String,
+}
+
+/// Whether `id` is safe to publish as both an `X-Capsule-Id` response header
+/// (set by `frontend_lifecycle_middleware` in `router.rs`) and a mesh
+/// plugin's terminal-event `capsule_id` — the single check that keeps those
+/// two views of the same exchange from disagreeing. The router already
+/// silently drops the header on a value `HeaderValue::from_str` rejects; a
+/// hook-minted marker that fails this same check must not be attached to the
+/// response at all, so a plugin observing the terminal event never sees a
+/// capsule id the client's response never carried.
+pub fn capsule_id_is_valid(id: &str) -> bool {
+    !id.is_empty() && axum::http::HeaderValue::from_str(id).is_ok()
 }
 
 impl ChatCompletionResponse {
@@ -307,6 +345,35 @@ impl ChatCompletionResponse {
             }],
             usage,
             timings: None,
+            capsule_marker: None,
+        }
+    }
+
+    /// Construct a response with an explicit id/creation time/choice set —
+    /// for callers (e.g. a backend reconstructing a parsed generation) that
+    /// need full control over those fields, unlike [`Self::new`]/
+    /// [`Self::new_with_reason`], which always mint a fresh id and a single
+    /// choice. `capsule_marker` always starts `None`; it is attached later,
+    /// by [`crate::hooks::HookedOpenAiBackend`]. Exists so a downstream
+    /// crate that previously built this via struct literal has a
+    /// `#[non_exhaustive]`-safe replacement.
+    pub fn from_parts(
+        id: impl Into<String>,
+        created: u64,
+        model: impl Into<String>,
+        choices: Vec<ChatCompletionChoice>,
+        usage: Usage,
+        timings: Option<BTreeMap<String, Value>>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            object: "chat.completion",
+            created,
+            model: model.into(),
+            choices,
+            usage,
+            timings,
+            capsule_marker: None,
         }
     }
 
@@ -344,6 +411,8 @@ pub struct ChatCompletionChunk {
     pub choices: Vec<ChatCompletionChunkChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timings: Option<BTreeMap<String, Value>>,
 }
 
 impl ChatCompletionChunk {
@@ -365,6 +434,7 @@ impl ChatCompletionChunk {
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -386,6 +456,7 @@ impl ChatCompletionChunk {
                 finish_reason: None,
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -411,6 +482,7 @@ impl ChatCompletionChunk {
                 finish_reason: Some(finish_reason),
             }],
             usage: None,
+            timings: None,
         }
     }
 
@@ -422,6 +494,18 @@ impl ChatCompletionChunk {
             model: model.into(),
             choices: Vec::new(),
             usage: Some(usage),
+            timings: None,
+        }
+    }
+
+    pub fn usage_with_timings(
+        model: impl Into<String>,
+        usage: Usage,
+        timings: Option<BTreeMap<String, Value>>,
+    ) -> Self {
+        Self {
+            timings,
+            ..Self::usage(model, usage)
         }
     }
 }
@@ -450,6 +534,22 @@ pub struct ChatCompletionDelta {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn chat_usage_chunk_serializes_optional_timings() {
+        let chunk = ChatCompletionChunk::usage_with_timings(
+            "model",
+            Usage::new(3, 2),
+            Some(BTreeMap::from([(
+                "cache_restore_ms".to_string(),
+                json!(2.5),
+            )])),
+        );
+
+        let value = serde_json::to_value(chunk).unwrap();
+        assert_eq!(value["usage"]["prompt_tokens"], json!(3));
+        assert_eq!(value["timings"]["cache_restore_ms"], json!(2.5));
+    }
 
     use super::*;
 

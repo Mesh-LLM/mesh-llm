@@ -153,6 +153,10 @@ impl StageControlState {
             StageControlRequest::Load(load) => {
                 self.load(load).await.map(StageControlResponse::Ready)
             }
+            StageControlRequest::LoadLocal(mut load) => {
+                load.local_source_required = true;
+                self.load(load).await.map(StageControlResponse::Ready)
+            }
             StageControlRequest::Stop(stop) => {
                 self.stop(stop).await.map(StageControlResponse::Ready)
             }
@@ -217,7 +221,22 @@ impl StageControlState {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let source = resolve_inventory_source(&request);
+        let source_request = request.clone();
+        let source =
+            match tokio::task::spawn_blocking(move || resolve_inventory_source(&source_request))
+                .await
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    tracing::warn!(
+                        model_id = request.model_id,
+                        package_ref = request.package_ref,
+                        error = %error,
+                        "GGUF inventory verification task failed"
+                    );
+                    None
+                }
+            };
         let layer_count = source
             .as_ref()
             .map(|source| source.layer_count)
@@ -251,6 +270,15 @@ impl StageControlState {
         } else {
             Vec::new()
         };
+        let content_addressed_ref =
+            crate::inference::skippy::is_content_addressed_gguf_ref(&request.package_ref);
+        let local_source_required = crate::inference::skippy::effective_local_source_required(
+            &request.model_id,
+            request.runtime_profile.as_deref(),
+            request.local_source_required || content_addressed_ref,
+        );
+        let content_addressed_local_source =
+            local_source_required.then_some(content_addressed_ref && source.is_some());
         StageLayerInventory {
             model_id: request.model_id,
             package_ref: request.package_ref,
@@ -260,10 +288,16 @@ impl StageControlState {
             available_ranges,
             missing_ranges,
             preparing_ranges,
-            source_model_path: source
-                .as_ref()
-                .map(|source| source.path.to_string_lossy().to_string()),
+            source_model_path: (!local_source_required && !content_addressed_ref)
+                .then(|| {
+                    source
+                        .as_ref()
+                        .map(|source| source.path.to_string_lossy().to_string())
+                })
+                .flatten(),
             source_model_bytes: source.as_ref().and_then(|source| source.bytes),
+            source_model_sha256: source.as_ref().and_then(|source| source.sha256.clone()),
+            content_addressed_local_source,
             source_model_kind: source
                 .as_ref()
                 .map(|source| source.kind)
@@ -273,7 +307,7 @@ impl StageControlState {
 
     async fn prepare(
         &mut self,
-        request: StagePrepareRequest,
+        mut request: StagePrepareRequest,
     ) -> Result<StagePrepareAcceptedResponse> {
         if let Some(error) = self.validate_load_claim(&request.load) {
             return Ok(StagePrepareAcceptedResponse {
@@ -285,6 +319,27 @@ impl StageControlState {
                 ),
                 error: Some(error),
             });
+        }
+        let mut load = request.load.clone();
+        let verified_load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage prepare source task")?;
+        match verified_load {
+            Ok(load) => request.load = load,
+            Err(error) => {
+                let error = format!("{error:#}");
+                return Ok(StagePrepareAcceptedResponse {
+                    accepted: false,
+                    status: preparation_status_from_load(
+                        &request.load,
+                        StagePreparationState::Failed,
+                        Some(error.clone()),
+                    ),
+                    error: Some(error),
+                });
+            }
         }
         let key = stage_key(
             &request.load.topology_id,
@@ -398,7 +453,7 @@ impl StageControlState {
         }
     }
 
-    async fn load(&mut self, load: StageLoadRequest) -> Result<StageReadyResponse> {
+    async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
         anyhow::ensure!(
             load.backend == "skippy",
             "unsupported stage backend '{}'",
@@ -411,6 +466,11 @@ impl StageControlState {
                 error: Some(error),
             });
         }
+        load = tokio::task::spawn_blocking(move || {
+            crate::inference::skippy::apply_verified_local_source(&mut load).map(|_| load)
+        })
+        .await
+        .context("join verify local-required stage load source task")??;
         let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
         if let Some(existing) = self.stages.remove(&key) {
             existing.server.shutdown().await?;
@@ -437,8 +497,6 @@ impl StageControlState {
             config,
             topology: None,
             bind_addr,
-            activation_width: effective_load.activation_width,
-            wire_dtype: effective_load.wire_dtype.into(),
             metrics_otlp_grpc: self.telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: self.telemetry.queue_capacity,
             telemetry_level: self.telemetry.level,
@@ -448,6 +506,7 @@ impl StageControlState {
             downstream_wire_condition: super::benchmark_downstream_wire_condition()?,
             downstream_connect_timeout_secs: 30,
             native_mtp_enabled: effective_load.native_mtp_enabled,
+            continuous_batching: effective_load.continuous_batching,
             openai: None,
         });
         self.stages.insert(
@@ -805,7 +864,8 @@ fn stage_config(
             .or_else(|| load.model_path.clone()),
         source_model_sha256: materialized
             .map(|artifact| artifact.source_model_sha256.clone())
-            .or_else(|| package.map(|package| package.source_model_sha256.clone())),
+            .or_else(|| package.map(|package| package.source_model_sha256.clone()))
+            .or_else(|| load.source_model_sha256.clone()),
         source_model_bytes: materialized
             .and_then(|artifact| artifact.source_model_bytes)
             .or_else(|| package.and_then(|package| package.source_model_bytes))
@@ -814,6 +874,13 @@ fn stage_config(
         materialized_pinned: materialized.is_some(),
         model_path: load.model_path.clone(),
         projector_path: load.projector_path.clone(),
+        projector_use_gpu: load.projector_use_gpu,
+        media_marker: load.media_marker.clone(),
+        image_min_tokens: load.image_min_tokens,
+        image_max_tokens: load.image_max_tokens,
+        batch_max_tokens: load.batch_max_tokens,
+        glm_dsa_policy: load.glm_dsa_policy,
+        generation_signal_window: load.generation_signal_window,
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
@@ -825,13 +892,27 @@ fn stage_config(
         n_gpu_layers: load.n_gpu_layers,
         mmap: load.mmap,
         mlock: load.mlock,
+        repack: load.runtime_settings.repack,
+        op_offload: load.runtime_settings.op_offload,
+        no_host_buffer: load.runtime_settings.no_host_buffer,
+        check_tensors: load.runtime_settings.check_tensors,
+        direct_io: load.runtime_settings.direct_io,
+        main_gpu: load.runtime_settings.main_gpu,
+        split_mode: load.runtime_settings.split_mode,
         cache_type_k: empty_to_default(&load.cache_type_k, "f16"),
         cache_type_v: empty_to_default(&load.cache_type_v, "f16"),
         flash_attn_type: load.flash_attn_type,
+        kv_offload: load.runtime_settings.kv_offload,
+        kv_unified: load.runtime_settings.kv_unified,
+        swa_full: load.runtime_settings.swa_full,
+        cache_idle_slots: load.runtime_settings.cache_idle_slots,
         filter_tensors_on_load: matches!(
             load.load_mode,
             LoadMode::RuntimeSlice | LoadMode::LayerPackage
         ),
+        checkpoint_quantization: None,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
         selected_device: load.selected_device.clone(),
         kv_cache: None,
         native_mtp_enabled: load.native_mtp_enabled,
@@ -875,6 +956,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         skippy_server::EmbeddedState::Stopped => StageRuntimeState::Stopped,
         skippy_server::EmbeddedState::Failed => StageRuntimeState::Failed,
     };
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&stage.load.package_ref);
     StageStatusSnapshot {
         topology_id: stage.load.topology_id.clone(),
         run_id: stage.load.run_id.clone(),
@@ -882,17 +965,21 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         backend: stage.load.backend.clone(),
         package_ref: Some(stage.load.package_ref.clone()),
         manifest_sha256: Some(stage.load.manifest_sha256.clone()),
-        source_model_path: stage
-            .materialized
-            .as_ref()
-            .map(|artifact| artifact.source_model_path.clone())
-            .or_else(|| {
+        source_model_path: (!content_addressed_ref)
+            .then(|| {
                 stage
-                    .package
+                    .materialized
                     .as_ref()
-                    .map(|package| package.source_model_path.clone())
+                    .map(|artifact| artifact.source_model_path.clone())
+                    .or_else(|| {
+                        stage
+                            .package
+                            .as_ref()
+                            .map(|package| package.source_model_path.clone())
+                    })
+                    .or_else(|| stage.load.model_path.clone())
             })
-            .or_else(|| stage.load.model_path.clone()),
+            .flatten(),
         source_model_sha256: stage
             .materialized
             .as_ref()
@@ -902,7 +989,8 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
                     .package
                     .as_ref()
                     .map(|package| package.source_model_sha256.clone())
-            }),
+            })
+            .or_else(|| stage.load.source_model_sha256.clone()),
         source_model_bytes: stage
             .materialized
             .as_ref()
@@ -919,15 +1007,17 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
             .as_ref()
             .map(|artifact| artifact.path.to_string_lossy().to_string()),
         materialized_pinned: stage.materialized.is_some(),
-        projector_path: stage.load.projector_path.clone(),
+        projector_path: (!stage.load.local_source_required && !content_addressed_ref)
+            .then(|| stage.load.projector_path.clone())
+            .flatten(),
         stage_id: stage.load.stage_id.clone(),
         stage_index: stage.load.stage_index,
         layer_start: stage.load.layer_start,
         layer_end: stage.load.layer_end,
         state,
         bind_addr: server.bind_addr.to_string(),
-        activation_width: stage.load.activation_width.max(0) as u32,
-        wire_dtype: stage.load.wire_dtype,
+        input_activation_boundary: server.input_activation_boundary,
+        output_activation_boundary: server.output_activation_boundary,
         selected_device: stage.load.selected_device.clone(),
         ctx_size: stage.load.ctx_size,
         lane_count: stage.load.lane_count,
@@ -962,8 +1052,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         layer_end: 0,
         state: StageRuntimeState::Stopped,
         bind_addr: String::new(),
-        activation_width: 0,
-        wire_dtype: StageWireDType::F32,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: None,
         ctx_size: 0,
         lane_count: 0,
@@ -979,6 +1069,8 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
 }
 
 fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatusSnapshot {
+    let content_addressed_ref =
+        crate::inference::skippy::is_content_addressed_gguf_ref(&load.package_ref);
     StageStatusSnapshot {
         topology_id: load.topology_id.clone(),
         run_id: load.run_id.clone(),
@@ -986,20 +1078,24 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         backend: load.backend.clone(),
         package_ref: Some(load.package_ref.clone()),
         manifest_sha256: Some(load.manifest_sha256.clone()),
-        source_model_path: load.model_path.clone(),
-        source_model_sha256: None,
+        source_model_path: (!content_addressed_ref)
+            .then(|| load.model_path.clone())
+            .flatten(),
+        source_model_sha256: load.source_model_sha256.clone(),
         source_model_bytes: load.source_model_bytes,
         materialized_path: None,
         materialized_pinned: false,
-        projector_path: load.projector_path.clone(),
+        projector_path: (!load.local_source_required && !content_addressed_ref)
+            .then(|| load.projector_path.clone())
+            .flatten(),
         stage_id: load.stage_id.clone(),
         stage_index: load.stage_index,
         layer_start: load.layer_start,
         layer_end: load.layer_end,
         state: StageRuntimeState::Failed,
         bind_addr: load.bind_addr.clone(),
-        activation_width: load.activation_width.max(0) as u32,
-        wire_dtype: load.wire_dtype,
+        input_activation_boundary: None,
+        output_activation_boundary: None,
         selected_device: load.selected_device.clone(),
         ctx_size: load.ctx_size,
         lane_count: load.lane_count,
@@ -1063,15 +1159,5 @@ fn preparation_status_from_cancel(cancel: StageCancelPrepareRequest) -> StagePre
         coordinator_term: 0,
         coordinator_id: None,
         lease_until_unix_ms: 0,
-    }
-}
-
-impl From<StageWireDType> for skippy_protocol::binary::WireActivationDType {
-    fn from(value: StageWireDType) -> Self {
-        match value {
-            StageWireDType::F32 => Self::F32,
-            StageWireDType::F16 => Self::F16,
-            StageWireDType::Q8 => Self::Q8,
-        }
     }
 }

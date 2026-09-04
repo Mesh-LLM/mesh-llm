@@ -23,11 +23,11 @@ host-io = ["mesh-llm-identity/host-io"]
 # tracing, sha2, ed25519-dalek, hex, uuid, url, http, base64, async-trait, httparse
 # (httparse is a transitive dep of iroh; not in forbidden list)
 iroh = { version = "1.0.3", default-features = false, features = ["metrics", "fast-apple-datapath", "portmapper", "tls-aws-lc-rs"] }
-mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.0-rc7", default-features = false }
-mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.0-rc7" }
-mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.0-rc7" }
-mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc7" }
-model-artifact = { path = "../model-artifact", version = "0.76.0-rc7" }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.76.0-rc9", default-features = false }
+mesh-llm-protocol = { path = "../mesh-llm-protocol", version = "0.76.0-rc9" }
+mesh-llm-routing = { path = "../mesh-llm-routing", version = "0.76.0-rc9" }
+mesh-llm-types = { path = "../mesh-llm-types", version = "0.76.0-rc9" }
+model-artifact = { path = "../model-artifact", version = "0.76.0-rc9" }
 async-trait = "0.1"
 httparse = "1"
 tokio = { version = "1", features = ["io-util", "sync", "net", "time", "rt-multi-thread"] }
@@ -41,7 +41,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 hex = "0.4"

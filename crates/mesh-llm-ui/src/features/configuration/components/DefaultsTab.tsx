@@ -69,6 +69,7 @@ const categoryIcons: Partial<Record<ConfigurationDefaultsCategoryId, LucideIcon>
   'request-defaults': Filter,
   'skippy-transport': Network,
   multimodal: Image,
+  topology: Layers,
   'advanced-server': Server,
   'logs-general': Layers,
   'logs-retention': Clock,
@@ -528,10 +529,11 @@ export function DefaultsTab({
 
       {readOnlyNotice}
 
-      <div className="grid min-w-0 gap-[14px] xl:grid-cols-[250px_minmax(0,1fr)_minmax(280px,340px)]">
+      <div className="grid min-w-0 gap-[14px] 2xl:grid-cols-[250px_minmax(0,1fr)_minmax(280px,340px)]">
         <SettingsCategoryRail
           activeId={activeCategoryId}
           categories={categories}
+          className="static self-start 2xl:sticky 2xl:top-[72px]"
           footer={
             <span className="inline-flex flex-col gap-1 whitespace-nowrap leading-none">
               <span className="type-label text-fg-faint">Configuration Path</span>
@@ -556,7 +558,7 @@ export function DefaultsTab({
           ))}
         </div>
 
-        <div className="hidden min-w-0 xl:block">
+        <div className="hidden min-w-0 2xl:block">
           <SettingsPreviewRail
             title={previewTitle}
             code={renderDefaultsPreview(previewLines)}

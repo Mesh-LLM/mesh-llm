@@ -57,6 +57,7 @@ WORKSPACE_MEMBERS=(
   "skippy-metrics"
   "openai-frontend"
   "skippy-ffi"
+  "skippy-model"
   "skippy-runtime"
   "skippy-scheduler"
   "skippy-server"

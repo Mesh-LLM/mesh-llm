@@ -1,11 +1,12 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
-    ActivationDesc, BackendDevice, Error, GenerationSignalWindow, IterationRequest, KvPageDesc,
-    LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo, MtmdBitmap, MtmdContext,
-    MtmdContextParams, MtmdDecoderPos, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, SlicePlan, Status,
-    TensorInfo, TokenSignal,
+    ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
+    IterationRequest, KvPageDesc, LlamaLogCallback, LlamaModelQuantizeParams, Model, ModelInfo,
+    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    MtmdHelperBitmapWrapper, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NgramCache, Opaque, RuntimeConfig,
+    SamplingConfig, Session, SlicePlan, Status, TensorInfo, TokenSignal,
 };
 
 unsafe extern "C" {
@@ -83,6 +84,16 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_model_open_from_source(
+        metadata_gguf: *const c_void,
+        metadata_gguf_size: usize,
+        source: *const ModelTensorSourceV1,
+        quantization_ftype: i32,
+        config: *const RuntimeConfig,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_model_attach_mtp_draft_model(
         target_model: *mut Model,
         path: *const c_char,
@@ -93,6 +104,22 @@ unsafe extern "C" {
     pub fn skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
 
     pub fn skippy_model_llama_model(model: *const Model) -> *const Opaque;
+
+    pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_hybrid(model: *const Opaque) -> bool;
+
+    pub fn llama_model_is_diffusion(model: *const Opaque) -> bool;
+
+    pub fn skippy_model_output_activation_boundary(
+        model: *const Model,
+        out_desc: *mut ActivationBoundaryDesc,
+    ) -> bool;
+
+    pub fn skippy_model_input_activation_boundary(
+        model: *const Model,
+        out_desc: *mut ActivationBoundaryDesc,
+    ) -> bool;
 
     pub fn skippy_session_create(
         model: *mut Model,
@@ -114,6 +141,8 @@ unsafe extern "C" {
     pub fn skippy_session_position(session: *const Session) -> i32;
 
     pub fn skippy_session_batch_size(session: *const Session) -> i32;
+
+    pub fn skippy_session_sequence_id(session: *const Session) -> i32;
 
     pub fn skippy_session_begin_external_decode(
         session: *mut Session,
@@ -212,8 +241,10 @@ unsafe extern "C" {
         output_payloads: *const *mut c_void,
         output_payload_capacities: *const usize,
         out_output_payload_bytes: *mut usize,
+        out_sampled_request_indexes: *mut usize,
         out_predicted_tokens: *mut i32,
-        predicted_token_capacity: usize,
+        sampled_output_capacity: usize,
+        out_sampled_output_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -467,6 +498,12 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_memory_used_cells(
+        session: *mut Session,
+        out_used_cells: *mut u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_drop_sequence(
         session: *mut Session,
         seq_id: i32,
@@ -511,6 +548,11 @@ unsafe extern "C" {
         parallel_tool_calls: bool,
         reasoning_format: *const c_char,
         chat_template_kwargs: *const c_char,
+        chat_template: *const c_char,
+        use_jinja: bool,
+        grammar: *const c_char,
+        json_schema: *const c_char,
+        skip_chat_parsing: bool,
         output_text: *mut c_char,
         output_text_capacity: usize,
         out_text_bytes: *mut usize,
@@ -566,6 +608,7 @@ unsafe extern "C" {
         layer_end: i32,
         include_embeddings: bool,
         include_output: bool,
+        include_per_layer_token_embd: bool,
         out_error: *mut *mut Error,
     ) -> Status;
 
@@ -598,11 +641,17 @@ unsafe extern "C" {
 
     pub fn mtmd_free(ctx: *mut MtmdContext);
 
+    pub fn mtmd_helper_init_opt_default() -> MtmdHelperInitOpt;
+
     pub fn mtmd_helper_bitmap_init_from_buf(
         ctx: *mut MtmdContext,
         buf: *const u8,
         len: usize,
-    ) -> *mut MtmdBitmap;
+        placeholder: bool,
+        opt: MtmdHelperInitOpt,
+    ) -> MtmdHelperBitmapWrapper;
+
+    pub fn mtmd_helper_video_free(video: *mut MtmdHelperVideo);
 
     pub fn mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
 

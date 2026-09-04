@@ -690,8 +690,6 @@ echo "smoke: prompt exact-prefix hit and live-session reuse"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
   "$STAGE_SERVER_BIN" serve-binary \
     --config "$PROMPT_CONFIG" \
-    --activation-width 2048 \
-    --activation-wire-dtype f16 \
     --max-inflight 4 \
     >"$PROMPT_LOG" 2>&1 &
 SERVER_PID="$!"
@@ -712,7 +710,6 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --first-stage-addr "$PROMPT_BIND" \
     --ctx-size "$PROMPT_CTX_SIZE" \
     --activation-width 2048 \
-    --activation-wire-dtype f16 \
     --prefill-chunk-size "$PROMPT_PREFILL_CHUNK_SIZE" \
     --max-new-tokens "$PROMPT_MAX_NEW_TOKENS" \
     --session-id skippy-ci-smoke \

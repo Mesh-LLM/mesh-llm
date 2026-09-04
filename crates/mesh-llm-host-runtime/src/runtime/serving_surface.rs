@@ -460,6 +460,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
     vec![
         StartupModelPlan {
             declared_ref: "unsloth/Model-A-GGUF:Q4_K_M".to_string(),
+            config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-A-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
@@ -471,10 +472,12 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             n_batch: None,
             n_ubatch: None,
             flash_attention: FlashAttentionType::Auto,
+            local_source_required: false,
             profile: String::new(),
         },
         StartupModelPlan {
             declared_ref: "Model-B".to_string(),
+            config_model_id: None,
             resolved_path: PathBuf::from("/tmp/Model-B.gguf"),
             mmproj_path: None,
             ctx_size: Some(4096),
@@ -492,6 +495,7 @@ pub(super) fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
             n_batch: None,
             n_ubatch: None,
             flash_attention: FlashAttentionType::Auto,
+            local_source_required: false,
             profile: String::new(),
         },
     ]
@@ -553,6 +557,7 @@ pub(super) fn assert_loaded_model_plan_row(
 pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model() {
     let startup_models = vec![StartupModelPlan {
         declared_ref: "Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m".to_string(),
+        config_model_id: None,
         resolved_path: PathBuf::from("/tmp/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
         mmproj_path: None,
         ctx_size: Some(4096),
@@ -564,6 +569,7 @@ pub(super) fn startup_launch_plan_uses_metal_device_fallback_for_unpinned_model(
         n_batch: None,
         n_ubatch: None,
         flash_attention: FlashAttentionType::Auto,
+        local_source_required: false,
         profile: String::new(),
     }];
 
@@ -1144,6 +1150,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             target_tx: ctx.target_tx.clone(),
             model_path: extra_model.resolved_path.clone(),
             model_ref: extra_model.declared_ref.clone(),
+            config_model_id: extra_model.config_model_id.clone(),
             readiness_index,
             profile: extra_model.profile.clone(),
             model_name: extra_name.clone(),
@@ -1152,6 +1159,9 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
             mmproj_path: extra_model.mmproj_path.clone(),
             ctx_size: extra_model.ctx_size,
             pinned_gpu: extra_model.pinned_gpu.clone(),
+            device_override: super::startup_models::startup_device_override(
+                extra_model.gpu_id.as_deref(),
+            ),
             runtime_capacity_ledger: ctx.runtime_capacity_ledger.clone(),
             cache_type_k: extra_model.cache_type_k.clone(),
             cache_type_v: extra_model.cache_type_v.clone(),
@@ -1162,6 +1172,7 @@ pub(super) async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditional
                 extra_model.parallel,
                 &ctx.config.gpu,
             ),
+            local_source_required: extra_model.local_source_required,
             split_topology_lock: ctx.options.split_topology_lock.clone(),
             resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
@@ -1546,7 +1557,7 @@ pub(super) async fn run_passive_listener_loop(
                 let node = node.clone();
                 let affinity = affinity_router.clone();
                 tokio::spawn(Box::pin(crate::network::proxy::handle_mesh_request(
-                    node, tcp_stream, true, affinity,
+                    node, tcp_stream.into(), true, affinity,
                 )));
             }
             Some(model_name) = promote_rx.recv() => {

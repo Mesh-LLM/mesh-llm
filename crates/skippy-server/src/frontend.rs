@@ -17,6 +17,7 @@ mod prefill;
 mod prefix_cache;
 mod prompting;
 mod request;
+mod sampling_cache_key;
 mod speculative;
 mod tool_emulation;
 mod util;
@@ -30,14 +31,18 @@ use self::{
 };
 
 pub use self::admission::DECODE_BATCH_HEADROOM_TOKENS;
-pub(crate) use self::generation::serve_embedded_openai_with_scheduler;
 use self::generation::*;
 pub use self::generation::{
-    CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs,
-    EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter,
-    EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
-    embedded_openai_backend, embedded_openai_router, serve_embedded_openai,
-    serve_embedded_openai_with_shutdown, serve_openai,
+    CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
+    EmbeddedOpenAiRequestDefaults, EmbeddedOpenAiRouter, EmbeddedReasoningBudget,
+    EmbeddedReasoningEnabled, EmbeddedReasoningFormat, embedded_openai_backend,
+    embedded_openai_router, serve_embedded_openai, serve_embedded_openai_with_shutdown,
+    serve_openai,
+};
+pub(crate) use self::generation::{
+    default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,
+    serve_embedded_openai_with_scheduler,
 };
 pub use self::generation_receipt::{
     GenerationAbort, GenerationCommit, GenerationLifecycleIngress, GenerationLifecycleObservation,

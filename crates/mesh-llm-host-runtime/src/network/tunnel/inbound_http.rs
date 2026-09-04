@@ -1,4 +1,5 @@
 use crate::mesh::Node;
+use crate::network::openai::client_stream::ClientStream;
 use anyhow::{Context, Result};
 use iroh::EndpointId;
 use std::time::Duration;
@@ -11,15 +12,17 @@ const TUNNELED_HTTP_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 mod tests;
 
-/// Handle an inbound HTTP tunnel bi-stream: connect to the local API proxy and relay.
+/// Handle an inbound HTTP tunnel bi-stream through direct ingress or the legacy bridge.
 pub(super) async fn handle_inbound_http_stream(
     node: Node,
     remote: EndpointId,
     quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
     http_port: u16,
+    ingress: Option<super::HttpIngress>,
 ) -> Result<()> {
-    // Admission check for remote QUIC HTTP ingress.
+    let _inflight = node.begin_inflight_request();
+
     match node
         .activity_policy_guard
         .check_admission(crate::runtime::IngressType::RemoteQuicHttp)
@@ -27,14 +30,13 @@ pub(super) async fn handle_inbound_http_stream(
         crate::runtime::AdmissionResult::Allowed => {}
         crate::runtime::AdmissionResult::Paused { reason, .. } => {
             tracing::debug!(reason, "Inbound HTTP tunnel rejected by activity policy");
-            anyhow::bail!("remote inference paused: {reason}");
+            let stream = ClientStream::from_quic_with_prefix(quic_recv, quic_send, Vec::new());
+            crate::network::openai::send_503(stream, &format!("inference paused: {reason}"))
+                .await
+                .context("failed to send paused-inference response")?;
+            return Ok(());
         }
     }
-
-    tracing::info!("Inbound HTTP tunnel stream -> API proxy :{http_port}");
-    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
-    tcp_stream.set_nodelay(true)?;
-    let _inflight = node.begin_inflight_request();
 
     // Only raw mesh ingress that successfully claimed a parent emits the
     // private assertion. Direct API requests have it stripped before they can
@@ -56,8 +58,23 @@ pub(super) async fn handle_inbound_http_stream(
             .as_ref()
             .and_then(|state| state.suppress_remote_tunneled_request(request_id))
     });
-    tcp_stream.write_all(&prefix).await?;
+    if let Some(ingress) = ingress {
+        let stream = ClientStream::from_quic_with_prefix(quic_recv, quic_send, prefix);
+        let targets = ingress.targets.borrow().clone();
+        crate::network::openai::ingress::handle_remote_http_stream(
+            node,
+            stream,
+            targets,
+            ingress.affinity,
+        )
+        .await;
+        return Ok(());
+    }
 
+    // Compatibility for embedders/tests that only configure the legacy port.
+    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
+    tcp_stream.set_nodelay(true)?;
+    tcp_stream.write_all(&prefix).await?;
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     super::relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
 }
@@ -100,8 +117,8 @@ fn remote_tunnel_request_metadata(
 
 /// Read at most one bounded HTTP header prefix without changing the bytes that
 /// the existing relay will subsequently forward. A read may include a small
-/// amount of body data from the same transport chunk; it is forwarded directly
-/// to the local API proxy and is never retained by logging state.
+/// amount of body data from the same transport chunk; direct ingress consumes
+/// it from `ClientStream` before reading the remaining QUIC bytes.
 async fn read_tunneled_http_header_prefix<R>(reader: &mut R) -> Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,

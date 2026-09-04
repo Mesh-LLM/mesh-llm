@@ -111,6 +111,32 @@ class StaticAbiArtifactTests(unittest.TestCase):
             build_script.index(hash_link),
         )
 
+    def test_skippy_ffi_uses_the_native_build_scripts_canonical_directory(self) -> None:
+        ffi_build = (ROOT / "crates" / "skippy-ffi" / "build.rs").read_text(
+            encoding="utf-8",
+        )
+
+        self.assertIn('.arg("--print-build-dir")', ffi_build)
+        self.assertIn('.env("LLAMA_STAGE_BACKEND", backend)', ffi_build)
+        self.assertIn('.env("LLAMA_STAGE_LINK_MODE", "static")', ffi_build)
+        self.assertNotIn("sanitize_build_component", ffi_build)
+
+        for backend in ("cpu", "metal", "cuda", "rocm"):
+            environment = os.environ.copy()
+            environment["LLAMA_STAGE_BACKEND"] = backend
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "build-llama.sh"), "--print-build-dir"],
+                cwd=ROOT,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            expected = Path(result.stdout.strip())
+            self.assertTrue(expected.is_absolute())
+            self.assertEqual(expected.parent, ROOT / ".deps" / "llama-build")
+            self.assertIn(f"static-{backend}", expected.name)
+
     def test_dynamic_output_probe_is_pipefail_safe(self) -> None:
         build_script = (ROOT / "scripts" / "build-llama.sh").read_text(
             encoding="utf-8",

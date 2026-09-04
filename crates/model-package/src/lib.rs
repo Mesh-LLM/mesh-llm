@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 /// Resolves endpoint from `HF_ENDPOINT` and token from `HF_TOKEN` /
 /// `HUGGING_FACE_HUB_TOKEN`.
 pub fn build_hf_client() -> Result<hf_hub::HFClient> {
+    let _ = model_hf::configure_hf_tls_provider();
     let mut builder =
         hf_hub::HFClientBuilder::new().cache_dir(model_hf::huggingface_hub_cache_dir());
 

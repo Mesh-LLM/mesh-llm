@@ -1,6 +1,9 @@
 use std::{
+    collections::hash_map::RandomState,
     fs,
-    net::TcpStream,
+    hash::{BuildHasher, Hasher},
+    io::ErrorKind,
+    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     thread,
@@ -23,8 +26,9 @@ use skippy_runtime::{
 
 use crate::{
     cli::{DEFAULT_RUN_MAX_NEW_TOKENS, FocusedRuntimeArgs, RunArgs},
+    direct_return_listener::{DriverReturnListener, DriverReturnReceiver},
     model_identity::model_identity_for_path,
-    support::{ChildGuard, ensure_release_skippy_server_bin, parse_wire_dtype, retry},
+    support::{ChildGuard, ensure_release_skippy_server_bin, retry},
 };
 
 #[path = "deployment.rs"]
@@ -366,7 +370,9 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
         .stages
         .first()
         .context("deployment plan has no stages")?;
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
+    // The topology hands the final stage the driver return endpoint as its
+    // downstream, so the driver must listen there to close the prediction ring.
+    let return_listener = start_driver_return_listener(plan)?;
     let prompt_cases = prompt_cases(args)?;
     if prompt_cases.is_empty() {
         bail!("prompt corpus is empty");
@@ -391,7 +397,7 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
                 .tokenize(&prompt_case.prompt)?
         };
         let mut result =
-            run_remote_prompt_case(args, first, wire_dtype, prompt_case, token_ids, index)?;
+            run_remote_prompt_case(args, first, prompt_case, token_ids, index, &return_listener)?;
         result.elapsed_ms = started.elapsed().as_millis();
         results.push(result);
     }
@@ -493,13 +499,151 @@ fn ensure_reply_kind(
     Ok(())
 }
 
+/// The final stage prefers delivering predictions over the direct return
+/// connection; if it could not connect there it falls back to the upstream
+/// reply chain. Decide once per prompt which path is live: poll both reply
+/// paths until one produces data, so a failed direct connection costs
+/// milliseconds — not a full direct-return timeout — before the upstream
+/// reply is consumed.
+const DIRECT_RETURN_REPLY_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Alternating poll interval while neither reply path has produced data yet.
+const REPLY_PATH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+fn receive_decode_reply(
+    stream: &mut TcpStream,
+    direct_return: &DriverReturnReceiver,
+    direct_mode: &mut Option<bool>,
+    decode_step: usize,
+    prompt_index: usize,
+) -> Result<skippy_protocol::binary::StageReply> {
+    let upstream = |stream: &mut TcpStream| {
+        recv_reply(stream).with_context(|| {
+            format!("receive decode step {decode_step} reply for prompt {prompt_index}")
+        })
+    };
+    match *direct_mode {
+        Some(true) => direct_return
+            .recv_timeout(DIRECT_RETURN_REPLY_TIMEOUT)?
+            .with_context(|| {
+                format!(
+                    "timed out waiting for direct prediction return reply at decode step \
+                     {decode_step} for prompt {prompt_index}"
+                )
+            }),
+        Some(false) => upstream(stream),
+        None => {
+            let deadline = Instant::now() + DIRECT_RETURN_REPLY_TIMEOUT;
+            loop {
+                if let Some(reply) = direct_return.recv_timeout(REPLY_PATH_POLL_INTERVAL)? {
+                    *direct_mode = Some(true);
+                    return Ok(reply);
+                }
+                if upstream_reply_ready(stream)? {
+                    *direct_mode = Some(false);
+                    return upstream(stream);
+                }
+                if Instant::now() >= deadline {
+                    bail!(
+                        "timed out waiting for a reply on either return path at decode step \
+                         {decode_step} for prompt {prompt_index}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Peek the upstream stream without consuming bytes so the undecided reply
+/// wait can notice a fallback reply immediately. EOF also counts as "ready":
+/// the follow-up blocking read surfaces the disconnect error promptly instead
+/// of spinning until the deadline.
+fn upstream_reply_ready(stream: &mut TcpStream) -> Result<bool> {
+    let previous = stream
+        .read_timeout()
+        .context("read upstream reply stream timeout")?;
+    stream
+        .set_read_timeout(Some(REPLY_PATH_POLL_INTERVAL))
+        .context("set upstream reply peek timeout")?;
+    let peeked = stream.peek(&mut [0_u8; 1]);
+    stream
+        .set_read_timeout(previous)
+        .context("restore upstream reply stream timeout")?;
+    match peeked {
+        Ok(_) => Ok(true),
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Ok(false)
+        }
+        Err(error) => Err(error).context("peek upstream reply stream"),
+    }
+}
+
+/// Bind the driver return listener on the interface named by the deployment
+/// plan rather than every interface; fall back to the wildcard only when that
+/// address is not local (e.g. the plan names a NAT-visible address), keeping
+/// the peer allowlist as the guard in that case.
+fn start_driver_return_listener(plan: &DeploymentPlan) -> Result<DriverReturnListener> {
+    let endpoint = plan.driver_return_endpoint.as_str();
+    let planned_addr = endpoint
+        .to_socket_addrs()
+        .with_context(|| format!("resolve driver return endpoint {endpoint}"))?
+        .next()
+        .with_context(|| format!("driver return endpoint resolved to no address: {endpoint}"))?;
+    let allowed_sources = stage_host_ips(plan);
+    match DriverReturnListener::start(planned_addr, allowed_sources.clone()) {
+        Ok(listener) => Ok(listener),
+        Err(bind_error) => {
+            eprintln!(
+                "driver prediction return listener could not bind {planned_addr} ({bind_error:#}); \
+                 falling back to a wildcard bind guarded by the stage-host allowlist"
+            );
+            DriverReturnListener::start(
+                SocketAddr::from(([0, 0, 0, 0], planned_addr.port())),
+                allowed_sources,
+            )
+            .context("start driver prediction return listener")
+        }
+    }
+}
+
+/// Resolve every stage host in the plan; these are the only non-loopback
+/// sources allowed to deliver direct prediction returns.
+fn stage_host_ips(plan: &DeploymentPlan) -> Vec<IpAddr> {
+    let mut ips = Vec::new();
+    for stage in &plan.stages {
+        let endpoint = stage
+            .endpoint
+            .strip_prefix("tcp://")
+            .unwrap_or(&stage.endpoint);
+        let Ok(resolved) = endpoint.to_socket_addrs() else {
+            eprintln!(
+                "driver prediction return allowlist skipping unresolvable stage endpoint \
+                 {endpoint}"
+            );
+            continue;
+        };
+        for addr in resolved {
+            if !ips.contains(&addr.ip()) {
+                ips.push(addr.ip());
+            }
+        }
+    }
+    ips
+}
+
+/// Random request/session identifiers so a peer on the benchmark network
+/// cannot guess a live ID and inject a forged prediction reply.
+fn random_wire_id() -> u64 {
+    RandomState::new().build_hasher().finish()
+}
+
 fn run_remote_prompt_case(
     args: &RunArgs,
     first: &StageAssignment,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     prompt_case: &PromptCase,
     token_ids: Vec<i32>,
     prompt_index: usize,
+    return_listener: &DriverReturnListener,
 ) -> Result<PromptDriverResult> {
     if token_ids.is_empty() {
         bail!("prompt produced no tokens");
@@ -514,16 +658,13 @@ fn run_remote_prompt_case(
         })?;
 
     let wire_started = Instant::now();
-    let request_id = 10_000_u64 + prompt_index as u64;
-    let session_id = 20_000_u64 + prompt_index as u64;
-    send_generation_config(
-        &mut stream,
-        wire_dtype,
-        request_id,
-        session_id,
-        token_ids.len(),
-    )
-    .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
+    let request_id = random_wire_id();
+    let session_id = random_wire_id();
+    let direct_return = return_listener
+        .register(request_id, session_id)
+        .with_context(|| format!("register direct prediction return for prompt {prompt_index}"))?;
+    send_generation_config(&mut stream, request_id, session_id, token_ids.len())
+        .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
     let prefill_token_count = token_ids.len().saturating_sub(1);
     let mut prefill_chunk_count = 0usize;
     let mut effective_chunk_size = None;
@@ -539,7 +680,6 @@ fn run_remote_prompt_case(
                 .context("prefill chunk position overflow")?;
             send_prefill_chunk(
                 &mut stream,
-                wire_dtype,
                 PrefillChunk {
                     prompt_index,
                     request_id,
@@ -556,10 +696,11 @@ fn run_remote_prompt_case(
     let max_new_tokens = effective_run_max_new_tokens(args);
     let mut predicted_tokens = Vec::with_capacity(max_new_tokens);
     let mut current = *token_ids.last().expect("checked non-empty tokens");
+    let mut direct_mode: Option<bool> = None;
     let decode_started = Instant::now();
     let mut ttft_ms = 0;
     for decode_step in 0..max_new_tokens {
-        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
         state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
         state.prompt_token_count =
             i32::try_from(token_ids.len()).context("prompt token count exceeds i32")?;
@@ -582,12 +723,16 @@ fn run_remote_prompt_case(
             activation: Vec::new(),
             raw_bytes: Vec::new(),
         };
-        write_stage_message(&mut stream, &message, wire_dtype).with_context(|| {
+        write_stage_message(&mut stream, &message).with_context(|| {
             format!("send remote decode step {decode_step} for prompt {prompt_index}")
         })?;
-        let reply = recv_reply(&mut stream).with_context(|| {
-            format!("receive decode step {decode_step} reply for prompt {prompt_index}")
-        })?;
+        let reply = receive_decode_reply(
+            &mut stream,
+            &direct_return,
+            &mut direct_mode,
+            decode_step,
+            prompt_index,
+        )?;
         ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
         if decode_step == 0 {
             ttft_ms = wire_started.elapsed().as_millis();
@@ -599,8 +744,7 @@ fn run_remote_prompt_case(
 
     write_stage_message(
         &mut stream,
-        &StageWireMessage::stop_with_identity(wire_dtype, request_id, session_id),
-        wire_dtype,
+        &StageWireMessage::stop_with_identity(request_id, session_id),
     )
     .context("send remote stop")?;
     let wire_elapsed_ms = wire_started.elapsed().as_millis();
@@ -663,20 +807,18 @@ fn adaptive_prefill_chunk_size(args: &RunArgs, prefill_token_count: usize) -> Op
 
 fn send_generation_config(
     stream: &mut TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
 ) -> Result<()> {
     let message = StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
         None,
         None,
     );
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    write_stage_message(&mut *stream, &message).context("send configure-generation")?;
     let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
     if reply.kind != WireReplyKind::Ack {
         bail!("expected configure-generation ACK, got {:?}", reply.kind);
@@ -693,12 +835,8 @@ struct PrefillChunk<'a> {
     tokens: &'a [i32],
 }
 
-fn send_prefill_chunk(
-    stream: &mut TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
-    chunk: PrefillChunk<'_>,
-) -> Result<()> {
-    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd, wire_dtype);
+fn send_prefill_chunk(stream: &mut TcpStream, chunk: PrefillChunk<'_>) -> Result<()> {
+    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
     state.seq_id = i32::try_from(chunk.prompt_index).context("prompt index exceeds i32")?;
     state.prompt_token_count =
         i32::try_from(chunk.prefill_token_count).context("prompt token count exceeds i32")?;
@@ -722,7 +860,7 @@ fn send_prefill_chunk(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype).with_context(|| {
+    write_stage_message(&mut *stream, &message).with_context(|| {
         format!(
             "send remote prefill chunk for prompt {}",
             chunk.prompt_index
@@ -791,16 +929,35 @@ impl DriverTokenizer {
                 n_gpu_layers: args.n_gpu_layers,
                 mmap: None,
                 mlock: false,
+                repack: false,
+                op_offload: None,
+                no_host_buffer: false,
+                check_tensors: false,
+                direct_io: false,
+                main_gpu: None,
+                split_mode: skippy_runtime::SplitMode::Auto,
                 selected_backend_device: None,
                 cache_type_k: skippy_runtime::GGML_TYPE_F16,
                 cache_type_v: skippy_runtime::GGML_TYPE_F16,
                 flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
                 load_mode,
                 projector_path: None,
+                projector_use_gpu: None,
+                media_marker: None,
+                image_min_tokens: None,
+                image_max_tokens: None,
+                batch_max_tokens: None,
+                glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
                 include_embeddings: true,
                 include_output: plan.stages.len() == 1,
                 mtp_source: MtpSource::Disabled,
                 filter_tensors_on_load: args.stage_load_mode != "runtime-slice",
+                checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+                checkpoint_imatrix: None,
+                checkpoint_imatrix_sha256: None,
+                kv_offload: None,
+                kv_unified: None,
+                swa_full: None,
             },
         )
         .with_context(|| format!("open tokenizer model {}", model_path.display()))?;
@@ -942,6 +1099,87 @@ pub(super) fn generate_bench_run_id() -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use skippy_protocol::binary::send_reply_predicted_with_stats;
+    use std::net::TcpListener;
+
+    #[test]
+    fn undecided_reply_wait_consumes_upstream_reply_promptly() {
+        let return_listener =
+            DriverReturnListener::start(SocketAddr::from(([127, 0, 0, 1], 0)), Vec::new()).unwrap();
+        let direct_return = return_listener.register(1, 2).unwrap();
+
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(upstream_listener.local_addr().unwrap()).unwrap();
+        let (mut upstream_side, _) = upstream_listener.accept().unwrap();
+        thread::spawn(move || {
+            send_reply_predicted_with_stats(&mut upstream_side, 7, Default::default()).unwrap();
+            // Keep the write side open so the driver's read is not racing EOF.
+            thread::sleep(Duration::from_secs(2));
+        });
+
+        let started = Instant::now();
+        let mut direct_mode = None;
+        let reply = receive_decode_reply(&mut stream, &direct_return, &mut direct_mode, 0, 0)
+            .expect("upstream fallback reply");
+        assert_eq!(reply.predicted, 7);
+        assert_eq!(direct_mode, Some(false));
+        // The whole point of the dual wait: nowhere near DIRECT_RETURN_REPLY_TIMEOUT.
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn undecided_reply_wait_prefers_direct_reply_and_locks_direct_mode() {
+        let return_listener =
+            DriverReturnListener::start(SocketAddr::from(([127, 0, 0, 1], 0)), Vec::new()).unwrap();
+        let direct_return = return_listener.register(3, 4).unwrap();
+
+        // Silent upstream: connect a peer that never writes.
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut stream = TcpStream::connect(upstream_listener.local_addr().unwrap()).unwrap();
+        let (_upstream_side, _) = upstream_listener.accept().unwrap();
+
+        let return_addr = return_listener.local_addr();
+        thread::spawn(move || {
+            use skippy_protocol::binary::{
+                StageStateHeader, StageWireMessage, recv_ready, write_stage_message,
+            };
+            let mut client = TcpStream::connect(return_addr).unwrap();
+            recv_ready(&mut client).unwrap();
+            write_stage_message(
+                &mut client,
+                &StageWireMessage {
+                    kind: WireMessageKind::PredictionReturnOpen,
+                    pos_start: 0,
+                    token_count: 0,
+                    state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
+                    request_id: 3,
+                    session_id: 4,
+                    sampling: None,
+                    chat_sampling_metadata: None,
+                    tokens: Vec::new(),
+                    positions: Vec::new(),
+                    activation: Vec::new(),
+                    raw_bytes: Vec::new(),
+                },
+            )
+            .unwrap();
+            send_reply_predicted_with_stats(&mut client, 11, Default::default()).unwrap();
+            thread::sleep(Duration::from_secs(2));
+        });
+
+        let mut direct_mode = None;
+        let reply = receive_decode_reply(&mut stream, &direct_return, &mut direct_mode, 0, 0)
+            .expect("direct return reply");
+        assert_eq!(reply.predicted, 11);
+        assert_eq!(direct_mode, Some(true));
+    }
+
+    #[test]
+    fn random_wire_ids_are_not_predictable_constants() {
+        let first = random_wire_id();
+        let second = random_wire_id();
+        assert_ne!(first, second);
+    }
 
     #[test]
     fn parses_prompt_token_ids() {
@@ -1052,7 +1290,6 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             activation_width: 2048,
-            activation_wire_dtype: "f32".to_string(),
             prompt: "Hello".to_string(),
             prompt_corpus: None,
             prompt_limit: None,

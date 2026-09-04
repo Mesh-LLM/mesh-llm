@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, Extension, State, rejection::JsonRejection},
-    http::{HeaderMap, Method, Request, StatusCode, Uri, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{IntoResponse, Response, sse::Event},
     routing::{get, post},
@@ -21,13 +21,14 @@ use serde_json::Value;
 use crate::{
     backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
     backend_lifecycle::{call_backend, call_backend_with_context},
-    chat::{ChatCompletionChunk, ChatCompletionRequest},
+    chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
     errors::OpenAiError,
     lifecycle::{
-        OpenAiBackendOperation, OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent,
-        OpenAiLifecycleObserver, OpenAiRequestMethod, OpenAiUsage,
+        CLIENT_NONCE_HEADER, CLIENT_NONCE_ORIGIN_HEADER, OpenAiBackendOperation,
+        OpenAiFrontendRoute, OpenAiLifecycleContext, OpenAiLifecycleEvent, OpenAiLifecycleObserver,
+        OpenAiRequestMethod, OpenAiUsage, client_nonce_from_headers_or_generate,
         request_id_from_headers_or_generate, request_id_response_header,
     },
     models::ModelsResponse,
@@ -389,7 +390,14 @@ async fn chat_completions(
             &response.usage,
         );
         let usage = response.usage.clone();
-        Ok(json_response_with_usage(response, &usage))
+        let capsule_marker = response.capsule_marker.clone();
+        let mut http_response = json_response_with_usage(response, &usage);
+        if let Some(marker) = capsule_marker {
+            http_response
+                .extensions_mut()
+                .insert(CapsuleMarkerExtension(marker));
+        }
+        Ok(http_response)
     }
 }
 
@@ -485,8 +493,15 @@ async fn non_streaming_responses(
     .await?;
     state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
     let usage = response.usage.clone();
+    let capsule_marker = response.capsule_marker.clone();
     let translated = translate_chat_completion_response_to_responses(&response)?;
-    Ok(json_response_with_usage(translated, &usage))
+    let mut http_response = json_response_with_usage(translated, &usage);
+    if let Some(marker) = capsule_marker {
+        http_response
+            .extensions_mut()
+            .insert(CapsuleMarkerExtension(marker));
+    }
+    Ok(http_response)
 }
 
 fn responses_stream_body_events(
@@ -763,12 +778,31 @@ async fn completions(
 #[derive(Clone, Copy)]
 struct TerminalUsage(TokenUsage);
 
+/// Threads a hook-minted [`CapsuleMarker`] from the handler to
+/// `frontend_lifecycle_middleware`, the same `Response::extensions()` relay
+/// [`TerminalUsage`] already uses to get authoritative usage from inside the
+/// handler out to the one layer that can write response headers.
+#[derive(Clone)]
+struct CapsuleMarkerExtension(CapsuleMarker);
+
+/// The rung-ladder response-leg header: see
+/// `docs/plugins/openai-exchange-lifecycle-design-note.md`.
+static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
+
 fn authoritative_usage(usage: &Usage) -> Option<TokenUsage> {
     TokenUsage::from_counts(
         Some(u64::from(usage.prompt_tokens)),
         Some(u64::from(usage.completion_tokens)),
         Some(u64::from(usage.total_tokens)),
     )
+    .map(|authoritative| {
+        authoritative.with_cached_prompt_tokens(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .map(|details| u64::from(details.cached_tokens)),
+        )
+    })
 }
 
 fn json_response_with_usage<T: Serialize>(value: T, usage: &Usage) -> Response {
@@ -846,11 +880,36 @@ async fn method_not_allowed(method: Method) -> OpenAiError {
     OpenAiError::method_not_allowed(method)
 }
 
+/// Ensure every request past this ingress carries a client nonce: forward one
+/// the harness already sent unchanged, or mint a fresh one and mark its
+/// origin. This is the one seam every harness talking to the local frontend
+/// goes through, mirroring how `x-request-id` is already guaranteed present
+/// by this same middleware. Returns the resolved nonce and, only when this
+/// call minted it, the origin-marker value — both echoed onto the response
+/// as well, so the resolution is externally observable in either direction.
+fn apply_client_nonce_headers(request: &mut Request<Body>) -> (HeaderValue, Option<HeaderValue>) {
+    let (nonce_value, nonce_origin) = client_nonce_from_headers_or_generate(request.headers());
+    // The origin marker asserts this frontend minted the nonce. Always remove
+    // an inbound marker first so a caller can never forge a `frontend` origin on
+    // a nonce it supplied itself — only re-insert it when we minted the value.
+    request.headers_mut().remove(&CLIENT_NONCE_ORIGIN_HEADER);
+    request
+        .headers_mut()
+        .insert(CLIENT_NONCE_HEADER.clone(), nonce_value.clone());
+    if let Some(origin_value) = &nonce_origin {
+        request
+            .headers_mut()
+            .insert(CLIENT_NONCE_ORIGIN_HEADER.clone(), origin_value.clone());
+    }
+    (nonce_value, nonce_origin)
+}
+
 async fn frontend_lifecycle_middleware(
     State(state): State<FrontendState>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let (nonce_value, nonce_origin) = apply_client_nonce_headers(&mut request);
     let request_id = request_id_from_headers_or_generate(request.headers());
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -864,6 +923,24 @@ async fn frontend_lifecycle_middleware(
     let mut response = next.run(request).await;
     let (header_name, header_value) = request_id_response_header(&request_id);
     response.headers_mut().insert(header_name, header_value);
+    response
+        .headers_mut()
+        .insert(CLIENT_NONCE_HEADER.clone(), nonce_value);
+    if let Some(origin_value) = nonce_origin {
+        response
+            .headers_mut()
+            .insert(CLIENT_NONCE_ORIGIN_HEADER.clone(), origin_value);
+    }
+    if let Some(marker) = response
+        .extensions()
+        .get::<CapsuleMarkerExtension>()
+        .map(|extension| extension.0.clone())
+        && let Ok(value) = HeaderValue::from_str(&marker.capsule_id)
+    {
+        response
+            .headers_mut()
+            .insert(X_CAPSULE_ID_HEADER.clone(), value);
+    }
     if is_streaming_response(&response) {
         lifecycle.transfer_to_stream();
     } else {

@@ -1,11 +1,16 @@
+#![allow(
+    deprecated,
+    reason = "bridge keeps legacy MCP sampling, roots, and logging methods for older peers"
+)]
+
 use anyhow::{Context, Result, anyhow};
 use rmcp::{
     ErrorData, RoleServer,
     model::{
-        ClientResult, CreateElicitationRequest, CreateElicitationRequestParams,
-        CreateMessageRequest, CreateMessageRequestParams, CustomNotification, CustomRequest,
-        ErrorCode, ListRootsRequest, LoggingMessageNotification, LoggingMessageNotificationParam,
-        PingRequest, ResourceUpdatedNotificationParam, ServerNotification, ServerRequest,
+        ClientResult, CreateMessageRequest, CreateMessageRequestParams, CustomNotification,
+        CustomRequest, ElicitRequest, ElicitRequestParams, ErrorCode, ListRootsRequest,
+        LoggingMessageNotification, LoggingMessageNotificationParam, PingRequest,
+        ResourceUpdatedNotificationParam, ServerNotification, ServerRequest,
     },
     service::Peer,
     transport::streamable_http_server::{
@@ -101,15 +106,13 @@ impl PluginRpcBridge for ActiveBridge {
                 }
                 "elicitation/create" => {
                     let params =
-                        deserialize_required::<CreateElicitationRequestParams>(params, &method)?;
+                        deserialize_required::<ElicitRequestParams>(params, &method)?;
                     let result: ClientResult = peer
-                        .send_request(ServerRequest::CreateElicitationRequest(
-                            CreateElicitationRequest::new(params),
-                        ))
+                        .send_request(ServerRequest::ElicitRequest(ElicitRequest::new(params)))
                         .await
                         .map_err(proto_error::from_service)?;
                     match result {
-                        ClientResult::CreateElicitationResult(result) => to_json_string(&result),
+                        ClientResult::ElicitResult(result) => to_json_string(&result),
                         _ => Err(proto_error::internal("unexpected elicitation response")),
                     }
                 }

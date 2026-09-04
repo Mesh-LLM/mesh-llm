@@ -100,7 +100,8 @@ bundle.
 
 ## Building locally
 
-Both lanes are exposed in the `Justfile`:
+Both lanes remain exposed from the root `Justfile`; their definitions are
+loaded from its flat imports under `just/`:
 
 ```bash
 # primary (CUDA 12.6.3 toolkit required on the host / container)
@@ -108,12 +109,13 @@ just release-build-cuda
 just release-bundle-cuda "$VERSION"
 
 # Blackwell (CUDA 12.8 toolkit required on the host / container)
-just release-build-cuda-blackwell
-just release-bundle-cuda-blackwell "$VERSION"
+# The Linux CUDA recipes select toolkit-dependent architectures internally.
+just release-build-cuda
+just release-bundle-cuda "$VERSION"
 ```
 
-You can override arches with a positional argument, e.g.:
-`just release-build-cuda "80;89"`.
+The Linux CUDA recipe selects its architecture list from the toolkit detected
+on the host; it does not accept a positional architecture override.
 
 ## CI wiring
 

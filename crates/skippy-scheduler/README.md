@@ -37,8 +37,10 @@ priority remains the primary ordering key, so aging bounds starvation only
 within one priority level. The KV-enabled server path applies the same policy to
 restore/prefill runtime operations and alternates those operations with live
 decode work at operation boundaries; one native restore plus suffix-prefill may
-still delay decode for the duration of that operation. Native batches remain
-phase-homogeneous.
+still delay decode for the duration of that operation. Once work reaches the
+native iteration scheduler, live decode rows are reserved first and remaining
+token capacity is filled by prefill or recompute rows. Sampled outputs carry
+explicit work indexes, so non-logit prefill rows cannot shift decode results.
 
 After priority, an ephemeral waiting-request radix groups prompts within a
 four-turn cache-plus-aging score band by weighted DFS order. Heavier

@@ -1,13 +1,125 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::{
-    ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
+    ActivationBoundaryDesc as RawActivationBoundaryDesc, ActivationDType,
+    ActivationDesc as RawActivationDesc, ActivationLayout,
     GenerationSignalWindow as RawGenerationSignalWindow,
     KvPageComponentDesc as RawKvPageComponentDesc, KvPageDesc as RawKvPageDesc,
-    LogitBias as RawLogitBias, SamplingConfig as RawSamplingConfig, TensorRole,
-    TokenSignal as RawTokenSignal,
+    LogitBias as RawLogitBias, MAX_DRY_SEQUENCE_BREAKER_BYTES, MAX_DRY_SEQUENCE_BREAKERS,
+    MAX_SAMPLERS, SamplingConfig as RawSamplingConfig, TensorRole, TokenSignal as RawTokenSignal,
 };
 
 pub const MAX_LOGIT_BIAS: usize = 256;
+pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 1;
+pub const ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR: u32 = 1;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS: u64 =
+    skippy_ffi::ACTIVATION_FLAG_GEMMA3N_ALTUP;
+pub const ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS: u64 =
+    skippy_ffi::ACTIVATION_SIDEBAND_TOKEN_IDS;
+
+/// Runtime memory semantics reported by the loaded llama.cpp model.
+///
+/// This is intentionally derived from the native model descriptor rather than
+/// a repository-name or family-name lookup. New architectures therefore
+/// inherit llama.cpp's own classification without a MeshLLM table update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelStateKind {
+    Dense,
+    Recurrent,
+    Hybrid,
+    Diffusion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModelCapability {
+    pub state_kind: ModelStateKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActivationBoundaryDesc {
+    pub version: u32,
+    pub ggml_type: u32,
+    pub layout: u32,
+    pub elements_per_token: u64,
+    pub bytes_per_token: u64,
+    pub required_frame_flags: u64,
+    pub required_sidebands: u64,
+}
+
+impl From<RawActivationBoundaryDesc> for ActivationBoundaryDesc {
+    fn from(raw: RawActivationBoundaryDesc) -> Self {
+        Self {
+            version: raw.version,
+            ggml_type: raw.ggml_type,
+            layout: raw.layout,
+            elements_per_token: raw.elements_per_token,
+            bytes_per_token: raw.bytes_per_token,
+            required_frame_flags: raw.required_frame_flags,
+            required_sidebands: raw.required_sidebands,
+        }
+    }
+}
+
+impl ActivationBoundaryDesc {
+    /// Validate the graph-observed contract against the currently supported
+    /// raw-F32 activation transport and return its element width.
+    pub fn raw_f32_width(self, edge: &str) -> Result<i32> {
+        if self.version != ACTIVATION_BOUNDARY_DESC_VERSION {
+            bail!(
+                "unsupported {edge} activation boundary descriptor version {}",
+                self.version
+            );
+        }
+        if self.ggml_type != crate::GGML_TYPE_F32 {
+            bail!(
+                "raw activation transport requires graph-observed F32; {edge} boundary uses ggml type {}",
+                self.ggml_type
+            );
+        }
+        if self.layout != ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR {
+            bail!(
+                "raw activation transport requires token-major layout; {edge} boundary uses layout {}",
+                self.layout
+            );
+        }
+        if self.elements_per_token == 0 {
+            bail!("graph-observed {edge} activation boundary has zero elements per token");
+        }
+        let unsupported_required_frame_flags =
+            self.required_frame_flags & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_FRAME_FLAGS;
+        if unsupported_required_frame_flags != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported frame flags {unsupported_required_frame_flags:#x}"
+            );
+        }
+        let unsupported_required_sidebands =
+            self.required_sidebands & !ACTIVATION_BOUNDARY_SUPPORTED_REQUIRED_SIDEBANDS;
+        if unsupported_required_sidebands != 0 {
+            bail!(
+                "graph-observed {edge} activation boundary requires unsupported sidebands {unsupported_required_sidebands:#x}"
+            );
+        }
+        let expected_bytes = self
+            .elements_per_token
+            .checked_mul(std::mem::size_of::<f32>() as u64)
+            .context("activation bytes per token overflow")?;
+        if self.bytes_per_token != expected_bytes {
+            bail!(
+                "graph-observed {edge} activation boundary reports {} bytes for {} F32 elements",
+                self.bytes_per_token,
+                self.elements_per_token
+            );
+        }
+        i32::try_from(self.elements_per_token)
+            .with_context(|| format!("graph-observed {edge} activation width exceeds i32"))
+    }
+
+    pub fn payload_bytes(self, edge: &str, token_count: u32) -> Result<u64> {
+        self.raw_f32_width(edge)?;
+        self.bytes_per_token
+            .checked_mul(u64::from(token_count))
+            .context("activation payload bytes overflow")
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorInfo {
@@ -211,16 +323,20 @@ impl RuntimeKvPageDesc {
                 if self.version == 2 && self.component_count == 2 =>
             {
                 let [base, swa] = *self.components;
+                let base_k_idx_flag = base.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
+                let swa_k_idx_flag = swa.flags & skippy_ffi::KV_PAGE_FLAG_HAS_K_IDX;
                 if base.version != 1
                     || base.role != 1
                     || base.payload_offset != 0
                     || base.token_start != self.token_start
                     || base.token_count != self.token_count
+                    || (base.k_idx_row_bytes > 0) != (base_k_idx_flag != 0)
                     || swa.version != 1
                     || swa.role != 2
                     || swa.token_start < self.token_start
                     || swa.token_start.checked_add(swa.token_count)
                         != self.token_start.checked_add(self.token_count)
+                    || (swa.k_idx_row_bytes > 0) != (swa_k_idx_flag != 0)
                     || swa.payload_offset != base.payload_bytes
                     || swa.payload_offset.checked_add(swa.payload_bytes) != Some(payload_len)
                 {
@@ -341,6 +457,17 @@ pub struct DecodeFrameBatchOutput {
     pub output: ActivationFrame,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IterationSample {
+    pub request_index: usize,
+    pub predicted_token: i32,
+}
+
+pub struct IterationBatchOutput {
+    pub request_outputs: Vec<ActivationFrame>,
+    pub samples: Vec<IterationSample>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaInput {
     pub bytes: Vec<u8>,
@@ -379,6 +506,7 @@ pub struct LogitBias {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SamplingConfig {
     pub enabled: bool,
+    pub ignore_eos: bool,
     pub seed: u32,
     pub temperature: f32,
     pub top_p: f32,
@@ -389,12 +517,38 @@ pub struct SamplingConfig {
     pub repeat_penalty: f32,
     pub penalty_last_n: i32,
     pub logit_bias: Vec<LogitBias>,
+    pub typical_p: f32,
+    pub top_nsigma: f32,
+    pub dynatemp_range: f32,
+    pub dynatemp_exponent: f32,
+    pub dry: DrySamplingConfig,
+    pub xtc: XtcSamplingConfig,
+    pub mirostat_mode: i32,
+    pub mirostat_entropy: f32,
+    pub mirostat_learning_rate: f32,
+    pub samplers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DrySamplingConfig {
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: i32,
+    pub penalty_last_n: i32,
+    pub sequence_breakers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct XtcSamplingConfig {
+    pub probability: f32,
+    pub threshold: f32,
 }
 
 impl Default for SamplingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            ignore_eos: false,
             seed: 0,
             temperature: 1.0,
             top_p: 1.0,
@@ -405,29 +559,90 @@ impl Default for SamplingConfig {
             repeat_penalty: 1.0,
             penalty_last_n: -1,
             logit_bias: Vec::new(),
+            typical_p: 1.0,
+            top_nsigma: -1.0,
+            dynatemp_range: 0.0,
+            dynatemp_exponent: 1.0,
+            dry: DrySamplingConfig {
+                multiplier: 0.0,
+                base: 1.75,
+                allowed_length: 2,
+                penalty_last_n: 64,
+                sequence_breakers: vec!["\n".into(), ":".into(), "\"".into(), "*".into()],
+            },
+            xtc: XtcSamplingConfig {
+                probability: 0.0,
+                threshold: 0.1,
+            },
+            mirostat_mode: 0,
+            mirostat_entropy: 5.0,
+            mirostat_learning_rate: 0.1,
+            samplers: vec![
+                "penalties".into(),
+                "dry".into(),
+                "top_n_sigma".into(),
+                "top_k".into(),
+                "typical_p".into(),
+                "top_p".into(),
+                "min_p".into(),
+                "xtc".into(),
+                "temperature".into(),
+            ],
         }
     }
 }
 
 impl SamplingConfig {
-    pub(crate) fn as_raw(&self) -> RawSamplingConfig {
+    pub(crate) fn as_raw(&self) -> Result<RawSamplingConfig> {
+        if self.logit_bias.len() > MAX_LOGIT_BIAS {
+            return Err(anyhow!("sampling logit_bias exceeds the native limit"));
+        }
+        if self.samplers.len() > MAX_SAMPLERS {
+            return Err(anyhow!("sampling sampler order exceeds the native limit"));
+        }
+        if self.dry.sequence_breakers.len() > MAX_DRY_SEQUENCE_BREAKERS {
+            return Err(anyhow!(
+                "sampling DRY sequence breakers exceed the native count limit"
+            ));
+        }
+        if self
+            .dry
+            .sequence_breakers
+            .iter()
+            .any(|value| value.len() >= MAX_DRY_SEQUENCE_BREAKER_BYTES)
+        {
+            return Err(anyhow!(
+                "sampling DRY sequence breaker exceeds the native byte limit"
+            ));
+        }
         let mut logit_bias = [RawLogitBias {
             token_id: 0,
             bias: 0.0,
         }; MAX_LOGIT_BIAS];
-        for (target, source) in logit_bias.iter_mut().zip(
-            self.logit_bias
-                .iter()
-                .take(self.logit_bias.len().min(MAX_LOGIT_BIAS)),
-        ) {
+        for (target, source) in logit_bias.iter_mut().zip(&self.logit_bias) {
             *target = RawLogitBias {
                 token_id: source.token_id,
                 bias: source.bias,
             };
         }
-        RawSamplingConfig {
-            version: 1,
-            flags: u32::from(self.enabled),
+        let mut samplers = [0_u32; MAX_SAMPLERS];
+        for (target, source) in samplers.iter_mut().zip(&self.samplers) {
+            *target = sampler_id(source)
+                .ok_or_else(|| anyhow!("sampling sampler order contains {source:?}"))?;
+        }
+        let mut dry_sequence_breakers =
+            [[0_u8; MAX_DRY_SEQUENCE_BREAKER_BYTES]; MAX_DRY_SEQUENCE_BREAKERS];
+        for (target, source) in dry_sequence_breakers
+            .iter_mut()
+            .zip(self.dry.sequence_breakers.iter())
+        {
+            let bytes = source.as_bytes();
+            let length = bytes.len();
+            target[..length].copy_from_slice(&bytes[..length]);
+        }
+        Ok(RawSamplingConfig {
+            version: 2,
+            flags: u32::from(self.enabled) | (u32::from(self.ignore_eos) << 1),
             seed: self.seed,
             top_k: self.top_k,
             penalty_last_n: self.penalty_last_n,
@@ -436,10 +651,43 @@ impl SamplingConfig {
             presence_penalty: self.presence_penalty,
             frequency_penalty: self.frequency_penalty,
             repeat_penalty: self.repeat_penalty,
-            logit_bias_count: self.logit_bias.len().min(MAX_LOGIT_BIAS) as u32,
+            logit_bias_count: self.logit_bias.len() as u32,
             min_p: self.min_p,
+            typical_p: self.typical_p,
+            top_nsigma: self.top_nsigma,
+            dynatemp_range: self.dynatemp_range,
+            dynatemp_exponent: self.dynatemp_exponent,
+            dry_multiplier: self.dry.multiplier,
+            dry_base: self.dry.base,
+            dry_allowed_length: self.dry.allowed_length,
+            dry_penalty_last_n: self.dry.penalty_last_n,
+            xtc_probability: self.xtc.probability,
+            xtc_threshold: self.xtc.threshold,
+            mirostat_mode: self.mirostat_mode,
+            mirostat_entropy: self.mirostat_entropy,
+            mirostat_learning_rate: self.mirostat_learning_rate,
+            sampler_count: self.samplers.len() as u32,
+            samplers,
+            ignore_eos: u32::from(self.ignore_eos),
+            dry_sequence_breaker_count: self.dry.sequence_breakers.len() as u32,
+            dry_sequence_breakers,
             logit_bias,
-        }
+        })
+    }
+}
+
+fn sampler_id(name: &str) -> Option<u32> {
+    match name {
+        "penalties" => Some(1),
+        "dry" => Some(2),
+        "top_n_sigma" => Some(3),
+        "top_k" => Some(4),
+        "typical_p" | "typ_p" => Some(5),
+        "top_p" => Some(6),
+        "min_p" => Some(7),
+        "xtc" => Some(8),
+        "temperature" | "temp" => Some(9),
+        _ => None,
     }
 }
 
@@ -492,6 +740,11 @@ pub struct ChatTemplateOptions {
     pub enable_thinking: Option<bool>,
     pub reasoning_format: Option<ChatReasoningFormat>,
     pub chat_template_kwargs: Option<String>,
+    pub chat_template: Option<String>,
+    pub use_jinja: bool,
+    pub grammar: Option<String>,
+    pub json_schema: Option<String>,
+    pub skip_chat_parsing: bool,
 }
 
 impl Default for ChatTemplateOptions {
@@ -501,6 +754,11 @@ impl Default for ChatTemplateOptions {
             enable_thinking: None,
             reasoning_format: None,
             chat_template_kwargs: None,
+            chat_template: None,
+            use_jinja: true,
+            grammar: None,
+            json_schema: None,
+            skip_chat_parsing: false,
         }
     }
 }
@@ -514,6 +772,11 @@ pub struct ChatTemplateJsonOptions {
     pub tools_json: Option<String>,
     pub tool_choice_json: Option<String>,
     pub parallel_tool_calls: bool,
+    pub chat_template: Option<String>,
+    pub use_jinja: bool,
+    pub grammar: Option<String>,
+    pub json_schema: Option<String>,
+    pub skip_chat_parsing: bool,
 }
 
 impl Default for ChatTemplateJsonOptions {
@@ -526,6 +789,11 @@ impl Default for ChatTemplateJsonOptions {
             tools_json: None,
             tool_choice_json: None,
             parallel_tool_calls: true,
+            chat_template: None,
+            use_jinja: true,
+            grammar: None,
+            json_schema: None,
+            skip_chat_parsing: false,
         }
     }
 }
@@ -534,6 +802,98 @@ impl Default for ChatTemplateJsonOptions {
 pub struct ChatTemplateJsonResult {
     pub prompt: String,
     pub metadata_json: String,
+}
+
+#[cfg(test)]
+mod activation_boundary_descriptor_tests {
+    use super::*;
+
+    fn f32_boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        ActivationBoundaryDesc {
+            version: ACTIVATION_BOUNDARY_DESC_VERSION,
+            ggml_type: crate::GGML_TYPE_F32,
+            layout: ACTIVATION_BOUNDARY_LAYOUT_TOKEN_MAJOR,
+            elements_per_token,
+            bytes_per_token: elements_per_token.saturating_mul(std::mem::size_of::<f32>() as u64),
+            required_frame_flags: 0,
+            required_sidebands: 0,
+        }
+    }
+
+    #[test]
+    fn raw_f32_boundary_accepts_exact_graph_contract() {
+        let boundary = f32_boundary(1024);
+        assert_eq!(boundary.raw_f32_width("output").unwrap(), 1024);
+        assert_eq!(boundary.payload_bytes("output", 128).unwrap(), 524_288);
+    }
+
+    #[test]
+    fn raw_f32_boundary_rejects_each_invalid_semantic() {
+        let mut cases = Vec::new();
+
+        let mut unsupported_version = f32_boundary(1024);
+        unsupported_version.version += 1;
+        cases.push((unsupported_version, "descriptor version"));
+
+        let mut unsupported_type = f32_boundary(1024);
+        unsupported_type.ggml_type = crate::GGML_TYPE_F16;
+        cases.push((unsupported_type, "requires graph-observed F32"));
+
+        let mut unsupported_layout = f32_boundary(1024);
+        unsupported_layout.layout += 1;
+        cases.push((unsupported_layout, "requires token-major layout"));
+
+        cases.push((f32_boundary(0), "zero elements"));
+
+        let mut inconsistent_bytes = f32_boundary(1024);
+        inconsistent_bytes.bytes_per_token -= 1;
+        cases.push((inconsistent_bytes, "reports 4095 bytes"));
+
+        let mut unsupported_required_frame_flags = f32_boundary(1024);
+        unsupported_required_frame_flags.required_frame_flags = 1 << 63;
+        cases.push((
+            unsupported_required_frame_flags,
+            "requires unsupported frame flags",
+        ));
+
+        let mut unsupported_required_sidebands = f32_boundary(1024);
+        unsupported_required_sidebands.required_sidebands = 1 << 63;
+        cases.push((
+            unsupported_required_sidebands,
+            "requires unsupported sidebands",
+        ));
+
+        let mut byte_overflow = f32_boundary(1);
+        byte_overflow.elements_per_token = u64::MAX;
+        byte_overflow.bytes_per_token = u64::MAX;
+        cases.push((byte_overflow, "bytes per token overflow"));
+
+        let too_wide = f32_boundary(i32::MAX as u64 + 1);
+        cases.push((too_wide, "width exceeds i32"));
+
+        for (boundary, expected) in cases {
+            let error = boundary
+                .raw_f32_width("input")
+                .expect_err("invalid graph contract must fail closed");
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?} in {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn payload_size_overflow_fails_closed() {
+        let boundary = ActivationBoundaryDesc {
+            elements_per_token: i32::MAX as u64,
+            bytes_per_token: i32::MAX as u64 * std::mem::size_of::<f32>() as u64,
+            ..f32_boundary(1)
+        };
+        let error = boundary
+            .payload_bytes("output", u32::MAX)
+            .expect_err("overflowing payload size must fail");
+        assert!(error.to_string().contains("payload bytes overflow"));
+    }
 }
 
 #[cfg(test)]
@@ -638,5 +998,43 @@ mod kv_page_descriptor_tests {
         overflowing_swa.components[1].token_count = 2;
         assert!(overflowing_swa.validate_payload(12).is_err());
         assert!(composite().validate_payload(11).is_err());
+    }
+
+    #[test]
+    fn sampling_raw_accepts_exact_native_dry_breaker_payload() {
+        let sampling = SamplingConfig {
+            dry: DrySamplingConfig {
+                sequence_breakers: vec!["123456789012345".to_string()],
+                ..DrySamplingConfig::default()
+            },
+            ..SamplingConfig::default()
+        };
+
+        assert!(sampling.as_raw().is_ok());
+    }
+
+    #[test]
+    fn sampling_raw_rejects_dry_breakers_that_cannot_fit_native_payload() {
+        for breaker in ["1234567890123456", "🐍🐍🐍🐍"] {
+            let sampling = SamplingConfig {
+                dry: DrySamplingConfig {
+                    sequence_breakers: vec![breaker.to_string()],
+                    ..DrySamplingConfig::default()
+                },
+                ..SamplingConfig::default()
+            };
+
+            assert!(sampling.as_raw().is_err(), "breaker={breaker:?}");
+        }
+    }
+
+    #[test]
+    fn sampling_raw_rejects_unknown_sampler_names() {
+        let sampling = SamplingConfig {
+            samplers: vec!["unknown".to_string()],
+            ..SamplingConfig::default()
+        };
+
+        assert!(sampling.as_raw().is_err());
     }
 }

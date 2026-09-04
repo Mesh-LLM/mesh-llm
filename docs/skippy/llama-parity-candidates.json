@@ -1,11 +1,10 @@
 {
   "schema_version": 1,
   "goal": "cheap llama.cpp parity: one small GGUF representative per llama.cpp model implementation where certification is meaningful",
+  "activation_transport_note": "All production activation transport uses fixed raw f32. Historical f16/q8 wire validation references in notes fields below are research evidence only, not active dtype options.",
   "defaults": {
     "ctx_size": 128,
     "n_gpu_layers": 999,
-    "wire_dtype": "f16",
-    "wire_dtypes": "f32,f16,q8",
     "prompt": "Hello"
   },
   "support_priority": {
@@ -161,6 +160,15 @@
       "notes": "text split/cache and split multimodal serving passed with bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M plus mmproj-Qwen2-VL-2B-Instruct-f16.gguf after adding per-chunk media activation forwarding, sampled final prefill, and M-RoPE position sideband transport; f16 wire passed, q8 rejected; FullState remains blocked by M-RoPE native-position rules, so use ResidentKv for exact-prefix text cache"
     },
     {
+      "llama_model": "qwen4exp",
+      "family": "qwen4exp",
+      "status": "package_or_remote_only",
+      "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+      "include": "*UD-IQ1_S*.gguf",
+      "recurrent": "all",
+      "notes": "real Metal parity passed for monolithic versus a two-stage artifact split at layer 24 on the complete three-shard UD-IQ1_S model: predicted token 11 matched, activation width was 10240 f32 values/token, and the boundary payload was 40960 bytes/token; native runtime slicing uses a token-id PLE sideband with sticky recurrent/indexer ownership, while the roughly 68 GiB public quant keeps this package-or-remote-only for routine CI"
+    },
+    {
       "llama_model": "qwen3vl",
       "family": "qwen3vl",
       "status": "certified",
@@ -234,7 +242,7 @@
       "status": "certified",
       "repo": "bartowski/Phi-3.5-MoE-instruct-GGUF",
       "include": "Phi-3.5-MoE-instruct-Q4_K_M.gguf",
-      "notes": "text lane passed in llama-parity-phimoe-runtime-slice-2 after adding PhiMoE to the runtime-slice ABI allowlist; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed"
+      "notes": "text lane passed in llama-parity-phimoe-runtime-slice-2 after adding PhiMoE staged-graph support; q8 activation wire validated; ResidentKv native-sequence remap cache smoke passed"
     },
     {
       "llama_model": "gemma",
@@ -283,7 +291,6 @@
       "include": "*Q4_K_M.gguf",
       "split_layer": 15,
       "splits": "10,15",
-      "wire_dtype": "f32",
       "n_gpu_layers": 0,
       "notes": "certified with lmstudio-community/gemma-3n-E2B-it-GGUF Q4_K_M in llama-parity-gemma3n-cpu-20260507d; Gemma3n carries AltUp sideband state across activation frames and split topologies must keep KV-reuse layers with their KV-owner layers, so the reviewed three-stage split is 0..10,10..15,15..30 rather than an even 0..10,10..20,20..30 split. The local parity representative runs CPU-only because Metal on the M1 Ultra diverges for split Gemma3n AltUp handoff while CPU matches the full-model baseline."
     },
@@ -356,7 +363,7 @@
       "status": "certified",
       "repo": "mradermacher/tiny-random-granite-moe-GGUF",
       "include": "tiny-random-granite-moe.Q4_K_M.gguf",
-      "notes": "text lane passed in llama-parity-granite-moe-runtime-slice-2 after adding Granite-MoE to the skippy ABI allowlist; tiny random GGUF certifies graph/tensor layout only, so replace with a real small artifact when available"
+      "notes": "text lane passed in llama-parity-granite-moe-runtime-slice-2 after adding Granite-MoE staged-graph support; tiny random GGUF certifies graph/tensor layout only, so replace with a real small artifact when available"
     },
     {
       "llama_model": "gptneox",
@@ -638,8 +645,7 @@
       "llama_model": "apertus",
       "family": "apertus",
       "status": "certified",
-      "wire_dtype": "f32",
-      "notes": "selected public apertus GGUF for split execution and ResidentKv certification; text split, chain, dtype matrix, and ResidentKv handoff passed in llama-parity-apertus-f32-20260507; f32 activation wire is required because f16 and q8 alter the next-token argmax for the sampled boundary",
+      "notes": "selected public apertus GGUF for split execution and ResidentKv certification; text split, chain, and ResidentKv handoff passed in llama-parity-apertus-f32-20260507. The current raw-f32 protocol matches that transport evidence; historical f16 and q8 failures remain useful compression research evidence.",
       "repo": "unsloth/Apertus-8B-Instruct-2509-GGUF",
       "include": "Apertus-8B-Instruct-2509-UD-IQ2_M.gguf"
     },
@@ -734,7 +740,7 @@
         "DeepSeek-OCR-Q8_0.gguf",
         "mmproj-DeepSeek-OCR-Q8_0.gguf"
       ],
-      "notes": "OCR multimodal/MLA family; text split, chain, dtype matrix, ResidentKv handoff, and split multimodal serving passed on ggml-org/DeepSeek-OCR-GGUF:Q8_0 plus mmproj-DeepSeek-OCR-Q8_0.gguf after adding runtime-slice ABI allowlist coverage and media activation position sideband forwarding; q8 activation wire rejected, default f16 is the support target"
+      "notes": "OCR multimodal/MLA family; text split, chain, dtype matrix, ResidentKv handoff, and split multimodal serving passed on ggml-org/DeepSeek-OCR-GGUF:Q8_0 plus mmproj-DeepSeek-OCR-Q8_0.gguf after adding staged-graph support and media activation position sideband forwarding; q8 activation wire rejected, default f16 is the support target"
     },
     {
       "llama_model": "delta-net-base",

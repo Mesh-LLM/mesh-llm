@@ -60,8 +60,7 @@ Useful REPL commands include `:history`, `:logs [name] [lines]`, and `:quit`.
 
 - Default local state lives under `/tmp/skippy-prompt`.
 - Remote runs stage inputs under `/tmp/skippy-remote-prompt` by default.
-- `--activation-wire-dtype q8` is accepted only when topology policy has
-  validation for the requested family/split.
+- Activation frames always use raw little-endian f32 on the stage wire.
 - `--draft-model-path` enables draft-model speculative proposals.
 - Standalone cache and n-gram sidecars are not imported into mesh-llm; topology
   launch exits before starting sidecars.

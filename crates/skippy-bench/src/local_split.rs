@@ -12,8 +12,8 @@ use skippy_protocol::binary::{
 };
 use skippy_runtime::{MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel};
 use skippy_topology::{
-    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, dense_attention_layers,
+    infer_family_capability, plan_contiguous_with_splits,
 };
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
     model_identity::model_identity_for_path,
     support::{
         ChildGuard, activation_width, connect_ready, ensure_release_skippy_server_bin,
-        generate_run_id, parse_wire_dtype, temp_config_path_for,
+        generate_run_id, temp_config_path_for,
     },
 };
 
@@ -33,7 +33,6 @@ struct BinarySplitResult {
     token_id: i32,
     predicted_token: i32,
     activation_width: i32,
-    wire_dtype: String,
     boundary_producer_stage_index: i32,
     boundary_layer_start: i32,
     boundary_layer_end: i32,
@@ -47,7 +46,6 @@ struct BinaryChainResult {
     token_id: i32,
     predicted_token: i32,
     activation_width: i32,
-    wire_dtype: String,
     stage0_wire_payload_bytes: usize,
     stage0_payload_bytes: u64,
     split_layer_1: u32,
@@ -76,7 +74,6 @@ pub fn local_split_binary(args: LocalSplitBinaryArgs) -> Result<()> {
         n_gpu_layers: args.n_gpu_layers,
         prompt: args.prompt,
         stage1_bind_addr: args.stage1_bind_addr,
-        activation_wire_dtype: args.activation_wire_dtype,
         child_logs: args.child_logs,
         startup_timeout_secs: args.startup_timeout_secs,
     })?;
@@ -89,7 +86,6 @@ pub fn local_split_binary(args: LocalSplitBinaryArgs) -> Result<()> {
             "token_id": result.token_id,
             "predicted_token": result.predicted_token,
             "activation_width": result.activation_width,
-            "wire_dtype": result.wire_dtype,
             "boundary": {
                 "producer_stage_index": result.boundary_producer_stage_index,
                 "layer_start": result.boundary_layer_start,
@@ -122,7 +118,6 @@ pub fn local_split_compare(args: LocalSplitCompareArgs) -> Result<()> {
         n_gpu_layers: args.n_gpu_layers,
         prompt: args.prompt,
         stage1_bind_addr: args.stage1_bind_addr,
-        activation_wire_dtype: args.activation_wire_dtype,
         child_logs: args.child_logs,
         startup_timeout_secs: args.startup_timeout_secs,
     })?;
@@ -140,7 +135,6 @@ pub fn local_split_compare(args: LocalSplitCompareArgs) -> Result<()> {
             "token_id": split.token_id,
             "predicted_token": split.predicted_token,
             "activation_width": split.activation_width,
-            "wire_dtype": split.wire_dtype,
             "boundary": {
                 "producer_stage_index": split.boundary_producer_stage_index,
                 "layer_start": split.boundary_layer_start,
@@ -174,7 +168,6 @@ pub fn local_split_chain_binary(args: LocalSplitChainBinaryArgs) -> Result<()> {
             "token_id": result.token_id,
             "predicted_token": result.predicted_token,
             "activation_width": result.activation_width,
-            "wire_dtype": result.wire_dtype,
             "stages": [
                 {
                     "stage_index": 0,
@@ -226,16 +219,35 @@ fn run_full_model_decode(
         n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,
         flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let model = StageModel::open(model_path, &config).context("failed to open full model")?;
     let tokens = model
@@ -265,7 +277,6 @@ struct BinarySplitConfig {
     n_gpu_layers: i32,
     prompt: String,
     stage1_bind_addr: std::net::SocketAddr,
-    activation_wire_dtype: String,
     child_logs: bool,
     startup_timeout_secs: u64,
 }
@@ -275,14 +286,7 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         bail!("split_layer must be greater than zero and less than layer_end");
     }
     ensure_release_skippy_server_bin(&args.stage_server_bin)?;
-    validate_local_topology_plan(
-        &args.model_path,
-        args.layer_end,
-        &[args.split_layer],
-        2,
-        &args.activation_wire_dtype,
-    )?;
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
+    validate_local_topology_plan(&args.model_path, args.layer_end, &[args.split_layer], 2)?;
     let model_identity = model_identity_for_path(&args.model_id, Some(&args.model_path))?;
     let stage0_config = RuntimeConfig {
         stage_index: 0,
@@ -297,16 +301,35 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         n_gpu_layers: args.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,
         flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let stage0 =
         StageModel::open(&args.model_path, &stage0_config).context("failed to open stage 0")?;
@@ -385,10 +408,6 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
-        "--activation-wire-dtype",
-        &args.activation_wire_dtype,
     ]);
     if args.child_logs {
         stage_command
@@ -403,9 +422,9 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         .context("stage 1 binary server did not become ready")?;
     let request_id = 1;
     let session_id = 1;
-    send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
+    send_generation_config(&mut stream, request_id, session_id, 1)
         .context("send binary split generation config")?;
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.prompt_token_count = 0;
     state.decode_step = 0;
     state.current_token = token_id;
@@ -413,7 +432,6 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     state.flags |=
         skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
     let activation = skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
-        wire_dtype,
         1,
         activation_width,
         &boundary.payload,
@@ -434,18 +452,16 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         activation,
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut stream, &message, wire_dtype).context("send binary decode")?;
+    write_stage_message(&mut stream, &message).context("send binary decode")?;
     let reply = recv_reply(&mut stream).context("receive binary split prediction reply")?;
     ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
-    write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
-        .context("send binary stop")?;
+    write_stage_message(&mut stream, &StageWireMessage::stop()).context("send binary stop")?;
 
     Ok(BinarySplitResult {
         model_identity,
         token_id,
         predicted_token: reply.predicted,
         activation_width,
-        wire_dtype: args.activation_wire_dtype,
         boundary_producer_stage_index: boundary.desc.producer_stage_index,
         boundary_layer_start: boundary.desc.layer_start,
         boundary_layer_end: boundary.desc.layer_end,
@@ -468,9 +484,7 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         args.layer_end,
         &[args.split_layer_1, args.split_layer_2],
         3,
-        &args.activation_wire_dtype,
     )?;
-    let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
     let model_identity = model_identity_for_path(&args.model_id, Some(&args.model_path))?;
     let stage0_config = RuntimeConfig {
         stage_index: 0,
@@ -485,16 +499,35 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         n_gpu_layers: args.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,
         flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let stage0 =
         StageModel::open(&args.model_path, &stage0_config).context("failed to open stage 0")?;
@@ -614,10 +647,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
-        "--activation-wire-dtype",
-        &args.activation_wire_dtype,
     ]);
     configure_child_logs(&mut stage2_command, args.child_logs);
     let _stage2 = ChildGuard::spawn(stage2_command)?;
@@ -633,10 +662,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         topology_path
             .to_str()
             .context("stage topology path is not valid UTF-8")?,
-        "--activation-width",
-        &activation_width.to_string(),
-        "--activation-wire-dtype",
-        &args.activation_wire_dtype,
     ]);
     configure_child_logs(&mut stage1_command, args.child_logs);
     let _stage1 = ChildGuard::spawn(stage1_command)?;
@@ -645,9 +670,9 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         .context("stage 1 binary server did not become ready")?;
     let request_id = 2;
     let session_id = 2;
-    send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
+    send_generation_config(&mut stream, request_id, session_id, 1)
         .context("send binary chain generation config")?;
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
     state.prompt_token_count = 0;
     state.decode_step = 0;
     state.current_token = token_id;
@@ -655,7 +680,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
     state.flags |=
         skippy_protocol::binary::activation_state_flags_from_frame_flags(boundary.desc.flags);
     let activation = skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
-        wire_dtype,
         1,
         activation_width,
         &boundary.payload,
@@ -676,10 +700,10 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         activation,
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut stream, &message, wire_dtype).context("send binary chain decode")?;
+    write_stage_message(&mut stream, &message).context("send binary chain decode")?;
     let reply = recv_reply(&mut stream).context("receive binary chain prediction reply")?;
     ensure_reply_kind(&reply, WireReplyKind::PredictedToken)?;
-    write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
+    write_stage_message(&mut stream, &StageWireMessage::stop())
         .context("send binary chain stop")?;
 
     Ok(BinaryChainResult {
@@ -687,7 +711,6 @@ fn run_binary_chain(args: LocalSplitChainBinaryArgs) -> Result<BinaryChainResult
         token_id,
         predicted_token: reply.predicted,
         activation_width,
-        wire_dtype: args.activation_wire_dtype,
         stage0_wire_payload_bytes: message.activation.len(),
         stage0_payload_bytes: boundary.desc.payload_bytes,
         split_layer_1: args.split_layer_1,
@@ -728,20 +751,18 @@ fn local_split_topology(
 
 fn send_generation_config(
     stream: &mut std::net::TcpStream,
-    wire_dtype: skippy_protocol::binary::WireActivationDType,
     request_id: u64,
     session_id: u64,
     prompt_token_count: usize,
 ) -> Result<()> {
     let message = StageWireMessage::configure_generation(
-        wire_dtype,
         request_id,
         session_id,
         i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
         None,
         None,
     );
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    write_stage_message(&mut *stream, &message).context("send configure-generation")?;
     let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
     if reply.kind != WireReplyKind::Ack {
         bail!("expected configure-generation ACK, got {:?}", reply.kind);
@@ -754,7 +775,6 @@ fn validate_local_topology_plan(
     layer_end: u32,
     splits: &[u32],
     stage_count: usize,
-    activation_wire_dtype: &str,
 ) -> Result<()> {
     let identity = model_path.display().to_string();
     let family = infer_family_capability(&identity, layer_end, 0);
@@ -773,25 +793,6 @@ fn validate_local_topology_plan(
         policy: PlannerPolicy::default(),
     };
     let plan = plan_contiguous_with_splits(&request, splits).context("topology planner failed")?;
-
-    if activation_wire_dtype.eq_ignore_ascii_case("q8") {
-        match family.as_ref().map(|family| family.q8_wire_validation) {
-            Some(WireValidation::Validated) => {}
-            Some(WireValidation::Rejected) => {
-                bail!(
-                    "topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record",
-                    model_path.display()
-                );
-            }
-            Some(WireValidation::Untested) => {
-                bail!(
-                    "topology planner has no q8 validation for {}; use f16 until this family/split passes correctness",
-                    model_path.display()
-                );
-            }
-            None => {}
-        }
-    }
 
     let rejected = plan
         .boundaries
@@ -843,16 +844,35 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         n_gpu_layers: args.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,
         flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: false,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     let stage1_config = RuntimeConfig {
         stage_index: 1,
@@ -867,16 +887,35 @@ pub fn local_split_inprocess(args: LocalSplitInprocessArgs) -> Result<()> {
         n_gpu_layers: args.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         cache_type_k: skippy_runtime::GGML_TYPE_F16,
         cache_type_v: skippy_runtime::GGML_TYPE_F16,
         flash_attn_type: skippy_runtime::FlashAttentionType::Auto,
         load_mode: RuntimeLoadMode::RuntimeSlice,
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: false,
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: true,
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
 
     let stage0 =

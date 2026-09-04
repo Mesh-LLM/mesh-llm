@@ -93,7 +93,7 @@ What to keep:
   Stage pipelines have different latency and bandwidth tradeoffs from tensor
   RPC offload.
 - Remote stage commands should send package identity, manifest hash, model id,
-  layer range, selected files, activation wire policy, and topology/run ids.
+  layer range, selected files, and topology/run ids.
   They should not assume matching local paths on every peer.
 - Downstream/final stages should become ready before upstream stages and the
   driver start sending work.
@@ -556,7 +556,7 @@ endpoints:
 - how many requests are admitted, active, queued, completed, failed, or
   cancelled?
 - what is each stage's readiness, endpoint, layer range, context size,
-  activation width, wire dtype, and package identity?
+  activation width, and package identity?
 - what are current token counters, throughput estimates, and last error?
 - where are the logs and materialized package artifacts?
 
@@ -573,7 +573,7 @@ Current branch status:
 - stage status includes topology/run id, backend, package/source identity,
   materialized artifact path and size when locally visible, pin state,
   projector path, multimodal flag, stage id/index, node id, layer range,
-  readiness state, bind address, activation width, wire dtype, selected device,
+  readiness state, bind address, activation width, selected device,
   context size, last error, and shutdown generation;
 - `/api/runtime/stages` exposes the same staged-serving state plus topology
   assignments for dashboard/debug views;
@@ -817,7 +817,7 @@ The command should include:
 - assigned layer range;
 - stage id and stage index;
 - selected package files or file patterns;
-- activation width and wire dtype;
+- activation width;
 - bind/listen information;
 - shutdown/reload generation.
 
@@ -848,8 +848,7 @@ Important policy changes:
 - each stage owns its own layer range and KV for that range;
 - family split safety should come from skippy's reviewed/inferred
   `FamilyCapabilityRecord` data, including recurrent ranges, split
-  constraints, sideband requirements, exact-state mobility, and wire dtype
-  validation;
+  constraints, sideband requirements, and exact-state mobility;
 - stage assignments and readiness should be visible in status/gossip.
 
 ### 10. Preserve Auto LLM Hooks
@@ -915,7 +914,6 @@ struct StageRuntimeStatus {
     status: StageStatus,
     context_length: Option<u32>,
     activation_width: Option<u32>,
-    wire_dtype: Option<String>,
     selected_device: Option<String>,
     backend_pid: Option<u32>,
     log_path: Option<PathBuf>,

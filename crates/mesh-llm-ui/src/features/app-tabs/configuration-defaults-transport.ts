@@ -9,28 +9,6 @@ import {
 
 export const CONFIGURATION_DEFAULT_TRANSPORT_SETTINGS = [
   {
-    id: 'activation-wire-dtype',
-    categoryId: 'skippy-transport',
-    icon: 'zap',
-    label: 'Activation wire dtype',
-    description: 'Choose the dtype used when activation frames travel between skippy stages.',
-    inheritedLabel: 'Inherited by stage chains without a wire-dtype override',
-    tomlSection: SKIPPY_TRANSPORT_TOML_SECTION,
-    mutability: 'restart-required',
-    control: {
-      kind: 'choice',
-      name: 'activation_wire_dtype',
-      value: 'auto',
-      presentation: 'segmented',
-      options: [
-        { value: 'auto', label: 'auto' },
-        { value: 'f16', label: 'f16' },
-        { value: 'f32', label: 'f32' },
-        { value: 'q8', label: 'q8' }
-      ]
-    }
-  },
-  {
     id: 'stage-model-path',
     categoryId: 'skippy-transport',
     icon: 'folder',

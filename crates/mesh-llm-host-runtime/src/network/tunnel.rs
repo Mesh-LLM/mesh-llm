@@ -1,5 +1,5 @@
-//! QUIC tunnel management for forwarding OpenAI HTTP traffic to the local
-//! model-aware API proxy.
+//! QUIC tunnel management for delivering remote OpenAI HTTP traffic and
+//! forwarding stage transport streams.
 
 use crate::mesh::Node;
 use crate::protocol::read_len_prefixed;
@@ -21,11 +21,18 @@ fn quic_response_first_byte_timeout() -> Duration {
     Duration::from_secs(5 * 60)
 }
 
+#[derive(Clone)]
+pub(super) struct HttpIngress {
+    targets: tokio::sync::watch::Receiver<crate::inference::election::ModelTargets>,
+    affinity: crate::network::affinity::AffinityRouter,
+}
+
 /// Manages all tunnels for a node
 #[derive(Clone)]
 pub struct Manager {
     node: Node,
     http_port: Arc<AtomicU16>,
+    http_ingress: Arc<std::sync::RwLock<Option<HttpIngress>>>,
 }
 
 impl Manager {
@@ -52,24 +59,28 @@ impl Manager {
         let mgr = Manager {
             node: node.clone(),
             http_port: Arc::new(AtomicU16::new(0)),
+            http_ingress: Arc::new(std::sync::RwLock::new(None)),
         };
 
-        // Handle inbound HTTP tunnel streams.
-        // These connect to the local model-aware OpenAI proxy.
+        // Handle inbound HTTP tunnel streams in-process when the runtime has
+        // installed direct ingress; retain the legacy port fallback for embedders.
         let http_port_ref = mgr.http_port.clone();
+        let http_ingress_ref = mgr.http_ingress.clone();
         let http_node = mgr.node.clone();
         tokio::spawn(async move {
             while let Some((remote, send, recv)) = tunnel_http_rx.recv().await {
+                let ingress = http_ingress_ref.read().ok().and_then(|guard| guard.clone());
                 let port = http_port_ref.load(Ordering::Relaxed);
-                if port == 0 {
+                if ingress.is_none() && port == 0 {
                     tracing::warn!("Inbound HTTP tunnel but no OpenAI surface running, dropping");
                     continue;
                 }
                 let node = http_node.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        inbound_http::handle_inbound_http_stream(node, remote, send, recv, port)
-                            .await
+                    if let Err(e) = inbound_http::handle_inbound_http_stream(
+                        node, remote, send, recv, port, ingress,
+                    )
+                    .await
                     {
                         tracing::warn!("Inbound HTTP tunnel stream error: {e}");
                     }
@@ -95,11 +106,21 @@ impl Manager {
         Ok(mgr)
     }
 
-    /// Update the local model-aware API proxy port for inbound HTTP tunnel streams.
-    /// Set to 0 to disable.
+    /// Install the in-process model-aware ingress used by remote HTTP tunnels.
+    pub fn set_http_ingress(
+        &self,
+        targets: tokio::sync::watch::Receiver<crate::inference::election::ModelTargets>,
+        affinity: crate::network::affinity::AffinityRouter,
+    ) {
+        if let Ok(mut ingress) = self.http_ingress.write() {
+            *ingress = Some(HttpIngress { targets, affinity });
+        }
+        tracing::info!("Tunnel manager: direct HTTP ingress enabled");
+    }
+
+    /// Update the compatibility API proxy port used until direct ingress is installed.
     pub fn set_http_port(&self, port: u16) {
         self.http_port.store(port, Ordering::Relaxed);
-        tracing::info!("Tunnel manager: http_port updated to {port}");
     }
 }
 

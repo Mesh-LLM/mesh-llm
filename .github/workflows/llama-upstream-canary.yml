@@ -32,6 +32,7 @@ jobs:
       new_sha: ${{ steps.sha.outputs.new_sha }}
       changed: ${{ steps.sha.outputs.changed }}
       certify: ${{ steps.sha.outputs.certify }}
+      cadence: ${{ steps.sha.outputs.cadence }}
       battery_outcome: ${{ steps.battery.outcome }}
       trusted_queue_sha: ${{ steps.sha.outputs.trusted_queue_sha }}
     env:
@@ -102,10 +103,18 @@ jobs:
             else
               echo "changed=true"
             fi
-            if [[ "$old_sha" != "$new_sha" || "$FORCE_CERTIFY" == "true" ]]; then
+            if [[ "$FORCE_CERTIFY" == "true" ]]; then
               echo "certify=true"
+              echo "cadence=manual-full"
+            elif [[ "$old_sha" != "$new_sha" ]]; then
+              echo "certify=true"
+              echo "cadence=llama-bump"
+            elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+              echo "certify=true"
+              echo "cadence=nightly"
             else
               echo "certify=false"
+              echo "cadence="
             fi
           } >> "$GITHUB_OUTPUT"
 
@@ -119,6 +128,7 @@ jobs:
           plan="target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
           python3 scripts/plan-family-battery.py \
             --manifest ci/llama-canary/family-certified.json \
+            --cadence "${{ steps.sha.outputs.cadence }}" \
             --shard-count 1 \
             --check-cache \
             --cache-root "$HF_CACHE" \
@@ -159,13 +169,24 @@ jobs:
       - name: Supported-families certification battery (parity gate)
         id: battery
         if: steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true'
+        # continue-on-error so the battery-failure agent repair loop below can
+        # run; the "Fail when the canary needs human attention" step keeps the
+        # job red for any battery failure the repair does not resolve.
+        continue-on-error: true
         # Preflight resolves every cached model to an immutable snapshot before
         # any certification starts. Individual certifications are bounded by
         # the script; this outer ceiling leaves room for the complete manifest.
         timeout-minutes: 720
         env:
           FAMILY_BATTERY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}"
+        run: |
+          set -o pipefail
+          # Tee the battery output to the repair wrapper's evidence path so a
+          # battery-failure repair turn reuses this run's evidence instead of
+          # re-running the (up to 720-minute) battery before its first agent
+          # turn. The wrapper clears this file at the start of its own runs.
+          scripts/skippy-family-battery.sh --skip-build --plan "${{ steps.family_plan.outputs.plan_path }}" 2>&1 \
+            | tee .deps/llama-canary-repair-battery.log
 
       - name: Upload supported-families battery evidence
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.sha.outputs.certify == 'true' }}
@@ -199,7 +220,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report forced certification result
-        if: steps.prepare.outcome == 'success' && steps.sha.outputs.changed == 'false' && steps.sha.outputs.certify == 'true' && steps.battery.outcome == 'success'
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.cadence == 'manual-full' && steps.battery.outcome == 'success'
         run: |
           {
             echo "## llama.cpp upstream canary (forced certification)"
@@ -209,14 +230,95 @@ jobs:
             cat /tmp/llama-upstream-pr.md
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Report patch-queue failure
-        if: steps.prepare.outcome == 'failure'
+      - name: Report nightly family result
+        if: steps.prepare.outcome == 'success' && steps.sha.outputs.cadence == 'nightly' && steps.battery.outcome == 'success'
         run: |
           {
-            echo "## llama.cpp patch queue failed to apply"
+            echo "## llama.cpp nightly family sentinels"
             echo
-            echo "The trusted default-branch patch queue does not apply onto the requested upstream."
-            echo "Inspect the apply log and repair the queue in a normal reviewed pull request."
+            echo "The pinned upstream passed the dense, hybrid/composite, and recurrent sentinel battery."
+            echo
+            echo "Certified families: ${{ steps.family_plan.outputs.family_count }}"
+            cat /tmp/llama-upstream-pr.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Agent repair loop (patch-queue failure)
+        id: repair_queue
+        # Repair the patch queue with the opencode agent before failing the
+        # run. The wrapper itself re-runs the battery and only succeeds when
+        # certification passes; it guarantees a repair PR regardless of
+        # outcome. Requires opencode + agent credentials and
+        # CANARY_REPAIR_TOKEN on the family-certify runner (see
+        # ci/llama-canary/agent-repair-prompt.md).
+        if: steps.prepare.outcome == 'failure'
+        timeout-minutes: 720
+        continue-on-error: true
+        env:
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Post-green review: after a certified repair, a fresh-context
+          # agent turn reviews the repair PR content and may modify it
+          # (separate review(llama): commit; see
+          # scripts/llama-canary-agent-repair.sh). Opt out repo-wide by
+          # setting LLAMA_CANARY_AGENT_REVIEW=false.
+          CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}
+          # Untrusted dispatch values reach Bash only as environment
+          # variables, never through inline interpolation.
+          UPSTREAM_SHA_INPUT: ${{ github.event.inputs.upstream_sha || 'latest' }}
+        run: |
+          scripts/llama-canary-agent-repair.sh patch-queue
+
+      - name: Agent repair loop (battery failure)
+        id: repair_battery
+        # The queue applied but a certification lane failed: hand the failing
+        # battery output to the same repair loop. Skipped when the patch-queue
+        # repair already ran or passed everything.
+        if: >
+          steps.prepare.outcome == 'success'
+          && steps.sha.outputs.certify == 'true'
+          && steps.sha.outputs.cadence != 'nightly'
+          && steps.battery.outcome == 'failure'
+        timeout-minutes: 720
+        continue-on-error: true
+        env:
+          CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+          # Post-green review: same opt-out var as the patch-queue step.
+          CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}
+          # Untrusted dispatch values reach Bash only as environment
+          # variables, never through inline interpolation.
+          UPSTREAM_SHA_INPUT: ${{ steps.sha.outputs.new_sha }}
+        run: |
+          scripts/llama-canary-agent-repair.sh battery
+
+      - name: Fail when the canary needs human attention
+        # Any repair outcome leaves the run red: if the repair loop failed,
+        # the agent is stuck; if it succeeded, the certified fix lives on the
+        # repair PR branch and a human must merge it before the trusted main
+        # queue can certify. The repair PR carries the details.
+        if: >
+          contains(fromJSON('["success", "failure"]'), steps.repair_queue.outcome)
+          || contains(fromJSON('["success", "failure"]'), steps.repair_battery.outcome)
+          || steps.battery.outcome == 'failure'
+        env:
+          CANARY_CADENCE: ${{ steps.sha.outputs.cadence }}
+        run: |
+          if [[ "$CANARY_CADENCE" == "nightly" ]]; then
+            {
+              echo "## llama.cpp nightly family sentinels failed"
+              echo
+              echo "The bounded trusted-main nightly battery failed. Inspect the uploaded family evidence; the upstream patch-queue repair agent was intentionally not invoked for an unchanged pin."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "## llama.cpp canary needs human attention"
+            echo
+            echo "The agent repair loop ran; review and merge the repair PR on"
+            echo "\`llama-canary/patch-queue-fix\` (it contains the agent's work, the upstream"
+            echo "analysis, and — if the loop did not finish green — where it is stuck). If the"
+            echo "repair loop could not even start, check the run log for missing opencode,"
+            echo "agent credentials, or CANARY_REPAIR_TOKEN on this runner."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
@@ -245,7 +347,7 @@ jobs:
             echo "validated SHA output is malformed" >&2
             exit 1
           fi
-          printf '%s\n' "$VALIDATED_SHA" > third_party/llama.cpp/upstream.txt
+          scripts/update-llama-pin.sh "$VALIDATED_SHA"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add third_party/llama.cpp/upstream.txt

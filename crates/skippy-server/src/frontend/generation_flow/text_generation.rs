@@ -1,13 +1,16 @@
-use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::generation::{
-    EmbeddedStageZeroGeneration, GENERATION_ADMISSION_TIMEOUT, GeneratedText, GenerationTokenLimit,
-    LocalGeneration, OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
+    EmbeddedStageZeroGeneration, GeneratedText, GenerationTokenLimit, LocalGeneration,
+    OpenAiBackendMode, OpenAiGenerationIds, PhaseTimer, PreparedGenerationPrompt,
     PreparedTextPrompt, StageOpenAiBackend, TextGenerationCollector, emulation_generation_active,
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use openai_frontend::{ChatCompletionRequest, OpenAiError, OpenAiResult};
 use serde_json::json;
 use skippy_runtime::SamplingConfig;
+
+pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
+    u64::try_from(prompt_token_count).unwrap_or(u64::MAX)
+}
 
 impl StageOpenAiBackend {
     pub(in crate::frontend) fn prepare_text_prompt(
@@ -44,6 +47,7 @@ impl StageOpenAiBackend {
         prompt: PreparedGenerationPrompt,
         max_tokens: GenerationTokenLimit,
         prepared_text: Option<PreparedTextPrompt>,
+        token_budget_stats: (usize, usize),
         stop: Option<&openai_frontend::StopSequence>,
         sampling: SamplingConfig,
         hook_request: Option<ChatCompletionRequest>,
@@ -116,15 +120,11 @@ impl StageOpenAiBackend {
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }
-        let token_admit_timer = PhaseTimer::start();
-        let token_budget_reservation = self.generation_token_budget.reserve_cancellable(
-            GenerationTokenBudgetRequest::new(prompt_token_ids.len(), max_tokens),
-            GENERATION_ADMISSION_TIMEOUT,
-            cancellation,
-        )?;
         if cancellation.is_some_and(openai_frontend::CancellationToken::is_cancelled) {
             return Err(OpenAiError::backend("request cancelled"));
         }
+        let token_admit_timer = PhaseTimer::start();
+        let (reserved_tokens, active_reserved_tokens) = token_budget_stats;
         let mut token_admit_attrs = self.openai_attrs(&ids);
         token_admit_attrs.insert(
             "llama_stage.prompt_token_count".to_string(),
@@ -133,11 +133,11 @@ impl StageOpenAiBackend {
         token_admit_attrs.insert("llama_stage.max_tokens".to_string(), json!(max_tokens));
         token_admit_attrs.insert(
             "llama_stage.kv_reserved_tokens".to_string(),
-            json!(token_budget_reservation.tokens()),
+            json!(reserved_tokens),
         );
         token_admit_attrs.insert(
             "llama_stage.kv_active_reserved_tokens".to_string(),
-            json!(token_budget_reservation.active_tokens_after_reservation()),
+            json!(active_reserved_tokens),
         );
         token_admit_attrs.insert(
             "llama_stage.kv_capacity_tokens".to_string(),
@@ -148,12 +148,26 @@ impl StageOpenAiBackend {
             token_admit_timer,
             token_admit_attrs,
         );
+        let _resident_capacity_reservation = match self.kv.as_ref() {
+            Some(kv) => kv
+                .reserve_resident_capacity(
+                    &ids.session_label,
+                    // The resident allocator adds its own n_batch-sized free
+                    // watermark for decode. Passing the outer reservation
+                    // (prompt + decode headroom) would charge that headroom a
+                    // second time and reject prompts that fit the shared pool.
+                    resident_capacity_target_tokens(prompt_token_ids.len()),
+                )
+                .map_err(openai_backend_error)?,
+            None => None,
+        };
         let chat_sampling_metadata = prompt.chat_parse_metadata.as_deref();
 
         let emulation_active = emulation_generation_active(hook_request.as_ref(), &prompt);
         let mut collector =
-            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)
-                .with_emulation_stop(emulation_active);
+            TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk)?
+                .with_emulation_stop(emulation_active)
+                .with_ignore_eos(sampling.ignore_eos);
         let cache_stats = match self.mode.clone() {
             OpenAiBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
@@ -174,7 +188,6 @@ impl StageOpenAiBackend {
             )?,
             OpenAiBackendMode::EmbeddedStageZero {
                 config,
-                wire_dtype,
                 prefill_chunk_policy,
                 activation_width,
                 downstream_wire_condition,
@@ -184,7 +197,6 @@ impl StageOpenAiBackend {
             } => self.generate_embedded_stage_zero_tokens(
                 EmbeddedStageZeroGeneration {
                     config: &config,
-                    wire_dtype,
                     prefill_chunk_policy: &prefill_chunk_policy,
                     activation_width,
                     downstream_wire_condition,

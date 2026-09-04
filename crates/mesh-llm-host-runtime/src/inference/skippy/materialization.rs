@@ -192,11 +192,6 @@ pub fn materialize_stage_config(
 }
 
 fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<StagePackageInfo> {
-    let activation_width = info.activation_width.with_context(|| {
-        format!(
-            "layer package {package_ref} is missing activation_width; rebuild the package manifest"
-        )
-    })?;
     Ok(StagePackageInfo {
         package_ref: package_ref.to_string(),
         package_dir: info.package_dir,
@@ -206,7 +201,7 @@ fn stage_package_info(package_ref: &str, info: LayerPackageInfo) -> Result<Stage
         source_model_sha256: info.source_model_sha256,
         source_model_bytes: info.source_model_bytes,
         layer_count: info.layer_count,
-        activation_width,
+        activation_width: 0,
         generation: info.generation,
         projector_path: info
             .projectors
@@ -278,7 +273,6 @@ mod tests {
             },
             "format": "layer-package",
             "layer_count": 1,
-            "activation_width": 4096,
             "shared": {
                 "metadata": {
                     "path": "shared/metadata.gguf",
@@ -328,6 +322,7 @@ mod tests {
             topology_id: "topology-a".to_string(),
             run_id: "run-a".to_string(),
             model_id: "model-a".to_string(),
+            runtime_profile: Some(String::new()),
             backend: "skippy".to_string(),
             package_ref: package_dir.to_string_lossy().to_string(),
             manifest_sha256,
@@ -337,13 +332,21 @@ mod tests {
             layer_end: 1,
             model_path: Some(package_dir.to_string_lossy().to_string()),
             source_model_bytes: None,
+            source_model_sha256: None,
+            local_source_required: false,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             selected_device: None,
             bind_addr: "127.0.0.1:0".to_string(),
-            activation_width: 4096,
-            wire_dtype: crate::inference::skippy::StageWireDType::F16,
             ctx_size: 8192,
             lane_count: 1,
+            continuous_batching: true,
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: -1,
@@ -352,6 +355,7 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            runtime_settings: Default::default(),
             native_mtp_enabled: true,
             shutdown_generation: 1,
             coordinator_term: 0,
@@ -386,7 +390,6 @@ mod tests {
                 },
                 "format": "layer-package",
                 "layer_count": 1,
-                "activation_width": 4096,
                 "shared": {
                     "metadata": {
                         "path": "shared/metadata.gguf",
@@ -460,6 +463,7 @@ mod tests {
             topology_id: "topology-a".to_string(),
             run_id: "run-a".to_string(),
             model_id: "model-a".to_string(),
+            runtime_profile: Some(String::new()),
             backend: "skippy".to_string(),
             package_ref: dir.path().to_string_lossy().to_string(),
             manifest_sha256,
@@ -469,13 +473,21 @@ mod tests {
             layer_end: 1,
             model_path: None,
             source_model_bytes: None,
+            source_model_sha256: None,
+            local_source_required: false,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             selected_device: None,
             bind_addr: "127.0.0.1:0".to_string(),
-            activation_width: 4096,
-            wire_dtype: crate::inference::skippy::StageWireDType::F16,
             ctx_size: 512,
             lane_count: 1,
+            continuous_batching: true,
             n_batch: None,
             n_ubatch: None,
             n_gpu_layers: 0,
@@ -484,6 +496,7 @@ mod tests {
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
+            runtime_settings: Default::default(),
             native_mtp_enabled: true,
             shutdown_generation: 0,
             coordinator_term: 0,

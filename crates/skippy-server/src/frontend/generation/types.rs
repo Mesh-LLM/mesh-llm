@@ -10,6 +10,8 @@ use crate::frontend::SpeculativeDecodeConfig;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::decode_scheduler::VerifyWindowPipelineStats;
 use crate::frontend::generation::DraftRunner;
+use crate::frontend::generation::GenerationConcurrencyController;
+use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::GenerationTokenLimit;
 use crate::frontend::generation::OpenAiGenerationIds;
 use crate::frontend::generation::PersistentStageLanePool;
@@ -31,13 +33,12 @@ use serde_json::json;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
-use skippy_protocol::binary::WireActivationDType;
 use skippy_runtime::SamplingConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 pub(in crate::frontend) struct GenerationSessionLockEntry {
@@ -60,9 +61,11 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) adaptive_speculative_window: bool,
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: SpeculativeDecodeConfig,
-    pub(in crate::frontend) generation_limit: Arc<Semaphore>,
+    pub(in crate::frontend) generation_limit: Arc<GenerationConcurrencyController>,
     pub(in crate::frontend) generation_queue_depth: Arc<AtomicUsize>,
     pub(in crate::frontend) generation_queue_limit: usize,
+    pub(in crate::frontend) generation_admission_timeout: Duration,
+    pub(in crate::frontend) generation_service_estimator: Arc<GenerationServiceEstimator>,
     pub(in crate::frontend) generation_session_locks:
         Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     pub(in crate::frontend) generation_token_budget: Arc<GenerationTokenBudget>,
@@ -79,7 +82,6 @@ pub(in crate::frontend) enum OpenAiBackendMode {
     LocalRuntime,
     EmbeddedStageZero {
         config: StageConfig,
-        wire_dtype: WireActivationDType,
         prefill_chunk_policy: PrefillChunkPolicy,
         activation_width: i32,
         downstream_wire_condition: WireCondition,
@@ -152,7 +154,6 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
 
 pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) config: &'a StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) prefill_chunk_policy: &'a PrefillChunkPolicy,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
@@ -183,7 +184,6 @@ pub(in crate::frontend) struct SplitMultimodalGeneration<'a> {
     pub(in crate::frontend) cancellation: Option<&'a openai_frontend::CancellationToken>,
     pub(in crate::frontend) ids: OpenAiGenerationIds,
     pub(in crate::frontend) config: StageConfig,
-    pub(in crate::frontend) wire_dtype: WireActivationDType,
     pub(in crate::frontend) activation_width: i32,
     pub(in crate::frontend) downstream_wire_condition: WireCondition,
     pub(in crate::frontend) lane_pool: Arc<PersistentStageLanePool>,
@@ -240,6 +240,8 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) speculative_stats: Option<OpenAiSpeculativeStats>,
     pub(in crate::frontend) prompt_ms: f64,
     pub(in crate::frontend) predicted_ms: f64,
+    pub(in crate::frontend) queue_wait_ms: f64,
+    pub(in crate::frontend) restore_ms: f64,
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) finish_reason: FinishReason,
     pub(in crate::frontend) detokenize_ms: f64,
@@ -272,6 +274,12 @@ impl GeneratedText {
         let mut timings = BTreeMap::from([
             ("prompt_n".to_string(), json!(self.prompt_tokens)),
             ("prompt_ms".to_string(), json!(self.prompt_ms)),
+            ("queue_wait_ms".to_string(), json!(self.queue_wait_ms)),
+            ("cache_restore_ms".to_string(), json!(self.restore_ms)),
+            (
+                "suffix_prefill_n".to_string(),
+                json!(self.suffix_prefill_tokens),
+            ),
             (
                 "prompt_per_second".to_string(),
                 json!(tokens_per_second(self.prompt_tokens, self.prompt_ms)),

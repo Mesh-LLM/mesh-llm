@@ -401,6 +401,11 @@ impl ConfigEditor {
         &mut self,
         node: LocalServingNodeConfig,
     ) -> Result<&mut Self> {
+        if node.runtime.is_some() {
+            bail!(
+                "local serving node runtime is unsupported; configure a supported hardware selector instead"
+            );
+        }
         self.set_version(Some(1));
         if let Some(assignment) = node.gpu_assignment {
             self.set_gpu_assignment(assignment);
@@ -412,9 +417,6 @@ impl ConfigEditor {
             self.set_owner_control_advertise_addr(node.owner_control_advertise_addr);
         }
         let mut model = self.upsert_model(node.model, String::new())?;
-        if let Some(runtime) = node.runtime {
-            model.runtime(runtime);
-        }
         if let Some(device) = node.device {
             model.device(device);
         }
@@ -436,8 +438,10 @@ impl ConfigEditor {
         derived_profile: String,
     ) -> Result<ModelConfigEditor<'_>> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
+        let defaults = self.config.defaults.as_ref();
         let index = match self.config.models.iter().position(|entry| {
-            entry.model == model_ref && entry.derived_profile() == derived_profile
+            entry.model == model_ref
+                && entry.with_profile_defaults(defaults).derived_profile() == derived_profile
         }) {
             Some(index) => index,
             None => {
@@ -450,6 +454,7 @@ impl ConfigEditor {
         };
         Ok(ModelConfigEditor {
             model: &mut self.config.models[index],
+            defaults,
         })
     }
 
@@ -459,8 +464,10 @@ impl ConfigEditor {
         derived_profile: String,
     ) -> Result<&mut Self> {
         let model_ref = normalize_non_empty(model_ref.as_ref(), "model ref")?;
+        let defaults = self.config.defaults.as_ref();
         self.config.models.retain(|entry| {
-            !(entry.model == model_ref && entry.derived_profile() == derived_profile)
+            !(entry.model == model_ref
+                && entry.with_profile_defaults(defaults).derived_profile() == derived_profile)
         });
         Ok(self)
     }
@@ -583,6 +590,7 @@ impl ModelDefaultsEditor<'_> {
 
 pub struct ModelConfigEditor<'a> {
     model: &'a mut ModelConfigEntry,
+    defaults: Option<&'a ModelConfigDefaults>,
 }
 
 impl ModelConfigEditor<'_> {
@@ -591,7 +599,9 @@ impl ModelConfigEditor<'_> {
     }
 
     pub fn derived_profile(&self) -> String {
-        self.model.derived_profile()
+        self.model
+            .with_profile_defaults(self.defaults)
+            .derived_profile()
     }
 
     pub fn runtime(&mut self, runtime: ModelRuntimeKind) -> &mut Self {
@@ -1028,7 +1038,7 @@ mod schema_tests {
             .unwrap()
             .context_size(4096);
         editor
-            .upsert_model("Qwen/Qwen3-8B-GGUF:Q4_K_M", String::new())
+            .upsert_model("Qwen/Qwen3-14B-GGUF:Q4_K_M", String::new())
             .unwrap()
             .context_size(16384);
 
@@ -1152,6 +1162,58 @@ mod schema_tests {
 
         let config = editor.into_config();
         assert_eq!(config.models.len(), 2);
+    }
+
+    fn config_with_inherited_local_required_model() -> MeshConfig {
+        MeshConfig {
+            defaults: Some(ModelConfigDefaults {
+                skippy: Some(crate::SkippyConfig {
+                    source_policy: Some("local-required".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn upsert_model_matches_profile_with_inherited_defaults() {
+        let config = config_with_inherited_local_required_model();
+        let effective_profile = config.models[0]
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        let mut editor = ConfigEditor::new(config);
+
+        let mut model = editor
+            .upsert_model("Qwen3-8B", effective_profile.clone())
+            .unwrap();
+        assert_eq!(model.derived_profile(), effective_profile);
+        model.context_size(8192);
+
+        let config = editor.into_config();
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(
+            config.models[0].model_fit.as_ref().unwrap().ctx_size,
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn remove_model_matches_profile_with_inherited_defaults() {
+        let config = config_with_inherited_local_required_model();
+        let effective_profile = config.models[0]
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        let mut editor = ConfigEditor::new(config);
+
+        editor.remove_model("Qwen3-8B", effective_profile).unwrap();
+
+        assert!(editor.into_config().models.is_empty());
     }
 
     #[test]

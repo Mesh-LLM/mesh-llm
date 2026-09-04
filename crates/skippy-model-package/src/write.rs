@@ -119,6 +119,45 @@ pub(crate) fn write_stage_artifact(
     }
 }
 
+pub(crate) fn check_manifest_matches_artifact(
+    stage_index: usize,
+    planned: (usize, u64),
+    written: (usize, u64),
+    path: &Path,
+) -> Result<()> {
+    if planned != written {
+        bail!(
+            "stage {stage_index} plan selected {} tensors / {} bytes but the written artifact {} \
+             contains {} tensors / {} bytes; the packaging plan and the native slice writer \
+             disagree on tensor selection",
+            planned.0,
+            planned.1,
+            path.display(),
+            written.0,
+            written.1,
+        );
+    }
+    Ok(())
+}
+
+/// Read back what the slice writer actually put in the artifact, rather than
+/// trusting the plan's prediction of it.
+fn written_artifact_tensor_totals(path: &Path) -> Result<(usize, u64)> {
+    let info = ModelInfo::open(path)
+        .with_context(|| format!("open written stage artifact {}", path.display()))?;
+    let tensors = info.tensors().with_context(|| {
+        format!(
+            "read tensors from written stage artifact {}",
+            path.display()
+        )
+    })?;
+    let tensor_bytes = tensors
+        .iter()
+        .try_fold(0u64, |total, tensor| total.checked_add(tensor.byte_size))
+        .with_context(|| format!("tensor byte total overflows u64 in {}", path.display()))?;
+    Ok((tensors.len(), tensor_bytes))
+}
+
 fn build_manifest(
     model: &Path,
     layer_count: u32,
@@ -128,6 +167,18 @@ fn build_manifest(
     for (stage, path) in written {
         let metadata = fs::metadata(&path)
             .with_context(|| format!("read artifact metadata {}", path.display()))?;
+        let (tensor_count, tensor_bytes) = written_artifact_tensor_totals(&path)?;
+        // The plan predicate and the native slice writer select tensors
+        // independently, in different languages. If they ever disagree the
+        // manifest silently misdescribes the artifact, and `tensor_bytes` is
+        // what split planning divides to estimate per-layer stage cost. Report
+        // what the artifact actually contains and fail loudly on a mismatch.
+        check_manifest_matches_artifact(
+            stage.stage_index,
+            (stage.tensor_count, stage.tensor_bytes),
+            (tensor_count, tensor_bytes),
+            &path,
+        )?;
         stages.push(SliceManifestStage {
             stage_index: stage.stage_index,
             layer_start: stage.layer_start,
@@ -135,8 +186,8 @@ fn build_manifest(
             includes_embeddings: stage.includes_embeddings,
             includes_output: stage.includes_output,
             path: path.display().to_string(),
-            tensor_count: stage.tensor_count,
-            tensor_bytes: stage.tensor_bytes,
+            tensor_count,
+            tensor_bytes,
             artifact_bytes: metadata.len(),
             sha256: file_sha256(&path)?,
         });
@@ -268,6 +319,7 @@ fn write_single_source_stage_artifact(
         stage.layer_end,
         stage.includes_embeddings,
         stage.includes_output,
+        stage.includes_per_layer_token_embd,
     )?;
     info.write_slice_gguf(&plan, stage.stage_index as u32, out)
         .with_context(|| format!("write GGUF slice {}", out.display()))

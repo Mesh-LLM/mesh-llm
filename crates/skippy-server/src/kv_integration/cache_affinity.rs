@@ -30,6 +30,7 @@ impl KvStageIntegration {
                     .map(|hit| hit.matched_tokens),
                 StagePrefixCachePayload::Disabled => None,
             })
+            .filter(|matched_tokens| self.meets_shared_prefix_min_tokens(*matched_tokens))
             .max()
             .unwrap_or(0);
         if matched_tokens == 0 {
@@ -65,7 +66,7 @@ mod tests {
         StageConfig {
             run_id: "run".to_string(),
             topology_id: "topology".to_string(),
-            model_id: "org/model:Q4_K_M".to_string(),
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
             package_ref: None,
             manifest_sha256: None,
             source_model_path: None,
@@ -86,9 +87,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: Some(StageKvCacheConfig {
@@ -105,13 +117,17 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
     #[test]
     fn busy_radix_returns_cold_affinity_without_waiting() {
         let config = test_config();
-        let integration = KvStageIntegration::from_config(&config).unwrap().unwrap();
+        let integration =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
+                .unwrap()
+                .unwrap();
         let radix = Arc::clone(&integration.radix);
         let (locked_tx, locked_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();

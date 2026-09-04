@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_kv_tool_loop:
+        description: "Skip repeated KV/tool-loop, overlap, and prefix-reuse certification."
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: "Request timeout in seconds for each probe."
         required: false
@@ -54,3 +59,10 @@ jobs:
       skip_streaming: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_streaming || false }}
       timeout: ${{ github.event.inputs.timeout || vars.MESH_NIGHTLY_STABILITY_TIMEOUT || '180' }}
       output_dir: ${{ github.event.inputs.output_dir || format('nightly-artifacts/stability/{0}', github.run_id) }}
+      kv_tool_loop: ${{ !inputs.skip_kv_tool_loop && (github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_KV_TOOL_LOOP_ENABLED != '0') }}
+      kv_models: ${{ vars.MESH_NIGHTLY_KV_MODELS || github.event.inputs.models || vars.MESH_NIGHTLY_STABILITY_MODELS || 'auto,mesh' }}
+      kv_attempts: ${{ vars.MESH_NIGHTLY_KV_ATTEMPTS || '3' }}
+      kv_pressure_turns: ${{ vars.MESH_NIGHTLY_KV_PRESSURE_TURNS || '6' }}
+      kv_overlap_requests: ${{ vars.MESH_NIGHTLY_KV_OVERLAP_REQUESTS || '2' }}
+      kv_min_cached_tokens: ${{ vars.MESH_NIGHTLY_KV_MIN_CACHED_TOKENS || '2048' }}
+      kv_suffix_prefill_limit: ${{ vars.MESH_NIGHTLY_KV_SUFFIX_PREFILL_LIMIT || '256' }}

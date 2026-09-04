@@ -26,6 +26,7 @@ pub mod attr {
     pub const KV_CAPACITY_STATUS: &str = "skippy.kv.capacity_status";
     pub const KV_CAPACITY_TOKENS: &str = "skippy.kv.capacity_tokens";
     pub const KV_CAPACITY_ACTIVE_TOKENS: &str = "skippy.kv.capacity_active_tokens";
+    pub const KV_CAPACITY_PHYSICAL_USED_TOKENS: &str = "skippy.kv.capacity_physical_used_tokens";
     pub const KV_CAPACITY_PINNED_TOKENS: &str = "skippy.kv.capacity_pinned_tokens";
     pub const KV_CAPACITY_REQUEST_TOKENS: &str = "skippy.kv.capacity_request_tokens";
     pub const KV_CAPACITY_MINIMUM_FREE_TOKENS: &str = "skippy.kv.capacity_minimum_free_tokens";
@@ -37,6 +38,8 @@ pub mod attr {
         "skippy.kv.capacity_required_eviction_tokens";
     pub const KV_CAPACITY_EVICTED_ENTRIES: &str = "skippy.kv.capacity_evicted_entries";
     pub const KV_CAPACITY_EVICTED_TOKENS: &str = "skippy.kv.capacity_evicted_tokens";
+    pub const KV_CAPACITY_PHYSICAL_EVICTED_TOKENS: &str =
+        "skippy.kv.capacity_physical_evicted_tokens";
     pub const KV_CAPACITY_PREDICTED_RECOMPUTE_COST: &str =
         "skippy.kv.capacity_predicted_recompute_cost";
     pub const VERIFY_WINDOW_DIRECT_RETURN_UPSTREAM_OPENED: &str =

@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use skippy_protocol::{StageConfig, StageTopology, binary::WireActivationDType};
+use skippy_protocol::{StageConfig, StageTopology};
 use skippy_runtime::MtpSource;
 
 use crate::{
@@ -16,8 +16,6 @@ pub struct BinaryStageOptions {
     pub config: StageConfig,
     pub topology: Option<StageTopology>,
     pub bind_addr: SocketAddr,
-    pub activation_width: i32,
-    pub wire_dtype: WireActivationDType,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -27,6 +25,12 @@ pub struct BinaryStageOptions {
     pub downstream_wire_condition: WireCondition,
     pub downstream_connect_timeout_secs: u64,
     pub native_mtp_enabled: bool,
+    /// Whether the iteration scheduler may serve multiple active lanes.
+    ///
+    /// Binary stages launched by the standalone CLI retain the historical
+    /// enabled default. Mesh-launched stages receive the resolved value from
+    /// the stage-control load request.
+    pub continuous_batching: bool,
     pub openai: Option<EmbeddedOpenAiStageOptions>,
 }
 
@@ -36,6 +40,9 @@ pub struct EmbeddedOpenAiStageOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub generation_concurrency: usize,
+    pub adaptive_generation_min_concurrency: Option<usize>,
+    pub generation_queue_capacity: usize,
+    pub generation_admission_timeout_secs: u64,
     pub prefill_chunk_size: usize,
     pub prefill_chunk_policy: String,
     pub prefill_chunk_schedule: Option<String>,
@@ -55,10 +62,7 @@ pub struct EmbeddedOpenAiStageOptions {
 
 impl BinaryStageOptions {
     pub fn from_cli_args(args: ServeBinaryArgs) -> Result<Self> {
-        if args.activation_width <= 0 {
-            bail!("activation_width must be greater than zero");
-        }
-        if args.openai_generation_concurrency == 0 {
+        if args.openai_generation_concurrency == Some(0) {
             bail!("--openai-generation-concurrency must be greater than zero");
         }
         if args.openai_prefill_chunk_size == 0 {
@@ -69,7 +73,7 @@ impl BinaryStageOptions {
         {
             bail!("--openai-prefill-adaptive-target-ms must be finite and greater than zero");
         }
-        let wire_dtype = parse_wire_dtype(&args.activation_wire_dtype)?;
+
         let downstream_wire_condition =
             WireCondition::new(args.downstream_wire_delay_ms, args.downstream_wire_mbps)?;
         let config = load_json::<StageConfig>(&args.config)
@@ -82,6 +86,20 @@ impl BinaryStageOptions {
             None => None,
         };
         let bind_addr = args.bind_addr.unwrap_or(config.bind_addr.parse()?);
+        let openai_generation_concurrency = args
+            .openai_generation_concurrency
+            .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
+        let openai_generation_queue_capacity =
+            args.openai_generation_queue_capacity.unwrap_or_else(|| {
+                crate::frontend::default_generation_queue_capacity(openai_generation_concurrency)
+            });
+        let adaptive_generation_min_concurrency =
+            crate::frontend::resolve_adaptive_generation_min_concurrency(
+                args.openai_adaptive_generation_concurrency,
+                args.openai_adaptive_generation_min_concurrency,
+                openai_generation_concurrency,
+                "--openai-adaptive-generation-min-concurrency",
+            )?;
         let openai_speculative: SpeculativeDecodeConfig = args
             .openai_speculative_config
             .as_ref()
@@ -96,7 +114,10 @@ impl BinaryStageOptions {
                 bind_addr,
                 model_id: args.openai_model_id,
                 default_max_tokens: args.openai_default_max_tokens,
-                generation_concurrency: args.openai_generation_concurrency,
+                generation_concurrency: openai_generation_concurrency,
+                adaptive_generation_min_concurrency,
+                generation_queue_capacity: openai_generation_queue_capacity,
+                generation_admission_timeout_secs: args.openai_generation_admission_timeout_secs,
                 prefill_chunk_size: args.openai_prefill_chunk_size,
                 prefill_chunk_policy: args.openai_prefill_chunk_policy,
                 prefill_chunk_schedule: args.openai_prefill_chunk_schedule,
@@ -118,8 +139,6 @@ impl BinaryStageOptions {
             config,
             topology,
             bind_addr,
-            activation_width: args.activation_width,
-            wire_dtype,
             metrics_otlp_grpc: args.metrics_otlp_grpc,
             telemetry_queue_capacity: args.telemetry_queue_capacity,
             telemetry_level: args.telemetry_level,
@@ -129,6 +148,7 @@ impl BinaryStageOptions {
             downstream_wire_condition,
             downstream_connect_timeout_secs: args.downstream_connect_timeout_secs,
             native_mtp_enabled,
+            continuous_batching: true,
             openai,
         })
     }
@@ -148,15 +168,6 @@ impl BinaryStageOptions {
         } else {
             MtpSource::Integrated
         }
-    }
-}
-
-pub fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
     }
 }
 
@@ -201,9 +212,20 @@ mod tests {
             n_gpu_layers: -1,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
             selected_device: None,
             kv_cache: None,
@@ -212,6 +234,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -239,6 +262,7 @@ mod tests {
                 max_tokens: 6,
                 pipeline_depth: 2,
             },
+            ..SpeculativeDecodeConfig::default()
         }
     }
 
@@ -264,8 +288,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
             "--openai-speculative-config",
@@ -281,7 +303,50 @@ mod tests {
         let openai = options.openai.expect("embedded OpenAI configuration");
 
         assert!(options.native_mtp_enabled);
+        assert_eq!(openai.generation_concurrency, 1);
+        assert_eq!(openai.generation_queue_capacity, 16);
+        assert_eq!(openai.generation_admission_timeout_secs, 0);
         assert_eq!(openai.speculative, expected);
+    }
+
+    #[test]
+    fn embedded_openai_admission_overrides_are_independent() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        let mut config = stage_config();
+        config.lane_count = 4;
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&config).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            stage_path.to_str().expect("UTF-8 stage path"),
+            "--openai-bind-addr",
+            "127.0.0.1:9337",
+            "--openai-generation-concurrency",
+            "2",
+            "--openai-generation-queue-capacity",
+            "33",
+            "--openai-generation-admission-timeout-secs",
+            "90",
+        ])
+        .expect("parse binary stage CLI");
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+        let openai = BinaryStageOptions::from_cli_args(args)
+            .expect("resolve binary stage")
+            .openai
+            .expect("embedded OpenAI configuration");
+
+        assert_eq!(openai.generation_concurrency, 2);
+        assert_eq!(openai.generation_queue_capacity, 33);
+        assert_eq!(openai.generation_admission_timeout_secs, 90);
     }
 
     #[test]
@@ -307,8 +372,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
             "--openai-bind-addr",
             "127.0.0.1:9337",
             "--openai-speculative-config",
@@ -351,8 +414,6 @@ mod tests {
             "serve-binary",
             "--config",
             stage_path.to_str().expect("UTF-8 stage path"),
-            "--activation-width",
-            "2048",
         ])
         .expect("parse binary stage CLI");
         let Command::ServeBinary(args) = cli.command else {

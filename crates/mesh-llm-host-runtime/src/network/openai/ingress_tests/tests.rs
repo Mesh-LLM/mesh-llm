@@ -250,7 +250,7 @@ async fn moa_single_worker_stays_in_gateway() {
     let lifecycle = OpenAiLifecycleAttachment::unowned();
 
     let result = try_handle_moa_intercept(
-        tcp_stream,
+        tcp_stream.into(),
         &mut request,
         &ctx,
         &decision,
@@ -523,6 +523,56 @@ async fn api_proxy_tokenizer_route_ignores_generation_context_budget() {
     );
 }
 
+// --- #1331 M2: path 2 (raw-proxy ingress) openai-exchange status mapping ---
+//
+// `try_route_plugin_model` itself needs a live TCP stream and a real
+// `mesh::Node` (see the `plugin_lifecycle`/`record_plugin_attempt` doubles
+// above, which exist because the whole function is not economical to invoke
+// directly in a unit test); `plugin_route_status` is the pure piece of that
+// call site's openai-exchange wiring, so it's tested directly instead.
+#[test]
+fn plugin_route_status_maps_responded_and_responded_with_usage() {
+    assert_eq!(
+        plugin_route_status(&proxy::RouteDispatchOutcome::Responded(200)),
+        Some(200)
+    );
+    assert_eq!(
+        plugin_route_status(&proxy::RouteDispatchOutcome::RespondedWithUsage {
+            status_code: 200,
+            usage: mesh_llm_events::logging::events::TokenUsage::from_counts(
+                Some(1),
+                Some(1),
+                Some(2)
+            )
+            .unwrap(),
+        }),
+        Some(200)
+    );
+}
+
+#[test]
+fn plugin_route_status_maps_failed_with_status_and_omits_statusless_outcomes() {
+    assert_eq!(
+        plugin_route_status(&proxy::RouteDispatchOutcome::FailedWithStatus {
+            status_code: 503,
+            reason: "plugin_endpoint_failed",
+        }),
+        Some(503)
+    );
+    assert_eq!(
+        plugin_route_status(&proxy::RouteDispatchOutcome::Failed(
+            "plugin_endpoint_failed"
+        )),
+        None
+    );
+    assert_eq!(
+        plugin_route_status(&proxy::RouteDispatchOutcome::Dropped(
+            "response_write_failed"
+        )),
+        None
+    );
+}
+
 #[test]
 fn plugin_route_success_records_one_attempt_and_one_terminal_outcome() {
     let (service, mut attachment) = plugin_lifecycle();
@@ -535,6 +585,7 @@ fn plugin_route_success_records_one_attempt_and_one_terminal_outcome() {
         super::super::response::RouteAttemptResult::Delivered {
             status_code: 200,
             usage: None,
+            cache_cost: None,
         },
     );
     assert!(matches!(
@@ -762,6 +813,7 @@ fn invalid_and_failed_moa_responses_map_from_http_status() {
 fn usage_never_turns_moa_or_pipeline_error_statuses_into_success() {
     let usage = mesh_llm_events::logging::events::TokenUsage {
         prompt_tokens: Some(8),
+        cached_prompt_tokens: None,
         completion_tokens: Some(5),
         total_tokens: Some(13),
     };
@@ -791,6 +843,7 @@ fn usage_never_turns_moa_or_pipeline_error_statuses_into_success() {
 fn streamed_moa_chat_and_responses_record_compatible_usage_lifecycle() {
     let usage = mesh_llm_events::logging::events::TokenUsage {
         prompt_tokens: Some(8),
+        cached_prompt_tokens: None,
         completion_tokens: Some(5),
         total_tokens: Some(13),
     };

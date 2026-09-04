@@ -113,6 +113,9 @@ impl Node {
                 "claim"
             }
             Some(skippy_stage_proto::stage_control_request::Command::LoadStage(_)) => "load",
+            Some(skippy_stage_proto::stage_control_request::Command::LoadLocalStage(_)) => {
+                "load-local"
+            }
             Some(skippy_stage_proto::stage_control_request::Command::StopStage(_)) => "stop",
             Some(skippy_stage_proto::stage_control_request::Command::PrepareStage(_)) => "prepare",
             _ => "other",
@@ -177,8 +180,10 @@ impl Node {
         request: crate::inference::skippy::StageControlRequest,
         error: anyhow::Error,
     ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
-        let crate::inference::skippy::StageControlRequest::Load(load) = request else {
-            return Err(error);
+        let load = match request {
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => load,
+            _ => return Err(error),
         };
         let error_message = format!("{error:#}");
         tracing::warn!(
@@ -207,6 +212,7 @@ impl Node {
         use prost::Message as _;
 
         let frame = self.decode_stage_control_request(remote, &mut recv).await?;
+        self.ensure_current_stage_control_peer(remote).await?;
         let request_kind = Self::stage_control_request_kind(&frame);
         tracing::debug!(
             "handle_stage_control: received {request_kind} from {}",
@@ -223,7 +229,9 @@ impl Node {
                 );
                 e
             })?;
-        if let crate::inference::skippy::StageControlRequest::Load(load) = &request {
+        if let crate::inference::skippy::StageControlRequest::Load(load)
+        | crate::inference::skippy::StageControlRequest::LoadLocal(load) = &request
+        {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
@@ -231,13 +239,7 @@ impl Node {
             .execute_stage_control_request_for_peer(remote, request)
             .await?;
         self.record_stage_control_response(&response).await;
-        let status_list_supported = self
-            .peer_supports_skippy_subprotocol_feature(
-                remote,
-                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
-            )
-            .await;
-        let proto_response = stage_control_response_to_proto(response, status_list_supported);
+        let proto_response = stage_control_response_to_proto(response);
         write_len_prefixed(&mut send, &proto_response.encode_to_vec()).await?;
         let _ = send.finish();
         Ok(())
@@ -247,10 +249,27 @@ impl Node {
         &self,
         request: &mut crate::inference::skippy::StageControlRequest,
     ) -> anyhow::Result<()> {
+        if let crate::inference::skippy::StageControlRequest::LoadLocal(load) = request {
+            // Enforce the command-level policy before any resolver is allowed
+            // to inspect the request. StageControlState repeats this at the
+            // execution boundary as defense in depth.
+            load.local_source_required = true;
+        }
         match request {
             crate::inference::skippy::StageControlRequest::Claim(_) => {}
-            crate::inference::skippy::StageControlRequest::Load(load) => {
-                if load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
+            crate::inference::skippy::StageControlRequest::Load(load)
+            | crate::inference::skippy::StageControlRequest::LoadLocal(load) => {
+                let mut effective_load = load.clone();
+                let verified = tokio::task::spawn_blocking(move || {
+                    let verified =
+                        crate::inference::skippy::apply_verified_local_source(&mut effective_load)?;
+                    anyhow::Ok((effective_load, verified))
+                })
+                .await
+                .context("join verify local-required stage load source task")??;
+                *load = verified.0;
+                if !verified.1
+                    && load.load_mode == skippy_protocol::LoadMode::RuntimeSlice
                     && load
                         .model_path
                         .as_deref()
@@ -369,6 +388,23 @@ impl Node {
             }
             _ => false,
         }
+    }
+
+    pub(crate) async fn ensure_current_stage_control_peer(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.peer_supports_skippy_subprotocol_feature(
+                peer_id,
+                skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+            )
+            .await,
+            "stage peer {} does not advertise the required generation-{} control bundle",
+            peer_id.fmt_short(),
+            skippy_protocol::STAGE_PROTOCOL_GENERATION
+        );
+        Ok(())
     }
 
     pub(crate) async fn fetch_stage_package_artifacts_from_peer(

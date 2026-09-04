@@ -15,6 +15,27 @@ use crate::{common::Usage, errors::OpenAiError};
 /// The canonical request correlation header used by the OpenAI frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
+/// A caller-supplied fresh, unpredictable per-request value. Presence alone
+/// buys equivocation resistance (a downstream recorder can no longer fabricate
+/// or replay the freshness value) — it does not establish who sent it.
+pub static CLIENT_NONCE_HEADER: HeaderName = HeaderName::from_static("x-capsule-client-nonce");
+
+/// Set only when this ingress minted the nonce itself, never when forwarding
+/// a value the inbound request already carried. Without this marker, "the
+/// harness sent a nonce" and "the ingress minted one on the harness's behalf"
+/// are indistinguishable once the header is present downstream.
+pub static CLIENT_NONCE_ORIGIN_HEADER: HeaderName =
+    HeaderName::from_static("x-capsule-nonce-origin");
+
+/// The [`CLIENT_NONCE_ORIGIN_HEADER`] value stamped when this frontend minted
+/// the nonce rather than forwarding one the client already supplied.
+///
+/// The value is `frontend`, not `local_ingress`: for a remote-routed request
+/// this router is the remote host's frontend, so it cannot know whether it is
+/// the original ingress for the logical request. It can only truthfully assert
+/// "this frontend minted the value it is forwarding."
+pub const CLIENT_NONCE_ORIGIN_FRONTEND: &str = "frontend";
+
 /// Metadata that identifies a frontend request without retaining its payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenAiLifecycleContext {
@@ -96,7 +117,7 @@ pub enum OpenAiFailure {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct OpenAiUsage {
     pub prompt_tokens: u32,
-    pub cached_tokens: u32,
+    pub cached_tokens: Option<u32>,
     pub completion_tokens: u32,
     pub total_tokens: u32,
 }
@@ -108,7 +129,7 @@ impl From<&Usage> for OpenAiUsage {
             cached_tokens: usage
                 .prompt_tokens_details
                 .as_ref()
-                .map_or(0, |details| details.cached_tokens),
+                .map(|details| details.cached_tokens),
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
         }
@@ -244,6 +265,75 @@ pub fn request_id_response_header(request_id: &RequestId) -> (HeaderName, Header
     (REQUEST_ID_HEADER.clone(), value)
 }
 
+/// Accept an inbound client nonce only when it is a single valid UUIDv4.
+///
+/// A nonce that is not a UUIDv4 is not a nonce this ingress can vouch for: a
+/// client can pin a non-UUID value to a constant, which loses the freshness
+/// property while making the value look more trustworthy than a minted one
+/// (because a forwarded value carries no origin marker). Requiring UUIDv4
+/// aligns the accepted shape with the shape this ingress mints, so downstream
+/// consumers can assume every `x-capsule-client-nonce` is a UUIDv4 regardless
+/// of whether it was forwarded or minted.
+pub fn parse_client_nonce(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value).ok().filter(|uuid| {
+        // Require both the version *and* the RFC 4122 variant: a value whose
+        // version nibble is 4 but whose variant is NCS/Microsoft/future (e.g.
+        // `...-0d9e-...`) is not a UUIDv4 this ingress would ever mint, so a
+        // client must not be able to pass one off as a minted-shaped nonce.
+        uuid.get_version_num() == 4 && uuid.get_variant() == uuid::Variant::RFC4122
+    })
+}
+
+/// Accept exactly one valid UUIDv4 client nonce from a header-like value
+/// sequence, returning it in canonical hyphenated form.
+///
+/// A missing value, malformed value, non-UUIDv4 value, or duplicate header is
+/// rejected. This mirrors [`parse_single_request_id`] so both the axum ingress
+/// and the raw host-runtime proxy agree on exactly one nonce-acceptance rule.
+pub fn parse_single_client_nonce<'a, I>(values: I) -> Option<HeaderValue>
+where
+    I: IntoIterator<Item = Option<&'a str>>,
+{
+    let mut values = values.into_iter();
+    let value = values.next()??;
+    if values.next().is_some() {
+        return None;
+    }
+    let uuid = parse_client_nonce(value)?;
+    Some(
+        HeaderValue::from_str(&uuid.hyphenated().to_string())
+            .expect("a UUID is always a valid header value"),
+    )
+}
+
+/// Generate a fresh CSPRNG UUIDv4 client nonce header value — never reused
+/// across requests, never derived from a counter, timestamp, or session.
+pub fn generate_client_nonce() -> HeaderValue {
+    HeaderValue::from_str(&Uuid::new_v4().hyphenated().to_string())
+        .expect("a UUID is always a valid header value")
+}
+
+/// Forward a single valid inbound UUIDv4 client nonce, or mint a fresh one when
+/// the header is absent, invalid, non-UUIDv4, or duplicated. Returns the value
+/// to forward and, only when this call minted it, the origin-marker value to
+/// attach alongside it so a downstream reader can tell the two cases apart.
+pub fn client_nonce_from_headers_or_generate(
+    headers: &HeaderMap,
+) -> (HeaderValue, Option<HeaderValue>) {
+    let inbound = headers
+        .get_all(&CLIENT_NONCE_HEADER)
+        .iter()
+        .map(|value| value.to_str().ok());
+    match parse_single_client_nonce(inbound) {
+        Some(value) => (value, None),
+        None => {
+            let minted = generate_client_nonce();
+            let origin = HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND);
+            (minted, Some(origin))
+        }
+    }
+}
+
 pub(crate) const CLIENT_CLOSED_REQUEST_STATUS: u16 = 499;
 
 pub(crate) fn client_closed_request_status() -> StatusCode {
@@ -330,6 +420,110 @@ mod tests {
         }
     }
 
+    const CLIENT_NONCE: &str = "6d7d8d2e-3f4a-4b5c-8d9e-0a1b2c3d4e5f";
+
+    #[test]
+    fn client_nonce_valid_uuidv4_is_forwarded_unchanged() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static(CLIENT_NONCE),
+        );
+
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        assert_eq!(value, HeaderValue::from_static(CLIENT_NONCE));
+        assert!(
+            origin.is_none(),
+            "forwarding a caller-supplied nonce must not add an origin marker"
+        );
+    }
+
+    #[test]
+    fn client_nonce_non_uuid_value_is_replaced_and_marked() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static("harness-supplied-nonce"),
+        );
+
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        let minted = value.to_str().expect("minted nonce is ASCII");
+        assert_ne!(minted, "harness-supplied-nonce");
+        assert!(parse_client_nonce(minted).is_some(), "a UUIDv4 is minted");
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
+        );
+    }
+
+    #[test]
+    fn client_nonce_duplicate_headers_are_rejected_and_replaced() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static(CLIENT_NONCE),
+        );
+        headers.append(
+            CLIENT_NONCE_HEADER.clone(),
+            HeaderValue::from_static(CLIENT_NONCE),
+        );
+
+        let (value, origin) = client_nonce_from_headers_or_generate(&headers);
+        assert_ne!(
+            value,
+            HeaderValue::from_static(CLIENT_NONCE),
+            "a duplicated nonce header must never be accepted as trusted"
+        );
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
+        );
+    }
+
+    #[test]
+    fn parse_single_client_nonce_golden_table_rejects_missing_invalid_and_duplicate_values() {
+        let valid = CLIENT_NONCE;
+        let non_v4 = "6d7d8d2e-3f4a-1b5c-8d9e-0a1b2c3d4e5f"; // version nibble = 1
+        // version nibble = 4 but variant nibble = 0 (NCS, not RFC 4122).
+        let v4_non_rfc4122_variant = "6d7d8d2e-3f4a-4b5c-0d9e-0a1b2c3d4e5f";
+        let cases = [
+            (vec![Some(valid)], true),
+            (vec![Some("not-a-uuid")], false),
+            (vec![Some(non_v4)], false),
+            (vec![Some(v4_non_rfc4122_variant)], false),
+            (Vec::new(), false),
+            (vec![Some(valid), Some(valid)], false),
+            (vec![None], false),
+            (vec![None, Some(valid)], false),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(
+                parse_single_client_nonce(values).is_some(),
+                expected,
+                "nonce acceptance mismatch",
+            );
+        }
+    }
+
+    #[test]
+    fn client_nonce_absent_is_minted_and_marked_frontend() {
+        let (value, origin) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+
+        assert!(parse_client_nonce(value.to_str().expect("minted nonce is ASCII")).is_some());
+        assert_eq!(
+            origin,
+            Some(HeaderValue::from_static(CLIENT_NONCE_ORIGIN_FRONTEND))
+        );
+    }
+
+    #[test]
+    fn client_nonce_minting_is_fresh_every_call() {
+        let (first, _) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+        let (second, _) = client_nonce_from_headers_or_generate(&HeaderMap::new());
+        assert_ne!(first, second, "a nonce reused across requests buys nothing");
+    }
+
     #[test]
     fn lifecycle_events_keep_context_and_terminal_results_typed() {
         let context = OpenAiLifecycleContext::new(
@@ -381,11 +575,18 @@ mod tests {
             usage,
             OpenAiUsage {
                 prompt_tokens: 17,
-                cached_tokens: 11,
+                cached_tokens: Some(11),
                 completion_tokens: 4,
                 total_tokens: 21,
             }
         );
+    }
+
+    #[test]
+    fn usage_projection_preserves_absent_cache_metadata() {
+        let usage = OpenAiUsage::from(&Usage::new(17, 4));
+
+        assert_eq!(usage.cached_tokens, None);
     }
 
     #[test]

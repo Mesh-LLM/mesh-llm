@@ -3,6 +3,7 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod routing_telemetry;
 mod startup;
 
 pub use startup::detect_vram_bytes_capped;
@@ -110,6 +111,8 @@ pub struct Node {
     pub(crate) routing_metrics: crate::network::metrics::RoutingMetrics,
     pub(crate) routing_telemetry:
         Arc<std::sync::Mutex<Option<Arc<dyn crate::network::metrics::RoutingTelemetrySink>>>>,
+    pub(crate) cache_affinity_inventory:
+        Arc<std::sync::Mutex<mesh_llm_routing::cache_inventory::CacheInventory>>,
     pub(crate) swarm_capture: Arc<std::sync::Mutex<Option<crate::capture::SwarmCaptureRecorder>>>,
     pub(crate) local_request_metrics: Arc<LocalRequestMetricsSampler>,
     pub(crate) runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
@@ -594,78 +597,6 @@ impl Node {
         }
     }
 
-    pub fn record_inference_attempt(
-        &self,
-        model: Option<&str>,
-        target: &crate::inference::election::InferenceTarget,
-        queue_wait: std::time::Duration,
-        attempt_time: std::time::Duration,
-        outcome: crate::network::metrics::AttemptOutcome,
-        completion_tokens: Option<u64>,
-    ) {
-        let attempt_target = match target {
-            crate::inference::election::InferenceTarget::Local(port) => {
-                crate::network::metrics::AttemptTarget::Local(format!("127.0.0.1:{port}"))
-            }
-            crate::inference::election::InferenceTarget::Remote(peer_id) => {
-                crate::network::metrics::AttemptTarget::Remote(peer_id.fmt_short().to_string())
-            }
-            crate::inference::election::InferenceTarget::None => return,
-        };
-        self.routing_metrics.record_attempt(
-            model,
-            attempt_target.clone(),
-            queue_wait,
-            attempt_time,
-            outcome,
-            completion_tokens,
-        );
-        if let Some(sink) = self.routing_telemetry_sink() {
-            sink.record_route_attempt(model, &attempt_target, outcome);
-        }
-        self.publish_routing_runtime_snapshot();
-    }
-
-    pub fn record_endpoint_attempt(
-        &self,
-        model: Option<&str>,
-        endpoint: &str,
-        queue_wait: std::time::Duration,
-        attempt_time: std::time::Duration,
-        outcome: crate::network::metrics::AttemptOutcome,
-        completion_tokens: Option<u64>,
-    ) {
-        let model_ref = model.map(canonical_demand_model_ref);
-        let attempt_target = crate::network::metrics::AttemptTarget::Endpoint(endpoint.to_string());
-        self.routing_metrics.record_attempt(
-            model_ref.as_deref(),
-            attempt_target.clone(),
-            queue_wait,
-            attempt_time,
-            outcome,
-            completion_tokens,
-        );
-        if let Some(sink) = self.routing_telemetry_sink() {
-            sink.record_route_attempt(model_ref.as_deref(), &attempt_target, outcome);
-        }
-        self.publish_routing_runtime_snapshot();
-    }
-
-    pub fn record_routed_request(
-        &self,
-        model: Option<&str>,
-        attempts: usize,
-        outcome: crate::network::metrics::RequestOutcome,
-    ) {
-        let model_ref = model.map(canonical_demand_model_ref);
-        self.routing_metrics
-            .record_request(model_ref.as_deref(), attempts, outcome);
-        if let Some(sink) = self.routing_telemetry_sink() {
-            sink.record_model_request(model_ref.as_deref(), attempts, outcome);
-        }
-        self.publish_routing_runtime_snapshot();
-    }
-
     pub fn local_request_metrics_snapshot(&self) -> LocalRequestMetricsSnapshot {
         self.local_request_metrics.snapshot()
     }
@@ -878,6 +809,9 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+                mesh_llm_routing::cache_inventory::CacheInventory::default(),
+            )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,
@@ -1055,6 +989,9 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
+                mesh_llm_routing::cache_inventory::CacheInventory::default(),
+            )),
             swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,
@@ -1219,6 +1156,12 @@ impl Node {
     #[cfg(test)]
     pub async fn insert_test_peer(&self, peer: PeerInfo) {
         self.state.lock().await.peers.insert(peer.id, peer);
+    }
+
+    /// Drop a peer from the local mesh view, simulating churn.
+    #[cfg(test)]
+    pub async fn remove_test_peer(&self, id: EndpointId) {
+        self.state.lock().await.peers.remove(&id);
     }
 }
 impl Node {

@@ -332,10 +332,11 @@ fn participant_capacity_advice(
         return Some(advice);
     };
 
-    advice.state = participant_capacity_state(required_bytes, advice.split_capable, summary);
+    advice.state =
+        participant_capacity_state(required_bytes, advice.split_capable == Some(true), summary);
     advice.reason = participant_capacity_reason(advice.state);
     advice.shortfall_bytes =
-        participant_capacity_shortfall(required_bytes, advice.split_capable, summary);
+        participant_capacity_shortfall(required_bytes, advice.split_capable == Some(true), summary);
     Some(advice)
 }
 
@@ -783,7 +784,7 @@ mod tests {
             eligible_node_count: 2,
             missing_capacity_node_count: 0,
             excluded_client_node_count: 0,
-            split_capable: true,
+            split_capable: Some(true),
         }
     }
 

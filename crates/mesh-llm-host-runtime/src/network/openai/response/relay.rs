@@ -1,14 +1,16 @@
+use super::cache_cost::parse_cache_cost_from_json_body;
 use super::common::{
     ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body,
     retryable_quality_result,
 };
 use super::probe::{
-    ParsedResponseHeaders, ResponseProbe, read_response_chunk, try_parse_response_headers,
+    ParsedResponseHeaders, ResponseProbe, append_capsule_nonce_headers, read_response_chunk,
+    try_parse_response_headers,
 };
 use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
+use crate::network::openai::client_stream::ClientStream;
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 const MAX_ERROR_RESPONSE_BYTES: usize = 256 * 1024;
 
@@ -44,12 +46,25 @@ pub(in crate::network::openai::response) fn remap_error_http_response(
     }
     let mapped_body =
         openai_frontend::map_upstream_error_body(status_code, &full_response[header_end..])?;
-    let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    // The upstream frontend echoes the capsule nonce on its error responses too;
+    // rebuilding the header from scratch would drop it, so re-append whatever the
+    // upstream sent. This keeps the nonce contract intact even when a llama.cpp
+    // error body is remapped into an OpenAI-shaped one.
+    let upstream = try_parse_response_headers(full_response).ok().flatten();
+    let mut header = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         status_code,
         reason_phrase(status_code),
         mapped_body.len()
     );
+    if let Some(parsed) = &upstream {
+        append_capsule_nonce_headers(
+            &mut header,
+            parsed.client_nonce.as_deref(),
+            parsed.nonce_origin.as_deref(),
+        );
+    }
+    header.push_str("\r\n");
     let mut response = header.into_bytes();
     response.extend_from_slice(&mapped_body);
     Some(response)
@@ -76,7 +91,7 @@ fn oversized_error_http_response(status_code: u16) -> Vec<u8> {
 }
 
 pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     route_observer: OpenAiRouteObserver<'_>,
@@ -108,11 +123,12 @@ pub(in crate::network::openai::response) async fn relay_error_response<R: AsyncR
     Ok(RouteAttemptResult::Delivered {
         status_code,
         usage: None,
+        cache_cost: None,
     })
 }
 
 pub(in crate::network::openai::response) async fn relay_success_response<R: AsyncRead + Unpin>(
-    tcp_stream: &mut TcpStream,
+    tcp_stream: &mut ClientStream,
     reader: &mut R,
     probe: ResponseProbe,
     parsed: ParsedResponseHeaders,
@@ -135,6 +151,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
                 return Ok(result);
             }
             let usage = parse_token_usage_from_json_body(body);
+            let cache_cost = parse_cache_cost_from_json_body(body);
             // Reads may include bytes beyond the declared HTTP body. Only the
             // declared response is client-visible and capturable.
             tcp_stream.write_all(&buffered[..body_end]).await?;
@@ -143,6 +160,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
             return Ok(RouteAttemptResult::Delivered {
                 status_code: probe.status_code,
                 usage,
+                cache_cost,
             });
         }
     }
@@ -156,6 +174,7 @@ pub(in crate::network::openai::response) async fn relay_success_response<R: Asyn
     Ok(RouteAttemptResult::Delivered {
         status_code: probe.status_code,
         usage: None,
+        cache_cost: None,
     })
 }
 
@@ -217,6 +236,37 @@ mod tests {
     }
 
     #[test]
+    fn test_remap_error_http_response_preserves_upstream_nonce_headers() {
+        let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+        let origin_header = openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
+        let upstream = format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n{nonce_header}: 11111111-1111-4111-8111-111111111111\r\n{origin_header}: frontend\r\nContent-Length: 52\r\n\r\n{{\"type\":\"not_found_error\",\"message\":\"model missing\"}}"
+        );
+        let upstream = upstream.into_bytes();
+        let header_end = upstream
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|idx| idx + 4)
+            .unwrap();
+        let remapped = remap_error_http_response(404, header_end, &upstream)
+            .expect("llama error should be remapped");
+        let remapped_text = String::from_utf8(remapped).unwrap();
+
+        assert!(
+            remapped_text.contains(&format!(
+                "{nonce_header}: 11111111-1111-4111-8111-111111111111\r\n"
+            )),
+            "the upstream-echoed nonce must survive an error remap: {remapped_text}"
+        );
+        assert!(
+            remapped_text.contains(&format!("{origin_header}: frontend\r\n")),
+            "the upstream-echoed origin marker must survive an error remap: {remapped_text}"
+        );
+        // The body is still remapped to the OpenAI shape.
+        assert!(remapped_text.contains("\"code\":\"model_not_found\""));
+    }
+
+    #[test]
     fn test_remap_error_http_response_keeps_openai_error_passthrough() {
         let upstream = b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 110\r\n\r\n{\"error\":{\"message\":\"bad request\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_value\"}}";
         let header_end = upstream
@@ -240,7 +290,8 @@ mod tests {
         let captured = Arc::new(Captures::default());
         let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
             let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
             relay_success_response(
                 &mut client,
@@ -256,6 +307,8 @@ mod tests {
                     status_code: 200,
                     content_length: Some(body.len()),
                     content_type: Some("application/json".to_owned()),
+                    client_nonce: None,
+                    nonce_origin: None,
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 observer,
@@ -265,7 +318,7 @@ mod tests {
         });
         upstream_writer.write_all(body).await.unwrap();
         drop(upstream_writer);
-        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut socket = ClientStream::connect(address).await.unwrap();
         let mut client_response = Vec::new();
         socket.read_to_end(&mut client_response).await.unwrap();
         task.await.unwrap();
@@ -295,7 +348,8 @@ mod tests {
         let captures: Arc<dyn OpenAiArtifactCapture> = captured.clone();
         let task_header = header.clone();
         let task = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
             let observer = OpenAiRouteObserver::capture_test_observer(RequestId::new(), &captures);
             let mut empty_reader = tokio::io::empty();
             relay_success_response(
@@ -312,6 +366,8 @@ mod tests {
                     status_code: 200,
                     content_length: Some(body.len()),
                     content_type: Some("application/json; charset=utf-8".to_owned()),
+                    client_nonce: None,
+                    nonce_origin: None,
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 observer,
@@ -319,7 +375,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut socket = ClientStream::connect(address).await.unwrap();
         let mut client_response = Vec::new();
         socket.read_to_end(&mut client_response).await.unwrap();
         task.await.unwrap();

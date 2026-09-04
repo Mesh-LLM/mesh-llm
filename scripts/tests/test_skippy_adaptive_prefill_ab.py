@@ -86,6 +86,23 @@ class AdaptivePrefillAbTests(unittest.TestCase):
         self.assertAlmostEqual(first["ttft_ms_p95"]["median"], 10.0)
         self.assertEqual(len(first["ttft_ms_p95"]["round_deltas"]), 4)
 
+    def test_markdown_renders_missing_metrics_as_na(self):
+        before = {metric: 1.0 for metric in BENCH.METRICS}
+        after = {metric: 2.0 for metric in BENCH.METRICS}
+        before.pop("ttft_ms_p95")
+        after["prefill_elapsed_ms_p95"] = None
+
+        report = BENCH.markdown(
+            before,
+            after,
+            {},
+            {"exact_matches": 0, "comparable_requests": 0},
+        )
+
+        self.assertNotIn("xychart-beta", report)
+        self.assertIn("| TTFT p95 ms | n/a | 2.0 | n/a |", report)
+        self.assertIn("| Prefill p95 ms | 1.0 | n/a | n/a |", report)
+
 
 if __name__ == "__main__":
     unittest.main()

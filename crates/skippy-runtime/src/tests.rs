@@ -4,9 +4,11 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, FlashAttentionType,
-        GGML_TYPE_F16, ModelInfo, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeLoadMode, SamplingConfig,
-        StageModel, StageSession, Status, TensorRole, format_skippy_error,
+        ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateMessage, DecodeFrameBatchRequest,
+        CheckpointQuantization, FlashAttentionType, GGML_TYPE_F16, GlmDsaPolicy,
+        IterationBatchPhase, IterationBatchRequest, ModelInfo, MtpSource, NativeMtpDraft,
+        RuntimeConfig, RuntimeLoadMode, SamplingConfig, SplitMode, StageModel, StageSession, Status,
+        TensorRole, format_skippy_error,
     };
     use std::{
         env,
@@ -52,6 +54,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn model_reader_prevents_late_model_mutation() {
+        let mut model = StageModel::new_dummy();
+        let reader = model.reader();
+        let error = model
+            .attach_mtp_draft_model("/definitely/missing/model.gguf", &RuntimeConfig::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("model readers are active"));
+
+        drop(reader);
+        let error = model
+            .attach_mtp_draft_model("/definitely/missing/model.gguf", &RuntimeConfig::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("null model"));
+    }
+
     fn open_correctness_model(model_path: &PathBuf) -> anyhow::Result<StageModel> {
         open_correctness_model_with_context(model_path, 256)
     }
@@ -60,13 +78,21 @@ mod tests {
         model_path: &PathBuf,
         ctx_size: u32,
     ) -> anyhow::Result<StageModel> {
+        open_correctness_model_with_context_and_lanes(model_path, ctx_size, 1)
+    }
+
+    fn open_correctness_model_with_context_and_lanes(
+        model_path: &PathBuf,
+        ctx_size: u32,
+        lane_count: u32,
+    ) -> anyhow::Result<StageModel> {
         let layer_end = infer_layer_end(model_path)?;
         let config = RuntimeConfig {
             stage_index: 0,
             layer_start: 0,
             layer_end,
             ctx_size,
-            lane_count: 1,
+            lane_count,
             n_batch: None,
             n_ubatch: None,
             n_threads: None,
@@ -74,18 +100,194 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
             selected_backend_device: None,
             cache_type_k: GGML_TYPE_F16,
             cache_type_v: GGML_TYPE_F16,
             flash_attn_type: FlashAttentionType::Auto,
             load_mode: RuntimeLoadMode::RuntimeSlice,
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: GlmDsaPolicy::Auto,
             include_embeddings: true,
             include_output: true,
             mtp_source: MtpSource::Disabled,
             filter_tensors_on_load: false,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: SplitMode::Auto,
+            checkpoint_quantization: CheckpointQuantization::Preserve,
+            checkpoint_imatrix: None,
+            checkpoint_imatrix_sha256: None,
         };
         StageModel::open(model_path, &config)
+    }
+
+    #[test]
+    fn mixed_prefill_decode_matches_serial_when_model_is_configured() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        // The mixed and serial sides each keep three sessions live at once.
+        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 6)?;
+        let tokens = model.tokenize(
+            "Mixed scheduling keeps decode latency bounded while prompts continue arriving.",
+            true,
+        )?;
+        assert!(tokens.len() >= 3, "correctness prompt must produce three tokens");
+        let prefix = &tokens[..2];
+        let long_prefill = &tokens[..tokens.len().min(6)];
+        let short_prefill = &tokens[..3];
+        let mut mixed = [
+            model.create_session()?,
+            model.create_session()?,
+            model.create_session()?,
+        ];
+        let mut serial = [
+            model.create_session()?,
+            model.create_session()?,
+            model.create_session()?,
+        ];
+        let (mixed_decode_token, _) =
+            mixed[0].prefill_chunk_frame_sampled(prefix, None, None, 0)?;
+        let (serial_decode_token, _) =
+            serial[0].prefill_chunk_frame_sampled(prefix, None, None, 0)?;
+        assert_eq!(mixed_decode_token, serial_decode_token);
+        let decode_tokens = [mixed_decode_token];
+        let output = {
+            let [decode, long, short] = &mut mixed;
+            let mut requests = [
+                IterationBatchRequest {
+                    session: decode,
+                    token_ids: &decode_tokens,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: true,
+                    phase: IterationBatchPhase::Decode,
+                },
+                IterationBatchRequest {
+                    session: long,
+                    token_ids: long_prefill,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: false,
+                    phase: IterationBatchPhase::Prefill,
+                },
+                IterationBatchRequest {
+                    session: short,
+                    token_ids: short_prefill,
+                    positions: &[],
+                    sampling: None,
+                    input: None,
+                    sample_last: true,
+                    phase: IterationBatchPhase::Prefill,
+                },
+            ];
+            StageSession::iteration_batch_sampled(&mut requests)?
+        };
+
+        let (serial_decode_prediction, _) =
+            serial[0].decode_step_frame_sampled(serial_decode_token, None, None, 0)?;
+        serial[1].prefill_chunk_frame(long_prefill, None, 0)?;
+        let (serial_short_prediction, _) =
+            serial[2].prefill_chunk_frame_sampled(short_prefill, None, None, 0)?;
+        assert_eq!(mixed[0].last_token_signal()?, serial[0].last_token_signal()?);
+        assert_eq!(mixed[2].last_token_signal()?, serial[2].last_token_signal()?);
+        assert_eq!(
+            output
+                .samples
+                .iter()
+                .map(|sample| (sample.request_index, sample.predicted_token))
+                .collect::<Vec<_>>(),
+            [
+                (0, serial_decode_prediction),
+                (2, serial_short_prediction)
+            ]
+        );
+        assert_eq!(output.request_outputs.len(), 3);
+        for index in 0..3 {
+            assert_eq!(mixed[index].token_count(), serial[index].token_count());
+            assert_eq!(mixed[index].native_position()?, serial[index].native_position()?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_batched_decode_preserves_lazy_token_signals_when_model_is_configured()
+    -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model_with_context_and_lanes(&model_path, 256, 4)?;
+        let tokens = model.tokenize("Legacy batch sampling keeps token signals lazy.", true)?;
+        assert!(tokens.len() >= 2, "correctness prompt must produce two tokens");
+        let prefix = &tokens[..2];
+        let mut batched = [model.create_session()?, model.create_session()?];
+        let mut serial = [model.create_session()?, model.create_session()?];
+        let mut batched_inputs = [0; 2];
+        let mut serial_inputs = [0; 2];
+        for index in 0..2 {
+            batched_inputs[index] = batched[index]
+                .prefill_chunk_frame_sampled(prefix, None, None, 0)?
+                .0;
+            serial_inputs[index] = serial[index]
+                .prefill_chunk_frame_sampled(prefix, None, None, 0)?
+                .0;
+            assert_eq!(batched_inputs[index], serial_inputs[index]);
+        }
+
+        let outputs = {
+            let [first, second] = &mut batched;
+            let mut requests = [
+                DecodeFrameBatchRequest {
+                    session: first,
+                    token_id: batched_inputs[0],
+                    sampling: None,
+                    input: None,
+                },
+                DecodeFrameBatchRequest {
+                    session: second,
+                    token_id: batched_inputs[1],
+                    sampling: None,
+                    input: None,
+                },
+            ];
+            StageSession::decode_step_frame_batch_sampled(&mut requests)?
+        };
+        let serial_outputs = [
+            serial[0]
+                .decode_step_frame_sampled(serial_inputs[0], None, None, 0)?
+                .0,
+            serial[1]
+                .decode_step_frame_sampled(serial_inputs[1], None, None, 0)?
+                .0,
+        ];
+
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|output| output.predicted_token)
+                .collect::<Vec<_>>(),
+            serial_outputs,
+        );
+        for index in 0..2 {
+            assert_eq!(batched[index].last_token_signal()?, serial[index].last_token_signal()?);
+        }
+        Ok(())
     }
 
     fn tool_call_template_options() -> ChatTemplateJsonOptions {
@@ -506,6 +708,16 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn ignore_eos_sets_the_native_sampling_flag() {
+        let sampling = SamplingConfig {
+            enabled: true,
+            ignore_eos: true,
+            ..SamplingConfig::default()
+        };
+        assert_eq!(sampling.as_raw().unwrap().flags & 0b11, 0b11);
     }
 
     #[test]

@@ -127,8 +127,10 @@ pub(crate) struct RuntimeStagePayload {
     pub(crate) layer_end: u32,
     pub(crate) state: &'static str,
     pub(crate) bind_addr: String,
-    pub(crate) activation_width: u32,
-    pub(crate) wire_dtype: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) input_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_activation_boundary: Option<skippy_runtime::ActivationBoundaryDesc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) selected_device: Option<RuntimeStageDevicePayload>,
     pub(crate) ctx_size: u32,
@@ -703,7 +705,8 @@ pub(crate) struct ModelTargetCapacityAdvicePayload {
     pub(crate) eligible_node_count: usize,
     pub(crate) missing_capacity_node_count: usize,
     pub(crate) excluded_client_node_count: usize,
-    pub(crate) split_capable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) split_capable: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -828,8 +831,8 @@ pub(crate) fn build_runtime_stage_payloads(
                 layer_end: status.layer_end,
                 state: runtime_stage_state_label(status.state),
                 bind_addr: status.bind_addr,
-                activation_width: status.activation_width,
-                wire_dtype: runtime_stage_wire_dtype_label(status.wire_dtype),
+                input_activation_boundary: status.input_activation_boundary,
+                output_activation_boundary: status.output_activation_boundary,
                 selected_device: status
                     .selected_device
                     .map(|device| RuntimeStageDevicePayload {
@@ -862,16 +865,6 @@ pub(crate) fn runtime_stage_state_label(
         crate::inference::skippy::StageRuntimeState::Stopping => "stopping",
         crate::inference::skippy::StageRuntimeState::Stopped => "stopped",
         crate::inference::skippy::StageRuntimeState::Failed => "failed",
-    }
-}
-
-pub(crate) fn runtime_stage_wire_dtype_label(
-    dtype: crate::inference::skippy::StageWireDType,
-) -> &'static str {
-    match dtype {
-        crate::inference::skippy::StageWireDType::F32 => "f32",
-        crate::inference::skippy::StageWireDType::F16 => "f16",
-        crate::inference::skippy::StageWireDType::Q8 => "q8",
     }
 }
 

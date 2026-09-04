@@ -9,7 +9,6 @@ use anyhow::anyhow;
 use serde_json::Value;
 use serde_json::json;
 use skippy_protocol::binary::StageWireMessage;
-use skippy_protocol::binary::WireActivationDType;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::net::TcpStream;
@@ -33,7 +32,6 @@ pub(crate) struct AsyncForwardReceipt {
 
 struct AsyncForwardJob {
     message: StageWireMessage,
-    wire_dtype: WireActivationDType,
     condition: WireCondition,
     attrs: BTreeMap<String, Value>,
     done: mpsc::Sender<Result<f64, String>>,
@@ -64,11 +62,10 @@ impl AsyncForwarder {
     pub(crate) fn send(
         &mut self,
         message: StageWireMessage,
-        wire_dtype: WireActivationDType,
         condition: WireCondition,
         attrs: BTreeMap<String, Value>,
     ) -> Result<()> {
-        let receipt = self.send_tracked(message, wire_dtype, condition, attrs)?;
+        let receipt = self.send_tracked(message, condition, attrs)?;
         self.pending.push_back(receipt);
         Ok(())
     }
@@ -76,7 +73,6 @@ impl AsyncForwarder {
     pub(crate) fn send_tracked(
         &mut self,
         message: StageWireMessage,
-        wire_dtype: WireActivationDType,
         condition: WireCondition,
         attrs: BTreeMap<String, Value>,
     ) -> Result<AsyncForwardReceipt> {
@@ -85,7 +81,6 @@ impl AsyncForwarder {
         self.sender
             .send(AsyncForwardJob {
                 message,
-                wire_dtype,
                 condition,
                 attrs,
                 done,
@@ -142,11 +137,10 @@ fn time_until_ready(job: &AsyncForwardJob) -> std::time::Duration {
 }
 
 fn forward_job(writer: &mut TcpStream, telemetry: &Telemetry, job: AsyncForwardJob) {
-    let result =
-        write_stage_message_after_propagation(writer, &job.message, job.wire_dtype, job.condition)
-            .context("async forward activation frame downstream")
-            .map(|()| elapsed_ms(job.enqueued_at))
-            .map_err(|error| format!("{error:#}"));
+    let result = write_stage_message_after_propagation(writer, &job.message, job.condition)
+        .context("async forward activation frame downstream")
+        .map(|()| elapsed_ms(job.enqueued_at))
+        .map_err(|error| format!("{error:#}"));
     let write_end_unix_nanos = now_unix_nanos() as u64;
     let mut attrs = job.attrs;
     attrs.insert(
@@ -210,7 +204,7 @@ mod tests {
             } else {
                 0
             },
-            state: StageStateHeader::new(kind, WireActivationDType::F32),
+            state: StageStateHeader::new(kind),
             request_id: 1,
             session_id: 2,
             sampling: None,
@@ -235,7 +229,6 @@ mod tests {
         forwarder
             .send(
                 message(WireMessageKind::VerifyWindow, 10),
-                WireActivationDType::F32,
                 condition,
                 BTreeMap::new(),
             )
@@ -243,7 +236,6 @@ mod tests {
         forwarder
             .send(
                 message(WireMessageKind::VerifyWindow, 14),
-                WireActivationDType::F32,
                 condition,
                 BTreeMap::new(),
             )
@@ -251,7 +243,6 @@ mod tests {
         forwarder
             .send_tracked(
                 message(WireMessageKind::RetireVerifyWindow, 10),
-                WireActivationDType::F32,
                 condition,
                 BTreeMap::new(),
             )

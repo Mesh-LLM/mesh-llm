@@ -34,9 +34,11 @@ HF_WORKFLOW = ROOT / ".github" / "workflows" / "hf-download-smoke.yml"
 NATIVE_SDK_WORKFLOW = (
     ROOT / ".github" / "workflows" / "native-sdk-artifact.yml"
 )
+SDK_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "sdk-smoke.yml"
 SEED_WARMER = ROOT / ".github" / "workflows" / "cache-warm-sccache.yml"
 SEED_KEY_PATTERN = re.compile(
-    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('[^'\n]+', '[^'\n]+'\) \}\}"
+    r"mesh-llm-sccache-seed-[^\n]+-\$\{\{ hashFiles\('"
+    r"Cargo\.lock', '\.github/cache-version\.txt', 'Justfile', 'just/\*\*'\) \}\}"
 )
 SEED_IMAGE = (
     "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:"
@@ -93,6 +95,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("ci-linux-runtime-slice.yml", "linux_runtime"): policy,
             ("ci-quality-slice.yml", "rust_clippy"): policy,
             ("ci-rust-tests-slice.yml", "rust_tests"): policy,
+            ("ci-rust-tests-slice.yml", "safetensors_runtime_smoke"): policy,
             ("ci-windows-host-slice.yml", "windows_host"): policy,
             ("ci-windows-runtime-slice.yml", "windows_runtime"): policy,
             ("cache-warm-sccache.yml", "warm"): "false",
@@ -435,7 +438,7 @@ class SccacheEvidenceTests(unittest.TestCase):
 
         self.assertIn(
             "uses: Swatinem/rust-cache@"
-            "e18b497796c12c097a38f9edb9d0641fb99eee32",
+            "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
             swift,
         )
         self.assertIn("shared-key: swift-sdk", swift)
@@ -446,6 +449,50 @@ class SccacheEvidenceTests(unittest.TestCase):
             "&& github.ref == 'refs/heads/main' }}",
             swift,
         )
+
+    def test_rust_sdk_cache_key_covers_smoke_compatibility_boundaries(self) -> None:
+        workflow = yaml.safe_load(SDK_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+        steps = workflow["jobs"]["sdk_smoke"]["steps"]
+        cache_steps = [
+            step
+            for step in steps
+            if str(step.get("uses", "")).startswith("Swatinem/rust-cache@")
+        ]
+        self.assertEqual(len(cache_steps), 1)
+        cache = cache_steps[0]
+        self.assertEqual(cache["if"], "${{ inputs.sdk_kind == 'rust' }}")
+        values = cache["with"]
+
+        prefix = values["prefix-key"]
+        for boundary in (
+            "sdk-rust-cargo-v1",
+            "env.SDK_RUST_TARGET",
+            "env.SDK_RUST_IMAGE_DIGEST",
+            "env.SDK_RUST_TOOLCHAIN_EPOCH",
+            "env.SDK_RUST_PROFILE_LINKER",
+            "hashFiles(",
+            "'Cargo.lock'",
+            "'.github/cache-version.txt'",
+            "'.cargo/config.toml'",
+            "'**/Cargo.toml'",
+            "'scripts/ci-rust-sdk-smoke.sh'",
+            "'scripts/ci-sdk-fixture.sh'",
+            "'scripts/ci-prepare-native-runtime.sh'",
+            "'scripts/package-sdk-console-assets.sh'",
+            "'scripts/check-sdk-contract.sh'",
+            "'scripts/verify-sdk-console-assets.sh'",
+            "'.github/workflows/sdk-smoke.yml'",
+        ):
+            with self.subTest(boundary=boundary):
+                self.assertIn(boundary, prefix)
+
+        self.assertEqual(values["shared-key"], "ci-sdk-smoke-rust")
+        self.assertEqual(values["cache-bin"], "false")
+        self.assertIn(
+            "github.ref == 'refs/heads/main'",
+            values["save-if"],
+        )
+        self.assertNotIn("actions/cache", SDK_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
 
     def test_linux_seed_producer_and_consumers_share_compatible_key(self) -> None:
         warmer_workflow = yaml.safe_load(SEED_WARMER.read_text(encoding="utf-8"))
@@ -475,6 +522,9 @@ class SccacheEvidenceTests(unittest.TestCase):
             WORKFLOWS["host"],
             WORKFLOWS["runtime"],
         )
+        expected_restore_counts = {
+            "ci-rust-tests-slice.yml": 2,
+        }
         for path in consumers:
             with self.subTest(workflow=path.name):
                 workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -484,9 +534,13 @@ class SccacheEvidenceTests(unittest.TestCase):
                     for step in job.get("steps", [])
                     if step.get("uses") == "./.github/actions/restore-sccache-seed"
                 ]
-                self.assertEqual(len(keys), 1)
-                self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(keys[0]))
-                self.assertEqual(keys[0], expected_key)
+                self.assertEqual(
+                    len(keys),
+                    expected_restore_counts.get(path.name, 1),
+                )
+                for key in keys:
+                    self.assertIsNotNone(SEED_KEY_PATTERN.fullmatch(key))
+                    self.assertEqual(key, expected_key)
         warmer = SEED_WARMER.read_text(encoding="utf-8")
         self.assertIn("run: just ci-sccache-seed-build", warmer)
         self.assertNotIn(

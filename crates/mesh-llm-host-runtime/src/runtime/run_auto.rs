@@ -23,7 +23,8 @@ use super::{
     runtime_data_producer_for_console, runtime_startup_requirements, setup_run_auto_console_state,
     setup_run_auto_serving_surface, spawn_embedded_runtime_control_forwarder,
     spawn_run_auto_additional_model_tasks, spawn_run_auto_discovery_publisher,
-    start_run_auto_bootstrap_proxy, startup_local_model_loop, swarm_capture_observer_requested,
+    start_run_auto_bootstrap_proxy, startup_device_override, startup_local_model_loop,
+    swarm_capture_observer_requested,
 };
 use crate::api;
 use crate::inference::{election, skippy};
@@ -41,10 +42,10 @@ use crate::runtime::{
     InstanceLifecycleRecord, InstanceLifecycleState, tracing_writer::init_audit_logging,
 };
 use crate::system::{autoupdate, benchmark, hardware};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -294,7 +295,17 @@ pub(super) async fn run_runtime_cli(
         anyhow::bail!("mode conflict: {error}");
     }
     options.client = effective_mode == mesh_llm_config::RuntimeMode::Client;
+    anyhow::ensure!(
+        !options.client
+            || (options.checkpoint_quantization.is_none() && options.checkpoint_imatrix.is_none()),
+        "--checkpoint-quantization and --checkpoint-imatrix are only valid with mesh-llm serve"
+    );
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    apply_runtime_cli_checkpoint_overrides(
+        &mut config,
+        options.checkpoint_quantization.as_deref(),
+        options.checkpoint_imatrix.as_deref(),
+    )?;
     apply_runtime_config_options(&mut options, &config);
 
     initialize_audit_logging_for_options(&options)?;
@@ -458,6 +469,72 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
             defaults.as_ref(),
         ));
     }
+}
+
+pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
+    config: &mut plugin::MeshConfig,
+    quantization: Option<&str>,
+    imatrix: Option<&Path>,
+) -> Result<()> {
+    if quantization.is_none() && imatrix.is_none() {
+        return Ok(());
+    }
+
+    let quantization = quantization
+        .map(|value| {
+            value
+                .parse::<skippy_runtime::CheckpointQuantization>()
+                .map(|parsed| parsed.canonical_name().to_string())
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("invalid --quant {value:?}"))
+        })
+        .transpose()?;
+    let imatrix = imatrix
+        .map(|path| {
+            let canonical = std::fs::canonicalize(path).with_context(|| {
+                format!(
+                    "resolve --checkpoint-imatrix path {} from the current directory",
+                    path.display()
+                )
+            })?;
+            anyhow::ensure!(
+                canonical.is_file(),
+                "--checkpoint-imatrix must name a file: {}",
+                canonical.display()
+            );
+            Ok::<_, anyhow::Error>(canonical.to_string_lossy().into_owned())
+        })
+        .transpose()?;
+
+    let defaults = config
+        .defaults
+        .get_or_insert_with(plugin::ModelConfigDefaults::default);
+    let default_hardware = defaults
+        .hardware
+        .get_or_insert_with(plugin::HardwareConfig::default);
+    if let Some(value) = quantization.as_ref() {
+        default_hardware.checkpoint_quantization = Some(value.clone());
+    }
+    if let Some(value) = imatrix.as_ref() {
+        default_hardware.checkpoint_imatrix = Some(value.clone());
+    }
+
+    // Runtime CLI flags are process-wide serving overrides. Apply them to
+    // config-declared models as well as defaults so model-local config cannot
+    // unexpectedly take precedence over the explicit command line.
+    for model in &mut config.models {
+        let hardware = model
+            .hardware
+            .get_or_insert_with(plugin::HardwareConfig::default);
+        if let Some(value) = quantization.as_ref() {
+            hardware.checkpoint_quantization = Some(value.clone());
+        }
+        if let Some(value) = imatrix.as_ref() {
+            hardware.checkpoint_imatrix = Some(value.clone());
+        }
+    }
+
+    Ok(())
 }
 
 pub fn load_resolved_plugins(options: &RuntimeOptions) -> Result<plugin::ResolvedPlugins> {
@@ -750,6 +827,68 @@ pub(super) async fn start_run_auto_node_and_plugins(
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
+}
+
+pub(super) fn register_pre_accept_local_source_policies(
+    config: &plugin::MeshConfig,
+    startup_specs: &[StartupModelSpec],
+) {
+    let default_skippy = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref());
+    let default_model_path = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref())
+        .and_then(|hardware| hardware.model_path.as_deref());
+    for model in &config.models {
+        let mut model_ids = BTreeSet::from([model.model.clone()]);
+        let configured_path = model
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.model_path.as_deref())
+            .or(default_model_path);
+        if let Some(path) = configured_path {
+            let path = PathBuf::from(path);
+            model_ids.insert(path.to_string_lossy().into_owned());
+            if path.is_absolute() {
+                let canonical = path.canonicalize().unwrap_or(path);
+                model_ids.insert(models::model_ref_for_path(&canonical));
+            }
+        }
+        let required = super::startup_models::skippy_local_source_required(
+            model.skippy.as_ref(),
+            default_skippy,
+        );
+        let runtime_profile = model
+            .with_profile_defaults(config.defaults.as_ref())
+            .derived_profile();
+        for model_id in model_ids {
+            skippy::register_local_source_policy(&model_id, &runtime_profile, required);
+        }
+    }
+    for spec in startup_specs {
+        let mut model_ids = BTreeSet::new();
+        if let Some(declared_ref) = spec.declared_ref.as_deref() {
+            model_ids.insert(declared_ref.to_string());
+        }
+        model_ids.insert(spec.model_ref.to_string_lossy().into_owned());
+        if spec.model_ref.is_absolute() {
+            let canonical = spec
+                .model_ref
+                .canonicalize()
+                .unwrap_or_else(|_| spec.model_ref.clone());
+            model_ids.insert(models::model_ref_for_path(&canonical));
+        }
+        for model_id in model_ids {
+            skippy::register_local_source_policy(
+                &model_id,
+                &spec.profile,
+                spec.local_source_required,
+            );
+        }
+    }
 }
 
 pub(super) fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
@@ -1125,6 +1264,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
     let primary_ctx_size = primary_startup_model.and_then(|model| model.ctx_size);
     let primary_pinned_gpu = primary_startup_model.and_then(|model| model.pinned_gpu.clone());
+    let primary_device_override =
+        primary_startup_model.and_then(|model| startup_device_override(model.gpu_id.as_deref()));
     let primary_cache_type_k = primary_startup_model.and_then(|model| model.cache_type_k.clone());
     let primary_cache_type_v = primary_startup_model.and_then(|model| model.cache_type_v.clone());
     let primary_n_batch = primary_startup_model.and_then(|model| model.n_batch);
@@ -1135,6 +1276,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
     let primary_model_ref = primary_startup_model
         .map(|model| model.declared_ref.clone())
         .unwrap_or_else(|| model_name.to_string());
+    let primary_config_model_id =
+        primary_startup_model.and_then(|model| model.config_model_id.clone());
     let (primary_stop_tx, primary_stop_rx) = tokio::sync::watch::channel(false);
     let primary_instance_id = next_runtime_instance_id(next_runtime_instance_sequence);
     let primary_lifecycle = Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -1149,6 +1292,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
         model_ref: primary_model_ref,
+        config_model_id: primary_config_model_id,
         readiness_index: 0,
         profile: primary_startup_model
             .map(|model| model.profile.clone())
@@ -1159,6 +1303,7 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         mmproj_path: primary_mmproj,
         ctx_size: primary_ctx_size,
         pinned_gpu: primary_pinned_gpu,
+        device_override: primary_device_override,
         runtime_capacity_ledger: runtime_capacity_ledger.clone(),
         cache_type_k: primary_cache_type_k,
         cache_type_v: primary_cache_type_v,
@@ -1166,6 +1311,8 @@ pub(super) async fn spawn_run_auto_startup_model_tasks(ctx: RunAutoStartupTasksC
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        local_source_required: primary_startup_model
+            .is_some_and(|model| model.local_source_required),
         split_topology_lock: options.split_topology_lock.clone(),
         resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
@@ -1306,6 +1453,11 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
+    // Stage-control starts accepting before eager model resolution. Register
+    // every spelling that can become the model's runtime identity now so a
+    // legacy/profile-unaware request cannot bypass local-required policy in
+    // that window. False entries deliberately clear stale in-process policy.
+    register_pre_accept_local_source_policies(&config, &startup_specs);
     let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
@@ -1364,39 +1516,20 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     node.set_hosted_models(Vec::new()).await;
     node.regossip().await;
 
-    let tunnel_mgr =
-        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
-    // Both halves of inbound reachability are established here for any node
-    // that can serve, rather than only as a side effect of a local model
-    // finishing load.
-    //
-    // `set_http_port` is what lets a plugin-only node (no local model ever
-    // loads) accept inbound requests at all: the api proxy it points at is
-    // already bound and already answers correctly with no models loaded, so a
-    // tunneled request arriving before any model is ready gets a normal "not
-    // available" response instead of being silently dropped (the previous
-    // behavior whenever this was still 0 — see `network/tunnel.rs`'s
-    // `port == 0` early-return). The three call sites in `startup_handles.rs`
-    // remain and are now redundant-but-harmless — same node, same `api_port`,
-    // for the lifetime of the process.
-    //
-    // `plugin_host_role::spawn` is the other half: whether peers actually
-    // route here.
-    //
-    // Both are gated on `!is_client`. A client node has no compute to offer
-    // and never advertises `Host`, so nothing selects it as a route target;
-    // leaving its inbound HTTP tunnel terminated at the `port == 0` check
-    // keeps it exactly as reachable as it was before this change — not at
-    // all — instead of turning it into a mesh-internal request relay for any
-    // admitted peer that dials it.
-    if !is_client {
-        tunnel_mgr.set_http_port(api_port);
-        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
-    }
-
-    // Election publishes per-model targets
+    // Election publishes per-model targets. The same receiver and affinity
+    // router serve local TCP and remote QUIC OpenAI ingress.
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
     let target_tx = std::sync::Arc::new(target_tx);
+
+    let tunnel_mgr =
+        tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
+    // Serving hosts terminate inbound HTTP tunnel streams directly in the
+    // shared OpenAI ingress. Client-only nodes remain unreachable as hosts.
+    if !is_client {
+        tunnel_mgr.set_http_port(api_port);
+        tunnel_mgr.set_http_ingress(target_rx.clone(), affinity_router.clone());
+        plugin_host_role::spawn(node.clone(), plugin_manager.clone(), api_port);
+    }
 
     // Runtime control for local load/unload of extra models.
     let (control_tx, mut control_rx) =

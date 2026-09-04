@@ -3,7 +3,6 @@ use clap::Parser;
 
 mod cli;
 mod generation_manifest;
-mod gguf_header;
 mod glm_dsa_contract;
 mod glm_dsa_generation_policy;
 mod hash;

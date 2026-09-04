@@ -12,16 +12,19 @@ export function KaTeXBlock({ math, display }: { math: string; display: boolean }
     const container = display ? blockRef.current : inlineRef.current
     if (!container) return
 
+    setRendered(false)
     container.replaceChildren()
     try {
       katex.render(math, container, {
         displayMode: display,
-        throwOnError: false
+        throwOnError: false,
+        trust: false
       })
       // eslint-disable-next-line react-hooks/set-state-in-effect -- marks rendering complete after DOM mutation
       setRendered(true)
     } catch {
       container.replaceChildren()
+      setRendered(false)
     }
 
     return () => {
@@ -31,17 +34,17 @@ export function KaTeXBlock({ math, display }: { math: string; display: boolean }
 
   return display ? (
     <>
-      <div ref={blockRef} className={rendered ? 'my-2 overflow-x-auto' : 'hidden'} />
+      <div ref={blockRef} data-math-display="true" className={rendered ? 'my-2 overflow-x-auto' : 'hidden'} />
       {!rendered && (
         <div className="my-2 overflow-x-auto text-sm">
-          <code>{math}</code>
+          <code data-math-fallback="true">{math}</code>
         </div>
       )}
     </>
   ) : (
     <>
-      <span ref={inlineRef} className={rendered ? undefined : 'hidden'} />
-      {!rendered && <code>{math}</code>}
+      <span ref={inlineRef} data-math-inline="true" className={rendered ? undefined : 'hidden'} />
+      {!rendered && <code data-math-fallback="true">{math}</code>}
     </>
   )
 }

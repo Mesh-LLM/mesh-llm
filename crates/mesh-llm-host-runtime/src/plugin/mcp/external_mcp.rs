@@ -265,11 +265,11 @@ impl ExternalMcpPool {
 use axum::Router;
 #[cfg(test)]
 use rmcp::model::{
-    AnnotateAble, CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
-    Implementation, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage, PromptMessageContent,
-    PromptMessageRole, RawResource, RawResourceTemplate, ReadResourceRequestParams,
-    ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    Prompt, PromptMessage, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    Resource, ResourceContents, ResourceTemplate, Role, ServerCapabilities, ServerInfo, Tool,
 };
 #[cfg(test)]
 use rmcp::service::RequestContext;
@@ -326,7 +326,7 @@ impl ServerHandler for FakeExternalMcpServer {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let message = request
             .arguments
             .as_ref()
@@ -336,7 +336,8 @@ impl ServerHandler for FakeExternalMcpServer {
         Ok(CallToolResult::structured(json!({
             "echo": message,
             "tool": request.name.to_string(),
-        })))
+        }))
+        .into())
     }
 
     async fn list_prompts(
@@ -355,12 +356,13 @@ impl ServerHandler for FakeExternalMcpServer {
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
+    ) -> Result<GetPromptResponse, ErrorData> {
         Ok(GetPromptResult::new(vec![PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::text(format!("Prompt: {}", request.name)),
+            Role::User,
+            ContentBlock::text(format!("Prompt: {}", request.name)),
         )])
-        .with_description("External prompt"))
+        .with_description("External prompt")
+        .into())
     }
 
     async fn list_resources(
@@ -369,9 +371,7 @@ impl ServerHandler for FakeExternalMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         Ok(ListResourcesResult::with_all_items(vec![
-            RawResource::new("note://one", "First Note")
-                .with_description("External note")
-                .no_annotation(),
+            Resource::new("note://one", "First Note").with_description("External note"),
         ]))
     }
 
@@ -381,7 +381,7 @@ impl ServerHandler for FakeExternalMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         Ok(ListResourceTemplatesResult::with_all_items(vec![
-            RawResourceTemplate::new("note://{id}", "Note Template").no_annotation(),
+            ResourceTemplate::new("note://{id}", "Note Template"),
         ]))
     }
 
@@ -389,11 +389,12 @@ impl ServerHandler for FakeExternalMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         Ok(ReadResourceResult::new(vec![ResourceContents::text(
             format!("resource:{}", request.uri),
             request.uri,
-        )]))
+        )])
+        .into())
     }
 }
 

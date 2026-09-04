@@ -7,16 +7,18 @@ mod planning;
 mod validation;
 
 pub use edge_order::StageEdgeSignal;
+#[cfg(test)]
+pub(crate) use family_capability::TEST_LLAMA_ARCHITECTURE_CATALOG;
 pub use family_capability::{
-    STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, deepseek2_capability, deepseek2ocr_capability,
-    deepseek3_capability, dense_attention_layers, dense_family_capability, falcon_h1_capability,
-    falcon_h1_layers, gemma2_capability, gemma3_capability, gemma3n_capability,
-    gemma4_a4b_capability, gemma4_e4b_capability, glm4_capability, glm47_flash_capability,
-    infer_family_capability, kimi_linear_capability, laguna_capability, llama_capability,
-    minimax_m27_capability, olmo_capability, qwen2moe_capability, qwen3_dense_capability,
-    qwen3moe_capability, qwen3next_capability, qwen3next_layers, qwen35_series_capability,
-    recurrent_family_capability, reviewed_capability_for_identity, reviewed_capability_records,
-    rwkv6_capability, rwkv7_capability,
+    deepseek2_capability, deepseek2ocr_capability, deepseek3_capability, dense_attention_layers,
+    dense_family_capability, falcon_h1_capability, falcon_h1_layers, gemma2_capability,
+    gemma3_capability, gemma3n_capability, gemma4_a4b_capability, gemma4_e4b_capability,
+    glm4_capability, glm47_flash_capability, infer_family_capability, kimi_linear_capability,
+    laguna_capability, llama_capability, minimax_m27_capability, olmo_capability,
+    qwen2moe_capability, qwen3_dense_capability, qwen3moe_capability, qwen3next_capability,
+    qwen3next_layers, qwen4exp_capability, qwen35_series_capability, recurrent_family_capability,
+    reviewed_capability_for_identity, reviewed_capability_records, rwkv6_capability,
+    rwkv7_capability,
 };
 pub use planning::{
     classify_layers, plan_contiguous_with_splits, plan_even_contiguous,
@@ -25,6 +27,27 @@ pub use planning::{
     wire_payload_bytes_per_token,
 };
 pub use validation::PlanError;
+
+/// Legacy source-compatibility shape for callers that imported the former
+/// runtime-family registry. Production capability discovery now comes from the
+/// model loaded by llama.cpp; no runtime family rows are published here.
+#[deprecated(
+    note = "runtime family inference was removed; use loaded-model capability metadata instead"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StageRuntimeFamilyExpectation {
+    pub llama_architecture: &'static str,
+    pub family_id: &'static str,
+    pub recurrent_or_hybrid: bool,
+}
+
+/// Deprecated compatibility export. Intentionally empty so production code
+/// cannot recover KV semantics from a hand-maintained family table.
+#[allow(deprecated)]
+#[deprecated(
+    note = "runtime family inference was removed; use loaded-model capability metadata instead"
+)]
+pub const STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS: &[StageRuntimeFamilyExpectation] = &[];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyPlanRequest {
@@ -129,7 +152,6 @@ pub struct BoundaryPlan {
     pub consumer_stage_index: u32,
     pub layer_boundary: u32,
     pub decision: BoundaryDecision,
-    pub wire_dtype: WireDType,
     pub raw_activation_bytes_per_token: u64,
     pub wire_payload_bytes_per_token: u64,
     #[serde(default)]
@@ -189,9 +211,6 @@ pub enum PlanReasonCode {
     SharedKvRegionCut,
     TokenSidebandRequired,
     ActivationSidebandRequired,
-    DefaultWireDtypeF16,
-    Q8WireValidated,
-    Q8WireRejected,
     ExactStateMobilityAccepted,
     ExactStateMobilityRejected,
     CacheLocalityPreferred,
@@ -204,9 +223,9 @@ pub enum PlanReasonCode {
 pub struct FamilyCapabilityRecord {
     pub family_id: String,
     pub layer_count: u32,
+    /// Scalar pre-load estimate used only for topology diagnostics and wire budgeting.
+    /// It is not a runtime activation-frame contract.
     pub activation_width: u32,
-    pub default_wire_dtype: WireDType,
-    pub q8_wire_validation: WireValidation,
     pub exact_state_mobility: ExactStateMobility,
     #[serde(default)]
     pub recurrent_ranges: Vec<LayerRange>,
@@ -214,22 +233,6 @@ pub struct FamilyCapabilityRecord {
     pub split_constraints: Vec<SplitConstraint>,
     #[serde(default)]
     pub sidebands: Vec<SidebandRequirement>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WireDType {
-    F32,
-    F16,
-    Q8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WireValidation {
-    Untested,
-    Validated,
-    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -308,13 +311,6 @@ pub struct ReviewedCapabilityRecord {
     #[serde(default)]
     pub selector: Option<String>,
     pub capability: FamilyCapabilityRecord,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StageRuntimeFamilyExpectation {
-    pub llama_architecture: &'static str,
-    pub family_id: &'static str,
-    pub recurrent_or_hybrid: bool,
 }
 
 #[cfg(test)]

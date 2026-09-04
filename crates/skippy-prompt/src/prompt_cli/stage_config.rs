@@ -55,6 +55,13 @@ fn write_local_configs(
             materialized_pinned: false,
             model_path: Some(stage_model_path),
             projector_path: None,
+            projector_use_gpu: None,
+            media_marker: None,
+            image_min_tokens: None,
+            image_max_tokens: None,
+            batch_max_tokens: None,
+            glm_dsa_policy: skippy_protocol::GlmDsaPolicy::Auto,
+            generation_signal_window: None,
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index as u32,
             layer_start: stage.layer_start,
@@ -66,10 +73,24 @@ fn write_local_configs(
             n_gpu_layers: args.n_gpu_layers,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: args.cache_type_k.clone(),
             cache_type_v: args.cache_type_v.clone(),
             flash_attn_type: StageFlashAttentionType::Auto,
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: true,
+            checkpoint_quantization: None,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
             selected_device: None,
             kv_cache,
             native_mtp_enabled: true,
@@ -126,20 +147,10 @@ fn prompt_stage_kv_cache_config(
     }))
 }
 
-fn prompt_stage_cache_payload(args: &PromptArgs, stage: &LocalStage) -> StageKvCachePayload {
-    let identity = format!("{} {}", args.model_id, args.model_path.display());
-    let activation_width = u32::try_from(args.activation_width).unwrap_or_default();
-    match infer_family_capability(&identity, stage.layer_end, activation_width)
-        .map(|capability| capability.family_id)
-        .as_deref()
-    {
-        Some("qwen3next" | "falcon_h1") => StageKvCachePayload::KvRecurrent,
-        Some(
-            "qwen3_dense" | "llama" | "deepseek2" | "deepseek3" | "glm4" | "olmo" | "gemma2"
-            | "gemma3" | "gemma4_a4b" | "gemma4_e4b" | "glm47_flash" | "minimax_m27",
-        ) => StageKvCachePayload::ResidentKv,
-        _ => StageKvCachePayload::Auto,
-    }
+fn prompt_stage_cache_payload(_args: &PromptArgs, _stage: &LocalStage) -> StageKvCachePayload {
+    // The concrete payload is selected only after llama.cpp loads the model
+    // and reports its actual dense/recurrent/hybrid state semantics.
+    StageKvCachePayload::Auto
 }
 
 fn prompt_stage_cache_max_bytes(

@@ -108,6 +108,9 @@ jobs:
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
+      SKIPPY_CORRECTNESS_MODEL_FILE: Qwen3-0.6B-Q8_0.gguf
+      SKIPPY_CORRECTNESS_MODEL_REVISION: ef4088322893040952513f532f736ddeab518403
+      SKIPPY_CORRECTNESS_MODEL_SHA256: 12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:
@@ -129,7 +132,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -140,23 +143,45 @@ jobs:
         if: ${{ contains(toJson(matrix.batch.crates), 'skippy-quantize') || contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') || contains(toJson(matrix.batch.crates), 'skippy-ffi') }}
         run: scripts/prepare-llama.sh pinned
       - name: Download immutable static ABI input
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.static_abi_artifact_name }}
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
+      - name: Restore Skippy correctness model cache when required
+        id: skippy_correctness_model_cache
+        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package')) && needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/skippy-correctness-model
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-${{ runner.arch }}-skippy-correctness-model-${{ env.SKIPPY_CORRECTNESS_MODEL_SHA256 }}-${{ hashFiles('.github/cache-version.txt') }}
       - name: Download Skippy correctness model when required
-        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
+        if: ${{ (contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package')) && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/skippy-correctness-model"
-          hf download Qwen/Qwen3-0.6B-GGUF Qwen3-0.6B-Q8_0.gguf --local-dir "$RUNNER_TEMP/skippy-correctness-model"
-          test -s "$RUNNER_TEMP/skippy-correctness-model/Qwen3-0.6B-Q8_0.gguf"
+          hf download Qwen/Qwen3-0.6B-GGUF "$SKIPPY_CORRECTNESS_MODEL_FILE" \
+            --revision "$SKIPPY_CORRECTNESS_MODEL_REVISION" \
+            --local-dir "$RUNNER_TEMP/skippy-correctness-model"
+      - name: Verify Skippy correctness model when required
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') || contains(toJson(matrix.batch.crates), 'skippy-model-package') }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/skippy-correctness-model"
+          printf '%s  %s\n' "$SKIPPY_CORRECTNESS_MODEL_SHA256" "$SKIPPY_CORRECTNESS_MODEL_FILE" | sha256sum --check --strict
+      - name: Save trusted Skippy correctness model cache
+        # Main is exhaustive, so the batch containing skippy-runtime is the
+        # sole publisher for this shared package-manager-style cache key.
+        if: ${{ contains(toJson(matrix.batch.crates), 'skippy-runtime') && needs.runner_policy.outputs.allow_native_github_cache == 'true' && github.ref == 'refs/heads/main' && inputs.original_event_name != 'pull_request' && inputs.original_event_name != 'pull_request_target' && steps.skippy_correctness_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/skippy-correctness-model
+          key: ${{ steps.skippy_correctness_model_cache.outputs.cache-primary-key }}
       - name: Run isolated Cargo tests for the batch
         env:
           TEST_CRATES: ${{ toJson(matrix.batch.crates) }}
-          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/Qwen3-0.6B-Q8_0.gguf
+          SKIPPY_CORRECTNESS_MODEL: ${{ runner.temp }}/skippy-correctness-model/${{ env.SKIPPY_CORRECTNESS_MODEL_FILE }}
         run: |
           set -euo pipefail
           while IFS= read -r crate; do
@@ -172,3 +197,124 @@ jobs:
           artifact_name: sccache-ci-rust-tests-${{ matrix.batch.id }}-${{ github.run_attempt }}
           cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
           minimum_hit_rate: "0.20"
+
+  safetensors_runtime_smoke:
+    name: SafeTensors runtime smoke
+    needs: runner_policy
+    if: ${{ inputs.original_event_name == 'pull_request' && (contains(inputs.rust_tests_matrix, 'skippy-model') || contains(inputs.rust_tests_matrix, 'skippy-runtime') || contains(inputs.rust_tests_matrix, 'skippy-quantize') || contains(inputs.rust_tests_matrix, 'skippy-ffi') || contains(inputs.rust_tests_matrix, 'skippy-server') || contains(inputs.rust_tests_matrix, 'skippy-protocol') || contains(inputs.rust_tests_matrix, 'skippy-cache') || contains(inputs.rust_tests_matrix, 'mesh-llm-config') || contains(inputs.rust_tests_matrix, 'mesh-llm-host-runtime') || contains(inputs.rust_tests_matrix, 'mesh-llm-cli')) }}
+    runs-on: ${{ needs.runner_policy.outputs.runner }}
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:8d93de6ba30173e825a16fdecf011f9c632edc6e1259df7289e491b0a05f829d
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_STAGE_BACKEND: cpu
+      LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_SKIP_UI: "1"
+      MESH_LLM_REQUIRE_SCCACHE: "1"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+      RUSTC_WRAPPER: sccache
+      SAFETENSORS_REPOSITORY: HuggingFaceTB/SmolLM2-135M-Instruct
+      SAFETENSORS_REVISION: 12fd25f77366fa6b3b4b768ec3050bf629380bac
+      SAFETENSORS_QUANTIZATIONS: >-
+        preserve F32 F16 BF16 Q1_0 Q2_0 Q4_0 Q4_1 Q5_0 Q5_1
+        IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ1_S IQ1_M TQ1_0 TQ2_0
+        Q2_K Q2_K_S IQ3_XS IQ3_XXS IQ3_S IQ3_M
+        Q3_K_S Q3_K_M Q3_K_L IQ4_NL IQ4_XS Q4_K_S Q4_K_M
+        Q5_K_S Q5_K_M Q6_K Q8_0 MXFP4_MOE
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify prebuilt test environment
+        run: verify-runner-image public cpu
+      - name: Resolve static ABI toolchain epoch
+        uses: ./.github/actions/resolve-native-toolchain-epoch
+        with:
+          pinned_epoch: ${{ inputs.static_abi_toolchain_epoch }}
+      - id: sccache_seed
+        uses: ./.github/actions/restore-sccache-seed
+        with:
+          allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
+      - uses: ./.github/actions/configure-sccache-gha
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Prepare patched llama.cpp
+        run: scripts/prepare-llama.sh pinned
+      - name: Download immutable static ABI input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.static_abi_artifact_name }}
+          path: ${{ runner.temp }}/static-abi-input
+      - name: Restore immutable static ABI input
+        run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
+      - name: Prepare UI placeholder
+        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
+      - name: Download pinned SafeTensors checkpoint
+        run: |
+          set -euo pipefail
+          fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          hf download "$SAFETENSORS_REPOSITORY" \
+            config.json tokenizer.json tokenizer_config.json model.safetensors \
+            --revision "$SAFETENSORS_REVISION" \
+            --local-dir "$fixture_dir"
+      - name: Build and locate the SafeTensors smoke test
+        id: safetensors_smoke_test
+        run: |
+          set -euo pipefail
+          test_name="inference::skippy::resolver::tests::safetensors_checkpoint_reaches_mesh_host_runtime"
+          test_binary="$(
+            cargo test --locked -p mesh-llm-host-runtime --no-default-features \
+              --lib --no-run --message-format=json |
+              jq -r 'select(
+                .reason == "compiler-artifact" and
+                .target.name == "mesh_llm_host_runtime" and
+                .profile.test == true and
+                .executable != null
+              ) | .executable' |
+              tail -n 1
+          )"
+          if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then
+            echo "Unable to locate the mesh-llm-host-runtime library test binary" >&2
+            exit 1
+          fi
+          test_listing="$("$test_binary" --list --ignored --format terse)"
+          if ! grep -Fqx "$test_name: test" <<<"$test_listing"; then
+            echo "Required ignored smoke test is absent: $test_name" >&2
+            exit 1
+          fi
+          printf 'test_binary=%s\n' "$test_binary" >> "$GITHUB_OUTPUT"
+          printf 'test_name=%s\n' "$test_name" >> "$GITHUB_OUTPUT"
+      - name: Exercise every current direct-load quantization
+        env:
+          SAFETENSORS_SMOKE_TEST_BINARY: ${{ steps.safetensors_smoke_test.outputs.test_binary }}
+          SAFETENSORS_SMOKE_TEST_NAME: ${{ steps.safetensors_smoke_test.outputs.test_name }}
+        run: |
+          set -euo pipefail
+          fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
+          for quantization in $SAFETENSORS_QUANTIZATIONS; do
+            echo "::group::$quantization"
+            SKIPPY_SAFETENSORS_SMOKE_DIR="$fixture_dir" \
+              SKIPPY_SAFETENSORS_SMOKE_QUANTIZATION="$quantization" \
+              SKIPPY_SAFETENSORS_SMOKE_IMATRIX=synthetic \
+              "$SAFETENSORS_SMOKE_TEST_BINARY" \
+                "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
+            echo "::endgroup::"
+          done
+      - name: Capture SafeTensors smoke cache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-safetensors-runtime-smoke-${{ github.run_attempt }}
+          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}

@@ -9,6 +9,8 @@ import tempfile
 from typing import Final
 import unittest
 
+from scripts.tests.justfile_source import read_justfile_source
+
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 JUSTFILE: Final = ROOT / "Justfile"
@@ -62,7 +64,11 @@ def _run_release_recipe(
         # A value no test ever passes as an explicit MESH_CUDA_VERSION, so a
         # case that omits the env var can only get this from the fallback
         # actually running the detect script, not from a coincidental match.
-        detect_stub.write_text("#!/usr/bin/env bash\necho 11\n", encoding="utf-8")
+        detect_stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "${MESH_CUDA_VERSION:-11}"\n',
+            encoding="utf-8",
+        )
         detect_stub.chmod(0o755)
 
         justfile = workdir / "Justfile"
@@ -111,8 +117,7 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         for recipe_name in ("release-build-cuda", "release-build-aarch64-cuda"):
             recipe = self.recipe(recipe_name)
             self.assertIn(
-                'cuda_version="${MESH_CUDA_VERSION:-'
-                '$(scripts/detect-cuda-toolkit-version.sh)}"',
+                'cuda_version="$(scripts/detect-cuda-toolkit-version.sh)"',
                 recipe,
             )
 
@@ -126,7 +131,7 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         )
 
     def test_cuda12_release_recipes_include_pascal_sm61(self) -> None:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
 
         self.assertIn(
             "arches='61;75;80;86;87;89;90'",
@@ -172,12 +177,10 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
                 self.assertEqual(observed["arches"], expected)
 
         with self.subTest(mesh_cuda_version="<unset>"):
-            # No MESH_CUDA_VERSION at all -- this is the only case that
-            # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
-            # fallback rather than short-circuiting on the env var. Assert on
-            # toolkit_major too: every explicit case below the 12.8 gate also
-            # yields `pre_blackwell`, so arches alone can't tell the fallback
-            # ran from a coincidence.
+            # No MESH_CUDA_VERSION at all -- the detector's local auto-detection
+            # path supplies its sentinel version. Assert on toolkit_major too:
+            # every explicit case below the 12.8 gate also yields
+            # `pre_blackwell`, so arches alone cannot prove detection ran.
             observed = _run_release_recipe("release-build-cuda", recipe)
             self.assertEqual(observed["toolkit_major"], "11")
             self.assertEqual(observed["arches"], pre_blackwell)
@@ -213,12 +216,10 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
                 self.assertEqual(observed["arches"], expected)
 
         with self.subTest(mesh_cuda_version="<unset>"):
-            # No MESH_CUDA_VERSION at all -- this is the only case that
-            # actually exercises the `$(scripts/detect-cuda-toolkit-version.sh)`
-            # fallback rather than short-circuiting on the env var. Assert on
-            # toolkit_major too: every explicit case below the 13 gate also
-            # yields `pre_13`, so arches alone can't tell the fallback ran
-            # from a coincidence.
+            # No MESH_CUDA_VERSION at all -- the detector's local auto-detection
+            # path supplies its sentinel version. Assert on toolkit_major too:
+            # every explicit case below the 13 gate also yields `pre_13`, so
+            # arches alone cannot prove detection ran.
             observed = _run_release_recipe("release-build-aarch64-cuda", recipe)
             self.assertEqual(observed["toolkit_major"], "11")
             self.assertEqual(observed["arches"], pre_13)
@@ -264,13 +265,13 @@ class JustfileReleaseRuntimeTests(unittest.TestCase):
         self.assertNotIn('cp "{{ mesh_bin }}"', recipe)
 
     def release_runtime_recipe(self) -> str:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
         start = contents.index('release-runtime-build backend="" target="":')
         end = contents.index("# Build the backend-neutral host and the default runtime", start)
         return contents[start:end]
 
     def recipe(self, name: str) -> str:
-        contents = JUSTFILE.read_text(encoding="utf-8")
+        contents = read_justfile_source(JUSTFILE)
         match = re.search(rf"(?m)^{re.escape(name)}(?=[: ])", contents)
         self.assertIsNotNone(match)
         assert match is not None

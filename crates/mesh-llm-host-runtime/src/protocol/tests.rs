@@ -70,13 +70,11 @@ kv_unified = "auto"
 
 [defaults.hardware]
 gpu_layers = "auto"
-tensor_split = []
 
 [defaults.throughput]
 parallel = 3
 
 [defaults.skippy]
-activation_wire_dtype = "auto"
 
 [defaults.speculative]
 mode = "auto"
@@ -101,9 +99,6 @@ gpu_layers = 99
 
 [models.throughput]
 parallel = 4
-
-[models.skippy]
-binary_stage_transport = "auto"
 
 [models.speculative]
 draft_selection_policy = "auto"
@@ -181,8 +176,10 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         artifact_transfer_supported: false,
         stage_protocol_generation_supported: false,
         stage_status_list_supported: false,
+        local_gguf_content_id_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
+        cache_affinity: None,
 
         display_rtt: None,
         selected_path: None,

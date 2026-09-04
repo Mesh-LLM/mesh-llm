@@ -153,7 +153,9 @@ For tools without a Mesh launcher, configure an OpenAI-compatible provider with 
 
 ## 7. Add another machine
 
-Install Mesh on another machine and run the same command with the same mesh name:
+Install Mesh on another machine and run the same command with the same mesh name.
+Traffic between the two Mesh nodes is end-to-end encrypted by QUIC, whether iroh
+connects them directly or forwards the encrypted packets through a relay:
 
 ```sh
 mesh-llm serve --discover my-private-mesh --model unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL

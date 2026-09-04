@@ -12,6 +12,34 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     pub(in crate::network::openai::response) status_code: u16,
     pub(in crate::network::openai::response) content_length: Option<usize>,
     pub(in crate::network::openai::response) content_type: Option<String>,
+    /// The capsule client nonce and, if the inner frontend minted it itself,
+    /// the origin marker — both echoed on the inner frontend's response, but
+    /// otherwise lost because the public-proxy response adapters below
+    /// rebuild fresh HTTP responses instead of forwarding upstream headers.
+    pub(in crate::network::openai::response) client_nonce: Option<String>,
+    pub(in crate::network::openai::response) nonce_origin: Option<String>,
+}
+
+/// Append the capsule client nonce and origin-marker headers (when present)
+/// to a hand-built response header string, so response adapters that
+/// otherwise discard the upstream headers still echo them to the client.
+pub(in crate::network::openai::response) fn append_capsule_nonce_headers(
+    header: &mut String,
+    client_nonce: Option<&str>,
+    nonce_origin: Option<&str>,
+) {
+    if let Some(nonce) = client_nonce {
+        header.push_str(&format!(
+            "{}: {nonce}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str()
+        ));
+    }
+    if let Some(origin) = nonce_origin {
+        header.push_str(&format!(
+            "{}: {origin}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str()
+        ));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -64,6 +92,11 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
         Ok(httparse::Status::Complete(header_end)) => {
             let mut content_length = None;
             let mut content_type = None;
+            let mut client_nonce = None;
+            let mut nonce_origin = None;
+            let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+            let nonce_origin_header =
+                openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
             for header in response.headers.iter() {
                 if header.name.eq_ignore_ascii_case("content-length") {
                     let value = std::str::from_utf8(header.value)
@@ -79,6 +112,14 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                             .trim()
                             .to_string(),
                     );
+                } else if header.name.eq_ignore_ascii_case(nonce_header) {
+                    client_nonce = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                } else if header.name.eq_ignore_ascii_case(nonce_origin_header) {
+                    nonce_origin = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
                 }
             }
             Ok(Some(ParsedResponseHeaders {
@@ -86,6 +127,8 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 status_code: response.code.unwrap_or(0),
                 content_length,
                 content_type,
+                client_nonce,
+                nonce_origin,
             }))
         }
         Ok(httparse::Status::Partial) => Ok(None),
@@ -94,7 +137,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
 }
 
 /// Read the next chunk of HTTP response data without any timeout.
-/// Used for continuation reads after the first byte has already arrived.
+/// Used by relay paths whose own body limits provide the lifetime bound.
 pub(in crate::network::openai::response) async fn read_response_chunk<R: AsyncRead + Unpin>(
     reader: &mut R,
     buf: &mut Vec<u8>,
@@ -106,6 +149,16 @@ pub(in crate::network::openai::response) async fn read_response_chunk<R: AsyncRe
     }
     buf.extend_from_slice(&chunk[..read_result]);
     Ok(read_result)
+}
+
+async fn read_response_chunk_with_timeout<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    timeout: Duration,
+) -> Result<usize> {
+    tokio::time::timeout(timeout, read_response_chunk(reader, buf))
+        .await
+        .context("upstream response continuation read timeout")?
 }
 
 pub(in crate::network::openai::response) async fn read_transformed_response_body<
@@ -215,7 +268,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
         let first_read = buffered.is_empty();
         if first_read {
             let mut chunk = [0u8; 8192];
-            let read_result = tokio::time::timeout(timeout, reader.read(&mut chunk))
+            let read_timeout = timeout.saturating_sub(started.elapsed());
+            let read_result = tokio::time::timeout(read_timeout, reader.read(&mut chunk))
                 .await
                 .map_err(|_| {
                     anyhow!(
@@ -228,7 +282,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
             }
             buffered.extend_from_slice(&chunk[..read_result]);
         } else {
-            read_response_chunk(reader, &mut buffered).await?;
+            let read_timeout = timeout.saturating_sub(started.elapsed());
+            read_response_chunk_with_timeout(reader, &mut buffered, read_timeout).await?;
         }
         if buffered.len() > MAX_HEADER_BYTES {
             bail!("HTTP response headers exceed {MAX_HEADER_BYTES} bytes");
@@ -244,7 +299,8 @@ pub(in crate::network::openai::response) async fn probe_http_response_with_timeo
         0
     };
     while buffered.len() < parsed.header_end + preview_len {
-        read_response_chunk(reader, &mut buffered).await?;
+        let read_timeout = timeout.saturating_sub(started.elapsed());
+        read_response_chunk_with_timeout(reader, &mut buffered, read_timeout).await?;
     }
 
     let retryable_context_overflow = parsed.status_code == 400
@@ -340,6 +396,63 @@ mod tests {
 
         assert!(is_timeout_error(&error), "unexpected error: {error:#}");
     }
+
+    #[tokio::test]
+    async fn probe_continuation_read_has_timeout_after_partial_headers() {
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        writer.write_all(b"HTTP/1.1 200 OK\r\n").await.unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_http_response_with_timeout(&mut reader, Duration::from_millis(10)),
+        )
+        .await
+        .expect("partial response headers must honor the configured timeout");
+        let error = match result {
+            Ok(_) => panic!("a stalled partial header must time out"),
+            Err(error) => error,
+        };
+
+        assert!(is_timeout_error(&error), "unexpected error: {error:#}");
+        assert!(error.to_string().contains("continuation read timeout"));
+    }
+
+    #[tokio::test]
+    async fn probe_partial_headers_share_one_timeout_budget() {
+        let timeout_budget = Duration::from_millis(100);
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"H").await.unwrap();
+            for byte in b"TTP/1.1 200 OK\r\n" {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                if writer.write_all(&[*byte]).await.is_err() {
+                    return;
+                }
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_http_response_with_timeout(&mut reader, timeout_budget),
+        )
+        .await
+        .expect("partial headers must time out before the outer guard");
+        let elapsed = started.elapsed();
+        writer_task.abort();
+
+        let error = match result {
+            Ok(_) => panic!("a partial header stream must time out"),
+            Err(error) => error,
+        };
+        assert!(is_timeout_error(&error), "unexpected error: {error:#}");
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "partial bytes extended the overall header budget: {elapsed:?}"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn test_probe_http_response_local_tolerates_slow_first_byte() {
         use tokio::io::AsyncWriteExt;

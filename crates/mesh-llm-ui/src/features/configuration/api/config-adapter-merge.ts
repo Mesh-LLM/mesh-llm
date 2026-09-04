@@ -12,6 +12,7 @@ import {
   getSettingDisabledReason,
   getSettingWriteDisposition
 } from '@/features/configuration/lib/settings-utils'
+import { objectArrayItemSchema, parseSchemaObjectArrayValue } from '@/features/configuration/lib/schema-object-array'
 import {
   createConfigurationAuditSettingsFromSchema,
   createConfigurationAttestationSettingsFromSchema,
@@ -80,7 +81,9 @@ function serializeDefaultSettingValue(setting: ConfigurationDefaultsSetting, val
     if (optionValues.has('on') && optionValues.has('off')) return value ? 'on' : 'off'
   }
   if (typeof value === 'string' && setting.control.kind === 'choice') return normalizedChoiceValue(value)
-  if (Array.isArray(value) && setting.control.kind === 'text') return value.join(',')
+  if (Array.isArray(value) && setting.control.kind === 'text') {
+    return objectArrayItemSchema(setting.valueSchema) ? JSON.stringify(value) : value.join(',')
+  }
   if (value && typeof value === 'object' && setting.control.kind === 'text') {
     if (
       setting.canonicalPath === 'telemetry.headers' &&
@@ -141,6 +144,7 @@ function parseDefaultSettingValue(setting: ConfigurationDefaultsSetting, value: 
     }
     if (setting.valueSchema?.kind === 'array') {
       const arraySchema = setting.valueSchema
+      if (objectArrayItemSchema(arraySchema)) return parseSchemaObjectArrayValue(value) ?? value
       return value
         .split(',')
         .map((item) => item.trim())

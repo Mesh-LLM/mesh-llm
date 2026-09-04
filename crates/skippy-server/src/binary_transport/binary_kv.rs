@@ -921,15 +921,13 @@ mod tests {
     use super::binary_full_prefill_record_identities;
     use crate::binary_transport::stage_execution::prefix_cache_test_config;
     use crate::kv_integration::KvStageIntegration;
-    use skippy_protocol::binary::{
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-    };
+    use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
     fn prefill_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::PrefillEmbd,
             pos_start: 0,
             token_count: 0,
-            state: StageStateHeader::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32),
+            state: StageStateHeader::new(WireMessageKind::PrefillEmbd),
             request_id: 11,
             session_id: 13,
             sampling: None,
@@ -943,7 +941,7 @@ mod tests {
     #[test]
     fn binary_full_prefill_uses_one_radix_path_per_request() {
         let config = prefix_cache_test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("resident prefix cache enabled");
         let message = prefill_message();

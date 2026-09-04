@@ -1,5 +1,133 @@
 # mesh-llm Router Evals
 
+## Compare Mesh commits with production defaults
+
+`agentic-replay.py` is the durable entrypoint for comparing two or more
+Mesh refs on one model. It creates isolated detached worktrees, builds each
+release host and native runtime, replays a pinned subset of the Thoughtworks
+agentic-coding trajectories, and produces raw JSONL, CSV/JSON/Markdown tables,
+SVG throughput and TTFT charts, logs, binary hashes, and an artifact inventory.
+
+Inspect the exact build order and launch command without changing anything:
+
+```bash
+python3 evals/agentic-replay.py plan \
+  --ref rc8=v0.76.0-rc8 \
+  --ref main=origin/main \
+  --model '<model-uri>' \
+  --trajectories-per-framework 4
+```
+
+Run the default fast A/B release gate after materializing the pinned parquet from
+`thoughtworks/agentic-coding-trajectories`:
+
+```bash
+python3 evals/agentic-replay.py run \
+  --ref rc8=v0.76.0-rc8 \
+  --ref main=origin/main \
+  --model '<model-uri>' \
+  --trajectories-per-framework 4 \
+  --dataset-file /path/to/sessions.parquet \
+  --output /path/to/artifact
+```
+
+The server command is always `mesh-llm serve --model <model> --log-format
+json`. The runner never sets context size, Mesh execution lanes, KV budget, or
+backend tuning; `--concurrency` controls simultaneous client requests only.
+Trajectory count is deliberately explicit rather than hidden behind a default.
+Each measured cohort must contain at least twice the maximum offered client
+concurrency so the high-concurrency cells have more than one worker wave. With
+the example above and client concurrency 1/2/4, the runner selects 36 measured
+whole trajectories: four from each of the three recorded agent frameworks for
+each disjoint concurrency cohort. It also selects a disjoint 12-trajectory
+warm-up cohort and discards four ordered turns after every model-ready event.
+Selection is deterministic by session ID hash within each framework.
+
+The default checkpoint profile measures one request per trajectory: within each
+framework's four trajectories, one deterministically represents each of early,
+middle, late, and final stage. Every request contains the complete recorded
+history before that checkpoint. Skipped assistant turns and tool observations
+are appended from the dataset in strict order, so every experiment arm receives
+an identical prefix without paying for discarded generations at every step.
+This is 36 requests per ref and 72 for a two-ref A/B gate. Use `--passes 2` for
+reverse-order ABBA confirmation when the first-pass result is ambiguous.
+
+For nightly or research runs, `--replay-mode all --passes 2 --warmup-turns 14`
+restores exhaustive assistant-turn replay. The manifest records all selected
+session IDs, framework and turn counts, context bounds, and hashes. Use `report`
+to regenerate tables and charts from a completed artifact without rerunning the
+model.
+
+The default per-turn output cap is 2,048 tokens. Reports lead with token-weighted
+decode throughput measured after first generated content and show end-to-end
+output throughput separately because it includes prompt ingestion. They also
+show realized mean in-flight concurrency, slot utilization, failed requests,
+and the per-pass range. Percent deltas are suppressed unless compared arms
+fail the same request IDs.
+
+This is a deterministic hash-ordered stress sample, not a stratified sample of
+the corpus. Tool names are preserved but tool schemas are permissive stubs, and
+generated output is measured but not fed back into the replay. The benchmark is
+therefore a paired serving-performance comparison on reconstructed agent
+prompts; it does not measure answer quality or claim byte-identical production
+traffic. Treat small deltas as directional unless a larger cohort and repeated
+passes show a consistent separation.
+
+### KV-cache acceptance with captured harness traffic
+
+The Thoughtworks corpus is useful for broad agentic load, but it is not a
+substitute for the exact Buzz, OpenCode, Goose, or Pi prefix whose cache behavior
+is being certified. `run` therefore also accepts `--trajectory-manifest` in
+place of `--dataset-file`. Captured trajectories may include their exact `tools`
+array; the runner sends those schemas unchanged because tool-schema tokens are
+part of the reusable prefix identity.
+
+Use `--replay-mode final` to measure each captured trajectory at its longest
+recorded prefix. The optional gates make a qualifying run fail closed while
+retaining its complete artifact:
+
+```bash
+python3 evals/agentic-replay.py run \
+  --ref parent=<parent-commit> \
+  --ref candidate=<candidate-commit> \
+  --model '<model-uri>' \
+  --trajectory-manifest /path/to/captured-harnesses.json \
+  --replay-mode final \
+  --passes 2 \
+  --require-framework buzz \
+  --require-framework opencode \
+  --require-framework goose \
+  --prompt-token-range 18000:22000 \
+  --min-cache-pct 70 \
+  --require-output-match \
+  --max-ttft-regression-pct 5 \
+  --output /path/to/artifact
+```
+
+The manifest uses the same `warmup`, `1`, `2`, and `4` cohort names as the
+generated workload. Each trajectory has `session_id`, `source_dataset`,
+`agent_framework`, nullable `recorded_model`, ordered `messages`, and an
+optional exact OpenAI `tools` array. Include real captures from the required
+harnesses as distinct `agent_framework` values. Do not commit private captures;
+the artifact records and hashes the supplied manifest for reproducibility.
+
+Each repeated `--require-framework` value must be represented in every measured
+concurrency cohort. This preflight runs before any ref is built, preventing a
+long acceptance run from silently omitting Buzz or one of the comparison agent
+harnesses.
+
+`--prompt-token-range` is checked against server-reported token counts for every
+successful measured request, not a character estimate. `--min-cache-pct` checks
+the aggregate server-reported cached-token share in every ref/concurrency cell.
+`--require-output-match` compares generated-content hashes and failure identities
+across refs and passes. `--max-ttft-regression-pct` bounds candidate median TTFT
+relative to the first ref. Any configured failure is written into `run.json` and
+the Markdown report before the command exits non-zero.
+
+For the pinned Mesh-versus-raw-llama.cpp scheduler matrix across CUDA, Metal,
+dense/MoE/recurrent/hybrid models, llama-benchy, and Thoughtworks agent traces, see
+[`docs/skippy/COMPETITIVE_BENCHMARK.md`](../docs/skippy/COMPETITIVE_BENCHMARK.md).
+
 A/B comparison of pi agent performance through mesh-llm's multi-model router vs a frontier cloud model.
 
 ## Setup

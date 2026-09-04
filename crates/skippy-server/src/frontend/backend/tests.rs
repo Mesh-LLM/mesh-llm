@@ -1,6 +1,20 @@
 use super::*;
+use crate::frontend::EmbeddedOpenAiRequestDefaults;
+use crate::frontend::SpeculativeDecodeConfig;
+use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
+use crate::frontend::generation::OpenAiBackendMode;
+use crate::frontend::iteration_scheduler::IterationScheduler;
+use crate::runtime_state::RuntimeState;
+use futures_util::StreamExt;
+use openai_frontend::ChatCompletionChunk;
 use openai_frontend::ChatCompletionRequest;
+use openai_frontend::ChatCompletionResponse;
+use openai_frontend::ChatHookOutcome;
 use openai_frontend::FinishReason;
+use openai_frontend::OpenAiHookPolicy;
+use openai_frontend::Usage;
+use openai_frontend::set_chat_mesh_hooks_enabled;
 use serde_json::json;
 use tokio::runtime::Runtime;
 
@@ -37,11 +51,25 @@ fn admission_controller(
     generation_concurrency: usize,
     generation_queue_limit: usize,
 ) -> GenerationAdmissionController {
+    admission_controller_with_budget(generation_concurrency, generation_queue_limit, 4_096)
+}
+
+fn admission_controller_with_budget(
+    generation_concurrency: usize,
+    generation_queue_limit: usize,
+    token_capacity: usize,
+) -> GenerationAdmissionController {
     GenerationAdmissionController {
-        generation_limit: Arc::new(Semaphore::new(generation_concurrency)),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(
+            generation_concurrency,
+        )),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit,
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(
+            generation_concurrency,
+        )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(token_capacity)),
     }
 }
 
@@ -50,6 +78,392 @@ fn result_error<T>(result: OpenAiResult<T>) -> OpenAiError {
         Ok(_) => panic!("expected generation admission to fail"),
         Err(error) => error,
     }
+}
+
+#[tokio::test]
+async fn queued_admission_balances_shared_prefix_families_across_lane_wave() {
+    let controller = admission_controller(1, 4);
+    let work = GenerationAdmissionWork::new(4, 1);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(2),
+            work,
+        )
+        .await
+        .expect("active request admission");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    for (label, prompt) in [
+        ("family-a-1", vec![1, 1, 3, 4]),
+        ("family-a-2", vec![1, 1, 3, 5]),
+        ("family-b-1", vec![2, 2, 3, 4]),
+        ("family-b-2", vec![2, 2, 3, 5]),
+    ] {
+        let controller = controller.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let cancellation = openai_frontend::CancellationToken::new();
+            let admitted = controller
+                .acquire_scheduled_work(
+                    &trusted_ids(label),
+                    &cancellation,
+                    Duration::from_secs(2),
+                    work,
+                    GenerationAdmissionScheduling::new(
+                        Arc::from(prompt),
+                        Arc::new(skippy_scheduler::CacheAffinity::default),
+                    ),
+                )
+                .await
+                .expect("queued request admission");
+            tx.send((label, admitted)).await.unwrap();
+        });
+    }
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all prompts become scheduler-visible");
+
+    drop(active);
+    let (first_label, first) = tokio::time::timeout(Duration::from_millis(250), rx.recv())
+        .await
+        .expect("first queued admission was promoted")
+        .expect("first queued admission");
+    drop(first);
+    let (second_label, second) = rx.recv().await.expect("second queued admission");
+    assert_ne!(
+        first_label.split('-').nth(1),
+        second_label.split('-').nth(1),
+        "one family must not drain the whole lane wave"
+    );
+    drop(second);
+    let (_, third) = rx.recv().await.expect("third queued admission");
+    drop(third);
+    let (_, fourth) = rx.recv().await.expect("fourth queued admission");
+    drop(fourth);
+}
+
+#[tokio::test]
+async fn capacity_waiter_holds_neither_a_lane_nor_kv_until_atomic_promotion() {
+    let controller = admission_controller_with_budget(2, 2, 10);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::ZERO,
+            GenerationAdmissionWork::new(7, 0),
+        )
+        .await
+        .expect("first capacity reservation");
+    let waiting_controller = controller.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_controller
+            .acquire_work(
+                &trusted_ids("waiting"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                GenerationAdmissionWork::new(7, 0),
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("capacity waiter entered the queue");
+    assert_eq!(controller.generation_limit.available_permits(), 1);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 7);
+
+    drop(active);
+    let promoted = tokio::time::timeout(Duration::from_millis(100), waiter)
+        .await
+        .expect("capacity waiter promoted")
+        .expect("capacity waiter task completed")
+        .expect("capacity waiter admission");
+    assert_eq!(controller.generation_limit.available_permits(), 1);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 7);
+    drop(promoted);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn capacity_waiters_drain_serially_after_each_kv_release() {
+    let controller = admission_controller_with_budget(2, 4, 10);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::ZERO,
+            GenerationAdmissionWork::new(10, 0),
+        )
+        .await
+        .expect("active capacity reservation");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    for index in 0..4 {
+        let controller = controller.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let cancellation = openai_frontend::CancellationToken::new();
+            let admitted = controller
+                .acquire_work(
+                    &trusted_ids(&format!("waiting-{index}")),
+                    &cancellation,
+                    Duration::ZERO,
+                    GenerationAdmissionWork::new(10, 0),
+                )
+                .await
+                .expect("queued capacity admission");
+            tx.send(admitted).await.unwrap();
+        });
+    }
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all capacity waiters entered the queue");
+
+    drop(active);
+    for _ in 0..4 {
+        let admitted = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("next capacity waiter promoted")
+            .expect("queued capacity admission");
+        assert_eq!(controller.generation_token_budget.active_tokens(), 10);
+        drop(admitted);
+    }
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn full_pool_waiter_is_admitted_after_bounded_half_pool_bypasses() {
+    let controller = admission_controller_with_budget(2, 4, 10);
+    let half_pool_work = GenerationAdmissionWork::new(5, 0);
+    let full_pool_work = GenerationAdmissionWork::new(10, 0);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active-half-pool"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::ZERO,
+            half_pool_work,
+        )
+        .await
+        .expect("initial half-pool admission");
+
+    let full_pool_controller = controller.clone();
+    let full_pool_waiter = tokio::spawn(async move {
+        full_pool_controller
+            .acquire_work(
+                &trusted_ids("full-pool-waiter"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                full_pool_work,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("full-pool request entered the queue");
+
+    // Keep one half-pool reservation active and repeatedly fill/release the
+    // other half. The full-pool request cannot fit during these admissions.
+    for wave in 0..ADMISSION_STARVATION_BOUND_TURNS {
+        let bypass = tokio::time::timeout(
+            Duration::from_secs(1),
+            controller.acquire_work(
+                &trusted_ids(&format!("half-pool-bypass-{wave}")),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                half_pool_work,
+            ),
+        )
+        .await
+        .expect("fitting half-pool request completed before the timeout")
+        .expect("fitting half-pool request admitted before the bound");
+        assert_eq!(controller.generation_token_budget.active_tokens(), 10);
+        drop(bypass);
+    }
+
+    // The next fitting arrival reaches the bound and must remain queued while
+    // the controller drains capacity toward the older full-pool request.
+    let bypass_controller = controller.clone();
+    let blocked_bypass = tokio::spawn(async move {
+        bypass_controller
+            .acquire_work(
+                &trusted_ids("half-pool-after-bound"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                half_pool_work,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("post-bound half-pool request remained queued");
+    assert!(!full_pool_waiter.is_finished());
+    assert!(!blocked_bypass.is_finished());
+
+    drop(active);
+    let admitted_full_pool = tokio::time::timeout(Duration::from_secs(1), full_pool_waiter)
+        .await
+        .expect("full-pool waiter admitted after capacity drained")
+        .expect("full-pool waiter task completed")
+        .expect("full-pool admission succeeded");
+    assert_eq!(controller.generation_token_budget.active_tokens(), 10);
+    assert!(!blocked_bypass.is_finished());
+
+    drop(admitted_full_pool);
+    let admitted_bypass = tokio::time::timeout(Duration::from_secs(1), blocked_bypass)
+        .await
+        .expect("younger half-pool waiter admitted after the senior completed")
+        .expect("half-pool waiter task completed")
+        .expect("half-pool admission succeeded");
+    drop(admitted_bypass);
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn request_larger_than_the_kv_pool_fails_without_queueing_or_taking_a_lane() {
+    let controller = admission_controller_with_budget(2, 2, 128);
+    let error = result_error(
+        controller
+            .acquire_work(
+                &trusted_ids("too-large"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::ZERO,
+                GenerationAdmissionWork::new(129, 0),
+            )
+            .await,
+    );
+
+    assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error.body().error.code.as_deref(),
+        Some("context_length_exceeded")
+    );
+    assert!(
+        error
+            .body()
+            .error
+            .message
+            .contains("runtime pool holds 128")
+    );
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn cancelling_a_capacity_waiter_leaks_neither_lane_nor_kv_reservation() {
+    let controller = admission_controller_with_budget(2, 2, 128);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("active"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::ZERO,
+            GenerationAdmissionWork::new(100, 0),
+        )
+        .await
+        .expect("first capacity reservation");
+    let cancellation = openai_frontend::CancellationToken::new();
+    let waiter_cancellation = cancellation.clone();
+    let waiting_controller = controller.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_controller
+            .acquire_work(
+                &trusted_ids("waiting"),
+                &waiter_cancellation,
+                Duration::ZERO,
+                GenerationAdmissionWork::new(64, 0),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while controller.generation_queue_depth.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("capacity waiter entered the queue");
+
+    cancellation.cancel();
+    let error = result_error(
+        tokio::time::timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("cancelled capacity waiter returned")
+            .expect("capacity waiter task completed"),
+    );
+    assert!(error.body().error.message.contains("request cancelled"));
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(controller.generation_limit.available_permits(), 1);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 100);
+
+    drop(active);
+    assert_eq!(controller.generation_limit.available_permits(), 2);
+    assert_eq!(controller.generation_token_budget.active_tokens(), 0);
+}
+
+#[tokio::test]
+async fn predicted_wait_rejection_preserves_queue_capacity() {
+    let controller = admission_controller(1, 2);
+    let work = GenerationAdmissionWork::new(100, 100);
+    controller
+        .generation_service_estimator
+        .observe_completed(work, 100.0, 100.0);
+    let active = controller
+        .acquire_work(
+            &trusted_ids("agent-1"),
+            &openai_frontend::CancellationToken::new(),
+            Duration::from_secs(1),
+            work,
+        )
+        .await
+        .expect("active request admission");
+
+    let error = result_error(
+        controller
+            .acquire_work(
+                &trusted_ids("agent-2"),
+                &openai_frontend::CancellationToken::new(),
+                Duration::from_millis(199),
+                work,
+            )
+            .await,
+    );
+
+    assert!(
+        error
+            .body()
+            .error
+            .message
+            .contains("predicted generation wait")
+    );
+    assert_eq!(controller.generation_queue_depth.load(Ordering::Acquire), 0);
+    drop(active);
+    assert_eq!(controller.generation_limit.available_permits(), 1);
 }
 
 #[test]
@@ -684,6 +1098,40 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     );
 }
 
+/// Once streaming has committed HTTP 200, a native generation failure cannot
+/// be converted into a new HTTP status. It must remain an `Err` item on the
+/// backend stream so `openai-frontend` can frame an explicit SSE error event
+/// before `[DONE]` instead of making the response look like a zero-token
+/// success.
+#[test]
+fn backend_errors_are_delivered_as_terminal_stream_frames() {
+    let (tx, mut rx) = mpsc::channel(4);
+    let rt = Runtime::new().expect("tokio runtime for terminal-error test");
+    let sender = StreamEventSender::new(
+        tx,
+        rt.handle().clone(),
+        STREAM_SEND_STALL_TIMEOUT,
+        "test-request".to_owned(),
+        test_telemetry(),
+    );
+
+    sender
+        .send_terminal(Err(OpenAiError::backend(
+            "native decode failed to find a memory slot",
+        )))
+        .expect("backend failure must reach a live stream receiver");
+
+    let error = match rx.try_recv().expect("backend failure must be enqueued") {
+        Ok(_) => panic!("terminal item must remain an error"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("native decode failed to find a memory slot")
+    );
+}
+
 /// Bounds the double-wait hazard: once an in-flight send has already proven
 /// the receiver unreachable (stalled past the timeout, here injected short),
 /// a subsequent terminal send must not wait out the same stall timeout a
@@ -734,4 +1182,389 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
         "terminal send must short-circuit instead of waiting out the stall timeout again, took {elapsed:?} (timeout {stall_timeout:?})"
     );
     drop(rx);
+}
+
+// --- Terminal-hook lifecycle wiring (mesh1437 production wiring) ---
+//
+// `chat_completion_with_hooks`/`chat_completion_stream_with_hooks` are unit
+// tested directly with a fake `dispatch` closure rather than through the
+// full `chat_completion_with_context`/`chat_completion_stream` trait methods:
+// real generation needs a loaded GGUF (see `recurrent_test_backend` in
+// `local_generation/tests.rs`, gated on `SKIPPY_RECURRENT_CACHE_TEST_MODEL`),
+// but the hook lifecycle itself never touches `self.runtime` — it only reads
+// `self.hook_policy` — so it's fully exercisable on a modelless backend.
+
+fn hooks_test_backend(hook_policy: Option<Arc<dyn OpenAiHookPolicy>>) -> StageOpenAiBackend {
+    let config: skippy_protocol::StageConfig = serde_json::from_value(json!({
+        "run_id": "hooks-test",
+        "topology_id": "hooks-test",
+        "model_id": "hooks-test-model",
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "layer_start": 0,
+        "layer_end": 1,
+        "load_mode": "runtime-slice",
+        "bind_addr": "127.0.0.1:0",
+    }))
+    .expect("minimal stage config for hook lifecycle tests");
+    let runtime = Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(1)));
+    let telemetry = crate::telemetry::Telemetry::new(
+        None,
+        1,
+        config.clone(),
+        crate::telemetry::TelemetryLevel::Off,
+    );
+    let iteration_scheduler =
+        IterationScheduler::new(runtime.clone(), &config, 1, true, telemetry.clone())
+            .expect("iteration scheduler for hook lifecycle tests");
+    StageOpenAiBackend {
+        runtime: runtime.clone(),
+        config: config.clone(),
+        telemetry,
+        model_id: "hooks-test-model".to_string(),
+        default_max_tokens: 16,
+        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        ctx_size: 128,
+        mode: OpenAiBackendMode::LocalRuntime,
+        draft: None,
+        speculative_window: 0,
+        adaptive_speculative_window: false,
+        ngram_max: 0,
+        speculative: SpeculativeDecodeConfig::default(),
+        generation_limit: Arc::new(GenerationConcurrencyController::fixed(1)),
+        generation_queue_depth: Arc::new(AtomicUsize::new(0)),
+        generation_queue_limit: 1,
+        generation_admission_timeout: Duration::from_secs(10),
+        generation_service_estimator: Arc::new(GenerationServiceEstimator::new(1)),
+        generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(128)),
+        hook_policy,
+        generation_receipt: None,
+        linear_proposal_ingress: None,
+        kv: None,
+        iteration_scheduler,
+    }
+}
+
+fn mesh_hooks_request(model: &str) -> ChatCompletionRequest {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+    }))
+    .expect("minimal chat completion request");
+    set_chat_mesh_hooks_enabled(&mut request, true);
+    request
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum HookTerminalRecord {
+    Success { model: String },
+    Error { status: u16, message: String },
+    Denied { status: u16, reason: String },
+    Cancelled,
+    StreamCompleted,
+}
+
+#[derive(Default)]
+struct RecordingHookPolicy {
+    deny: bool,
+    hang_before_dispatch: bool,
+    terminals: Mutex<Vec<HookTerminalRecord>>,
+}
+
+#[async_trait]
+impl OpenAiHookPolicy for RecordingHookPolicy {
+    async fn before_chat_completion(
+        &self,
+        _request: &mut ChatCompletionRequest,
+    ) -> OpenAiResult<ChatHookOutcome> {
+        if self.hang_before_dispatch {
+            std::future::pending::<()>().await;
+        }
+        if self.deny {
+            return Err(OpenAiError::invalid_request("denied by policy"));
+        }
+        Ok(ChatHookOutcome::none())
+    }
+
+    async fn on_chat_completion_terminal(
+        &self,
+        _request: &ChatCompletionRequest,
+        _exchange_id: &str,
+        outcome: &ChatCompletionOutcome<'_>,
+    ) {
+        let record = match outcome {
+            ChatCompletionOutcome::Success { response } => HookTerminalRecord::Success {
+                model: response.model.clone(),
+            },
+            ChatCompletionOutcome::Error { status, message } => HookTerminalRecord::Error {
+                status: *status,
+                message: (*message).to_string(),
+            },
+            ChatCompletionOutcome::Denied { status, reason } => HookTerminalRecord::Denied {
+                status: *status,
+                reason: (*reason).to_string(),
+            },
+            ChatCompletionOutcome::Cancelled => HookTerminalRecord::Cancelled,
+            ChatCompletionOutcome::StreamCompleted => HookTerminalRecord::StreamCompleted,
+            other => {
+                unreachable!("unhandled ChatCompletionOutcome variant in test fixture: {other:?}")
+            }
+        };
+        self.terminals.lock().unwrap().push(record);
+    }
+}
+
+/// Terminal delivery for a dropped/streamed exchange fires from a detached
+/// spawned task (see `TerminalGuard::drop`/`fire_detached`), so it lands
+/// sometime after the driving future is aborted or the stream stops
+/// yielding items, not synchronously at that instant.
+async fn wait_for_hook_terminal(policy: &RecordingHookPolicy) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if !policy.terminals.lock().unwrap().is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "terminal event never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn stage_backend_success_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let response = backend
+        .chat_completion_with_hooks(request, |request| async move {
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                "ok",
+                Usage::new(1, 1),
+            ))
+        })
+        .await
+        .expect("fake dispatch succeeds");
+    assert_eq!(response.model, "hooks-test-model");
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(
+        terminals.as_slice(),
+        [HookTerminalRecord::Success {
+            model: "hooks-test-model".to_string()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn stage_backend_dispatch_error_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let error = backend
+        .chat_completion_with_hooks(request, |_request| async move {
+            Err(OpenAiError::backend("upstream exploded"))
+        })
+        .await
+        .expect_err("fake dispatch fails");
+    assert_eq!(error.status().as_u16(), 502);
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Error { status: 502, message }
+            if message.contains("upstream exploded")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_denied_request_never_dispatches_and_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy {
+        deny: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+    let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dispatched_flag = dispatched.clone();
+
+    let error = backend
+        .chat_completion_with_hooks(request, move |request| {
+            dispatched_flag.store(true, Ordering::Release);
+            async move {
+                Ok(ChatCompletionResponse::new(
+                    request.model,
+                    "ok",
+                    Usage::new(0, 0),
+                ))
+            }
+        })
+        .await
+        .expect_err("policy denies the request");
+    assert_eq!(error.status().as_u16(), 400);
+    assert!(
+        !dispatched.load(Ordering::Acquire),
+        "a denied request must never reach dispatch"
+    );
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Denied { status: 400, reason }
+            if reason.contains("denied by policy")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_dropped_during_admission_hook_fires_exactly_one_cancelled_terminal() {
+    let policy = Arc::new(RecordingHookPolicy {
+        hang_before_dispatch: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let handle = tokio::spawn(async move {
+        backend
+            .chat_completion_with_hooks(request, |request| async move {
+                Ok(ChatCompletionResponse::new(
+                    request.model,
+                    "ok",
+                    Usage::new(0, 0),
+                ))
+            })
+            .await
+    });
+
+    // Let the task run until it's parked in `before_chat_completion`, then
+    // cancel it the way an outer timeout or client disconnect would.
+    tokio::task::yield_now().await;
+    handle.abort();
+    let _ = handle.await;
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::Cancelled]);
+}
+
+#[tokio::test]
+async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(ChatCompletionChunk::delta(request.model.clone(), "hi")),
+                Ok(ChatCompletionChunk::done(request.model)),
+            ])) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    while stream
+        .next()
+        .await
+        .transpose()
+        .expect("no chunk errors")
+        .is_some()
+    {}
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::StreamCompleted]);
+}
+
+/// The explicit case this wiring exists for: a client disconnects (or an
+/// outer timeout fires) after a stream has already delivered a chunk but
+/// before it ends on its own. Without `TerminalGuardedChatStream` wired into
+/// `StageOpenAiBackend`, this exchange got zero terminal events.
+#[tokio::test]
+async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_terminal() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            let first = ChatCompletionChunk::delta(request.model, "partial");
+            Ok(Box::pin(
+                futures_util::stream::once(async move { Ok(first) })
+                    .chain(futures_util::stream::pending()),
+            ) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    let first = stream.next().await;
+    assert!(matches!(first, Some(Ok(_))), "first chunk should flow");
+    drop(stream);
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.as_slice(), [HookTerminalRecord::Cancelled]);
+}
+
+#[tokio::test]
+async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy::default());
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let mut stream = backend
+        .chat_completion_stream_with_hooks(request, |request| async move {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(ChatCompletionChunk::delta(request.model, "hi")),
+                Err(OpenAiError::backend("upstream exploded")),
+            ])) as ChatCompletionStream)
+        })
+        .await
+        .expect("stream created");
+    while let Some(item) = stream.next().await {
+        let _ = item;
+    }
+    wait_for_hook_terminal(&policy).await;
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Error { status: 502, message }
+            if message.contains("upstream exploded")
+    ));
+}
+
+#[tokio::test]
+async fn stage_backend_stream_denied_never_dispatches_and_fires_terminal_exactly_once() {
+    let policy = Arc::new(RecordingHookPolicy {
+        deny: true,
+        ..RecordingHookPolicy::default()
+    });
+    let backend = hooks_test_backend(Some(policy.clone()));
+    let request = mesh_hooks_request("hooks-test-model");
+
+    let error = match backend
+        .chat_completion_stream_with_hooks(request, |_request| async move {
+            panic!("a denied request must never reach dispatch")
+        })
+        .await
+    {
+        Ok(_) => panic!("policy denies the request"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status().as_u16(), 400);
+
+    let terminals = policy.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(
+        &terminals[0],
+        HookTerminalRecord::Denied { status: 400, reason }
+            if reason.contains("denied by policy")
+    ));
 }

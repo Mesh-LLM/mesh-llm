@@ -21,8 +21,8 @@ use crate::telemetry::{Telemetry, now_unix_nanos};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use skippy_protocol::binary::{
-    StageReplyStats, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
-    recv_reply, send_reply_ack_with_stats,
+    StageReplyStats, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
+    send_reply_ack_with_stats,
 };
 use skippy_protocol::{StageConfig, StageTopology};
 use std::collections::BTreeMap;
@@ -38,7 +38,6 @@ pub(super) fn handle_stop(
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -63,13 +62,8 @@ pub(super) fn handle_stop(
                 .flush()
                 .context("flush async forwards before stop")?;
         }
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward binary stop")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward binary stop")?;
         let reply = recv_reply(&mut **downstream).context("stop downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("stop expected downstream ACK");
@@ -78,6 +72,10 @@ pub(super) fn handle_stop(
     }
     let reset_start_unix_nanos = now_unix_nanos() as u64;
     let reset_timer = Instant::now();
+    let session_lease = session_tracker.session_lease(session_key);
+    let release = session_lease
+        .begin_release()
+        .ok_or_else(|| anyhow::anyhow!("cannot stop stale binary session {session_key}"))?;
     let accumulated =
         kv.and_then(|cache| take_shared_prefill_tokens(&cache.split_prefill_tokens, session_key));
     let scheduler_config = config.clone();
@@ -104,7 +102,10 @@ pub(super) fn handle_stop(
             Ok((record, drop_stats))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
-        .context("reset binary stage session")?;
+        .context("reset binary stage session");
+    drop(release);
+    session_tracker.stopped(session_key);
+    let outcome = outcome?;
     let runtime_lock_wait_ms = outcome.runtime_lock_wait_ms;
     let (record, drop_stats) = outcome.value;
     if let Some(record) = record
@@ -149,7 +150,6 @@ pub(super) fn handle_stop(
         reset_start_unix_nanos,
         reset_end_unix_nanos,
     );
-    session_tracker.stopped(session_key);
     prediction_return_streams.remove(&(message.request_id, message.session_id));
     prediction_return_sinks.remove(message.request_id, message.session_id);
     send_reply_ack_with_stats(upstream, stop_stats).context("send stop ACK")
@@ -159,7 +159,6 @@ pub(super) fn handle_stop(
 pub(super) fn handle_verify_retirement(
     iteration_scheduler: &IterationScheduler,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -184,13 +183,8 @@ pub(super) fn handle_verify_retirement(
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
         .context("retire binary stage verify checkpoint")?;
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward verify retirement")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward verify retirement")?;
     }
     Ok(())
 }
@@ -200,7 +194,6 @@ pub(super) fn handle_session_control(
     iteration_scheduler: &IterationScheduler,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     message: &StageWireMessage,
     session_key: &str,
@@ -238,13 +231,8 @@ pub(super) fn handle_session_control(
         _ => unreachable!("session control checked above"),
     }
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward session control")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward session control")?;
         let reply = recv_reply(&mut **downstream).context("session control downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("session control expected downstream ACK");
@@ -261,7 +249,6 @@ pub(super) fn handle_generation_control(
     iteration_scheduler: &IterationScheduler,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     message: &StageWireMessage,
@@ -285,13 +272,8 @@ pub(super) fn handle_generation_control(
     )
     .context("drain deferred replies before generation config")?;
     if let Some(downstream) = downstream.as_mut() {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward generation config")?;
+        write_stage_message_conditioned(&mut **downstream, message, downstream_wire_condition)
+            .context("forward generation config")?;
         let reply = recv_reply(&mut **downstream).context("generation config downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("generation config expected downstream ACK");
@@ -324,7 +306,6 @@ pub(super) fn handle_generation_control(
             topology,
             message.request_id,
             message.session_id,
-            wire_dtype,
             downstream_connect_timeout_secs,
             prediction_return_sinks,
             prediction_return_streams,
@@ -342,7 +323,6 @@ pub(super) fn handle_prefix_cache_control(
     telemetry: &Telemetry,
     upstream: &mut TcpStream,
     mut downstream: Option<&mut TcpStream>,
-    wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
     downstream_connect_timeout_secs: u64,
     activation_width: i32,
@@ -380,7 +360,6 @@ pub(super) fn handle_prefix_cache_control(
             session_id,
             message,
             downstream,
-            wire_dtype,
             downstream_wire_condition,
             activation_width,
             control_started,
@@ -416,13 +395,8 @@ pub(super) fn handle_prefix_cache_control(
     if local.hit
         && let Some(downstream) = downstream.as_mut()
     {
-        write_stage_message_conditioned(
-            &mut **downstream,
-            &message,
-            wire_dtype,
-            downstream_wire_condition,
-        )
-        .context("forward prefix cache control")?;
+        write_stage_message_conditioned(&mut **downstream, &message, downstream_wire_condition)
+            .context("forward prefix cache control")?;
         let mut reply = recv_reply(&mut **downstream).context("prefix cache downstream ACK")?;
         if reply.kind != WireReplyKind::Ack {
             bail!("prefix cache control expected downstream ACK");

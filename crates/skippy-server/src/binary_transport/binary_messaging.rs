@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     io::{self, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -24,12 +25,13 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs, iteration_scheduler::IterationScheduler},
     kv_integration::KvStageIntegration,
-    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides},
+    runtime_state::{RuntimeLaunchOverrides, load_runtime_with_overrides, loaded_model_state_kind},
     telemetry::{Telemetry, lifecycle_attrs},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 use skippy_protocol::binary::{WireMessageKind, read_stage_message, send_ready};
+use skippy_runtime::ActivationBoundaryDesc;
 
 pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
@@ -43,6 +45,11 @@ mod summary;
 mod telemetry;
 
 use self::connection::handle_binary_connection;
+use self::session_tracker::ConnectionSessionOwnership;
+
+/// How often a waiting connection worker rechecks the shutdown flag, matching
+/// the downstream DOWNSTREAM_SHUTDOWN_POLL cadence in stage_execution.
+const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 struct ConnectionWorkerControl {
@@ -81,6 +88,41 @@ impl ConnectionWorkerControl {
             .expect("connection sockets lock poisoned")
             .clear();
     }
+
+    fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
+    }
+
+    /// Block until `stream` has readable data (or EOF), returning false when
+    /// shutdown is requested instead. Peeks under a short read timeout so no
+    /// message bytes are consumed and the worker never sits in an
+    /// uninterruptible blocking read: `TcpStream::shutdown` on a tracked
+    /// clone does not unblock an in-flight `read` on Windows (#1538).
+    fn wait_for_readable(&self, stream: &TcpStream) -> io::Result<bool> {
+        stream.set_read_timeout(Some(WORKER_SHUTDOWN_POLL))?;
+        let mut probe = [0u8; 1];
+        let ready = loop {
+            if self.is_shutting_down() {
+                break false;
+            }
+            match stream.peek(&mut probe) {
+                Ok(_) => break true,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => {
+                    let _ = stream.set_read_timeout(None);
+                    return Err(error);
+                }
+            }
+        };
+        stream.set_read_timeout(None)?;
+        Ok(ready)
+    }
 }
 
 struct ConnectionWorker {
@@ -96,19 +138,22 @@ impl ConnectionWorkers {
         self.0.push(worker);
     }
 
-    fn reap_finished(&mut self) -> Result<()> {
+    fn reap_finished(&mut self) -> usize {
+        let mut panicked = 0;
         let mut index = 0;
         while index < self.0.len() {
             if self.0[index].task.is_finished() {
                 let worker = self.0.swap_remove(index);
                 if worker.task.join().is_err() {
-                    bail!("binary stage connection worker panicked");
+                    // A panicked worker only fails its own connection; the
+                    // accept loop must keep serving other clients.
+                    panicked += 1;
                 }
             } else {
                 index += 1;
             }
         }
-        Ok(())
+        panicked
     }
 
     fn shutdown(mut self) -> Result<()> {
@@ -152,6 +197,14 @@ pub async fn serve_binary_stage_with_shutdown(
     options: BinaryStageOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    serve_binary_stage_with_shutdown_and_boundary_observer(options, shutdown, |_, _| {}).await
+}
+
+pub(crate) async fn serve_binary_stage_with_shutdown_and_boundary_observer(
+    options: BinaryStageOptions,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>),
+) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_task = tokio::spawn({
         let stop = stop.clone();
@@ -160,19 +213,21 @@ pub async fn serve_binary_stage_with_shutdown(
             stop.store(true, Ordering::SeqCst);
         }
     });
-    let result = run_binary_stage(options, stop);
+    let result = run_binary_stage(options, stop, boundary_observer);
     stop_task.abort();
     result
 }
 
-fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> Result<()> {
+fn run_binary_stage(
+    options: BinaryStageOptions,
+    shutdown: Arc<AtomicBool>,
+    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>),
+) -> Result<()> {
     let mtp_source = options.resolved_mtp_source();
     let BinaryStageOptions {
         config,
         topology,
         bind_addr,
-        activation_width,
-        wire_dtype,
         metrics_otlp_grpc,
         telemetry_queue_capacity,
         telemetry_level,
@@ -182,6 +237,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         downstream_wire_condition,
         downstream_connect_timeout_secs,
         native_mtp_enabled,
+        continuous_batching,
         openai,
     } = options;
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
@@ -203,6 +259,19 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         },
     )?
     .context("binary stage server requires model_path")?;
+    let (input_boundary, output_boundary) = {
+        let runtime = runtime
+            .lock()
+            .map_err(|_| anyhow!("runtime lock poisoned"))?;
+        (
+            runtime.input_activation_boundary(),
+            runtime.output_activation_boundary(),
+        )
+    };
+    let input_activation_width =
+        activation_width_from_graph("input", input_boundary, config.layer_start > 0)?;
+    let output_activation_width =
+        activation_width_from_graph("output", output_boundary, config.downstream.is_some())?;
     if max_inflight > 0 {
         let timer = Instant::now();
         let sessions = runtime
@@ -234,15 +303,20 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         runtime.clone(),
         &config,
         max_inflight.max(1),
+        continuous_batching,
         telemetry.clone(),
     )
     .map_err(|error| anyhow!("create binary iteration scheduler: {error}"))?;
-    let kv = KvStageIntegration::from_config(&config)?.map(Arc::new);
+    let kv =
+        KvStageIntegration::from_loaded_model(&config, loaded_model_state_kind(Some(&runtime)))?
+            .map(Arc::new);
     let prediction_returns = Arc::new(PredictionReturnHub::default());
     let prediction_return_sinks = Arc::new(PredictionReturnSinks::default());
+    let session_ownership = Arc::new(ConnectionSessionOwnership::default());
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
+    boundary_observer(input_boundary, output_boundary);
     if let Some(openai_options) = openai {
         if config.stage_index != 0 || config.layer_start != 0 {
             bail!("--openai-bind-addr is only supported on stage 0");
@@ -263,6 +337,12 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         default_max_tokens: openai_options.default_max_tokens,
                         request_defaults: frontend::EmbeddedOpenAiRequestDefaults::default(),
                         generation_concurrency: openai_options.generation_concurrency,
+                        continuous_batching,
+                        adaptive_generation_min_concurrency: openai_options
+                            .adaptive_generation_min_concurrency,
+                        generation_queue_capacity: openai_options.generation_queue_capacity,
+                        generation_admission_timeout_secs: openai_options
+                            .generation_admission_timeout_secs,
                         prefill_chunk_size: openai_options.prefill_chunk_size,
                         prefill_chunk_policy: openai_options.prefill_chunk_policy,
                         prefill_chunk_schedule: openai_options.prefill_chunk_schedule,
@@ -280,8 +360,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         native_mtp_draft_model_path: openai_options.native_mtp_draft_model_path,
                         native_mtp_max_tokens: openai_options.native_mtp_max_tokens,
                         native_mtp_min_tokens: openai_options.native_mtp_min_tokens,
-                        activation_width,
-                        wire_dtype,
+                        activation_width: output_activation_width,
                         reply_credit_limit,
                         downstream_connect_timeout_secs,
                         downstream_wire_condition,
@@ -309,18 +388,30 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         .transpose()
         .context("spawn downstream preconnector")?;
     println!(
-        "skippy-server listening: binary={} stage_id={} layer_range={}..{} activation_width={} dtype={:?}",
+        "skippy-server listening: binary={} stage_id={} layer_range={}..{} input_activation_width={} output_activation_width={}",
         bind_addr,
         config.stage_id,
         config.layer_start,
         config.layer_end,
-        activation_width,
-        wire_dtype,
+        input_activation_width,
+        output_activation_width,
     );
 
     let accept_result = (|| -> Result<()> {
         while !shutdown.load(Ordering::SeqCst) {
-            connection_workers.reap_finished()?;
+            let panicked_workers = connection_workers.reap_finished();
+            if panicked_workers > 0 {
+                telemetry.emit(
+                    "stage.connection_worker_panic",
+                    BTreeMap::from([
+                        ("llama_stage.failure_contained".to_string(), json!(true)),
+                        (
+                            "llama_stage.panicked_workers".to_string(),
+                            json!(panicked_workers),
+                        ),
+                    ]),
+                );
+            }
             let (mut upstream, _) = match listener.accept() {
                 Ok(conn) => conn,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -344,6 +435,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
             let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
+            let session_ownership = session_ownership.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
             worker_control
                 .track(&upstream)
@@ -363,11 +455,20 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
-                    let first_message = match read_stage_message(&mut upstream, activation_width) {
-                        Ok(message) => message,
-                        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
-                        Err(error) => return Err(error.into()),
-                    };
+                    if !task_control
+                        .wait_for_readable(&upstream)
+                        .context("wait for the first binary stage message")?
+                    {
+                        return Ok(());
+                    }
+                    let first_message =
+                        match read_stage_message(&mut upstream, input_activation_width) {
+                            Ok(message) => message,
+                            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                                return Ok(());
+                            }
+                            Err(error) => return Err(error.into()),
+                        };
                     if first_message.kind == WireMessageKind::PredictionReturnOpen {
                         if config.stage_index == 0 {
                             return prediction_returns
@@ -394,8 +495,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         &telemetry,
                         &mut upstream,
                         downstream,
-                        activation_width,
-                        wire_dtype,
+                        input_activation_width,
+                        output_activation_width,
                         max_inflight,
                         reply_credit_limit,
                         async_prefill_forward,
@@ -403,6 +504,8 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                         downstream_connect_timeout_secs,
                         native_mtp_enabled,
                         &prediction_return_sinks,
+                        session_ownership,
+                        &task_control,
                         first_message,
                     )
                 })()
@@ -429,12 +532,28 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     finish_connection_workers(accept_result, connection_workers)
 }
 
+fn activation_width_from_graph(
+    edge: &str,
+    descriptor: Option<ActivationBoundaryDesc>,
+    required: bool,
+) -> Result<i32> {
+    let Some(descriptor) = descriptor else {
+        if required {
+            bail!("stage graph did not expose its {edge} activation boundary");
+        }
+        return Ok(0);
+    };
+    descriptor.raw_f32_width(edge)
+}
+
 #[cfg(test)]
 mod shutdown_tests {
     use super::{
-        ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, finish_connection_workers,
+        ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, activation_width_from_graph,
+        finish_connection_workers,
     };
     use anyhow::anyhow;
+    use skippy_runtime::ActivationBoundaryDesc;
     use std::{
         io::Read,
         net::{TcpListener, TcpStream},
@@ -444,8 +563,64 @@ mod shutdown_tests {
             mpsc,
         },
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
+
+    fn f32_boundary(elements_per_token: u64) -> ActivationBoundaryDesc {
+        ActivationBoundaryDesc {
+            version: 1,
+            ggml_type: 0,
+            layout: 1,
+            elements_per_token,
+            bytes_per_token: elements_per_token * std::mem::size_of::<f32>() as u64,
+            required_frame_flags: 0,
+            required_sidebands: 0,
+        }
+    }
+
+    #[test]
+    fn graph_boundary_is_the_only_activation_width_authority() {
+        assert_eq!(
+            activation_width_from_graph("output", Some(f32_boundary(1024)), true)
+                .expect("valid graph boundary"),
+            1024
+        );
+    }
+
+    #[test]
+    fn required_graph_boundary_cannot_be_omitted() {
+        let error = activation_width_from_graph("input", None, true)
+            .expect_err("required graph boundary must be present");
+        assert!(error.to_string().contains("did not expose"));
+    }
+
+    #[test]
+    fn absent_unused_graph_boundary_has_no_wire_width() {
+        assert_eq!(
+            activation_width_from_graph("input", None, false)
+                .expect("unused edge may omit a boundary"),
+            0
+        );
+    }
+
+    #[test]
+    fn unsupported_graph_boundary_fails_closed() {
+        let mut boundary = f32_boundary(1024);
+        boundary.ggml_type = 1;
+        let error = activation_width_from_graph("output", Some(boundary), true)
+            .expect_err("non-F32 graph boundary must not use the F32 codec");
+        assert!(error.to_string().contains("requires graph-observed F32"));
+
+        let mut boundary = f32_boundary(1024);
+        boundary.bytes_per_token -= 1;
+        let error = activation_width_from_graph("output", Some(boundary), true)
+            .expect_err("inconsistent graph boundary must fail");
+        assert!(error.to_string().contains("reports 4095 bytes"));
+
+        let error = activation_width_from_graph("output", Some(f32_boundary(0)), true)
+            .expect_err("empty graph boundary must fail");
+        assert!(error.to_string().contains("zero elements"));
+    }
 
     #[test]
     fn shutdown_closes_and_joins_an_active_connection_worker() {
@@ -456,8 +631,10 @@ mod shutdown_tests {
         control.track(&server).unwrap();
         let task_control = control.clone();
         let task = thread::spawn(move || {
-            let mut byte = [0u8; 1];
-            let _ = server.read(&mut byte);
+            if let Ok(true) = task_control.wait_for_readable(&server) {
+                let mut byte = [0u8; 1];
+                let _ = server.read(&mut byte);
+            }
             task_control.clear();
         });
         let mut workers = ConnectionWorkers::default();
@@ -485,8 +662,10 @@ mod shutdown_tests {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let task = thread::spawn(move || {
-            let mut byte = [0u8; 1];
-            let _ = server.read(&mut byte);
+            if let Ok(true) = task_control.wait_for_readable(&server) {
+                let mut byte = [0u8; 1];
+                let _ = server.read(&mut byte);
+            }
             task_control.clear();
             task_finished.store(true, Ordering::Release);
         });
@@ -506,5 +685,48 @@ mod shutdown_tests {
         let error = result.expect_err("accept failure must be returned after worker cleanup");
         assert!(format!("{error:#}").contains("accept failed"));
         drop(client);
+    }
+
+    #[test]
+    fn reap_finished_contains_a_panicked_worker_and_keeps_reaping() {
+        let control = Arc::new(ConnectionWorkerControl::default());
+        let task = thread::spawn(|| panic!("connection worker exploded"));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !task.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "panicking worker thread must finish within one second"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        assert_eq!(
+            workers.reap_finished(),
+            1,
+            "the panicked worker must be counted, not turned into an error"
+        );
+        assert!(
+            workers.0.is_empty(),
+            "the panicked worker must still be reaped"
+        );
+        assert_eq!(workers.reap_finished(), 0);
+    }
+
+    #[test]
+    fn reap_finished_leaves_running_workers_alone() {
+        let (stop_tx, stop_rx) = mpsc::sync_channel::<()>(1);
+        let control = Arc::new(ConnectionWorkerControl::default());
+        let task = thread::spawn(move || {
+            let _ = stop_rx.recv();
+        });
+        let mut workers = ConnectionWorkers::default();
+        workers.push(ConnectionWorker { control, task });
+
+        assert_eq!(workers.reap_finished(), 0);
+        assert_eq!(workers.0.len(), 1, "a running worker must not be reaped");
+        stop_tx.send(()).unwrap();
+        workers.shutdown().unwrap();
     }
 }

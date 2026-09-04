@@ -12,10 +12,7 @@ use crate::{
     cli::{Cli, CommandKind},
     glm_dsa_trace::glm_dsa_stage0_trace,
     native_mtp_openai::native_mtp_openai_ab,
-    runner::{
-        chain, dtype_matrix, single_step, split_prefix_hit, split_scan, stage_fa_parity,
-        state_handoff,
-    },
+    runner::{chain, single_step, split_prefix_hit, split_scan, stage_fa_parity, state_handoff},
 };
 
 fn prepare_model_download_directories() {
@@ -42,7 +39,6 @@ fn main() -> Result<()> {
         CommandKind::SingleStep(args) => single_step(args),
         CommandKind::Chain(args) => chain(args),
         CommandKind::SplitScan(args) => split_scan(args),
-        CommandKind::DtypeMatrix(args) => dtype_matrix(args),
         CommandKind::StateHandoff(args) => state_handoff(args),
         CommandKind::SplitPrefixHit(args) => split_prefix_hit(args),
         CommandKind::NativeMtpOpenAiAb(args) => native_mtp_openai_ab(*args),

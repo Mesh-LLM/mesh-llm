@@ -76,7 +76,6 @@ impl StageOpenAiBackend {
                     .map_err(openai_backend_error)
             })?;
         let message = retire_verify_window_message(
-            request.wire_dtype,
             retirement.request_id,
             retirement.session_id,
             retirement.token_start,
@@ -86,7 +85,6 @@ impl StageOpenAiBackend {
             forwarder
                 .send_tracked(
                     message,
-                    request.wire_dtype,
                     request.downstream_wire_condition,
                     self.openai_attrs(request.ids),
                 )
@@ -97,7 +95,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 downstream,
                 &message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -221,7 +218,6 @@ impl StageOpenAiBackend {
             request.config,
             message,
             &output.output,
-            request.wire_dtype,
             request.activation_width,
         )
         .map_err(openai_backend_error)?;
@@ -232,7 +228,6 @@ impl StageOpenAiBackend {
                 forwarder
                     .send_tracked(
                         forwarded.message,
-                        request.wire_dtype,
                         request.downstream_wire_condition,
                         self.openai_attrs(request.ids),
                     )
@@ -242,7 +237,6 @@ impl StageOpenAiBackend {
             write_stage_message_conditioned(
                 &mut *downstream,
                 &forwarded.message,
-                request.wire_dtype,
                 request.downstream_wire_condition,
             )
             .map_err(openai_io_error)?;
@@ -402,32 +396,76 @@ fn poll_direct_or_downstream_reply(
     prediction_return: &PredictionReturnReceiver,
     expected_replies: &[WireReplyKind],
 ) -> OpenAiResult<StageReply> {
-    let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream)?;
+    poll_direct_or_downstream_reply_with_timeouts(
+        downstream,
+        prediction_return,
+        expected_replies,
+        DIRECT_RETURN_FALLBACK_POLL,
+        DIRECT_RETURN_PEEK_TIMEOUT,
+        stage_reply_timeout(),
+    )
+}
+
+// The fallback poll and availability-peek intervals are injectable so tests can
+// widen them: a wide fallback poll proves the wake is event-driven rather than
+// quantized to the poll (without depending on sub-poll scheduler latency), and a
+// wide peek interval proves the peek is bounded by the remaining reply deadline
+// rather than overrunning it by a fixed interval.
+fn poll_direct_or_downstream_reply_with_timeouts(
+    downstream: &mut TcpStream,
+    prediction_return: &PredictionReturnReceiver,
+    expected_replies: &[WireReplyKind],
+    fallback_poll: Duration,
+    peek_timeout: Duration,
+    reply_timeout: Duration,
+) -> OpenAiResult<StageReply> {
+    let mut timeout_restore = DirectReturnFallbackTimeout::install(downstream, peek_timeout)?;
     let started = Instant::now();
-    let reply_timeout = stage_reply_timeout();
+    let timeout_error = || {
+        OpenAiError::backend(format!(
+            "timed out waiting for one of {expected_replies:?} from direct return or downstream"
+        ))
+    };
+    // The direct-return sink is the standard reply path, so block on its
+    // channel and wake the moment the reply lands instead of sampling it
+    // between bounded peeks: sampling quantized every reply wait to the poll
+    // interval and cost a uniform 0..poll of added latency per token. The
+    // tunnelled downstream fallback is checked without blocking each slice,
+    // so a fallback reply is still detected within one poll interval.
     let result = loop {
+        let remaining = reply_timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break Err(timeout_error());
+        }
         if let Some(reply) = prediction_return
-            .try_recv_one_of(expected_replies)
+            .recv_one_of_timeout(expected_replies, remaining.min(fallback_poll))
             .map_err(openai_backend_error)?
         {
             break Ok(reply);
         }
+        // The channel wait above may have consumed the deadline; recompute the
+        // budget and bound the availability peek by it so the whole wait honours
+        // `reply_timeout` rather than overrunning by a fixed peek interval.
+        let remaining = reply_timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break Err(timeout_error());
+        }
+        downstream
+            .set_read_timeout(Some(remaining.min(peek_timeout)))
+            .map_err(openai_io_error)?;
         if downstream_reply_available(downstream)? {
             // `peek` only proves that the first byte has arrived. Tunnelled
-            // replies may be fragmented, so retaining the short poll timeout
-            // while decoding the complete frame turns an ordinary partial
-            // arrival into EWOULDBLOCK. Once downstream wins the race, give
-            // the frame the remainder of the bounded fallback deadline.
+            // replies may be fragmented, so decode the complete frame under
+            // the remainder of the bounded fallback deadline rather than the
+            // short read timeout used for the availability check.
             let remaining = reply_timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break Err(timeout_error());
+            }
             downstream
-                .set_read_timeout(Some(remaining.max(DIRECT_RETURN_FALLBACK_POLL)))
+                .set_read_timeout(Some(remaining))
                 .map_err(openai_io_error)?;
             break receive_downstream_stage_reply_one_of(downstream, expected_replies);
-        }
-        if started.elapsed() >= reply_timeout {
-            break Err(OpenAiError::backend(format!(
-                "timed out waiting for one of {expected_replies:?} from direct return or downstream"
-            )));
         }
     };
     timeout_restore.restore()?;
@@ -451,6 +489,15 @@ fn downstream_reply_available(downstream: &TcpStream) -> OpenAiResult<bool> {
     }
 }
 
+/// Availability peeks run under a short read timeout rather than nonblocking
+/// mode. `O_NONBLOCK` lives on the shared open-file description, so setting it
+/// on this socket would also make writes on any `try_clone()` handle — such as
+/// an `AsyncForwarder` worker forwarding activations to the next stage — fail
+/// with `WouldBlock` once the send buffer fills. A read timeout (`SO_RCVTIMEO`)
+/// affects receives only, so a concurrent cloned writer keeps blocking
+/// semantics.
+const DIRECT_RETURN_PEEK_TIMEOUT: Duration = Duration::from_millis(1);
+
 struct DirectReturnFallbackTimeout {
     downstream: TcpStream,
     previous_timeout: Option<Duration>,
@@ -458,11 +505,14 @@ struct DirectReturnFallbackTimeout {
 }
 
 impl DirectReturnFallbackTimeout {
-    fn install(downstream: &TcpStream) -> OpenAiResult<Self> {
+    /// Give the downstream socket a short read timeout so availability peeks
+    /// return promptly while the reply wait blocks on the direct-return channel,
+    /// without toggling nonblocking mode on the shared file description.
+    fn install(downstream: &TcpStream, peek_timeout: Duration) -> OpenAiResult<Self> {
         let previous_timeout = downstream.read_timeout().map_err(openai_io_error)?;
         let restore_stream = downstream.try_clone().map_err(openai_io_error)?;
         downstream
-            .set_read_timeout(Some(DIRECT_RETURN_FALLBACK_POLL))
+            .set_read_timeout(Some(peek_timeout))
             .map_err(openai_io_error)?;
         Ok(Self {
             downstream: restore_stream,
@@ -506,7 +556,7 @@ fn receive_downstream_stage_reply_one_of(
 mod tests {
     use super::*;
     use crate::binary_transport::PredictionReturnHub;
-    use skippy_protocol::binary::{StageStateHeader, WireActivationDType};
+    use skippy_protocol::binary::StageStateHeader;
     use std::net::TcpListener;
     use std::sync::Arc;
 
@@ -545,10 +595,7 @@ mod tests {
                         kind: WireMessageKind::PredictionReturnOpen,
                         pos_start: 0,
                         token_count: 0,
-                        state: StageStateHeader::new(
-                            WireMessageKind::PredictionReturnOpen,
-                            WireActivationDType::F32,
-                        ),
+                        state: StageStateHeader::new(WireMessageKind::PredictionReturnOpen),
                         request_id,
                         session_id,
                         sampling: None,
@@ -595,20 +642,198 @@ mod tests {
     }
 
     #[test]
+    fn fallback_guard_keeps_a_cloned_writer_blocking() {
+        use std::io::{Read, Write};
+        // AsyncForwarder clones the downstream socket and writes frames from a
+        // separate worker thread. The fallback-wait guard must not toggle
+        // O_NONBLOCK on the shared open-file description, or those writes would
+        // fail with WouldBlock once the send buffer fills instead of blocking.
+        // A read timeout (SO_RCVTIMEO) affects receives only, so the writer is
+        // unaffected. Regression for michaelneale's review on #1575.
+        const PAYLOAD: usize = 8 * 1024 * 1024;
+        let (downstream, peer) = connected_stream_pair();
+        let writer = downstream.try_clone().unwrap();
+
+        // Peer starts reading only after a delay, forcing the send buffer to
+        // fill so a correct blocking write_all must wait rather than error.
+        let reader = std::thread::spawn(move || {
+            let mut peer = peer;
+            std::thread::sleep(Duration::from_millis(100));
+            let mut sink = vec![0u8; 1 << 16];
+            let mut total = 0usize;
+            while total < PAYLOAD {
+                match peer.read(&mut sink) {
+                    Ok(0) => break,
+                    Ok(n) => total += n,
+                    Err(error) => panic!("peer read failed: {error}"),
+                }
+            }
+            total
+        });
+
+        let guard =
+            DirectReturnFallbackTimeout::install(&downstream, DIRECT_RETURN_PEEK_TIMEOUT).unwrap();
+        let mut writer = writer;
+        // Must block until the peer drains, not fail with WouldBlock (os err 35).
+        writer
+            .write_all(&vec![0u8; PAYLOAD])
+            .expect("cloned writer must keep blocking semantics under the guard");
+        drop(guard);
+        drop(writer);
+        drop(downstream);
+        assert_eq!(reader.join().unwrap(), PAYLOAD);
+    }
+
+    #[test]
     fn direct_return_fallback_timeout_restores_on_drop_after_early_exit() {
         let (stream, _peer) = connected_stream_pair();
-        let original = Some(Duration::from_millis(123));
-        stream.set_read_timeout(original).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(123)))
+            .unwrap();
+        let effective_original = stream.read_timeout().unwrap();
 
         {
-            let _restore = DirectReturnFallbackTimeout::install(&stream).unwrap();
-            assert_eq!(
-                stream.read_timeout().unwrap(),
-                Some(DIRECT_RETURN_FALLBACK_POLL)
-            );
+            let _restore =
+                DirectReturnFallbackTimeout::install(&stream, DIRECT_RETURN_PEEK_TIMEOUT).unwrap();
+            // The short read timeout makes an availability peek on a silent
+            // socket return promptly instead of blocking out the original read
+            // timeout. A timed-out peek surfaces as WouldBlock on Unix and
+            // TimedOut on Windows.
+            let started = Instant::now();
+            let mut byte = [0u8; 1];
+            let peek = stream.peek(&mut byte);
+            assert!(matches!(
+                peek,
+                Err(ref error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    )
+            ));
+            assert!(started.elapsed() < Duration::from_millis(50));
         }
 
-        assert_eq!(stream.read_timeout().unwrap(), original);
+        // Drop restores blocking mode and the original read timeout.
+        assert_eq!(stream.read_timeout().unwrap(), effective_original);
+        let started = Instant::now();
+        let mut byte = [0u8; 1];
+        let peek = stream.peek(&mut byte);
+        assert!(matches!(
+            peek,
+            Err(ref error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn direct_return_reply_wakes_the_wait_immediately() {
+        // Far wider than the production 10ms fallback poll so an event-driven
+        // wake and a polling wake sit orders of magnitude apart.
+        const WIDE_FALLBACK_POLL: Duration = Duration::from_millis(1000);
+        let request_id = 71;
+        let session_id = 73;
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(request_id, session_id).unwrap();
+        let (mut downstream, _peer) = connected_stream_pair();
+
+        // Feed replies through the real return-stream reader: the sink writer
+        // half sends framed replies, the attached reader delivers them to the
+        // hub channel the wait blocks on.
+        let (sink_writer, sink_reader) = connected_stream_pair();
+        receiver.attach_opened_stream(sink_reader);
+        let sink_writer = Arc::new(std::sync::Mutex::new(sink_writer));
+
+        let mut max_wake_ms = 0.0_f64;
+        for _ in 0..5 {
+            let writer = sink_writer.clone();
+            let sent_at = Arc::new(std::sync::Mutex::new(None::<Instant>));
+            let sent_at_writer = sent_at.clone();
+            let sender = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut stream = writer.lock().unwrap();
+                *sent_at_writer.lock().unwrap() = Some(Instant::now());
+                skippy_protocol::binary::send_reply_message(
+                    &mut *stream,
+                    &StageReply {
+                        kind: WireReplyKind::PredictedToken,
+                        predicted: 5,
+                        predicted_tokens: vec![5],
+                        native_mtp_draft: None,
+                        window: Default::default(),
+                        stats: StageReplyStats::default(),
+                    },
+                )
+                .unwrap();
+            });
+
+            // Inject a deliberately wide fallback poll so the two behaviours are
+            // far apart: a polling wait would take up to WIDE_FALLBACK_POLL to
+            // notice the reply, while an event-driven wait wakes on channel
+            // delivery. Asserting the wake lands well inside that interval proves
+            // it is event-driven without pinning an absolute sub-poll latency
+            // that a loaded CI runner cannot honour.
+            let reply = poll_direct_or_downstream_reply_with_timeouts(
+                &mut downstream,
+                &receiver,
+                &[WireReplyKind::PredictedToken],
+                WIDE_FALLBACK_POLL,
+                DIRECT_RETURN_PEEK_TIMEOUT,
+                stage_reply_timeout(),
+            )
+            .unwrap();
+            let received_at = Instant::now();
+            sender.join().unwrap();
+            assert_eq!(reply.predicted, 5);
+            let wake_ms = received_at
+                .duration_since(sent_at.lock().unwrap().unwrap())
+                .as_secs_f64()
+                * 1000.0;
+            max_wake_ms = max_wake_ms.max(wake_ms);
+        }
+        // Event-driven wake fires on channel delivery; a polling wait would
+        // quantize to WIDE_FALLBACK_POLL (1000ms). The 100ms bound sits an order
+        // of magnitude below the poll yet far above channel-delivery + scheduler
+        // latency on a loaded runner, so it fails a polling regression without
+        // flaking on a correct implementation.
+        assert!(
+            max_wake_ms < 100.0,
+            "direct return wake took {max_wake_ms:.2}ms with a {}ms fallback poll; reply wait is polling, not event-driven",
+            WIDE_FALLBACK_POLL.as_millis()
+        );
+    }
+
+    #[test]
+    fn direct_return_fallback_wait_stays_within_reply_deadline() {
+        const REPLY_TIMEOUT: Duration = Duration::from_millis(50);
+        // A short fallback poll guarantees the loop reaches an availability peek
+        // with time still on the clock, and a peek interval far larger than the
+        // deadline means an unbounded peek would overrun by ~2s. Bounding the
+        // peek by the remaining budget keeps the whole wait near REPLY_TIMEOUT.
+        const SHORT_FALLBACK_POLL: Duration = Duration::from_millis(10);
+        const WIDE_PEEK_POLL: Duration = Duration::from_secs(2);
+        let hub = Arc::new(PredictionReturnHub::default());
+        let receiver = hub.register(81, 83).unwrap();
+        let (mut downstream, _peer) = connected_stream_pair();
+
+        let started = Instant::now();
+        let error = poll_direct_or_downstream_reply_with_timeouts(
+            &mut downstream,
+            &receiver,
+            &[WireReplyKind::PredictedToken],
+            SHORT_FALLBACK_POLL,
+            WIDE_PEEK_POLL,
+            REPLY_TIMEOUT,
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(error.to_string().contains("timed out waiting for one of"));
+        assert!(elapsed >= REPLY_TIMEOUT);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "reply wait took {elapsed:?} with a {REPLY_TIMEOUT:?} deadline and {WIDE_PEEK_POLL:?} peek interval; the availability peek is not bounded by the remaining budget"
+        );
+        assert_eq!(downstream.read_timeout().unwrap(), None);
     }
 
     #[test]

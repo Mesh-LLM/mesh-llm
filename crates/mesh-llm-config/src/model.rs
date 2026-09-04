@@ -1,4 +1,6 @@
 mod built_in_schema;
+mod multimodal;
+mod profile;
 mod runtime;
 mod schema_types;
 
@@ -7,6 +9,8 @@ pub use built_in_schema::{
     canonicalize_built_in_config_identifier, canonicalize_built_in_config_path,
     resolve_built_in_config_identifier, resolve_built_in_config_path,
 };
+pub use multimodal::MultimodalConfig;
+pub(crate) use multimodal::merge_multimodal;
 pub use runtime::{
     ActivityAdvertisement, ActivityResponse, DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
@@ -177,6 +181,8 @@ pub struct ModelConfigDefaults {
     #[serde(default)]
     pub throughput: Option<ThroughputConfig>,
     #[serde(default)]
+    pub topology: Option<ModelTopologyConfig>,
+    #[serde(default)]
     pub skippy: Option<SkippyConfig>,
     #[serde(default)]
     pub speculative: Option<SpeculativeConfig>,
@@ -203,6 +209,7 @@ pub struct ModelConfigEntry {
     pub model_fit: Option<ModelFitConfig>,
     pub hardware: Option<HardwareConfig>,
     pub throughput: Option<ThroughputConfig>,
+    pub topology: Option<ModelTopologyConfig>,
     pub skippy: Option<SkippyConfig>,
     pub speculative: Option<SpeculativeConfig>,
     pub request_defaults: Option<RequestDefaultsConfig>,
@@ -216,7 +223,7 @@ impl Serialize for ModelConfigEntry {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("ModelConfigEntry", 18)?;
+        let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
@@ -256,6 +263,9 @@ impl Serialize for ModelConfigEntry {
         if let Some(value) = &self.throughput {
             state.serialize_field("throughput", value)?;
         }
+        if let Some(value) = &self.topology {
+            state.serialize_field("topology", value)?;
+        }
         if let Some(value) = &self.skippy {
             state.serialize_field("skippy", value)?;
         }
@@ -272,118 +282,6 @@ impl Serialize for ModelConfigEntry {
             state.serialize_field("advanced", value)?;
         }
         state.end()
-    }
-}
-
-impl ModelConfigEntry {
-    /// Compute a derived profile hash from the runtime-shaping fields of this entry.
-    ///
-    /// The profile is derived from the fields that materially affect runtime
-    /// behavior: ModelFitConfig (ctx_size, batch, ubatch, cache_type_k,
-    /// cache_type_v, flash_attention), HardwareConfig (model_runtime, device,
-    /// gpu_layers, tensor_split, split_mode, main_gpu, cpu_moe, n_cpu_moe,
-    /// fit_target_mib, mmap, mlock), and ThroughputConfig (parallel,
-    /// continuous_batching, threads, threads_batch).
-    ///
-    /// Returns an 8-hex-character string (e.g. "a3f2b9c1"), or empty string
-    /// if all profile-input fields are at their defaults.
-    /// Derive a stable profile string from the runtime-shaping config fields.
-    ///
-    /// Returns an 8-hex-char hash when any profile-input field is set,
-    /// or an empty string (profile = default) when all inputs are at defaults.
-    pub fn derived_profile(&self) -> String {
-        let mut buf = Vec::new();
-        Self::write_effective_fit_profile(&mut buf, self);
-        Self::write_effective_hw_profile(&mut buf, self);
-        Self::write_effective_tp_profile(&mut buf, self);
-
-        if buf.is_empty() {
-            return String::new();
-        }
-
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        buf.hash(&mut hasher);
-        let hash = hasher.finish();
-        format!("{:08x}", hash & 0xFFFFFFFF)
-    }
-
-    fn write_effective_fit_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        // Effective fit fields: sub-config (set by ConfigEditor) preferred,
-        // top-level (set by direct Rust construction) as fallback.
-        let fit = entry.model_fit.as_ref();
-        wo!("ctx_size", fit.and_then(|f| f.ctx_size).or(entry.ctx_size));
-        wo!("batch", fit.and_then(|f| f.batch).or(entry.batch));
-        wo!("ubatch", fit.and_then(|f| f.ubatch).or(entry.ubatch));
-        wo!(
-            "cache_type_k",
-            fit.and_then(|f| f.cache_type_k.as_ref())
-                .or(entry.cache_type_k.as_ref())
-        );
-        wo!(
-            "cache_type_v",
-            fit.and_then(|f| f.cache_type_v.as_ref())
-                .or(entry.cache_type_v.as_ref())
-        );
-        wo!(
-            "flash_attention",
-            fit.and_then(|f| f.flash_attention)
-                .or(entry.flash_attention)
-        );
-    }
-
-    fn write_effective_hw_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        let hw = entry.hardware.as_ref();
-        wo!(
-            "gpu_id",
-            hw.and_then(|h| h.device.as_ref()).or(entry.gpu_id.as_ref())
-        );
-        if let Some(hw) = hw {
-            wo!("model_runtime", hw.model_runtime);
-            wo!("gpu_layers", hw.gpu_layers);
-            wo!("tensor_split", hw.tensor_split);
-            wo!("split_mode", hw.split_mode);
-            wo!("main_gpu", hw.main_gpu);
-            wo!("cpu_moe", hw.cpu_moe);
-            wo!("n_cpu_moe", hw.n_cpu_moe);
-            wo!("fit_target_mib", hw.fit_target_mib);
-            wo!("mmap", hw.mmap);
-            wo!("mlock", hw.mlock);
-        }
-    }
-
-    fn write_effective_tp_profile(buf: &mut Vec<u8>, entry: &ModelConfigEntry) {
-        use std::io::Write;
-        macro_rules! wo {
-            ($key:literal, $val:expr) => {
-                if let Some(ref v) = $val {
-                    let _ = write!(buf, concat!($key, "={:?}\0"), v);
-                }
-            };
-        }
-        let tp = entry.throughput.as_ref();
-        wo!("parallel", tp.and_then(|t| t.parallel).or(entry.parallel));
-        if let Some(tp) = tp {
-            wo!("continuous_batching", tp.continuous_batching);
-            wo!("threads", tp.threads);
-            wo!("threads_batch", tp.threads_batch);
-        }
     }
 }
 
@@ -500,8 +398,18 @@ pub struct HardwareConfig {
     pub control_vectors: Vec<String>,
     #[serde(default)]
     pub check_tensors: Option<bool>,
+    /// Tensor type policy applied while opening a SafeTensors checkpoint.
+    #[serde(default)]
+    pub checkpoint_quantization: Option<String>,
+    /// Importance matrix used by low-bit SafeTensors checkpoint quantization.
+    #[serde(default)]
+    pub checkpoint_imatrix: Option<String>,
     #[serde(default)]
     pub mmap: Option<BoolOrAuto>,
+    #[serde(default)]
+    pub use_mmap_prefetch: Option<bool>,
+    #[serde(default)]
+    pub use_mmap_buffer: Option<bool>,
     #[serde(default)]
     pub mlock: Option<bool>,
     #[serde(default)]
@@ -545,17 +453,68 @@ pub struct ThroughputConfig {
     pub tuning_profile: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTopologyMode {
+    Locked,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ModelTopologyMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<Vec<ModelTopologyStageConfig>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyStageConfig {
+    pub node: ModelTopologyNodeSelector,
+    pub layer_start: u32,
+    pub layer_end: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTopologyNodeSelector {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+}
+
+pub fn merge_model_topology(
+    defaults: Option<&ModelTopologyConfig>,
+    model: Option<&ModelTopologyConfig>,
+) -> Option<ModelTopologyConfig> {
+    let mut merged = defaults.cloned().unwrap_or_default();
+    if let Some(model) = model {
+        merged.mode = model.mode.or(merged.mode);
+        merged.manifest_sha256 = model.manifest_sha256.clone().or(merged.manifest_sha256);
+        merged.stages = model.stages.clone().or(merged.stages);
+    }
+    if merged.mode.is_none() && merged.manifest_sha256.is_none() && merged.stages.is_none() {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SkippyConfig {
     #[serde(default)]
     pub stage_model_path: Option<String>,
     #[serde(default)]
+    pub source_policy: Option<String>,
+    #[serde(default)]
     pub stage_role: Option<String>,
     #[serde(default)]
     pub stage_topology: Option<String>,
-    #[serde(default)]
-    pub activation_wire_dtype: Option<String>,
     #[serde(default)]
     pub binary_stage_transport: Option<String>,
     #[serde(default)]
@@ -870,9 +829,9 @@ pub struct RequestDefaultsConfig {
     #[serde(default)]
     pub frequency_penalty: Option<f64>,
     #[serde(default)]
-    pub dry: Option<ReservedObjectConfig>,
+    pub dry: Option<DrySamplingConfig>,
     #[serde(default)]
-    pub xtc: Option<ReservedObjectConfig>,
+    pub xtc: Option<XtcSamplingConfig>,
     #[serde(default)]
     pub adaptive: Option<ReservedObjectConfig>,
     #[serde(default)]
@@ -923,25 +882,26 @@ pub struct RequestDefaultsConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct MultimodalConfig {
+pub struct DrySamplingConfig {
     #[serde(default)]
-    pub mmproj: Option<String>,
+    pub multiplier: Option<f64>,
     #[serde(default)]
-    pub mmproj_url: Option<String>,
+    pub base: Option<f64>,
     #[serde(default)]
-    pub mmproj_offload: Option<BoolOrAuto>,
+    pub allowed_length: Option<i32>,
     #[serde(default)]
-    pub image_min_tokens: Option<u32>,
+    pub penalty_last_n: Option<i32>,
     #[serde(default)]
-    pub image_max_tokens: Option<u32>,
+    pub sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct XtcSamplingConfig {
     #[serde(default)]
-    pub embeddings: Option<toml::Value>,
+    pub probability: Option<f64>,
     #[serde(default)]
-    pub reranking: Option<toml::Value>,
-    #[serde(default)]
-    pub pooling: Option<toml::Value>,
-    #[serde(default)]
-    pub vocoder: Option<toml::Value>,
+    pub threshold: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1062,6 +1022,8 @@ struct RawModelConfigDefaults {
     #[serde(default)]
     throughput: Option<ThroughputConfig>,
     #[serde(default)]
+    topology: Option<ModelTopologyConfig>,
+    #[serde(default)]
     skippy: Option<SkippyConfig>,
     #[serde(default)]
     speculative: Option<SpeculativeConfig>,
@@ -1118,6 +1080,8 @@ struct RawModelConfigEntry {
     hardware: Option<HardwareConfig>,
     #[serde(default)]
     throughput: Option<ThroughputConfig>,
+    #[serde(default)]
+    topology: Option<ModelTopologyConfig>,
     #[serde(default)]
     skippy: Option<SkippyConfig>,
     #[serde(default)]
@@ -1190,6 +1154,7 @@ impl ModelConfigDefaults {
             model_fit,
             hardware,
             throughput,
+            topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
             request_defaults: raw.request_defaults,
@@ -1250,6 +1215,7 @@ impl ModelConfigEntry {
             model_fit,
             hardware,
             throughput,
+            topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
             request_defaults: raw.request_defaults,
@@ -1313,19 +1279,6 @@ pub(crate) fn merge_throughput(
     }
 }
 
-pub(crate) fn merge_multimodal(
-    current: Option<MultimodalConfig>,
-    mmproj: Option<String>,
-) -> Option<MultimodalConfig> {
-    let mut config = current.unwrap_or_default();
-    config.mmproj = config.mmproj.or(mmproj);
-    if is_multimodal_empty(&config) {
-        None
-    } else {
-        Some(config)
-    }
-}
-
 fn is_model_fit_empty(config: &ModelFitConfig) -> bool {
     config == &ModelFitConfig::default()
 }
@@ -1336,10 +1289,6 @@ fn is_hardware_empty(config: &HardwareConfig) -> bool {
 
 fn is_throughput_empty(config: &ThroughputConfig) -> bool {
     config == &ThroughputConfig::default()
-}
-
-fn is_multimodal_empty(config: &MultimodalConfig) -> bool {
-    config == &MultimodalConfig::default()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1455,8 +1404,8 @@ pub struct LoggingConfig {
     #[serde(default)]
     pub webhook: LoggingWebhookConfig,
 
-    /// Security audit stream configuration. Nested under [logging] so the
-    /// logging master switch (logging.enabled) gates the audit stream too.
+    /// Security audit stream configuration. Nested under `[logging]` so the
+    /// logging master switch (`logging.enabled`) gates the audit stream too.
     #[serde(default)]
     pub audit: AuditConfig,
 }

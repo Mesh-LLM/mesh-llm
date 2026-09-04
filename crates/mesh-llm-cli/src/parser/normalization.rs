@@ -49,6 +49,9 @@ where
         "--model",
         "--gguf",
         "--mmproj",
+        "--checkpoint-quantization",
+        "--quant",
+        "--checkpoint-imatrix",
         "--join",
         "--discover",
         "--mesh-name",
@@ -150,7 +153,12 @@ pub fn legacy_runtime_surface_warning(
         ));
     }
 
-    if !cli.model.is_empty() || !cli.gguf.is_empty() || cli.mmproj.is_some() {
+    if !cli.model.is_empty()
+        || !cli.gguf.is_empty()
+        || cli.mmproj.is_some()
+        || cli.checkpoint_quantization.is_some()
+        || cli.checkpoint_imatrix.is_some()
+    {
         return Some(format!(
             "⚠️ top-level serving flags now map to `mesh-llm serve`.\n  Please use: {}",
             suggested_serve_command(original_args)
@@ -235,6 +243,33 @@ mod tests {
                 .into_iter()
                 .map(OsString::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_skips_quant_value_before_serve() {
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--quant",
+            "Q4_K_M",
+            "serve",
+            "--model",
+            "Qwen/Qwen2.5-Coder-7B-Instruct",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                "mesh-llm",
+                "--quant",
+                "Q4_K_M",
+                "--model",
+                "Qwen/Qwen2.5-Coder-7B-Instruct",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
         );
     }
 

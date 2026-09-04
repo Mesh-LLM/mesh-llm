@@ -1,5 +1,11 @@
 # Prefix Affinity Benchmarks
 
+> Historical benchmark: this measured the removed learned
+> `(model, scaffold_hash) -> target` map. Current cache-aware routing accepts
+> only short-lived, worker-advertised positive L1 receipts. Keep these results
+> as a baseline; do not use this script's `prefix-only` phase as validation of
+> the current distributed cache-evidence path.
+
 This benchmark compares two routing modes for agentic traffic:
 
 - `sticky-only`: disable prefix affinity and route by the existing sticky key

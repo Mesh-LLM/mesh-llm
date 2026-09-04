@@ -96,7 +96,10 @@ mesh-llm serve --model Qwen3-8B-Q4_K_M
 ```
 
 This starts a private mesh, loads the requested model, opens the local API and
-console, and prints an invite token. Only nodes with the token can join.
+console, and prints an invite token. Only nodes with the token can join. Traffic
+between Mesh nodes—including prompts, responses, and split-model activations—is
+end-to-end encrypted by QUIC. If iroh falls back to a relay, the relay forwards
+encrypted packets and cannot read the inference payload.
 
 Join from another GPU node:
 
@@ -133,6 +136,23 @@ direct-address set to the selected IP. Default Nostr mode can still keep
 relay/public candidates; `--mesh-discovery-mode mdns` keeps startup LAN-only.
 Use `--listen-all` only for the local HTTP API/console listener; it does not
 select the mesh QUIC interface.
+
+### macOS Local Network privacy preflight
+
+Before interpreting a same-LAN join failure on macOS, complete the Local Network
+privacy gate in the repository's `deploy-macos` skill on **every** participating
+Mac. Run the exact signed app/binary identity from the same app, service, or
+interactive context that the test will use, and clear any Local Network alert on
+the logged-in desktop. A raw UDP test or an invite that contains the expected
+LAN candidate is not sufficient: the deployed process can still be blocked.
+
+For a split run, collect a path observation from both nodes before collecting
+performance data. The expected steady state is `path_type=direct`, an
+`observed_direct_remote_addr` on the intended LAN, and
+`observed_via_relay=false`. If the path stays relayed or unknown, classify the
+run as a networking preflight failure until Local Network authorization and the
+responsible code identity have been checked; do not attribute it to Iroh path
+selection first.
 
 ## Publish your own mesh
 

@@ -166,7 +166,7 @@ mod tests {
         StageConfig {
             run_id: "run".to_string(),
             topology_id: "topology".to_string(),
-            model_id: "org/model:Q4_K_M".to_string(),
+            model_id: "hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string(),
             package_ref: None,
             manifest_sha256: None,
             source_model_path: None,
@@ -187,9 +187,20 @@ mod tests {
             n_gpu_layers: 0,
             mmap: None,
             mlock: false,
+            repack: false,
+            op_offload: None,
+            no_host_buffer: false,
+            check_tensors: false,
+            direct_io: false,
+            main_gpu: None,
+            split_mode: skippy_protocol::SplitMode::Auto,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
+            kv_offload: None,
+            kv_unified: None,
+            swa_full: None,
+            cache_idle_slots: None,
             filter_tensors_on_load: false,
             selected_device: None,
             kv_cache: Some(StageKvCacheConfig {
@@ -206,6 +217,7 @@ mod tests {
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: None,
             downstream: None,
+            ..StageConfig::default()
         }
     }
 
@@ -218,7 +230,7 @@ mod tests {
             stage_id: "stage-0".to_string(),
             stage_index: 0,
             topology_id: "topology".to_string(),
-            model_id: Some("org/model:Q4_K_M".to_string()),
+            model_id: Some("hugging-quants/Llama-3.2-1B-Instruct-GGUF:Q4_K_M".to_string()),
             tokenizer_id: None,
             chat_template_id: Some("template".to_string()),
             seq: Some(1),
@@ -228,7 +240,7 @@ mod tests {
     #[test]
     fn kv_identities_use_one_full_radix_path() {
         let config = test_config();
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("cache enabled");
         let tokens = (0..160).collect::<Vec<_>>();
@@ -259,7 +271,7 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
+        let kv = KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Dense)
             .unwrap()
             .expect("cache enabled");
         let base = test_base();
@@ -294,6 +306,7 @@ mod tests {
     fn exact_state_radix_finds_cached_non_grid_prefix_length() {
         let config = StageConfig {
             ctx_size: 8192,
+            model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
                 payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 256,
@@ -303,9 +316,10 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+                .unwrap()
+                .expect("cache enabled");
         let base = test_base();
         let recorded_tokens = (0..2214).collect::<Vec<_>>();
         let recorded = kv.prefill_identity(&config, &base, 0, &recorded_tokens);
@@ -342,6 +356,7 @@ mod tests {
     #[test]
     fn exact_shared_checkpoint_rejects_empty_zero_minimum_checkpoint() {
         let config = StageConfig {
+            model_id: "tiiuae/Falcon-H1-0.5B-Instruct-GGUF:Q4_K_M".to_string(),
             kv_cache: Some(StageKvCacheConfig {
                 payload: StageKvCachePayload::KvRecurrent,
                 min_tokens: 0,
@@ -350,9 +365,10 @@ mod tests {
             }),
             ..test_config()
         };
-        let kv = KvStageIntegration::from_config(&config)
-            .unwrap()
-            .expect("cache enabled");
+        let kv =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+                .unwrap()
+                .expect("cache enabled");
 
         assert!(
             kv.exact_shared_checkpoint_identity(&config, &test_base(), 0, &[1])

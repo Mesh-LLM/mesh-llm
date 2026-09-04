@@ -60,7 +60,7 @@ pub(crate) fn summarize_capabilities(server_info: &ServerInfo, extra: &[String])
     if caps.logging.is_some() {
         capabilities.push("mcp:logging".into());
     }
-    if caps.tasks.is_some() {
+    if caps.supports_tasks() {
         capabilities.push("mcp:tasks".into());
     }
     if let Some(extensions) = &caps.extensions {
@@ -95,4 +95,19 @@ pub(crate) fn format_tool_names_for_log(tools: &[ToolSummary]) -> String {
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
     format_slice_for_log(&names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_capabilities;
+    use rmcp::model::{ServerCapabilities, ServerInfo};
+
+    #[test]
+    fn task_capability_is_detected_from_rmcp_extension() {
+        let server_info = ServerInfo::new(ServerCapabilities::builder().enable_tasks().build());
+
+        let capabilities = summarize_capabilities(&server_info, &[]);
+
+        assert!(capabilities.iter().any(|entry| entry == "mcp:tasks"));
+    }
 }

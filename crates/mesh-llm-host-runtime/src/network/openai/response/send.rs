@@ -1,6 +1,6 @@
 use crate::logging::OpenAiRouteObserver;
+use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 /// RFC 7230 tchar set for header field names: ASCII alphanumeric plus
 /// `!#$%&'*+-.^_`|~`. We additionally forbid `:` because it terminates
@@ -55,7 +55,7 @@ pub(crate) fn append_safe_header(headers: &mut String, name: &str, value: &str) 
 /// alphanumeric + a small symbol set); invalid names are dropped with a
 /// warning rather than written verbatim. Values are stripped of CR/LF.
 pub async fn send_json_ok_with_headers(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     data: &serde_json::Value,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
@@ -74,7 +74,7 @@ pub async fn send_json_ok_with_headers(
 /// Send a bounded JSON error and record it only after the exact client-visible
 /// body has been written successfully.
 pub(crate) async fn send_json_with_status_and_headers_observed(
-    stream: TcpStream,
+    stream: ClientStream,
     code: u16,
     data: &serde_json::Value,
     extra_headers: &[(&str, String)],
@@ -85,7 +85,7 @@ pub(crate) async fn send_json_with_status_and_headers_observed(
 }
 
 async fn send_json_with_status_and_headers_inner(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     code: u16,
     data: &serde_json::Value,
     extra_headers: &[(&str, String)],
@@ -119,12 +119,12 @@ async fn send_json_with_status_and_headers_inner(
     Ok(())
 }
 
-pub async fn send_400(stream: TcpStream, msg: &str) -> std::io::Result<()> {
+pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
 }
 
 #[cfg(test)]
-pub async fn send_error(stream: TcpStream, code: u16, msg: &str) -> std::io::Result<()> {
+pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, code, msg, None).await
 }
 
@@ -132,7 +132,7 @@ pub async fn send_error(stream: TcpStream, code: u16, msg: &str) -> std::io::Res
 /// body only after the client write succeeds. The observer remains the narrow
 /// logging boundary: it receives no request headers or arbitrary media type.
 pub(crate) async fn send_error_observed(
-    stream: TcpStream,
+    stream: ClientStream,
     code: u16,
     msg: &str,
     route_observer: OpenAiRouteObserver<'_>,
@@ -141,7 +141,7 @@ pub(crate) async fn send_error_observed(
 }
 
 pub(crate) async fn send_400_observed(
-    stream: TcpStream,
+    stream: ClientStream,
     msg: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> std::io::Result<()> {
@@ -149,7 +149,7 @@ pub(crate) async fn send_400_observed(
 }
 
 pub(crate) async fn send_503_observed(
-    stream: TcpStream,
+    stream: ClientStream,
     reason: &str,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> std::io::Result<()> {
@@ -158,7 +158,7 @@ pub(crate) async fn send_503_observed(
 }
 
 async fn send_openai_error(
-    mut stream: TcpStream,
+    mut stream: ClientStream,
     code: u16,
     msg: &str,
     route_observer: Option<OpenAiRouteObserver<'_>>,
@@ -197,8 +197,7 @@ async fn send_openai_error(
     Ok(())
 }
 
-#[cfg(test)]
-pub async fn send_503(stream: TcpStream, reason: &str) -> std::io::Result<()> {
+pub async fn send_503(stream: ClientStream, reason: &str) -> std::io::Result<()> {
     tracing::warn!("503 → client: {reason}");
     send_openai_error(stream, 503, reason, None).await
 }
@@ -363,6 +362,7 @@ mod tests {
         let capture = capture.clone();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            let stream: ClientStream = stream.into();
             super::send_error_observed(
                 stream,
                 404,
@@ -373,7 +373,7 @@ mod tests {
             .unwrap();
         });
 
-        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut client, &mut output)
             .await
@@ -394,7 +394,7 @@ mod tests {
     }
     async fn capture_proxy_error_response<F, Fut>(send: F) -> String
     where
-        F: FnOnce(tokio::net::TcpStream) -> Fut + Send + 'static,
+        F: FnOnce(ClientStream) -> Fut + Send + 'static,
         Fut: Future<Output = std::io::Result<()>> + Send + 'static,
     {
         use tokio::io::AsyncReadExt;
@@ -403,10 +403,11 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
+            let stream: ClientStream = stream.into();
             send(stream).await.unwrap();
         });
 
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
         client.read_to_end(&mut output).await.unwrap();
         server.await.unwrap();

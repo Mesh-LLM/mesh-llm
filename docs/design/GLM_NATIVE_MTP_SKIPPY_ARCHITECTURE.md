@@ -31,8 +31,8 @@ Skippy-certified public GGUF:
   `unsloth/GLM-4.7-Flash-GGUF:Q4_K_M`;
 - Skippy certified split plan: `layer_end=47`, `splits=15,31`, activation
   width `2048`;
-- Skippy wire dtype: `f16` by default, with q8 already validated for the
-  existing non-MTP parity path;
+- Skippy activation wire: fixed raw little-endian `f32`; older f16/q8 results
+  remain compression research evidence only;
 - upstream model card shows native framework MTP with
   `--speculative-config.method mtp` and
   `--speculative-config.num_speculative_tokens 1`.
@@ -60,7 +60,6 @@ skippy-correctness chain \
   --model-id meshllm/GLM-4.7-Flash-MTP-GGUF:Q4_K_M \
   --layer-end 48 \
   --splits 15,31 \
-  --activation-wire-dtype f16 \
   --require-native-mtp-draft
 ```
 

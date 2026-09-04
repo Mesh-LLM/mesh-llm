@@ -10,9 +10,26 @@ use skippy_ffi::{
 use crate::error::ensure_ok;
 use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenSignal};
 
+const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
+
+fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
+    // Template metadata can contain a large serialized PEG response parser,
+    // but native sampling only consults grammar fields. The renderer emits
+    // compact JSON, so an empty top-level grammar can use the minimal
+    // equivalent payload and avoid reparsing the unrelated PEG graph before
+    // first-token decode. Escaped JSON nested inside `chat_parser` cannot
+    // contain this unescaped byte sequence.
+    if metadata_json.contains(r#""grammar":"""#) {
+        EMPTY_CHAT_GRAMMAR_METADATA
+    } else {
+        metadata_json
+    }
+}
+
 pub struct StageSession {
     pub(crate) raw: *mut RawSession,
     pub(crate) token_count: u64,
+    pub(crate) include_output: bool,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -24,6 +41,13 @@ pub struct DecodeBatchRequest<'a> {
 fn native_position_to_u64(native_position: i32) -> Result<u64> {
     u64::try_from(native_position)
         .map_err(|_| anyhow!("skippy session has no valid native position"))
+}
+
+fn validate_native_sequence_id(sequence_id: i32) -> Result<i32> {
+    if sequence_id < 0 {
+        return Err(anyhow!("skippy session has no valid native sequence ID"));
+    }
+    Ok(sequence_id)
 }
 
 // The experimental C ABI owns synchronization internally for model/session use.
@@ -39,6 +63,12 @@ impl StageSession {
     pub fn native_position(&self) -> Result<u64> {
         let native_position = unsafe { skippy_ffi::skippy_session_position(self.raw) };
         native_position_to_u64(native_position)
+    }
+
+    /// Returns the native llama.cpp sequence used by this session.
+    pub fn native_sequence_id(&self) -> Result<i32> {
+        let sequence_id = unsafe { skippy_ffi::skippy_session_sequence_id(self.raw) };
+        validate_native_sequence_id(sequence_id)
     }
 
     pub fn batch_size(&self) -> Result<usize> {
@@ -63,9 +93,9 @@ impl StageSession {
         prompt_token_count: u64,
         sampling: Option<&SamplingConfig>,
     ) -> Result<()> {
-        let metadata_json = CString::new(metadata_json)
+        let metadata_json = CString::new(chat_sampling_metadata_for_native(metadata_json))
             .context("chat sampling metadata contains an interior NUL byte")?;
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -145,6 +175,16 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    pub fn memory_used_cells(&mut self) -> Result<u64> {
+        let mut used_cells = 0u64;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_memory_used_cells(self.raw, &mut used_cells, &mut error)
+        };
+        ensure_ok(status, error)?;
+        Ok(used_cells)
+    }
+
     pub fn prefill_chunk(&mut self, token_ids: &[i32]) -> Result<()> {
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -192,7 +232,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -233,7 +273,7 @@ impl StageSession {
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -271,8 +311,8 @@ impl StageSession {
             .collect::<Vec<_>>();
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let sampling = raw_sampling
             .iter()
             .map(|sampling| {
@@ -400,7 +440,10 @@ impl Drop for StageSession {
 
 #[cfg(test)]
 mod tests {
-    use super::native_position_to_u64;
+    use super::{
+        EMPTY_CHAT_GRAMMAR_METADATA, chat_sampling_metadata_for_native, native_position_to_u64,
+        validate_native_sequence_id,
+    };
 
     #[test]
     fn native_position_conversion_accepts_non_negative_positions() {
@@ -412,5 +455,24 @@ mod tests {
     fn native_position_conversion_rejects_negative_positions() {
         assert!(native_position_to_u64(-1).is_err());
         assert!(native_position_to_u64(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn native_sequence_id_validation_rejects_negative_sentinels() {
+        assert_eq!(validate_native_sequence_id(0).unwrap(), 0);
+        assert_eq!(validate_native_sequence_id(i32::MAX).unwrap(), i32::MAX);
+        assert!(validate_native_sequence_id(-1).is_err());
+        assert!(validate_native_sequence_id(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn empty_chat_grammar_uses_minimal_native_metadata() {
+        let metadata = r#"{"chat_parser":"large","grammar":"","grammar_triggers":[]}"#;
+        assert_eq!(
+            chat_sampling_metadata_for_native(metadata),
+            EMPTY_CHAT_GRAMMAR_METADATA
+        );
+        let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
+        assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
 }

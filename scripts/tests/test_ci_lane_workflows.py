@@ -204,6 +204,32 @@ class CiLaneWorkflowTests(unittest.TestCase):
         for platform in ("linux", "macos", "windows"):
             self.assertIn(f'select(.platform == "{platform}")', action)
 
+    def test_pr_planner_uses_only_immutable_source_manifests(self) -> None:
+        action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]', action)
+        self.assertIn('mktemp -d "$RUNNER_TEMP/mesh-ci-manifests.XXXXXX"', action)
+        self.assertIn(
+            'git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml',
+            action,
+        )
+        self.assertIn(
+            'git show "$SOURCE_SHA:ci/slices.yml" | cmp -s - ci/slices.yml',
+            action,
+        )
+        self.assertIn(
+            'git show "$SOURCE_SHA:ci/ownership.yml" | cmp -s - ci/ownership.yml',
+            action,
+        )
+        self.assertIn(
+            'python3 scripts/plan-ci.py --manifest-root "$manifest_root"',
+            action,
+        )
+        self.assertNotIn("git checkout", action)
+        self.assertNotIn('git archive --format=tar "$SOURCE_SHA" -- .', action)
+
     def test_topic_lane_projections_are_valid_jq(self) -> None:
         action = (ROOT / ".github/actions/plan-ci/action.yml").read_text(
             encoding="utf-8"

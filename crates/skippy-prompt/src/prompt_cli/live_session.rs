@@ -52,7 +52,6 @@ fn stage_chain_error_context(args: &BinaryReplArgs) -> String {
 fn reset_live_prompt_runtime(
     live: &mut PromptLiveSession,
     args: &BinaryReplArgs,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     request_id: u64,
     wire_session_id: u64,
@@ -67,7 +66,7 @@ fn reset_live_prompt_runtime(
         let io_timeout = Duration::from_secs(args.decode_timeout_secs.max(1));
         stream.set_read_timeout(Some(io_timeout)).ok();
         stream.set_write_timeout(Some(io_timeout)).ok();
-        stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)
+        stop_prompt_stream(stream, request_id, wire_session_id, args)
             .context("reset live prompt runtime session")?;
     }
     live.resident_tokens.clear();
@@ -82,7 +81,6 @@ fn rematerialize_live_transcript(
     tokenizer: &StageModel,
     chat_template_model: Option<&StageModel>,
     args: &BinaryReplArgs,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     request_id: u64,
     wire_session_id: u64,
@@ -105,7 +103,6 @@ fn rematerialize_live_transcript(
     if common_prefix < runtime_tokens.len() {
         send_trim_session(
             stream,
-            wire_dtype,
             prompt_index,
             request_id,
             wire_session_id,
@@ -121,7 +118,6 @@ fn rematerialize_live_transcript(
         let pos_start = common_prefix + chunk_index * args.prefill_chunk_size;
         send_prefill_chunk(
             stream,
-            wire_dtype,
             ReplPrefillChunk {
                 prompt_index,
                 request_id,
@@ -172,7 +168,6 @@ fn live_transcript_probe_tokens(
 fn stop_live_prompt_session(
     live: &mut PromptLiveSession,
     args: &BinaryReplArgs,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     wire_session_id: u64,
 ) -> Result<()> {
@@ -181,7 +176,7 @@ fn stop_live_prompt_session(
     };
     let prompt_index_bytes = prompt_index.to_le_bytes();
     let request_id = stable_wire_id(&[b"prompt-live-stop".as_slice(), &prompt_index_bytes]);
-    stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)
+    stop_prompt_stream(stream, request_id, wire_session_id, args)
         .context("stop live prompt session")?;
     live.resident_tokens.clear();
     live.stream.take();
@@ -190,15 +185,13 @@ fn stop_live_prompt_session(
 
 fn stop_prompt_stream(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     request_id: u64,
     wire_session_id: u64,
     args: &BinaryReplArgs,
 ) -> Result<()> {
     write_stage_message(
         &mut *stream,
-        &StageWireMessage::stop_with_identity(wire_dtype, request_id, wire_session_id),
-        wire_dtype,
+        &StageWireMessage::stop_with_identity(request_id, wire_session_id),
     )
     .with_context(|| stage_chain_error_context(args))?;
     let stop_reply = recv_reply(stream).with_context(|| stage_chain_error_context(args))?;
@@ -210,14 +203,13 @@ fn stop_prompt_stream(
 
 fn send_trim_session(
     stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
     prompt_index: usize,
     request_id: u64,
     session_id: u64,
     token_count: usize,
 ) -> Result<SessionControlReply> {
     let started = Instant::now();
-    let mut state = StageStateHeader::new(WireMessageKind::TrimSession, wire_dtype);
+    let mut state = StageStateHeader::new(WireMessageKind::TrimSession);
     state.seq_id = i32::try_from(prompt_index).context("prompt index exceeds i32")?;
     state.source_stage_index = -1;
     let message = StageWireMessage {
@@ -234,7 +226,7 @@ fn send_trim_session(
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     };
-    write_stage_message(&mut *stream, &message, wire_dtype)
+    write_stage_message(&mut *stream, &message)
         .with_context(|| format!("send trim session to {token_count} token(s)"))?;
     let reply = recv_reply(&mut *stream)
         .with_context(|| format!("receive trim session ACK for {token_count} token(s)"))?;

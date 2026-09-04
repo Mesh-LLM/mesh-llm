@@ -350,8 +350,6 @@ def inventory(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "local_path": str(path) if path else None,
                 "download": "" if path else download_command(entry),
                 "notes": entry.get("notes", ""),
-                "wire_dtype": entry.get("wire_dtype"),
-                "wire_dtypes": entry.get("wire_dtypes"),
             }
             row["priority"] = row_priority(row, priorities)
             if path:
@@ -426,84 +424,329 @@ def validate_inventory(rows: list[dict[str, Any]]) -> int:
                 file=sys.stderr,
             )
 
-    failures += validate_stage_abi_allowlist()
+    failures += validate_runtime_slice_admission()
 
     return failures
 
 
-def validate_stage_abi_allowlist() -> int:
-    llama_src = ROOT / ".deps/llama.cpp/src"
-    skippy_cpp = llama_src / "skippy.cpp"
-    arch_cpp = llama_src / "llama-arch.cpp"
-    models_dir = llama_src / "models"
-    if not skippy_cpp.exists() or not arch_cpp.exists() or not models_dir.is_dir():
+def executable_cpp(
+    source: str, preserved_string_literals: tuple[str, ...] = ()
+) -> str:
+    masked = list(source)
+    state = "code"
+    index = 0
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "line-comment":
+            if char == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+        elif state == "block-comment":
+            masked[index] = "\n" if char == "\n" else " "
+            if char == "*" and next_char == "/":
+                masked[index + 1] = " "
+                state = "code"
+                index += 1
+        elif char == "/" and next_char == "/":
+            masked[index] = masked[index + 1] = " "
+            state = "line-comment"
+            index += 1
+        elif char == "/" and next_char == "*":
+            masked[index] = masked[index + 1] = " "
+            state = "block-comment"
+            index += 1
+        else:
+            raw_match = None
+            if index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_"):
+                raw_match = re.match(
+                    r'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(', source[index:]
+                )
+            if raw_match is not None:
+                delimiter = raw_match.group(1)
+                close = f'){delimiter}"'
+                end = source.find(close, index + raw_match.end())
+                end = len(source) if end < 0 else end + len(close)
+                for mask_index in range(index, end):
+                    if source[mask_index] != "\n":
+                        masked[mask_index] = " "
+                index = end - 1
+            elif char in {"'", '"'}:
+                quote = char
+                end = index + 1
+                while end < len(source):
+                    if source[end] == "\\":
+                        end += 2
+                        continue
+                    end += 1
+                    if source[end - 1] == quote:
+                        break
+                literal = source[index:end]
+                preserve = quote == '"' and literal in preserved_string_literals
+                if not preserve:
+                    for mask_index in range(index, min(end, len(source))):
+                        if source[mask_index] != "\n":
+                            masked[mask_index] = " "
+                index = end - 1
+        index += 1
+    return "".join(masked)
+
+
+def _skip_balanced(text: str, index: int, open_char: str, close_char: str) -> int:
+    depth = 0
+    while index < len(text):
+        if text[index] == open_char:
+            depth += 1
+        elif text[index] == close_char:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return index
+
+
+def has_unbraced_control_statement(executable_source: str) -> bool:
+    """Detect a depth-0 control statement whose body is not a braced block.
+
+    Braced control bodies are opaque to the failure-path checks once nested
+    blocks are masked, so they cannot conditionally expose a failure path (the
+    production guards emit failure events through exactly such a block). An
+    unbraced control statement leaves its single statement visible to the
+    ordered failure-path match while keeping it conditionally executed, so a
+    guard like `if (false) llama_model_free(model); ...` must be rejected.
+    """
+    keyword_pattern = re.compile(r"\b(?:if|for|while|switch|catch|do|try|else)\b")
+    index = 0
+    while True:
+        match = keyword_pattern.search(executable_source, index)
+        if match is None:
+            return False
+        cursor = match.end()
+        if match.group(0) == "else" and executable_source[cursor:].lstrip().startswith(
+            "if"
+        ):
+            # `else if` is validated through the nested `if` match.
+            index = cursor
+            continue
+        if match.group(0) not in {"do", "try", "else"}:
+            while cursor < len(executable_source) and executable_source[cursor].isspace():
+                cursor += 1
+            if cursor < len(executable_source) and executable_source[cursor] == "(":
+                cursor = _skip_balanced(executable_source, cursor, "(", ")")
+        while cursor < len(executable_source) and executable_source[cursor].isspace():
+            cursor += 1
+        if cursor >= len(executable_source) or executable_source[cursor] != "{":
+            return True
+        index = _skip_balanced(executable_source, cursor, "{", "}")
+
+
+def mask_nested_blocks(source: str) -> str:
+    masked = list(source)
+    depth = 0
+    state = "code"
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if state in {"single-quote", "double-quote"}:
+            if depth > 0 and char != "\n":
+                masked[index] = " "
+            if char == "\\":
+                index += 1
+                if index < len(source) and depth > 0 and source[index] != "\n":
+                    masked[index] = " "
+            elif (state == "single-quote" and char == "'") or (
+                state == "double-quote" and char == '"'
+            ):
+                state = "code"
+        elif char == "'":
+            state = "single-quote"
+            if depth > 0:
+                masked[index] = " "
+        elif char == '"':
+            state = "double-quote"
+            if depth > 0:
+                masked[index] = " "
+        elif char == "{":
+            depth += 1
+            masked[index] = " "
+        elif char == "}":
+            masked[index] = " "
+            depth = max(0, depth - 1)
+        elif depth > 0 and char != "\n":
+            masked[index] = " "
+        index += 1
+    return "".join(masked)
+
+
+def extract_braced_block(source: str, header_pattern: str) -> str | None:
+    executable_source = executable_cpp(source)
+    match = re.search(header_pattern + r"\s*\{", executable_source)
+    if match is None:
+        return None
+    open_brace = executable_source.find("{", match.start(), match.end())
+    depth = 0
+    index = open_brace
+    while index < len(source):
+        char = executable_source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace + 1 : index]
+        index += 1
+    return None
+
+
+def validate_runtime_slice_admission(llama_root: Path | None = None) -> int:
+    llama_root = llama_root or ROOT / ".deps/llama.cpp"
+    model_loading = llama_root / "src/skippy/model_loading.cpp"
+    if not model_loading.exists():
         return 0
 
-    def normalized(name: str) -> str:
-        return name.replace("_", "").replace("-", "")
-
-    arch_names: dict[str, str] = {}
-    for match in re.finditer(
-        r'\{\s*LLM_ARCH_([A-Z0-9_]+),\s+"([^"]+)"\s*\}',
-        arch_cpp.read_text(encoding="utf-8"),
-    ):
-        arch_names[match.group(1).lower()] = match.group(2)
-
-    allowed = {
-        arch_names.get(match.group(1).lower(), match.group(1).lower())
-        for match in re.finditer(
-            r"model->arch != LLM_ARCH_([A-Z0-9_]+)",
-            skippy_cpp.read_text(encoding="utf-8"),
-        )
-    }
-    if "gpt-oss" in allowed:
-        allowed.add("openai-moe")
-
-    stage_hooked = set()
-    for path in models_dir.glob("*.cpp"):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if "skippy_graph_get_filter" in text and "stage_boundary" in text:
-            stage_hooked.add(path.stem)
-
-    # llama.cpp dispatches these architectures through another staged graph, or
-    # uses a model file name that differs from the architecture string.
-    stage_hooked.update(
-        {
-            "gpt-oss",
-            "deepseek2-ocr",
-            "mamba2",
-            "granite_moe",
-            "hunyuan_dense",
-            "phimoe",
-            "lfm2moe",
-            "minicpm",
-            "mistral4",
-            "nemotron_h_moe",
-        }
+    source = model_loading.read_text(encoding="utf-8")
+    executable_source = executable_cpp(source)
+    function_start = executable_source.find(
+        "static enum skippy_status skippy_finish_model_open("
     )
+    function_end = executable_source.find(
+        "enum skippy_status skippy_model_open_impl(", function_start
+    )
+    if function_start < 0 or function_end < 0:
+        print("Cannot locate Skippy runtime-slice admission function", file=sys.stderr)
+        return 1
 
-    allowed_by_norm = {normalized(name): name for name in allowed}
-    hooked_by_norm = {normalized(name): name for name in stage_hooked}
-    allowed_without_hook = sorted(set(allowed_by_norm) - set(hooked_by_norm))
-    hooked_but_not_allowed = sorted(set(hooked_by_norm) - set(allowed_by_norm))
-
+    admission = source[function_start:function_end]
+    if re.search(
+        r"(?m)^\s*#\s*(?:if|ifdef|ifndef|elif|else|endif)\b",
+        executable_cpp(admission),
+    ):
+        print(
+            "Runtime-slice admission contract must not use preprocessor branches",
+            file=sys.stderr,
+        )
+        return 1
+    validation_end = admission.find("skippy_model * stage_model")
+    if validation_end < 0:
+        print("Cannot locate Skippy runtime-slice validation boundary", file=sys.stderr)
+        return 1
+    validation = admission[:validation_end]
+    executable_validation = executable_cpp(validation)
+    architecture_guards = sorted(
+        set(
+            re.findall(
+                r"model->arch\s*[!=]=\s*LLM_ARCH_([A-Z0-9_]+)",
+                executable_validation,
+            )
+        )
+    )
     failures = 0
-    if allowed_without_hook:
-        failures += len(allowed_without_hook)
+    if architecture_guards:
+        failures += len(architecture_guards)
         print(
-            "Stage ABI allowlist contains architectures without detected staged graph support:",
+            "Runtime-slice admission must not depend on a model-architecture allowlist:",
             file=sys.stderr,
         )
-        for key in allowed_without_hook:
-            print(f"  - {allowed_by_norm[key]}", file=sys.stderr)
-    if hooked_but_not_allowed:
-        failures += len(hooked_but_not_allowed)
+        for architecture in architecture_guards:
+            print(f"  - {architecture}", file=sys.stderr)
+
+    invalid_argument_contracts = (
+        (
+            "layer_end range",
+            r"if\s*\(\s*config->layer_end\s*>\s*n_layer\s*\)",
+            "layer_end exceeds model layer count",
+        ),
+        (
+            "embedding ownership",
+            r"if\s*\(\s*config->include_embeddings\s*&&\s*"
+            r"config->layer_start\s*!=\s*0\s*&&\s*!config->include_output\s*\)",
+            "only the first runtime slice may include token embeddings",
+        ),
+        (
+            "first-slice embeddings",
+            r"if\s*\(\s*config->layer_start\s*==\s*0\s*&&\s*"
+            r"!config->include_embeddings\s*\)",
+            "the first runtime slice must include token embeddings",
+        ),
+        (
+            "output ownership",
+            r"if\s*\(\s*config->include_output\s*&&\s*"
+            r"config->layer_end\s*!=\s*n_layer\s*\)",
+            "only the final runtime slice may include output tensors",
+        ),
+    )
+    missing_checks = []
+    for name, guard, message in invalid_argument_contracts:
+        body = extract_braced_block(admission, guard)
+        executable_body = (
+            executable_cpp(body, (f'"{message}"',)) if body is not None else ""
+        )
+        masked_body = mask_nested_blocks(executable_body) if body is not None else ""
+        required_failure_path = (
+            r"llama_model_free\s*\(\s*model\s*\)\s*;"
+            r"[\s\S]*?const\s+char\s*\*\s*message\s*=\s*"
+            + re.escape(f'"{message}"')
+            + r"\s*;[\s\S]*?skippy_set_error\s*\(\s*out_error\s*,\s*"
+            r"SKIPPY_STATUS_INVALID_ARGUMENT\s*,\s*message\s*\)\s*;"
+            r"[\s\S]*?return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;"
+        )
+        failure_match = re.search(required_failure_path, masked_body)
+        first_return = re.search(r"\breturn\b", masked_body)
+        expected_return = re.search(
+            r"return\s+SKIPPY_STATUS_INVALID_ARGUMENT\s*;", masked_body
+        )
+        if (
+            body is None
+            or failure_match is None
+            or first_return is None
+            or expected_return is None
+            or first_return.start() != expected_return.start()
+            or has_unbraced_control_statement(executable_body)
+        ):
+            missing_checks.append(name)
+
+    boundary_contracts = (
+        (
+            "output activation boundary",
+            r"if\s*\(\s*!stage_model->ctx->get_activation_boundary\s*\([^)]*\)\s*\)",
+            "stage graph did not expose a stable output activation boundary",
+        ),
+        (
+            "input activation boundary",
+            r"if\s*\(\s*!stage_model->ctx->get_input_activation_boundary\s*\([^)]*\)\s*\)",
+            "stage graph did not expose a stable input activation boundary",
+        ),
+    )
+    for name, guard, message in boundary_contracts:
+        body = extract_braced_block(admission, guard)
+        executable_body = (
+            executable_cpp(body, (f'"{message}"',)) if body is not None else ""
+        )
+        masked_body = mask_nested_blocks(executable_body) if body is not None else ""
+        failure_path = (
+            r"return\s+fail_boundary_load\s*\(\s*"
+            + re.escape(f'"{message}"')
+            + r"\s*\)\s*;"
+        )
+        failure_match = re.search(failure_path, masked_body)
+        first_return = re.search(r"\breturn\b", masked_body)
+        if (
+            body is None
+            or failure_match is None
+            or first_return is None
+            or first_return.start() != failure_match.start()
+            or has_unbraced_control_statement(executable_body)
+        ):
+            missing_checks.append(name)
+    if missing_checks:
+        failures += len(missing_checks)
         print(
-            "Staged graph implementations are missing from the stage ABI allowlist:",
+            "Runtime-slice admission is missing realized-contract checks:",
             file=sys.stderr,
         )
-        for key in hooked_but_not_allowed:
-            print(f"  - {hooked_by_norm[key]}", file=sys.stderr)
+        for check in missing_checks:
+            print(f"  - {check}", file=sys.stderr)
 
     return failures
 
@@ -558,10 +801,6 @@ def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> 
             str(ctx_size),
             "--n-gpu-layers",
             str(args.n_gpu_layers if args.n_gpu_layers is not None else defaults.get("n_gpu_layers", 999)),
-            "--wire-dtype",
-            str(row.get("wire_dtype") or defaults.get("wire_dtype", "f16")),
-            "--wire-dtypes",
-            str(row.get("wire_dtypes") or defaults.get("wire_dtypes", "f32,f16,q8")),
             "--prompt",
             str(defaults.get("prompt", "Hello")),
             "--run-id",
@@ -590,8 +829,6 @@ def run_certifications(args: argparse.Namespace, rows: list[dict[str, Any]]) -> 
             cmd.append("--skip-build")
         if args.skip_state:
             cmd.append("--skip-state")
-        if args.skip_dtype:
-            cmd.append("--skip-dtype")
         state_payload_kind = args.state_payload_kind
         if not state_payload_kind and args.prefix_token_count:
             state_payload_kind = (
@@ -652,7 +889,6 @@ def main() -> int:
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--skip-build", action="store_true")
     run_parser.add_argument("--skip-state", action="store_true")
-    run_parser.add_argument("--skip-dtype", action="store_true")
     run_parser.add_argument("--state-payload-kind")
     run_parser.add_argument("--prefix-token-count", type=int)
     run_parser.add_argument("--cache-hit-repeats", type=int)

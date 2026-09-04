@@ -315,6 +315,17 @@ impl PrefillChunkPlanner {
 pub(super) struct EmbeddedPrefillDrain {
     pub(super) drained_replies: usize,
     pub(super) downstream_wait_ms: f64,
+    pub(super) downstream_wait_max_ms: f64,
+}
+
+impl EmbeddedPrefillDrain {
+    pub(super) fn absorb(&mut self, current: Self) {
+        self.drained_replies = self.drained_replies.saturating_add(current.drained_replies);
+        self.downstream_wait_ms += current.downstream_wait_ms;
+        self.downstream_wait_max_ms = self
+            .downstream_wait_max_ms
+            .max(current.downstream_wait_max_ms);
+    }
 }
 
 pub(super) fn drain_one_embedded_prefill_reply(
@@ -339,6 +350,7 @@ pub(super) fn drain_one_embedded_prefill_reply(
     Ok(EmbeddedPrefillDrain {
         drained_replies: 1,
         downstream_wait_ms,
+        downstream_wait_max_ms: downstream_wait_ms,
     })
 }
 
@@ -350,10 +362,7 @@ pub(super) fn drain_embedded_prefill_replies(
     let mut drained = EmbeddedPrefillDrain::default();
     while *pending_prefill_replies > 0 {
         let current = drain_one_embedded_prefill_reply(downstream, pending_prefill_replies, stats)?;
-        drained.drained_replies = drained
-            .drained_replies
-            .saturating_add(current.drained_replies);
-        drained.downstream_wait_ms += current.downstream_wait_ms;
+        drained.absorb(current);
     }
     Ok(drained)
 }

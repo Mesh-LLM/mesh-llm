@@ -65,6 +65,12 @@ details through environment variables:
 | `MESH_LLM_PLUGIN_NAME`      | Configured plugin name                      |
 | `MESH_LLM_PLUGIN_URL`       | Optional `[[plugin]].url` value from config |
 
+An HTTP or HTTPS URL configures a locally launched adapter plugin and is
+provided through `MESH_LLM_PLUGIN_URL`. `plugin.url` does not support `tcp://`
+control sessions, including loopback endpoints, because the control handshake
+has no per-instance capability secret or authenticated peer identity. Static
+configuration validation and the runtime resolver both reject that scheme.
+
 Plugin-specific configuration should live in the plugin process or use generic
 plugin config fields. The host should not special-case behavior for a plugin by
 repository or package name.

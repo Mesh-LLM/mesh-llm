@@ -11,7 +11,10 @@ use skippy_ffi::{
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
 use crate::types::empty_raw_activation_desc;
-use crate::{ActivationFrame, DecodeFrameBatchOutput, NativeMtpDraft, SamplingConfig, Status};
+use crate::{
+    ActivationFrame, DecodeFrameBatchOutput, IterationBatchOutput, IterationSample, NativeMtpDraft,
+    SamplingConfig, Status,
+};
 
 type RawInputFrame = (Option<RawActivationDesc>, *const c_void);
 
@@ -35,6 +38,46 @@ fn raw_input_desc_ptr(input: &RawInputFrame) -> *const RawActivationDesc {
         .0
         .as_ref()
         .map_or(ptr::null(), |desc| desc as *const RawActivationDesc)
+}
+
+fn collect_iteration_samples(
+    request_count: usize,
+    sampled_output_count: usize,
+    sampled_request_indexes: &[usize],
+    predicted_tokens: &[i32],
+) -> Result<Vec<IterationSample>> {
+    if sampled_output_count > request_count
+        || sampled_output_count > sampled_request_indexes.len()
+        || sampled_output_count > predicted_tokens.len()
+    {
+        return Err(anyhow!(
+            "native iteration returned {sampled_output_count} samples for {request_count} requests"
+        ));
+    }
+    let mut seen_samples = vec![false; request_count];
+    sampled_request_indexes
+        .iter()
+        .copied()
+        .zip(predicted_tokens.iter().copied())
+        .take(sampled_output_count)
+        .map(|(request_index, predicted_token)| {
+            let sampled = seen_samples.get_mut(request_index).ok_or_else(|| {
+                anyhow!(
+                    "native iteration sample references request {request_index}, but only {request_count} requests were submitted"
+                )
+            })?;
+            if *sampled {
+                return Err(anyhow!(
+                    "native iteration returned duplicate sample for request {request_index}"
+                ));
+            }
+            *sampled = true;
+            Ok(IterationSample {
+                request_index,
+                predicted_token,
+            })
+        })
+        .collect()
 }
 
 pub struct DecodeFrameBatchRequest<'a> {
@@ -63,21 +106,24 @@ pub struct IterationBatchRequest<'a> {
 impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+    ) -> Result<IterationBatchOutput> {
         Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
     }
 
     fn iteration_batch_sampled_raw(
         requests: &mut [IterationBatchRequest<'_>],
         output_capacities: &[usize],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
+    ) -> Result<IterationBatchOutput> {
         if requests.is_empty() {
-            return Ok(Vec::new());
+            return Ok(IterationBatchOutput {
+                request_outputs: Vec::new(),
+                samples: Vec::new(),
+            });
         }
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let input_frames = requests
             .iter()
             .map(|request| raw_input_frame(request.input))
@@ -114,7 +160,9 @@ impl StageSession {
             .map(|payload| payload.as_mut_ptr().cast())
             .collect::<Vec<_>>();
         let mut output_bytes = vec![0_usize; requests.len()];
-        let mut predicted_tokens = vec![-1_i32; requests.len()];
+        let mut sampled_request_indexes = vec![0_usize; requests.len()];
+        let mut predicted_tokens = vec![0_i32; requests.len()];
+        let mut sampled_output_count = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
             skippy_ffi::skippy_iteration_batch_sampled(
@@ -124,8 +172,10 @@ impl StageSession {
                 output_payload_ptrs.as_ptr(),
                 output_capacities.as_ptr(),
                 output_bytes.as_mut_ptr(),
+                sampled_request_indexes.as_mut_ptr(),
                 predicted_tokens.as_mut_ptr(),
                 predicted_tokens.len(),
+                &mut sampled_output_count,
                 &mut error,
             )
         };
@@ -143,6 +193,12 @@ impl StageSession {
             return Self::iteration_batch_sampled_serial(requests);
         }
         ensure_ok(status, error)?;
+        let samples = collect_iteration_samples(
+            requests.len(),
+            sampled_output_count,
+            &sampled_request_indexes,
+            &predicted_tokens,
+        )?;
         // The native call has already advanced every session, so compute all
         // new counts before storing any: a mid-loop overflow error must not
         // leave a subset of sessions updated and the rest desynced.
@@ -162,76 +218,82 @@ impl StageSession {
         for (request, updated) in requests.iter_mut().zip(updated_counts) {
             request.session.token_count = updated;
         }
-        Ok(output_payloads
+        let request_outputs = output_payloads
             .into_iter()
             .zip(output_descs)
             .zip(output_bytes)
-            .zip(predicted_tokens)
-            .map(|(((mut payload, desc), bytes), predicted_token)| {
+            .map(|((mut payload, desc), bytes)| {
                 payload.truncate(bytes);
-                DecodeFrameBatchOutput {
-                    predicted_token,
-                    output: ActivationFrame {
-                        desc: desc.into(),
-                        payload,
-                    },
+                ActivationFrame {
+                    desc: desc.into(),
+                    payload,
                 }
             })
-            .collect())
+            .collect();
+        Ok(IterationBatchOutput {
+            request_outputs,
+            samples,
+        })
     }
 
     fn iteration_batch_sampled_serial(
         requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<Vec<DecodeFrameBatchOutput>> {
-        requests
-            .iter_mut()
-            .map(|request| {
-                let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
-                    validate_serial_decode_request(request)?;
-                    request.session.decode_step_frame_sampled(
-                        request.token_ids[0],
+    ) -> Result<IterationBatchOutput> {
+        let mut request_outputs = Vec::with_capacity(requests.len());
+        let mut samples = Vec::new();
+        for (request_index, request) in requests.iter_mut().enumerate() {
+            let (predicted_token, output) = if request.phase == IterationBatchPhase::Decode {
+                validate_serial_decode_request(request)?;
+                request.session.decode_step_frame_sampled(
+                    request.token_ids[0],
+                    request.sampling,
+                    request.input,
+                    0,
+                )?
+            } else if request.sample_last {
+                if request.positions.is_empty() {
+                    request.session.prefill_chunk_frame_sampled(
+                        request.token_ids,
                         request.sampling,
                         request.input,
                         0,
                     )?
-                } else if request.sample_last {
-                    if request.positions.is_empty() {
-                        request.session.prefill_chunk_frame_sampled(
-                            request.token_ids,
-                            request.sampling,
-                            request.input,
-                            0,
-                        )?
-                    } else {
-                        request.session.prefill_chunk_frame_sampled_with_positions(
-                            request.token_ids,
-                            request.positions,
-                            request.sampling,
-                            request.input,
-                            0,
-                        )?
-                    }
                 } else {
-                    let output = if request.positions.is_empty() {
-                        request
-                            .session
-                            .prefill_chunk_frame(request.token_ids, request.input, 0)?
-                    } else {
-                        request.session.prefill_chunk_frame_with_positions(
-                            request.token_ids,
-                            request.positions,
-                            request.input,
-                            0,
-                        )?
-                    };
-                    (-1, output)
+                    request.session.prefill_chunk_frame_sampled_with_positions(
+                        request.token_ids,
+                        request.positions,
+                        request.sampling,
+                        request.input,
+                        0,
+                    )?
+                }
+            } else {
+                let output = if request.positions.is_empty() {
+                    request
+                        .session
+                        .prefill_chunk_frame(request.token_ids, request.input, 0)?
+                } else {
+                    request.session.prefill_chunk_frame_with_positions(
+                        request.token_ids,
+                        request.positions,
+                        request.input,
+                        0,
+                    )?
                 };
-                Ok(DecodeFrameBatchOutput {
+                (-1, output)
+            };
+            if iteration_request_should_emit_sample(request) {
+                samples.push(IterationSample {
+                    request_index,
                     predicted_token,
-                    output,
-                })
-            })
-            .collect()
+                });
+            }
+            request_outputs.push(output);
+        }
+        Ok(IterationBatchOutput {
+            request_outputs,
+            samples,
+        })
     }
 
     pub fn prefill_chunk_frame(
@@ -385,7 +447,7 @@ impl StageSession {
         let raw_input = raw_input_frame(input)?;
         let input_desc_ptr = raw_input_desc_ptr(&raw_input);
         let input_payload_ptr = raw_input.1;
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -538,7 +600,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut predicted_token = 0_i32;
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -598,7 +660,7 @@ impl StageSession {
         let mut predicted_token = 0_i32;
         let mut mtp_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -666,8 +728,8 @@ impl StageSession {
             .collect::<Vec<_>>();
         let raw_sampling = requests
             .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw))
-            .collect::<Vec<_>>();
+            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
+            .collect::<Result<Vec<_>>>()?;
         let sampling = raw_sampling
             .iter()
             .map(|sampling| {
@@ -889,7 +951,7 @@ impl StageSession {
         let mut output_token_count = 0usize;
         let mut output_draft = RawNativeMtpDraft::default();
         let mut error = ptr::null_mut();
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -997,7 +1059,7 @@ impl StageSession {
     }
 
     pub fn sample_current(&mut self, sampling: Option<&SamplingConfig>) -> Result<i32> {
-        let raw_sampling = sampling.map(SamplingConfig::as_raw);
+        let raw_sampling = sampling.map(SamplingConfig::as_raw).transpose()?;
         let sampling_ptr = raw_sampling
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
@@ -1016,10 +1078,17 @@ impl StageSession {
     }
 }
 
+fn iteration_request_should_emit_sample(request: &IterationBatchRequest<'_>) -> bool {
+    request.sample_last && request.session.include_output
+}
+
 fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
+    let framed_origin = request.session.token_count() == 0
+        && request.input.is_some()
+        && (request.positions.is_empty() || request.positions == [0]);
     anyhow::ensure!(
-        request.session.token_count() > 0,
-        "serial decode fallback requires an established session"
+        request.session.token_count() > 0 || framed_origin,
+        "serial decode fallback requires an established session or a framed origin decode"
     );
     anyhow::ensure!(
         request.token_ids.len() == 1,
@@ -1047,7 +1116,8 @@ fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result
 #[cfg(test)]
 mod tests {
     use super::{
-        IterationBatchPhase, IterationBatchRequest, raw_input_frame, validate_serial_decode_request,
+        IterationBatchPhase, IterationBatchRequest, collect_iteration_samples,
+        iteration_request_should_emit_sample, raw_input_frame, validate_serial_decode_request,
     };
     use crate::StageSession;
     use crate::{ActivationDesc, ActivationFrame, RuntimeActivationDType, RuntimeActivationLayout};
@@ -1102,6 +1172,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
+            include_output: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1117,6 +1188,32 @@ mod tests {
     }
 
     #[test]
+    fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
+        for positions in [&[][..], &[0][..]] {
+            let mut session = StageSession {
+                raw: ptr::null_mut(),
+                token_count: 0,
+                include_output: true,
+            };
+            let frame = ActivationFrame {
+                desc: activation_desc(1),
+                payload: vec![1],
+            };
+            let request = IterationBatchRequest {
+                session: &mut session,
+                token_ids: &[7],
+                positions,
+                sampling: None,
+                input: Some(&frame),
+                sample_last: true,
+                phase: IterationBatchPhase::Decode,
+            };
+
+            validate_serial_decode_request(&request).unwrap();
+        }
+    }
+
+    #[test]
     fn serial_decode_rejects_invalid_decode_shapes() {
         for (session_tokens, token_ids, positions, sample_last) in [
             (0, &[7][..], &[][..], true),
@@ -1127,6 +1224,7 @@ mod tests {
             let mut session = StageSession {
                 raw: ptr::null_mut(),
                 token_count: session_tokens,
+                include_output: true,
             };
             let request = IterationBatchRequest {
                 session: &mut session,
@@ -1147,6 +1245,7 @@ mod tests {
         let mut session = StageSession {
             raw: ptr::null_mut(),
             token_count: 4,
+            include_output: true,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -1158,5 +1257,43 @@ mod tests {
             phase: IterationBatchPhase::Prefill,
         };
         assert_eq!(request.phase, IterationBatchPhase::Prefill);
+    }
+
+    #[test]
+    fn serial_iteration_omits_samples_for_intermediate_stages() {
+        let mut session = StageSession {
+            raw: ptr::null_mut(),
+            token_count: 4,
+            include_output: false,
+        };
+        let request = IterationBatchRequest {
+            session: &mut session,
+            token_ids: &[7],
+            positions: &[],
+            sampling: None,
+            input: None,
+            sample_last: true,
+            phase: IterationBatchPhase::Decode,
+        };
+
+        assert!(!iteration_request_should_emit_sample(&request));
+    }
+
+    #[test]
+    fn sparse_iteration_samples_preserve_explicit_request_indexes() -> anyhow::Result<()> {
+        let samples = collect_iteration_samples(3, 2, &[0, 2, 0], &[41, 99, 0])?;
+
+        assert_eq!(samples[0].request_index, 0);
+        assert_eq!(samples[0].predicted_token, 41);
+        assert_eq!(samples[1].request_index, 2);
+        assert_eq!(samples[1].predicted_token, 99);
+        Ok(())
+    }
+
+    #[test]
+    fn iteration_samples_reject_duplicate_or_out_of_range_indexes() {
+        assert!(collect_iteration_samples(3, 2, &[1, 1], &[41, 99]).is_err());
+        assert!(collect_iteration_samples(3, 1, &[3], &[41]).is_err());
+        assert!(collect_iteration_samples(3, 4, &[0, 1, 2, 0], &[1, 2, 3, 4]).is_err());
     }
 }

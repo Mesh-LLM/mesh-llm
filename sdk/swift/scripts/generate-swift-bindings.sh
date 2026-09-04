@@ -27,13 +27,13 @@ rm -f \
 cat > "$RUNNER_DIR/Cargo.toml" <<'EOF'
 [package]
 name = "swift_bindgen_runner"
-version = "0.76.0-rc7"
+version = "0.76.0-rc9"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
 camino = "1"
-uniffi_bindgen = "=0.31.0"
+uniffi_bindgen = "=0.32.0"
 EOF
 
 cat > "$RUNNER_DIR/src/main.rs" <<EOF
@@ -55,6 +55,7 @@ fn main() -> Result<()> {
         modulemap_filename: Some("$FFI_MODULEMAP_NAME".into()),
         metadata_no_deps: true,
         link_frameworks: Vec::new(),
+        config: None,
     })?;
     Ok(())
 }

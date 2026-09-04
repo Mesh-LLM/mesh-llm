@@ -37,14 +37,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
-        telemetry_setting("telemetry.headers", ConfigValueSchema::Object),
+        telemetry_setting("telemetry.headers", ConfigValueSchema::object()),
         telemetry_setting("telemetry.export_interval_secs", ConfigValueSchema::Integer),
         telemetry_setting("telemetry.queue_size", ConfigValueSchema::Integer),
-        unsupported_setting(
-            "telemetry.prompt_shape_metrics",
-            ConfigValueSchema::Boolean,
-            "Prompt-shape telemetry is intentionally disabled until the telemetry surface is reviewed.",
-        ),
+        telemetry_setting("telemetry.prompt_shape_metrics", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
@@ -159,6 +155,7 @@ fn model_defaults_settings() -> Vec<ConfigSettingSchema> {
         "defaults.throughput",
         &[flat_alias("defaults.parallel")],
     ));
+    settings.extend(topology_settings("defaults.topology"));
     settings.extend(skippy_settings("defaults.skippy"));
     settings.extend(speculative_settings("defaults.speculative"));
     settings.extend(request_defaults_settings("defaults.request_defaults"));
@@ -195,6 +192,7 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.throughput"),
         &[flat_alias(&format!("{model_prefix}.parallel"))],
     ));
+    settings.extend(topology_settings(&format!("{model_prefix}.topology")));
     settings.extend(skippy_settings(&format!("{model_prefix}.skippy")));
     settings.extend(speculative_settings(&format!("{model_prefix}.speculative")));
     settings.extend(request_defaults_settings(&format!(
@@ -206,6 +204,60 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
     ));
     settings.extend(advanced_settings(&format!("{model_prefix}.advanced")));
     settings
+}
+
+fn topology_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
+    let node_selector = ConfigValueSchema::Object {
+        properties: vec![
+            ConfigObjectPropertySchema {
+                name: "endpoint_id".to_string(),
+                label: "Endpoint ID".to_string(),
+                required: false,
+                value_schema: ConfigValueSchema::String,
+            },
+            ConfigObjectPropertySchema {
+                name: "hostname".to_string(),
+                label: "Hostname".to_string(),
+                required: false,
+                value_schema: ConfigValueSchema::String,
+            },
+        ],
+    };
+    let stage = ConfigValueSchema::Object {
+        properties: vec![
+            ConfigObjectPropertySchema {
+                name: "node".to_string(),
+                label: "Node".to_string(),
+                required: true,
+                value_schema: node_selector,
+            },
+            ConfigObjectPropertySchema {
+                name: "layer_start".to_string(),
+                label: "Layer start".to_string(),
+                required: true,
+                value_schema: ConfigValueSchema::Integer,
+            },
+            ConfigObjectPropertySchema {
+                name: "layer_end".to_string(),
+                label: "Layer end".to_string(),
+                required: true,
+                value_schema: ConfigValueSchema::Integer,
+            },
+        ],
+    };
+    vec![
+        basic_setting(&format!("{prefix}.mode"), string_enum(["locked"])),
+        basic_setting(
+            &format!("{prefix}.manifest_sha256"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{prefix}.stages"),
+            ConfigValueSchema::Array {
+                items: Box::new(stage),
+            },
+        ),
+    ]
 }
 
 fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
@@ -266,7 +318,7 @@ fn model_fit_settings(
         ),
         basic_setting(&format!("{prefix}.kv_offload"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.kv_unified"), bool_or_auto_schema()),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.cache_ram_mib"),
             ConfigValueSchema::Integer,
         ),
@@ -303,22 +355,22 @@ fn model_fit_settings(
             &format!("{prefix}.prefix_cache.payload_mode"),
             string_enum(["resident-kv", "kv-recurrent", "full-state", "auto"]),
         ),
-        basic_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
-        basic_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),
+        unwired_setting(&format!("{prefix}.keep_tokens"), ConfigValueSchema::Integer),
+        unwired_setting(&format!("{prefix}.context_shift"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.swa_full"), ConfigValueSchema::Boolean),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.checkpoint_interval"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.checkpoint_count"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.lookup_cache_static"),
             ConfigValueSchema::String,
         ),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.lookup_cache_dynamic"),
             ConfigValueSchema::String,
         ),
@@ -369,7 +421,7 @@ fn hardware_settings(
     legacy_device_aliases: &[ConfigPathAlias],
 ) -> Vec<ConfigSettingSchema> {
     let mut settings = vec![
-        hidden_setting(
+        hidden_unsupported_setting(
             &format!("{prefix}.model_runtime"),
             string_enum(["auto", "cpu", "cuda", "rocm", "metal", "vulkan"]),
             "Model runtime is selected by the installed native runtime and hardware resolver, not by the web configuration UI.",
@@ -384,21 +436,21 @@ fn hardware_settings(
             &format!("{prefix}.stage_layer_end"),
             ConfigValueSchema::Integer,
         ),
-        basic_setting(
+        unwired_setting(
             &format!("{prefix}.placement"),
             string_enum(["auto", "pooled", "separated"]),
         ),
-        basic_setting(&format!("{prefix}.tensor_split"), tensor_split_schema()),
-        basic_setting(
+        unwired_setting(&format!("{prefix}.tensor_split"), tensor_split_schema()),
+        experimental_setting(
             &format!("{prefix}.split_mode"),
-            string_enum(["auto", "none", "layer", "row"]),
+            string_enum(["auto", "none", "layer", "row", "tensor"]),
         ),
-        basic_setting(&format!("{prefix}.main_gpu"), ConfigValueSchema::Integer),
-        basic_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
-        basic_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
+        experimental_setting(&format!("{prefix}.main_gpu"), ConfigValueSchema::Integer),
+        unwired_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
+        unwired_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
         rejected_setting(
             &format!("{prefix}.rpc_backend"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "The legacy rpc_backend escape hatch is explicitly unsupported by the embedded runtime.",
         ),
         basic_setting(
@@ -409,38 +461,60 @@ fn hardware_settings(
             &format!("{prefix}.safety_margin_gb"),
             ConfigValueSchema::Float,
         ),
-        basic_setting(&format!("{prefix}.fit_context"), bool_or_auto_schema()),
+        unsupported_setting(&format!("{prefix}.fit_context"), bool_or_auto_schema()),
         basic_setting(&format!("{prefix}.model_path"), ConfigValueSchema::Path),
         basic_setting(&format!("{prefix}.hf_repo"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.hf_file"), ConfigValueSchema::String),
         basic_setting(&format!("{prefix}.mmproj"), ConfigValueSchema::Path),
         basic_setting(&format!("{prefix}.mmproj_offload"), bool_or_auto_schema()),
-        basic_setting(
+        unsupported_setting(
             &format!("{prefix}.lora_adapters"),
             ConfigValueSchema::Array {
                 items: Box::new(ConfigValueSchema::String),
             },
         ),
-        basic_setting(
+        unsupported_setting(
             &format!("{prefix}.control_vectors"),
             ConfigValueSchema::Array {
                 items: Box::new(ConfigValueSchema::String),
             },
         ),
-        basic_setting(
+        experimental_setting(
             &format!("{prefix}.check_tensors"),
             ConfigValueSchema::Boolean,
         ),
+        experimental_setting(
+            &format!("{prefix}.checkpoint_quantization"),
+            string_enum([
+                "preserve", "F32", "F16", "BF16", "Q1_0", "Q2_0", "Q4_0", "Q4_1", "Q5_0",
+                "Q5_1", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M", "IQ1_S", "IQ1_M", "TQ1_0",
+                "TQ2_0", "Q2_K", "Q2_K_S", "IQ3_XS", "IQ3_XXS", "IQ3_S", "IQ3_M", "Q3_K_S",
+                "Q3_K_M", "Q3_K_L", "IQ4_NL", "IQ4_XS", "Q4_K_S", "Q4_K_M", "Q5_K_S",
+                "Q5_K_M", "Q6_K", "Q8_0", "MXFP4_MOE",
+            ]),
+        ),
+        experimental_setting(
+            &format!("{prefix}.checkpoint_imatrix"),
+            ConfigValueSchema::String,
+        ),
         basic_setting(&format!("{prefix}.mmap"), bool_or_auto_schema()),
+        unsupported_setting(
+            &format!("{prefix}.use_mmap_prefetch"),
+            ConfigValueSchema::Boolean,
+        ),
+        unsupported_setting(
+            &format!("{prefix}.use_mmap_buffer"),
+            ConfigValueSchema::Boolean,
+        ),
         basic_setting(&format!("{prefix}.mlock"), ConfigValueSchema::Boolean),
-        basic_setting(&format!("{prefix}.direct_io"), ConfigValueSchema::Boolean),
-        basic_setting(&format!("{prefix}.repack"), ConfigValueSchema::Boolean),
-        basic_setting(&format!("{prefix}.op_offload"), ConfigValueSchema::Boolean),
-        basic_setting(
+        experimental_setting(&format!("{prefix}.direct_io"), ConfigValueSchema::Boolean),
+        experimental_setting(&format!("{prefix}.repack"), ConfigValueSchema::Boolean),
+        experimental_setting(&format!("{prefix}.op_offload"), ConfigValueSchema::Boolean),
+        experimental_setting(
             &format!("{prefix}.no_host_buffer"),
             ConfigValueSchema::Boolean,
         ),
-        basic_setting(&format!("{prefix}.warmup"), bool_or_auto_schema()),
+        unsupported_setting(&format!("{prefix}.warmup"), bool_or_auto_schema()),
     ];
 
     if !legacy_device_aliases.is_empty() {
@@ -474,16 +548,30 @@ fn throughput_settings(
             ConfigValueSchema::Integer,
             "Dedicated HTTP worker tuning is rejected on the current embedded runtime path.",
         ),
-        basic_setting(&format!("{prefix}.priority"), integer_or_string_schema()),
-        basic_setting(
+        rejected_setting(
+            &format!("{prefix}.priority"),
+            integer_or_string_schema(),
+            "Model-scoped scheduling priority has no runtime or OS-priority consumer.",
+        ),
+        rejected_setting(
             &format!("{prefix}.poll"),
             bool_or_string_enum(["auto", "busy", "sleep"]),
+            "Polling policy is not exposed by the embedded native runtime.",
         ),
-        basic_setting(&format!("{prefix}.cpu_affinity"), string_or_list_schema()),
-        basic_setting(&format!("{prefix}.numa"), ConfigValueSchema::String),
-        basic_setting(
+        rejected_setting(
+            &format!("{prefix}.cpu_affinity"),
+            string_or_list_schema(),
+            "Inference-thread CPU affinity has no supported runtime consumer.",
+        ),
+        rejected_setting(
+            &format!("{prefix}.numa"),
+            ConfigValueSchema::String,
+            "NUMA policy is not exposed by the embedded native runtime.",
+        ),
+        rejected_setting(
             &format!("{prefix}.slot_prompt_similarity"),
             ConfigValueSchema::Float,
+            "Skippy slot and prefix-cache reuse has no configurable similarity threshold.",
         ),
         rejected_setting(
             &format!("{prefix}.sleep_idle_seconds"),
@@ -509,26 +597,33 @@ fn throughput_settings(
 
 fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
     vec![
-        basic_setting(
+        rejected_setting(
             &format!("{prefix}.stage_model_path"),
             ConfigValueSchema::Path,
+            "Stage artifacts come from the canonical model source and package planner.",
         ),
-        basic_setting(&format!("{prefix}.stage_role"), ConfigValueSchema::String),
         basic_setting(
+            &format!("{prefix}.source_policy"),
+            string_enum(["fallback", "local-required"]),
+        ),
+        rejected_setting(
+            &format!("{prefix}.stage_role"),
+            ConfigValueSchema::String,
+            "The typed topology planner derives stage roles from ordered layer assignments.",
+        ),
+        rejected_setting(
             &format!("{prefix}.stage_topology"),
             ConfigValueSchema::String,
+            "Untyped topology strings are unsupported; use typed per-model topology configuration.",
         ),
-        basic_setting(
-            &format!("{prefix}.activation_wire_dtype"),
-            string_enum(["auto", "f16", "f32", "q8"]),
-        ),
-        basic_setting(
+        rejected_setting(
             &format!("{prefix}.binary_stage_transport"),
             ConfigValueSchema::String,
+            "Binary stage transport is selected automatically.",
         ),
         rejected_setting(
             &format!("{prefix}.openai_frontend_mode"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "OpenAI frontend override wiring is intentionally rejected on the built-in schema surface.",
         ),
         basic_setting(
@@ -664,7 +759,7 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
 }
 
 fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
-    vec![
+    let mut settings = vec![
         basic_setting(&format!("{prefix}.max_tokens"), ConfigValueSchema::Integer),
         basic_setting(&format!("{prefix}.stop"), string_or_list_schema()),
         basic_setting(&format!("{prefix}.temperature"), ConfigValueSchema::Float),
@@ -697,20 +792,12 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.frequency_penalty"),
             ConfigValueSchema::Float,
         ),
-        unwired_setting(
-            &format!("{prefix}.dry"),
-            ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
-        ),
-        unwired_setting(
-            &format!("{prefix}.xtc"),
-            ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
-        ),
-        unwired_setting(
+        basic_setting(&format!("{prefix}.dry"), ConfigValueSchema::object()),
+        basic_setting(&format!("{prefix}.xtc"), ConfigValueSchema::object()),
+        rejected_setting(
             &format!("{prefix}.adaptive"),
-            ConfigValueSchema::Object,
-            "Reserved sampler object accepted for compatibility but not wired into the current runtime.",
+            ConfigValueSchema::object(),
+            "Adaptive sampling is reserved and rejected until it is implemented end to end.",
         ),
         basic_setting(
             &format!("{prefix}.mirostat_mode"),
@@ -735,11 +822,11 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::String,
         ),
         basic_setting(&format!("{prefix}.seed"), ConfigValueSchema::Integer),
-        basic_setting(&format!("{prefix}.logit_bias"), ConfigValueSchema::Object),
+        basic_setting(&format!("{prefix}.logit_bias"), ConfigValueSchema::object()),
         basic_setting(&format!("{prefix}.ignore_eos"), ConfigValueSchema::Boolean),
         rejected_setting(
             &format!("{prefix}.backend_sampling"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Backend-owned sampler blocks are explicitly rejected from the built-in control surface.",
         ),
         basic_setting(
@@ -765,7 +852,7 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(&format!("{prefix}.jinja"), ConfigValueSchema::Boolean),
         basic_setting(
             &format!("{prefix}.chat_template_kwargs"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
         ),
         basic_setting(
             &format!("{prefix}.skip_chat_parsing"),
@@ -773,28 +860,32 @@ fn request_defaults_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         ),
         basic_setting(
             &format!("{prefix}.prefill_assistant"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::OneOf {
+                variants: vec![ConfigValueSchema::String, ConfigValueSchema::object()],
+            },
         ),
         basic_setting(
             &format!("{prefix}.system_prompt"),
             ConfigValueSchema::String,
         ),
-        rejected_setting(
-            &format!("{prefix}.grammar"),
-            ConfigValueSchema::Object,
-            "Grammar injection is explicitly rejected on the built-in config surface.",
-        ),
-        rejected_setting(
+        basic_setting(&format!("{prefix}.grammar"), ConfigValueSchema::String),
+        basic_setting(
             &format!("{prefix}.json_schema"),
-            ConfigValueSchema::Object,
-            "JSON schema response shaping is intentionally rejected until a stable runtime contract exists.",
+            ConfigValueSchema::object(),
         ),
         rejected_setting(
             &format!("{prefix}.logprobs"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Logprobs request defaults are explicitly rejected from persisted config.",
         ),
-    ]
+    ];
+    for setting in &mut settings {
+        if setting.support == ConfigSupportState::Supported {
+            setting.apply_mode = ConfigApplyMode::DynamicApply;
+            setting.restart_scope = ConfigRestartScope::None;
+        }
+    }
+    settings
 }
 
 fn multimodal_settings(
@@ -814,23 +905,41 @@ fn multimodal_settings(
             ConfigValueSchema::Integer,
         ),
         rejected_setting(
+            &format!("{prefix}.image_marker"),
+            ConfigValueSchema::String,
+            "mtmd removed custom image markers; use media_marker.",
+        ),
+        basic_setting(&format!("{prefix}.media_marker"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.batch_max_tokens"),
+            ConfigValueSchema::Integer,
+        ),
+        basic_setting(
+            &format!("{prefix}.glm_dsa_policy"),
+            ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{prefix}.generation_signal_window"),
+            ConfigValueSchema::Integer,
+        ),
+        rejected_setting(
             &format!("{prefix}.embeddings"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in multimodal embeddings controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.reranking"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in reranking controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.pooling"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in pooling controls are explicitly rejected from persisted config.",
         ),
         rejected_setting(
             &format!("{prefix}.vocoder"),
-            ConfigValueSchema::Object,
+            ConfigValueSchema::object(),
             "Built-in vocoder controls are explicitly rejected from persisted config.",
         ),
     ];
