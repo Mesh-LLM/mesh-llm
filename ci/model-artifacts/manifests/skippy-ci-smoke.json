@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "skippy-ci-smoke",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "family-qwen3-dense",
+      "family": "qwen3-dense",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "qwen3"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-ci-smoke"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+      "selector": "Q8_0",
+      "files": [
+        "Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file_integrity": {
+        "Qwen3-0.6B-Q8_0.gguf": {
+          "size_bytes": 639446688,
+          "blob_id": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+        }
+      },
+      "model_ref": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "size_bytes": 639446688,
+      "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+      "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+    },
+    {
+      "id": "family-falcon-h1",
+      "family": "falcon-h1",
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "recurrent"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-ci-smoke",
+        "skippy-parity",
+        "competitive-benchmark",
+        "radix-cache"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "selector": "Q4_K_M",
+      "files": [
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 944786656,
+          "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+        }
+      },
+      "model_ref": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 944786656,
+      "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+      "url": "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+    }
+  ]
+}

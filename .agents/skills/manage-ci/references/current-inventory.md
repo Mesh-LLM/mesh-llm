@@ -469,7 +469,13 @@ fail-open policy.
   manifest.
 - `prepare-static-abi-input`: portable static ABI archive.
 - `compose-product-input`: exact host/runtime verification and composition.
-- `restore-smoke-inputs`: product/model extraction for consumers.
+- `ci/model-artifacts/registry.json`: canonical immutable model identities,
+  integrity, family capability tags, and allowed suite/cadence membership.
+  `scripts/generate-test-model-manifests.py` owns the family battery and
+  suite-specific projections; CI contract tests reject stale projections.
+- `restore-smoke-inputs`: product/model extraction for consumers. Model
+  restores resolve generated suite manifests, use exact digest-bearing cache
+  keys, and stream-verify size and SHA-256 before use.
 - `select-ci-runners`: provider labels, cache permissions, and the
   provider-derived `allow_native_github_cache` / `allow_depot_remote_cache`
   outputs. Depot selections disable both cache paths by default. During the
@@ -484,9 +490,12 @@ fail-open policy.
 - `capture-sccache-stats`: machine-readable cache evidence.
 
 Rust-test batches that contain `skippy-runtime` or `skippy-model-package`
-restore the pinned Qwen correctness fixture from one exact GitHub Actions cache
-key containing its file SHA-256 and `.github/cache-version.txt`. Every use is
-verified against the pinned digest before tests. Cache publication is limited
+resolve the generated Skippy correctness manifest, then restore the pinned Qwen
+fixture from one exact GitHub Actions cache key containing its file SHA-256 and
+`.github/cache-version.txt`. Every use is verified against the pinned size and
+digest before tests. The SafeTensors smoke resolves its repository, revision,
+complete file set, per-file integrity, and quantization sweep from the same
+registry. Cache publication is limited
 to the exhaustive trusted-main batch containing `skippy-runtime`; PR jobs are
 restore-only and jobs for which central runner policy denies native GitHub
 cache access download and verify the immutable revision without publishing.

@@ -18,15 +18,31 @@ WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skippy-ci-smoke}"
 REPORT_DIR="${WORK_DIR}/reports"
 MODEL_DIR="${MODEL_DIR:-${WORK_DIR}/models}"
 
-DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-Qwen/Qwen3-0.6B-GGUF}"
-DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-Qwen3-0.6B-Q8_0.gguf}"
-DENSE_MODEL_SELECTOR="${DENSE_MODEL_SELECTOR:-Q8_0}"
+DENSE_MODEL_MANIFEST="${DENSE_MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/skippy-ci-smoke.json}"
+DENSE_MODEL_ARTIFACT_ID="${DENSE_MODEL_ARTIFACT_ID:-family-qwen3-dense}"
+DENSE_MODEL_OVERRIDDEN=0
+if [[ -n "${DENSE_MODEL_REPO+x}${DENSE_MODEL_FILE+x}${DENSE_MODEL_SELECTOR+x}${DENSE_MODEL_REVISION+x}${DENSE_MODEL_PATH+x}" ]]; then
+  DENSE_MODEL_OVERRIDDEN=1
+fi
+DENSE_MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$DENSE_MODEL_MANIFEST" --artifact-id "$DENSE_MODEL_ARTIFACT_ID" --cadence manual)"
+DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-$(jq -r '.repo' <<<"$DENSE_MODEL_FIXTURE")}"
+DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-$(jq -r '.file' <<<"$DENSE_MODEL_FIXTURE")}"
+DENSE_MODEL_SELECTOR="${DENSE_MODEL_SELECTOR:-$(jq -r '.selector' <<<"$DENSE_MODEL_FIXTURE")}"
+DENSE_MODEL_REVISION="${DENSE_MODEL_REVISION:-$(jq -r '.revision' <<<"$DENSE_MODEL_FIXTURE")}"
 DENSE_MODEL_ID="${DENSE_MODEL_ID:-${DENSE_MODEL_REPO}:${DENSE_MODEL_SELECTOR}}"
 DENSE_MODEL_PATH="${DENSE_MODEL_PATH:-}"
 
-RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-tiiuae/Falcon-H1-1.5B-Instruct-GGUF}"
-RECURRENT_MODEL_FILE="${RECURRENT_MODEL_FILE:-Falcon-H1-1.5B-Instruct-Q4_K_M.gguf}"
-RECURRENT_MODEL_SELECTOR="${RECURRENT_MODEL_SELECTOR:-Q4_K_M}"
+RECURRENT_MODEL_MANIFEST="${RECURRENT_MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/skippy-ci-smoke.json}"
+RECURRENT_MODEL_ARTIFACT_ID="${RECURRENT_MODEL_ARTIFACT_ID:-family-falcon-h1}"
+RECURRENT_MODEL_OVERRIDDEN=0
+if [[ -n "${RECURRENT_MODEL_REPO+x}${RECURRENT_MODEL_FILE+x}${RECURRENT_MODEL_SELECTOR+x}${RECURRENT_MODEL_REVISION+x}${RECURRENT_MODEL_PATH+x}" ]]; then
+  RECURRENT_MODEL_OVERRIDDEN=1
+fi
+RECURRENT_MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$RECURRENT_MODEL_MANIFEST" --artifact-id "$RECURRENT_MODEL_ARTIFACT_ID" --cadence manual)"
+RECURRENT_MODEL_REPO="${RECURRENT_MODEL_REPO:-$(jq -r '.repo' <<<"$RECURRENT_MODEL_FIXTURE")}"
+RECURRENT_MODEL_FILE="${RECURRENT_MODEL_FILE:-$(jq -r '.file' <<<"$RECURRENT_MODEL_FIXTURE")}"
+RECURRENT_MODEL_SELECTOR="${RECURRENT_MODEL_SELECTOR:-$(jq -r '.selector' <<<"$RECURRENT_MODEL_FIXTURE")}"
+RECURRENT_MODEL_REVISION="${RECURRENT_MODEL_REVISION:-$(jq -r '.revision' <<<"$RECURRENT_MODEL_FIXTURE")}"
 RECURRENT_MODEL_ID="${RECURRENT_MODEL_ID:-${RECURRENT_MODEL_REPO}:${RECURRENT_MODEL_SELECTOR}}"
 RECURRENT_MODEL_PATH="${RECURRENT_MODEL_PATH:-}"
 
@@ -128,7 +144,8 @@ descendant_pids() {
 download_model() {
   local repo="$1"
   local file="$2"
-  local out_dir="$3"
+  local revision="$3"
+  local out_dir="$4"
   local output path
 
   if [[ -n "${HF_CACHE:-}" ]]; then
@@ -139,7 +156,7 @@ download_model() {
       HF_HOME="$HF_CACHE" \
       HF_HUB_CACHE="$HF_CACHE/hub" \
       HF_HUB_OFFLINE=1 \
-        run_with_timeout "resolve cached ${repo}/${file}" hf download "$repo" "$file"
+        run_with_timeout "resolve cached ${repo}/${file}" hf download "$repo" "$file" --revision "$revision"
     )"
   else
     mkdir -p "$out_dir"
@@ -150,7 +167,7 @@ download_model() {
       return 0
     fi
     echo "downloading ${repo}/${file}" >&2
-    output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --local-dir "$out_dir")"
+    output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --revision "$revision" --local-dir "$out_dir")"
   fi
 
   path="$(
@@ -343,10 +360,24 @@ fi
 mkdir -p "$REPORT_DIR" "$MODEL_DIR"
 
 if [[ -z "$DENSE_MODEL_PATH" ]]; then
-  DENSE_MODEL_PATH="$(download_model "$DENSE_MODEL_REPO" "$DENSE_MODEL_FILE" "${MODEL_DIR}/dense")"
+  DENSE_MODEL_PATH="$(download_model "$DENSE_MODEL_REPO" "$DENSE_MODEL_FILE" "$DENSE_MODEL_REVISION" "${MODEL_DIR}/dense")"
 fi
 if [[ -z "$RECURRENT_MODEL_PATH" ]]; then
-  RECURRENT_MODEL_PATH="$(download_model "$RECURRENT_MODEL_REPO" "$RECURRENT_MODEL_FILE" "${MODEL_DIR}/recurrent")"
+  RECURRENT_MODEL_PATH="$(download_model "$RECURRENT_MODEL_REPO" "$RECURRENT_MODEL_FILE" "$RECURRENT_MODEL_REVISION" "${MODEL_DIR}/recurrent")"
+fi
+if [[ "$DENSE_MODEL_OVERRIDDEN" == "0" ]]; then
+  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+    "$DENSE_MODEL_MANIFEST" \
+    --artifact-id "$DENSE_MODEL_ARTIFACT_ID" \
+    --cadence manual \
+    --verify-root "$(dirname "$DENSE_MODEL_PATH")"
+fi
+if [[ "$RECURRENT_MODEL_OVERRIDDEN" == "0" ]]; then
+  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+    "$RECURRENT_MODEL_MANIFEST" \
+    --artifact-id "$RECURRENT_MODEL_ARTIFACT_ID" \
+    --cadence manual \
+    --verify-root "$(dirname "$RECURRENT_MODEL_PATH")"
 fi
 
 echo "building skippy smoke binaries"

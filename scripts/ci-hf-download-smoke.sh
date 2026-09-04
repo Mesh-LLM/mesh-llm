@@ -13,9 +13,21 @@
 
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODEL_MANIFEST="${MESH_HF_DOWNLOAD_TEST_MANIFEST:-$ROOT/ci/model-artifacts/manifests/hf-download-smoke.json}"
+MODEL_CADENCE="${MESH_HF_DOWNLOAD_TEST_CADENCE:-manual}"
+
+for artifact_id in smollm2-q4-download gemma3-bf16-metadata; do
+  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+    "$MODEL_MANIFEST" \
+    --artifact-id "$artifact_id" \
+    --cadence "$MODEL_CADENCE" >/dev/null
+done
+
 echo "=== CI HuggingFace Download Smoke ==="
 echo "  rust toolchain: $(rustc --version 2>/dev/null || echo 'not found')"
 echo "  os:             $(uname -s)"
+echo "  model cadence:  $MODEL_CADENCE"
 if [[ -n "${HF_TOKEN:-}${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
   echo "  hf token:       present"
 else
