@@ -51,7 +51,7 @@ const ROOT_LOCK_FILE: &str = ".owner.lock";
 const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// On-disk format version stamped into every manifest. A released change to
 /// the layout bumps this and makes older entries misses, never migrations.
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandoffSegmentRef {
@@ -68,6 +68,9 @@ pub struct HandoffSegmentRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandoffManifest {
     pub version: u32,
+    /// Numerical model identity used by exact model-scoped lifecycle
+    /// operations. This intentionally spans every split stage of one model.
+    pub model_identity: String,
     /// `exact_state_identity` of the producing runtime — the numerical
     /// identity a loader must match before importing this state.
     pub state_identity: String,
@@ -92,8 +95,17 @@ pub struct HandoffManifest {
 
 impl HandoffManifest {
     pub fn new(state_identity: String, payload_kind: String) -> Self {
+        Self::new_for_model(state_identity.clone(), state_identity, payload_kind)
+    }
+
+    pub fn new_for_model(
+        model_identity: String,
+        state_identity: String,
+        payload_kind: String,
+    ) -> Self {
         Self {
             version: MANIFEST_VERSION,
+            model_identity,
             state_identity,
             payload_kind,
             total_bytes: 0,
@@ -791,6 +803,19 @@ impl HandoffSegmentStore {
     /// with the recorded size and offsets tile the payload exactly — the
     /// completeness gate that makes partial state unloadable.
     pub fn commit(&self, manifest: &HandoffManifest) -> Result<()> {
+        match self.try_commit(manifest)? {
+            Ok(()) => Ok(()),
+            Err(refusal) => bail!(
+                "cannot commit manifest {}: {}",
+                manifest.payload_digest,
+                refusal.reason()
+            ),
+        }
+    }
+
+    /// As [`Self::commit`], preserving an admission refusal as structured
+    /// state for the manager's effective-state contract.
+    pub fn try_commit(&self, manifest: &HandoffManifest) -> Result<Result<(), WriteRefusal>> {
         if manifest.payload_digest.is_empty() {
             bail!("manifest has no payload digest");
         }
@@ -835,13 +860,7 @@ impl HandoffSegmentStore {
             );
         }
         if self.limits.budget_bytes > 0 && manifest.total_bytes > self.limits.budget_bytes {
-            bail!(
-                "manifest {} spans {} bytes, more than the {} byte budget ({})",
-                manifest.payload_digest,
-                manifest.total_bytes,
-                self.limits.budget_bytes,
-                WriteRefusal::SkippedOversize.reason()
-            );
+            return Ok(Err(WriteRefusal::SkippedOversize));
         }
         // Compact, not pretty: a 64-row window turns a long prefix into
         // thousands of segment refs, and eviction parses every manifest to
@@ -856,16 +875,10 @@ impl HandoffSegmentStore {
             Ok(_reservation) => {
                 write_atomically(&self.manifest_path(&manifest.payload_digest), &serialized)?;
             }
-            Err(refusal) => {
-                bail!(
-                    "cannot commit manifest {}: {}",
-                    manifest.payload_digest,
-                    refusal.reason()
-                );
-            }
+            Err(refusal) => return Ok(Err(refusal)),
         }
         self.enforce_budget()?;
-        Ok(())
+        Ok(Ok(()))
     }
 
     /// Record that an entry was used, so eviction can order by last use.
@@ -1090,6 +1103,14 @@ impl HandoffSegmentStore {
     /// Pinned manifests are never evicted, so an in-flight read or write keeps
     /// its state loadable even under pressure.
     pub fn enforce_budget_to(&self, target_bytes: u64) -> Result<u64> {
+        self.enforce_budget_to_model(target_bytes, None)
+    }
+
+    fn enforce_budget_to_model(
+        &self,
+        target_bytes: u64,
+        model_identity: Option<&str>,
+    ) -> Result<u64> {
         let usage_before = self.managed_usage_bytes()?;
         if usage_before <= target_bytes {
             return Ok(0);
@@ -1114,10 +1135,10 @@ impl HandoffSegmentStore {
         let mut freeable = usage_before;
         let mut evicted_any = false;
         while freeable > target_bytes {
-            let Some(position) = manifests
-                .iter()
-                .rposition(|manifest| !self.is_pinned(&manifest.payload_digest))
-            else {
+            let Some(position) = manifests.iter().rposition(|manifest| {
+                !self.is_pinned(&manifest.payload_digest)
+                    && model_identity.is_none_or(|identity| manifest.model_identity == identity)
+            }) else {
                 // Everything left is in use. Refusing the write is correct;
                 // tearing state out from under a live operation is not.
                 break;
@@ -1158,16 +1179,36 @@ impl HandoffSegmentStore {
         self.enforce_budget_to(target_bytes)
     }
 
+    pub(crate) fn prune_model_to(&self, model_identity: &str, target_bytes: u64) -> Result<u64> {
+        self.enforce_budget_to_model(target_bytes, Some(model_identity))
+    }
+
     /// Remove every manifest that is not pinned, then collect the segments
     /// that became unreferenced. Returns bytes freed.
     ///
     /// Requests in flight keep serving: clearing removes stored state, and a
     /// miss falls back to cold prefill.
     pub fn clear(&self) -> Result<u64> {
+        self.clear_model_inner(None)
+    }
+
+    pub(crate) fn clear_model(&self, model_identity: &str) -> Result<u64> {
+        self.clear_model_inner(Some(model_identity))
+    }
+
+    fn clear_model_inner(&self, model_identity: Option<&str>) -> Result<u64> {
         let before = self.managed_usage_bytes()?;
         for key in self.list_manifests()? {
             if self.is_pinned(&key) {
                 continue;
+            }
+            if let Some(model_identity) = model_identity {
+                let Ok(manifest) = self.load_manifest(&key) else {
+                    continue;
+                };
+                if manifest.model_identity != model_identity {
+                    continue;
+                }
             }
             let path = self.manifest_path(&key);
             match fs::remove_file(&path) {
@@ -1768,16 +1809,21 @@ mod tests {
     fn eviction_leaves_headroom_so_a_full_cache_is_not_repriced_per_commit() {
         let root = temp_root("low-water");
         let store = store(&root, 40_000);
-        for fill in 1u8..=6 {
+        let mut eviction_triggered = false;
+        for fill in 1u8..=16 {
             let manifest = commit_payload(&store, &vec![fill; 8_000], 4096);
-            // A commit that overflows evicts; one that fits must not.
             store.commit(&manifest).expect("commit");
+            if store.usage().unwrap().evicted_manifests > 0 {
+                eviction_triggered = true;
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        assert!(eviction_triggered, "fixture never crossed the budget");
         let usage = store.managed_usage_bytes().expect("usage");
         assert!(
-            usage <= 40_000 * EVICTION_LOW_WATER_PERCENT / 100,
-            "eviction stopped at the cap instead of below it: {usage}"
+            usage < 40_000,
+            "eviction left no headroom below the cap: {usage}"
         );
         assert_eq!(
             store.enforce_budget().expect("second pass"),

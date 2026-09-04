@@ -140,18 +140,7 @@ fn update_weight_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
         }
     }
     hasher.update(b"checkpoint-quantization:");
-    let quantization = config
-        .checkpoint_quantization
-        .as_deref()
-        .unwrap_or("preserve")
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_uppercase)
-        .collect::<String>();
-    hasher.update(match quantization.as_str() {
-        "DIRECT" | "NONE" | "PRESERVE" => b"PRESERVE" as &[u8],
-        _ => quantization.as_bytes(),
-    });
+    hasher.update(normalized_checkpoint_quantization(config).as_bytes());
     hasher.update(b"checkpoint-imatrix:");
     match config.checkpoint_imatrix_sha256.as_deref() {
         Some(digest) => hasher.update(digest.as_bytes()),
@@ -167,6 +156,21 @@ fn update_weight_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
         LoadMode::RuntimeSlice => b"load:runslice",
         LoadMode::ArtifactSlice => b"load:artslice",
     });
+}
+
+fn normalized_checkpoint_quantization(config: &StageConfig) -> String {
+    let quantization = config
+        .checkpoint_quantization
+        .as_deref()
+        .unwrap_or("preserve")
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect::<String>();
+    match quantization.as_str() {
+        "DIRECT" | "NONE" | "PRESERVE" => "PRESERVE".to_string(),
+        _ => quantization,
+    }
 }
 
 pub fn prefix_hash_with_namespace(
@@ -248,6 +252,58 @@ pub fn exact_state_identity_for_stage(config: &StageConfig, payload_kind: &str) 
     hasher.update(&config.lane_count.to_le_bytes());
     hasher.update(b"payload:");
     hasher.update(payload_kind.as_bytes());
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+/// Stable identity for model-scoped lifecycle operations.
+///
+/// Unlike an exact-state identity this deliberately excludes stage layout,
+/// payload format, placement, and device details: every split stage for the
+/// same numerical model must be selected by one model-scoped prune or clear.
+/// A source-model digest is authoritative when present. Older/direct inputs
+/// without one fall back to their materialized manifest/package identity.
+pub fn numerical_model_identity_for_stage(config: &StageConfig) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"numerical-model-identity-v1");
+    match config.source_model_sha256.as_deref() {
+        Some(digest) => {
+            hasher.update(b"source:");
+            hasher.update(digest.as_bytes());
+        }
+        None => {
+            hasher.update(b"source:<absent>");
+            hasher.update(b"manifest:");
+            hasher.update(
+                config
+                    .manifest_sha256
+                    .as_deref()
+                    .unwrap_or("<absent>")
+                    .as_bytes(),
+            );
+            hasher.update(b"package:");
+            hasher.update(
+                config
+                    .package_ref
+                    .as_deref()
+                    .unwrap_or("<absent>")
+                    .as_bytes(),
+            );
+            // The fallback must not collapse unrelated legacy configurations
+            // that have no content digest at all.
+            hasher.update(b"model:");
+            hasher.update(config.model_id.as_bytes());
+        }
+    }
+    hasher.update(b"checkpoint-quantization:");
+    hasher.update(normalized_checkpoint_quantization(config).as_bytes());
+    hasher.update(b"checkpoint-imatrix:");
+    hasher.update(
+        config
+            .checkpoint_imatrix_sha256
+            .as_deref()
+            .unwrap_or("<absent>")
+            .as_bytes(),
+    );
     format!("blake3:{}", hasher.finalize().to_hex())
 }
 
@@ -1009,8 +1065,46 @@ mod identity_stability_tests {
             exact_state_identity_for_stage(&replica, "full-state")
         );
         assert_eq!(
+            numerical_model_identity_for_stage(&first),
+            numerical_model_identity_for_stage(&replica)
+        );
+        assert_eq!(
             prefix_identity(&first, 0, &tokens).prefix_hash,
             prefix_identity(&replica, 0, &tokens).prefix_hash
+        );
+    }
+
+    #[test]
+    fn model_identity_groups_split_packages_from_one_source_model() {
+        let mut first = config_with_topology("topology-a");
+        first.source_model_sha256 = Some("source-digest".to_string());
+        first.manifest_sha256 = Some("stage-a-manifest".to_string());
+        first.package_ref = Some("stage-a-package".to_string());
+        let second = StageConfig {
+            stage_id: "stage-b".to_string(),
+            stage_index: 1,
+            layer_start: 24,
+            layer_end: 48,
+            manifest_sha256: Some("stage-b-manifest".to_string()),
+            package_ref: Some("stage-b-package".to_string()),
+            ..first.clone()
+        };
+
+        assert_eq!(
+            numerical_model_identity_for_stage(&first),
+            numerical_model_identity_for_stage(&second)
+        );
+        assert_ne!(
+            exact_state_identity_for_stage(&first, "full-state"),
+            exact_state_identity_for_stage(&second, "full-state")
+        );
+
+        let mut equivalent_spelling = first.clone();
+        equivalent_spelling.checkpoint_quantization = Some("none".to_string());
+        assert_eq!(
+            numerical_model_identity_for_stage(&first),
+            numerical_model_identity_for_stage(&equivalent_spelling),
+            "equivalent preserve-mode spellings must share lifecycle identity"
         );
     }
 

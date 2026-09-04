@@ -12,16 +12,19 @@ pub mod tier;
 pub use config::{ResidentCacheConfig, SparseCheckpointPolicy};
 pub use identity::{
     ExactStateIdentityParams, NATIVE_KV_DTYPE, NATIVE_KV_RUNTIME_ABI_VERSION, PrefixIdentity,
-    activation_page_id, exact_state_identity, exact_state_identity_for_stage, prefix_hash,
-    prefix_hash_with_namespace, prefix_identity, prefix_identity_with_namespace,
-    prefix_namespace_hash,
+    activation_page_id, exact_state_identity, exact_state_identity_for_stage,
+    numerical_model_identity_for_stage, prefix_hash, prefix_hash_with_namespace, prefix_identity,
+    prefix_identity_with_namespace, prefix_namespace_hash,
 };
 pub use l3::{
     GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef, HandoffSegmentStore,
     MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentHold, SegmentPut,
     StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
-pub use manager::{L3ActivitySnapshot, L3CacheManager};
+pub use manager::{
+    L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3StateReason,
+    L3StateTransition,
+};
 pub use payload::{
     CacheBlobStore, CacheBytes, CacheBytesReconstructStats, CacheDedupeStats, ExactStatePayload,
     ExactStatePayloadKind,
