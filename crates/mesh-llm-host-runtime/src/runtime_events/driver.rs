@@ -1,0 +1,314 @@
+//! The engine-owned driver: the single production task that pumps
+//! `RuntimeEventEngine::drain()` in every serving mode, so a submitted
+//! fact is actually applied through the reducer and published to
+//! subscribers -- fixing review defect D3
+//! (`.omo/plans/event-system-fixes.md` task 3). Before this module, the
+//! ONLY thing that ever called `drain()` in production was the
+//! presentation subscriber's own render tick (`presentation/subscriber.rs`),
+//! so `--local-model-only` -- which never attaches that subscriber, by
+//! design -- never drained a single fact, and nothing in the process ever
+//! called `RuntimeEventEngine::shutdown`.
+//!
+//! [`spawn_engine_driver`] is spawned once per installed engine, immediately
+//! after `install_runtime_event_engine`, in BOTH `runtime/run_auto.rs` (the
+//! mesh-serve/TUI path, alongside the presentation subscriber) and
+//! `runtime/local_model_only.rs` (which keeps its own "zero management
+//! subscribers" invariant -- the driver needs no subscriber to do its job).
+//! The spawned task loops on `select!` over two independent wake sources:
+//!
+//! - the engine's `Notify`, signaled by every `SubmitOutcome::Accepted`
+//!   submission (`RuntimeEventEngine::submit`), so a terminal, a newly
+//!   distinct state-transition, or a diagnostic within its lane depth is
+//!   applied and published promptly, not just once per fallback tick.
+//!   `Coalesced`/`Dropped*` outcomes never signal: progress intentionally
+//!   flushes on its own cadence (task 4), never on every coalesce, or
+//!   coalescing would lose its whole point.
+//! - a `TUI_RENDER_TICK` (33 ms) fallback, so a process with an installed
+//!   engine but no active producers right now (idle between requests) still
+//!   converges, and a signal that is technically missed (the `Notify`
+//!   permit already consumed by a still-in-flight `drain()` call) is
+//!   bounded by at most one tick's latency rather than lost.
+//!
+//! Task 4 owns restructuring what the drain entry point actually applies
+//! (terminal and state lanes, then the diagnostic queue, then a 100 ms
+//! progress flush); this module calls whatever that entry point currently
+//! is (`RuntimeEventEngine::drain()` today) so this call site does not need
+//! to change when task 4 lands.
+//!
+//! Shutdown ([`shutdown_engine_driver`] / [`finalize_engine_driver`]) is
+//! called from the SAME shutdown sequence that already emits
+//! `node_draining`/`node_stopped` (`runtime/node_lifecycle_events.rs`),
+//! AFTER both of those facts are submitted -- so this call's own final
+//! drain is what applies and publishes them; a driver aborted first would
+//! leave a submitted `node_stopped` sitting in the wake list forever with
+//! nothing left to drain it. The budget passed at the two production call
+//! sites is the frozen `WAKE_LIST_DEPTH` -- the wake list's own hard
+//! capacity (`config.rs`; by construction it can never hold more entries
+//! than that, see `wake.rs`'s own doc), so every entry actually queued
+//! always drains and `shutdown_degraded` stays at zero in practice. The
+//! frozen `SHUTDOWN_DRAIN_DEADLINE` (2 s) has no async-wait teeth yet --
+//! today's `drain()`/`shutdown()` are synchronous, bounded-in-memory
+//! operations with nothing to wait ON, so there is no wall-clock deadline
+//! to enforce here. Task 5 gives that deadline real meaning (a bounded
+//! child-settle grace before a root with still-occupied children
+//! releases); this module's job is to keep the call site exactly where
+//! task 5 needs it to slot the wait in.
+
+use std::sync::Arc;
+
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
+
+use super::config::{TUI_RENDER_TICK, WAKE_LIST_DEPTH};
+use super::engine::RuntimeEventEngine;
+
+/// Spawn the engine-owned driver task for `engine`. Keep the returned
+/// handle alive for the life of the serving process and hand it to
+/// [`shutdown_engine_driver`] (or [`finalize_engine_driver`]) during
+/// graceful shutdown -- see the module doc for why aborting it any earlier
+/// can silently lose a fact.
+#[must_use]
+pub fn spawn_engine_driver(engine: Arc<RuntimeEventEngine>) -> JoinHandle<()> {
+    tokio::spawn(drive_engine(engine))
+}
+
+async fn drive_engine(engine: Arc<RuntimeEventEngine>) {
+    let mut tick = tokio::time::interval(TUI_RENDER_TICK);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            () = engine.notified() => {
+                engine.drain();
+            }
+            _ = tick.tick() => {
+                engine.drain();
+            }
+        }
+    }
+}
+
+/// Drain `engine` one final time, bounded by `budget` (see
+/// `RuntimeEventEngine::shutdown`), then abort `driver_handle`. Exposed
+/// directly -- rather than only through [`finalize_engine_driver`] -- so a
+/// caller that already holds its own engine reference, and every test in
+/// this module, can exercise the exact production sequencing without the
+/// process-global installed-engine indirection.
+pub fn shutdown_engine_driver(
+    engine: &RuntimeEventEngine,
+    driver_handle: JoinHandle<()>,
+    budget: Option<usize>,
+) {
+    engine.shutdown(budget);
+    driver_handle.abort();
+}
+
+/// Production shutdown convenience for both serving modes: shut down the
+/// process-local installed engine (`runtime_events::runtime_event_engine`),
+/// if one is installed, through [`shutdown_engine_driver`] with the frozen
+/// `WAKE_LIST_DEPTH` budget; abort `driver_handle` either way. Call this
+/// from the SAME shutdown sequence that already emits
+/// `node_draining`/`node_stopped`, after both are submitted (see the
+/// module doc).
+pub fn finalize_engine_driver(driver_handle: JoinHandle<()>) {
+    match crate::runtime_events::runtime_event_engine() {
+        Some(engine) => shutdown_engine_driver(&engine, driver_handle, Some(WAKE_LIST_DEPTH)),
+        None => driver_handle.abort(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mesh_llm_runtime_event_contracts::{
+        FamilyFact, NativeRuntimeEventKind, OperationId, OperationScope, RuntimeEventIngress,
+        RuntimeFact, SubmitOutcome,
+    };
+
+    use super::{finalize_engine_driver, shutdown_engine_driver, spawn_engine_driver};
+    use crate::runtime_events::config::{TUI_RENDER_TICK, WAKE_LIST_DEPTH};
+    use crate::runtime_events::engine::RuntimeEventEngine;
+    use crate::runtime_events::reservation::TerminalRecord;
+    use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
+
+    fn terminal_fact() -> RuntimeFact {
+        RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeStopped))
+    }
+
+    /// Let an already-spawned driver consume the fallback interval's own
+    /// immediate first tick (a `tokio::time::interval` quirk: the first
+    /// `.tick()` completes right away, before any real period has
+    /// elapsed) with nothing queued to drain, so it settles into waiting
+    /// for its genuinely-periodic second tick. Tests that need to prove
+    /// WHICH branch of the driver's `select!` caused a drain call this
+    /// first, before submitting anything, so a later small time-advance
+    /// cannot be attributed to that free first tick.
+    async fn settle_past_the_free_first_tick() {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Task 3 acceptance: "with no subscriber attached, a submitted
+    /// terminal is applied and its reservation released within one tick."
+    /// Proven by advancing virtual time by LESS than one `TUI_RENDER_TICK`
+    /// after the driver has already settled past its free first tick, so
+    /// only the `Notify` branch could possibly have fired.
+    #[tokio::test(start_paused = true)]
+    async fn notify_signal_drains_a_terminal_before_the_next_fallback_tick() {
+        let engine = RuntimeEventEngine::new();
+        assert_eq!(engine.subscribers().active_count(), 0);
+        let driver = spawn_engine_driver(engine.clone());
+        settle_past_the_free_first_tick().await;
+
+        let reservation = engine
+            .reserve_root(OperationId::new(), terminal_fact)
+            .expect("reservation");
+        assert_eq!(
+            reservation.ingress().try_submit(terminal_fact()),
+            SubmitOutcome::Accepted
+        );
+
+        tokio::time::advance(TUI_RENDER_TICK / 4).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(
+            engine.occupied_count(),
+            0,
+            "the notify signal -- not the fallback tick, which cannot have fired yet -- \
+             must drain and release the reservation"
+        );
+
+        driver.abort();
+    }
+
+    /// Task 3 acceptance: the driver's fallback tick is what keeps a
+    /// system converged even when nothing signals it. Proven by writing a
+    /// wake entry directly through the reservation table and wake list --
+    /// exactly what `engine::lanes::submit_terminal` does internally,
+    /// minus the `Notify` call `RuntimeEventEngine::submit` performs on
+    /// top of it -- so no signal is ever sent for this entry.
+    #[tokio::test(start_paused = true)]
+    async fn fallback_tick_drains_a_wake_entry_that_never_signaled_notify() {
+        let engine = RuntimeEventEngine::new();
+        let driver = spawn_engine_driver(engine.clone());
+        settle_past_the_free_first_tick().await;
+
+        let scope = OperationScope::root_only(OperationId::new());
+        let handle = engine.table().reserve(scope).expect("reserve");
+        assert!(engine.table().write_terminal(
+            handle,
+            TerminalRecord {
+                fact: terminal_fact(),
+                synthesized: false,
+            }
+        ));
+        engine.wake().push_next(handle);
+
+        tokio::time::advance(TUI_RENDER_TICK * 3).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(
+            engine.occupied_count(),
+            0,
+            "the fallback tick alone -- no notify was ever signaled for this entry -- must \
+             still drain and release the reservation"
+        );
+
+        driver.abort();
+    }
+
+    /// Task 3 acceptance: "shutdown test proves `shutdown_degraded` stays
+    /// 0 when the wake list is drained within budget."
+    #[tokio::test]
+    async fn shutdown_within_budget_does_not_degrade() {
+        let engine = RuntimeEventEngine::with_capacity(4);
+        for _ in 0..2 {
+            let reservation = engine
+                .reserve_root(OperationId::new(), terminal_fact)
+                .expect("reserve");
+            reservation.ingress().try_submit(terminal_fact());
+        }
+        let driver_handle = tokio::spawn(async {});
+
+        shutdown_engine_driver(&engine, driver_handle, Some(2));
+
+        assert_eq!(engine.health().snapshot().shutdown_degraded, 0);
+        assert!(engine.is_shutting_down());
+    }
+
+    /// Task 3 acceptance: "...and increments otherwise."
+    #[tokio::test]
+    async fn shutdown_past_its_budget_degrades_the_remainder() {
+        let engine = RuntimeEventEngine::with_capacity(4);
+        for _ in 0..3 {
+            let reservation = engine
+                .reserve_root(OperationId::new(), terminal_fact)
+                .expect("reserve");
+            reservation.ingress().try_submit(terminal_fact());
+        }
+        let driver_handle = tokio::spawn(async {});
+
+        shutdown_engine_driver(&engine, driver_handle, Some(1));
+
+        assert_eq!(engine.health().snapshot().shutdown_degraded, 1);
+        assert_eq!(engine.health().snapshot().terminal_delivery_failed, 2);
+    }
+
+    /// End-to-end sanity: a real driver drains a fact through its own
+    /// notify-driven tick during steady-state operation, and the explicit
+    /// shutdown call afterward -- against an already-empty wake list -- is
+    /// still safe, reports no degradation, and cleanly stops the task.
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_engine_driver_is_safe_after_the_driver_already_drained_everything() {
+        let engine = RuntimeEventEngine::new();
+        let driver = spawn_engine_driver(engine.clone());
+        settle_past_the_free_first_tick().await;
+
+        let reservation = engine
+            .reserve_root(OperationId::new(), terminal_fact)
+            .expect("reservation");
+        reservation.ingress().try_submit(terminal_fact());
+
+        tokio::time::advance(TUI_RENDER_TICK).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(engine.occupied_count(), 0);
+
+        shutdown_engine_driver(&engine, driver, Some(WAKE_LIST_DEPTH));
+
+        assert!(engine.is_shutting_down());
+        assert_eq!(engine.health().snapshot().shutdown_degraded, 0);
+    }
+
+    /// [`finalize_engine_driver`] is the production call site: it must
+    /// resolve the process-global installed engine itself (not require the
+    /// caller to hold one) and still shut it down correctly.
+    #[tokio::test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    async fn finalize_engine_driver_shuts_down_the_process_installed_engine() {
+        clear_runtime_event_engine();
+        let engine = RuntimeEventEngine::new();
+        install_runtime_event_engine(engine.clone());
+        let driver = spawn_engine_driver(engine.clone());
+
+        let reservation = engine
+            .reserve_root(OperationId::new(), terminal_fact)
+            .expect("reservation");
+        reservation.ingress().try_submit(terminal_fact());
+
+        finalize_engine_driver(driver);
+
+        assert!(engine.is_shutting_down());
+        assert_eq!(
+            engine.occupied_count(),
+            0,
+            "finalize_engine_driver's own engine.shutdown() call drains synchronously, \
+             independent of whether the driver task itself ever got scheduled"
+        );
+        clear_runtime_event_engine();
+    }
+}

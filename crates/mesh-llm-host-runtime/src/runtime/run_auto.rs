@@ -1411,6 +1411,13 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     // degrades to no presentation rather than failing startup.
     let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    // Task 3: the engine-owned driver is the process's one production
+    // drain loop (defect D3 -- previously nothing but the presentation
+    // subscriber's own tick ever drained anything, and that tick is now a
+    // pure consumer; see `runtime_events::driver`'s module doc). Spawned
+    // immediately after install, same as the presentation subscriber below.
+    let runtime_event_driver =
+        crate::runtime_events::driver::spawn_engine_driver(runtime_event_engine.clone());
     // Task 19: the hidden, TEST-ONLY `event-disabled` A/B certification
     // selector. `event_system_progress_diagnostic_bypass_enabled()` is
     // `false` unless BOTH `MESH_LLM_BENCHMARK_TUNE_TRIAL=1` and
@@ -1640,6 +1647,7 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         console_server_handle,
         discovery_publisher,
         presentation_subscriber,
+        runtime_event_driver,
         startup_specs: &startup_specs,
         tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,

@@ -14,6 +14,7 @@ use std::time::Instant;
 use mesh_llm_runtime_event_contracts::{
     OperationId, OperationScope, ProcessInstanceId, RuntimeEventIngress, RuntimeFact, SubmitOutcome,
 };
+use tokio::sync::Notify;
 
 use super::config::RESERVATION_TABLE_CAPACITY;
 use super::health::EngineHealth;
@@ -52,6 +53,11 @@ pub struct RuntimeEventEngine {
     /// See `set_progress_diagnostic_class_bypass` and `submit` below for
     /// the single contract boundary this flag gates.
     progress_diagnostic_class_bypass: AtomicBool,
+    /// Signaled once per `SubmitOutcome::Accepted` submission (never on
+    /// `Coalesced`/`Dropped*`/`RejectedShuttingDown`/`TerminalDeliveryFailed`)
+    /// -- the engine-owned driver's (`runtime_events::driver`, task 3) wake
+    /// source, alongside its own fallback tick. See [`Self::notified`].
+    notify: Notify,
 }
 
 impl RuntimeEventEngine {
@@ -87,6 +93,7 @@ impl RuntimeEventEngine {
             process_instance: ProcessInstanceId::new(),
             telemetry: OnceLock::new(),
             progress_diagnostic_class_bypass: AtomicBool::new(false),
+            notify: Notify::new(),
         })
     }
 
@@ -190,6 +197,16 @@ impl RuntimeEventEngine {
         self.shutting_down.load(Ordering::Acquire)
     }
 
+    /// Await the engine's next `SubmitOutcome::Accepted` signal (or return
+    /// immediately if one arrived since the caller's last await). Backs the
+    /// engine-owned driver's (`runtime_events::driver`, task 3) `select!`
+    /// wake condition; a signal missed by a race is bounded by the
+    /// driver's own fallback tick, so no precise check-then-wait ordering
+    /// is required here.
+    pub(crate) async fn notified(&self) {
+        self.notify.notified().await;
+    }
+
     pub fn reserve_root(
         self: &Arc<Self>,
         operation: OperationId,
@@ -276,6 +293,9 @@ impl RuntimeEventEngine {
         };
         if let (Some(queue), Some(start)) = (telemetry, start) {
             queue.record_class_outcome(class, outcome, start.elapsed());
+        }
+        if outcome == SubmitOutcome::Accepted {
+            self.notify.notify_one();
         }
         outcome
     }

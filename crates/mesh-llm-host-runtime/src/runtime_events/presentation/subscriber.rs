@@ -19,19 +19,16 @@
 //! subscription is registered on the engine BEFORE the function returns,
 //! not at some later point inside a freshly spawned task.
 //!
-//! The drive loop also calls [`RuntimeEventEngine::drain`] once per render
-//! tick. This is deliberate and load-bearing, not incidental: nothing else
-//! in the running host calls `drain()` outside test code (verified by grep
-//! across `crates/mesh-llm-host-runtime/src` at the time this was written)
-//! -- a submitted terminal fact sits in the engine's wake list, reserved
-//! but never applied through the reducer or published to any subscriber,
-//! until something drains it. This subscriber is the one always-on,
-//! life-of-process consumer the plan's own "Authority boundaries" table
-//! describes for presentation, so its own tick is the natural place to pump
-//! the engine until a dedicated engine-owned drain loop exists. Draining is
-//! idempotent and safe to call from multiple sites (task 3's `drain()` is a
-//! plain `&self` method over a lock-protected wake list), so this does not
-//! preclude another consumer also draining later.
+//! This is a PURE consumer: it never calls [`RuntimeEventEngine::drain`] or
+//! any other apply/release/flush entry point. The engine-owned driver task
+//! (`runtime_events::driver`, spawned right alongside this subscriber in
+//! `run_auto.rs`) is the process's one production drain loop; this
+//! subscriber's own tick only flushes ITS OWN local, presentation-side
+//! state -- the progress coalescer and the cadence-gated health snapshot --
+//! and forwards whatever the driver already applied and published, which
+//! this subscriber receives over its subscription. Losing this subscriber
+//! (a lagged disconnect) degrades observability only; it can never stall
+//! or affect the driver's own progress.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -119,8 +116,9 @@ pub fn attach(engine: &RuntimeEventEngine) -> Result<SubscriptionHandle, Subscri
 /// subscription is disconnected for lagging too far behind. A lagged
 /// receiver records the disconnect on engine health and returns --
 /// presentation loss degrades observability only, it never blocks or fails
-/// primary work. See the module doc for why every tick also calls
-/// `engine.drain()`.
+/// primary work. This loop never drains the engine itself (see the module
+/// doc): its own tick only flushes the progress coalescer and the
+/// cadence-gated health snapshot.
 pub async fn drive_presentation_subscriber(
     mut subscription: SubscriptionHandle,
     engine: Arc<RuntimeEventEngine>,
@@ -142,7 +140,6 @@ pub async fn drive_presentation_subscriber(
                 }
             }
             _ = tick.tick() => {
-                engine.drain();
                 flush_tick(&coalescer, engine.health(), sink.as_ref(), Instant::now());
             }
         }

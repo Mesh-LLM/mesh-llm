@@ -1,9 +1,10 @@
 //! Proves the presentation subscriber is actually attached to a live
-//! engine, synchronously and with no scheduler race, and that its drive
-//! loop pumps the engine (`RuntimeEventEngine::drain`) on every tick so
-//! queued terminal facts reach the sink without any external explicit
-//! `engine.drain()` call -- the two things `run_auto.rs`'s wiring depends
-//! on being true.
+//! engine, synchronously and with no scheduler race, and that a fact the
+//! engine-owned driver (`runtime_events::driver`, spawned right alongside
+//! this subscriber in `run_auto.rs`) applies and publishes reaches the
+//! sink through the subscriber's own subscription -- with no drain() call
+//! anywhere in this subscriber or this test: draining is exclusively the
+//! driver's job as of task 3.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,16 +35,15 @@ async fn spawn_presentation_subscriber_registers_a_live_subscription_before_retu
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_drive_loop_drains_the_engine_on_every_tick_so_a_queued_terminal_fact_reaches_the_sink()
-{
+async fn a_fact_the_engine_owned_driver_applies_reaches_the_sink_via_the_subscription() {
     let engine = RuntimeEventEngine::new();
     let sink = Arc::new(RecordingSink::default());
     let subscription = attach(&engine).expect("attach");
 
-    // Submit a terminal fact but deliberately never call `engine.drain()`
-    // ourselves -- production has no other periodic drain call site (see
-    // the module doc on `drive_presentation_subscriber`), so the drive
-    // loop's own tick must be the thing that applies and publishes it.
+    // Submit a terminal fact and spawn the SAME `runtime_events::driver`
+    // task `run_auto.rs` spawns right alongside this subscriber -- proving
+    // the subscriber needs nothing of its own to observe it, only the
+    // driver applying and publishing it upstream of this subscription.
     let reservation = engine
         .reserve_root(OperationId::new(), terminal_fact)
         .expect("reservation");
@@ -53,6 +53,7 @@ async fn the_drive_loop_drains_the_engine_on_every_tick_so_a_queued_terminal_fac
         mesh_llm_runtime_event_contracts::SubmitOutcome::Accepted
     ));
 
+    let driver = crate::runtime_events::driver::spawn_engine_driver(Arc::clone(&engine));
     let drive_engine = Arc::clone(&engine);
     let drive_sink: Arc<dyn super::super::subscriber::PresentationSink> = sink.clone();
     let drive = tokio::spawn(drive_presentation_subscriber(
@@ -67,10 +68,11 @@ async fn the_drive_loop_drains_the_engine_on_every_tick_so_a_queued_terminal_fac
     }
 
     drive.abort();
+    driver.abort();
     let emitted = sink.drain();
     assert!(
         !emitted.is_empty(),
-        "the drive loop's own tick must call engine.drain() so a queued terminal fact \
-         reaches the sink without any external explicit drain() call"
+        "the engine-owned driver must apply and publish a queued terminal fact so the \
+         presentation subscriber's own subscription receives and routes it"
     );
 }

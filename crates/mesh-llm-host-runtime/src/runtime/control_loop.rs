@@ -114,6 +114,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         console_server_handle,
         discovery_publisher,
         presentation_subscriber,
+        runtime_event_driver,
         startup_specs,
         tunnel_mgr,
         skippy_telemetry,
@@ -332,6 +333,7 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         console_server_handle,
         discovery_publisher,
         presentation_subscriber,
+        runtime_event_driver,
         lan_bootstrap_tasks,
         runtime_models: &mut runtime_state.runtime_models,
         runtime_survey_models: &mut runtime_state.runtime_survey_models,
@@ -374,6 +376,7 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
         console_server_handle,
         discovery_publisher,
         presentation_subscriber,
+        runtime_event_driver,
         lan_bootstrap_tasks,
         runtime_models,
         runtime_survey_models,
@@ -438,6 +441,11 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
 
     cleanup_run_auto_runtime_dir(runtime);
     super::node_lifecycle_events::emit_node_stopped();
+    // Task 3: finalize AFTER node_stopped so the driver's own final drain
+    // is what applies and publishes both node_draining and node_stopped to
+    // any attached v1 stream -- aborting the driver any earlier would leave
+    // node_stopped sitting in the wake list with nothing left to drain it.
+    crate::runtime_events::driver::finalize_engine_driver(runtime_event_driver);
 }
 
 pub(super) async fn run_auto_handle_control_request(

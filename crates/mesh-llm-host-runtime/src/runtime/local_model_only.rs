@@ -115,6 +115,14 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
     // this mode without needing a separate no-op engine variant.
     let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
     crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
+    // Task 3: same engine-owned driver as the mesh-serve path in
+    // `run_auto.rs` (defect D3) -- this mode's own "zero management
+    // subscribers" invariant only ever meant no PRESENTATION subscriber;
+    // the driver needs no subscriber at all to apply and publish a fact
+    // (see `runtime_events::driver`'s module doc and this module's own
+    // `tests::engine_driver`).
+    let runtime_event_driver =
+        crate::runtime_events::driver::spawn_engine_driver(runtime_event_engine.clone());
     // Task 19: same hidden, TEST-ONLY `event-disabled` A/B certification
     // selector as the mesh-serve path in `run_auto.rs` -- see its comment
     // for the gate/selector relationship; a no-op on every normal startup.
@@ -213,7 +221,7 @@ pub(super) async fn run_local_model_only(mut options: RuntimeOptions) -> Result<
         http_bind_addr: bind_addr,
     };
 
-    let result = run_loaded_local_model(launch, &model_name, bind_addr).await;
+    let result = run_loaded_local_model(launch, &model_name, bind_addr, runtime_event_driver).await;
     cleanup_run_auto_runtime_dir(runtime);
     result
 }
@@ -274,10 +282,12 @@ async fn run_loaded_local_model(
     launch: LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
     bind_addr: SocketAddr,
+    runtime_event_driver: tokio::task::JoinHandle<()>,
 ) -> Result<()> {
     let (_, model, _death_rx) = start_local_openai_model(launch, model_name).await?;
     if let Err(error) = wait_for_openai_ready(&model, bind_addr).await {
         model.shutdown().await;
+        runtime_event_driver.abort();
         return Err(error);
     }
 
@@ -304,6 +314,10 @@ async fn run_loaded_local_model(
     emit_shutdown(Some(reason)).await;
     model.shutdown().await;
     super::node_lifecycle_events::emit_node_stopped();
+    // Task 3: finalize AFTER node_stopped, same ordering rationale as
+    // `control_loop.rs::shutdown_run_auto_runtime` -- the driver's own
+    // final drain is what applies and publishes both node lifecycle facts.
+    crate::runtime_events::driver::finalize_engine_driver(runtime_event_driver);
     outcome.map(|_| ())
 }
 
@@ -443,5 +457,65 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("completion {attempt} failed: {error}"));
         }
+    }
+
+    /// Review defect D3: `--local-model-only` never drained a single
+    /// runtime-event fact, because the only production drain call site was
+    /// the presentation subscriber's own tick, and this mode deliberately
+    /// never attaches a presentation (or any other management) subscriber
+    /// -- see this module's own top-of-function comment in
+    /// `run_local_model_only`. Proves the SAME wiring pattern
+    /// `run_local_model_only` now uses (`spawn_engine_driver` right after
+    /// `install_runtime_event_engine`) applies and releases a submitted
+    /// terminal with zero subscribers ever attached, matching the plan's
+    /// "zero management subscribers" invariant for this mode.
+    #[tokio::test]
+    async fn engine_driver() {
+        use mesh_llm_runtime_event_contracts::{
+            FamilyFact, NativeRuntimeEventKind, OperationId, RuntimeEventIngress, RuntimeFact,
+            SubmitOutcome,
+        };
+
+        let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+        assert_eq!(
+            engine.subscribers().active_count(),
+            0,
+            "local-model-only attaches zero management subscribers before the driver even \
+             starts"
+        );
+        let driver = crate::runtime_events::driver::spawn_engine_driver(engine.clone());
+
+        let reservation = engine
+            .reserve_root(OperationId::new(), || {
+                RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeStopped))
+            })
+            .expect("reservation");
+        let fact =
+            RuntimeFact::NativeRuntime(FamilyFact::new(NativeRuntimeEventKind::RuntimeStopped));
+        assert_eq!(
+            reservation.ingress().try_submit(fact),
+            SubmitOutcome::Accepted
+        );
+
+        for _ in 0..200 {
+            if engine.occupied_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        assert_eq!(
+            engine.occupied_count(),
+            0,
+            "the engine-owned driver must apply and release the terminal with no subscriber \
+             ever attached"
+        );
+        assert_eq!(
+            engine.subscribers().active_count(),
+            0,
+            "draining must never require or create a subscriber"
+        );
+
+        driver.abort();
     }
 }

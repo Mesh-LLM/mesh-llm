@@ -10,6 +10,7 @@
 //! the minimal ack seam) belong to a later task.
 
 pub mod config;
+pub mod driver;
 pub mod engine;
 pub mod health;
 pub mod presentation;
