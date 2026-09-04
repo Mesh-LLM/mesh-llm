@@ -14,7 +14,86 @@
 
 use model_artifact::{ModelArtifactFile, ModelFormat, ModelRepository, resolve_model_artifact_ref};
 use model_hf::HfModelRepository;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+struct DownloadManifest {
+    artifacts: Vec<DownloadFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadFixture {
+    id: String,
+    repo: String,
+    revision: String,
+    selector: String,
+    files: Vec<String>,
+    file_integrity: BTreeMap<String, DownloadIntegrity>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DownloadIntegrity {
+    size_bytes: u64,
+    blob_id: String,
+}
+
+struct SingleDownloadFixture {
+    repo: String,
+    revision: String,
+    selector: String,
+    file: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
+/// Read the selected fixture manifest generated from ci/model-artifacts/registry.json.
+fn download_fixture(id: &str) -> DownloadFixture {
+    let default_manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../ci/model-artifacts/manifests/hf-download-smoke.json");
+    let manifest_path = std::env::var_os("MESH_HF_DOWNLOAD_TEST_MANIFEST")
+        .map(PathBuf::from)
+        .unwrap_or(default_manifest);
+    let manifest_contents = std::fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
+        panic!(
+            "read HF download fixture manifest {}: {error}",
+            manifest_path.display()
+        )
+    });
+    let manifest: DownloadManifest = serde_json::from_str(&manifest_contents)
+        .unwrap_or_else(|error| panic!("parse HF download fixture manifest: {error}"));
+    manifest
+        .artifacts
+        .into_iter()
+        .find(|artifact| artifact.id == id)
+        .unwrap_or_else(|| panic!("HF download fixture artifact is missing: {id}"))
+}
+
+fn single_download_fixture(id: &str) -> SingleDownloadFixture {
+    let fixture = download_fixture(id);
+    assert_eq!(
+        fixture.files.len(),
+        1,
+        "download fixture must have one file"
+    );
+    let file = fixture.files.into_iter().next().expect("fixture file");
+    let integrity = fixture
+        .file_integrity
+        .get(&file)
+        .expect("fixture file integrity");
+    let size_bytes = integrity.size_bytes;
+    let sha256 = integrity.blob_id.clone();
+    SingleDownloadFixture {
+        repo: fixture.repo,
+        revision: fixture.revision,
+        selector: fixture.selector,
+        file,
+        size_bytes,
+        sha256,
+    }
+}
 
 /// Build a repository pointed at a fresh temp cache directory by default.
 ///
@@ -47,13 +126,15 @@ fn test_cache_dir(tmp: &Path) -> PathBuf {
 async fn resolve_revision_returns_commit_sha() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     let sha = repo
-        .resolve_revision("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF", Some("main"))
+        .resolve_revision(&fixture.repo, Some(&fixture.revision))
         .await
         .expect("resolve_revision");
 
-    // HF commit SHAs are 40-char hex strings.
+    // Immutable revisions resolve to the exact registered commit SHA.
+    assert_eq!(sha, fixture.revision);
     assert_eq!(sha.len(), 40, "expected 40-char SHA, got: {sha}");
     assert!(
         sha.chars().all(|c| c.is_ascii_hexdigit()),
@@ -68,13 +149,14 @@ async fn resolve_revision_returns_commit_sha() {
 async fn list_files_single_gguf_repo() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     let sha = repo
-        .resolve_revision("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF", Some("main"))
+        .resolve_revision(&fixture.repo, Some(&fixture.revision))
         .await
         .unwrap();
     let files = repo
-        .list_files("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF", &sha)
+        .list_files(&fixture.repo, &sha)
         .await
         .expect("list_files");
 
@@ -85,10 +167,7 @@ async fn list_files_single_gguf_repo() {
         1,
         "expected exactly 1 GGUF file, got: {gguf_files:?}"
     );
-    assert_eq!(
-        gguf_files[0].path, "SmolLM2-135M-Instruct.Q4_K_M.gguf",
-        "unexpected GGUF filename"
-    );
+    assert_eq!(gguf_files[0].path, fixture.file, "unexpected GGUF filename");
     eprintln!(
         "listed {n} files, GGUF size: {size:?} bytes",
         n = files.len(),
@@ -105,13 +184,15 @@ async fn list_files_single_gguf_repo() {
 async fn list_files_split_gguf_repo() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = download_fixture("gemma3-bf16-metadata");
 
     let sha = repo
-        .resolve_revision("unsloth/gemma-3-27b-it-GGUF", Some("main"))
+        .resolve_revision(&fixture.repo, Some(&fixture.revision))
         .await
         .unwrap();
+    assert_eq!(sha, fixture.revision);
     let files = repo
-        .list_files("unsloth/gemma-3-27b-it-GGUF", &sha)
+        .list_files(&fixture.repo, &sha)
         .await
         .expect("list_files");
 
@@ -142,21 +223,23 @@ async fn list_files_split_gguf_repo() {
 async fn resolve_artifact_ref_single_gguf() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     let artifact =
-        resolve_model_artifact_ref("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M", &repo)
+        resolve_model_artifact_ref(&format!("{}:{}", fixture.repo, fixture.selector), &repo)
             .await
             .expect("resolve_model_artifact_ref");
 
     assert_eq!(artifact.format, ModelFormat::Gguf);
-    assert_eq!(artifact.primary_file, "SmolLM2-135M-Instruct.Q4_K_M.gguf");
+    assert_eq!(artifact.primary_file, fixture.file);
     assert_eq!(artifact.files.len(), 1);
-    assert_eq!(
-        artifact.source_repo,
-        "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF"
-    );
+    assert_eq!(artifact.source_repo, fixture.repo);
     assert_eq!(artifact.source_revision.len(), 40);
-    assert_eq!(artifact.selector.as_deref(), Some("Q4_K_M"));
+    assert_eq!(artifact.source_revision, fixture.revision);
+    assert_eq!(
+        artifact.selector.as_deref(),
+        Some(fixture.selector.as_str())
+    );
     eprintln!(
         "resolved artifact: {} @ {} → {}",
         artifact.model_id, artifact.source_revision, artifact.primary_file
@@ -218,18 +301,16 @@ async fn resolve_artifact_ref_split_gguf() {
 async fn download_single_gguf_file() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     let sha = repo
-        .resolve_revision("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF", Some("main"))
+        .resolve_revision(&fixture.repo, Some(&fixture.revision))
         .await
         .unwrap();
+    assert_eq!(sha, fixture.revision);
 
     let path = repo
-        .download_file(
-            "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
-            &sha,
-            "SmolLM2-135M-Instruct.Q4_K_M.gguf",
-        )
+        .download_file(&fixture.repo, &fixture.revision, &fixture.file)
         .await
         .expect("download_file");
 
@@ -241,21 +322,20 @@ async fn download_single_gguf_file() {
 
     let metadata = std::fs::metadata(&path).expect("file metadata");
     let size = metadata.len();
-    // SmolLM2-135M Q4_K_M is ~100 MB.
-    assert!(
-        size > 50_000_000,
-        "downloaded file should be >50MB, got {size} bytes"
-    );
-    assert!(
-        size < 200_000_000,
-        "downloaded file should be <200MB, got {size} bytes"
-    );
+    assert_eq!(size, fixture.size_bytes, "downloaded fixture size changed");
 
     // Verify the file starts with the GGUF magic bytes.
     let mut magic = [0u8; 4];
     let mut file = std::fs::File::open(&path).unwrap();
     std::io::Read::read_exact(&mut file, &mut magic).unwrap();
     assert_eq!(&magic, b"GGUF", "file should start with GGUF magic");
+
+    let digest = Sha256::digest(std::fs::read(&path).expect("read downloaded fixture"));
+    assert_eq!(
+        hex::encode(digest),
+        fixture.sha256,
+        "downloaded fixture digest changed"
+    );
 
     eprintln!("downloaded {size} bytes to {}", path.display());
 }
@@ -269,10 +349,11 @@ async fn download_single_gguf_file() {
 async fn full_resolve_download_identity_pipeline() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     // Step 1: Resolve artifact reference.
     let artifact =
-        resolve_model_artifact_ref("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M", &repo)
+        resolve_model_artifact_ref(&format!("{}:{}", fixture.repo, fixture.selector), &repo)
             .await
             .expect("resolve artifact");
     eprintln!(
@@ -309,13 +390,14 @@ async fn full_resolve_download_identity_pipeline() {
         .identity_for_path(primary_path)
         .expect("identity_for_path should succeed for a file in the HF cache");
 
-    assert_eq!(
-        identity.repo_id,
-        "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF"
-    );
-    assert_eq!(identity.file, "SmolLM2-135M-Instruct.Q4_K_M.gguf");
+    assert_eq!(identity.repo_id, fixture.repo);
+    assert_eq!(identity.file, fixture.file);
     assert_eq!(identity.revision, artifact.source_revision);
-    assert_eq!(identity.selector.as_deref(), Some("Q4_K_M"));
+    assert_eq!(identity.revision, fixture.revision);
+    assert_eq!(
+        identity.selector.as_deref(),
+        Some(fixture.selector.as_str())
+    );
     assert!(
         !identity.canonical_ref.is_empty(),
         "canonical_ref should not be empty"
@@ -347,18 +429,16 @@ async fn resolve_nonexistent_repo_returns_error() {
 async fn download_nonexistent_file_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = make_repo(tmp.path());
+    let fixture = single_download_fixture("smollm2-q4-download");
 
     let sha = repo
-        .resolve_revision("jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF", Some("main"))
+        .resolve_revision(&fixture.repo, Some(&fixture.revision))
         .await
         .unwrap();
+    assert_eq!(sha, fixture.revision);
 
     let result = repo
-        .download_file(
-            "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
-            &sha,
-            "nonexistent-file.gguf",
-        )
+        .download_file(&fixture.repo, &fixture.revision, "nonexistent-file.gguf")
         .await;
 
     assert!(result.is_err(), "expected error for nonexistent file");

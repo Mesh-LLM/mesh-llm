@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "openai-smoke",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "smollm2-q4-download",
+      "family": "smollm2",
+      "capability_tags": [
+        "dense",
+        "download",
+        "gguf",
+        "small"
+      ],
+      "suites": [
+        "hf-download-smoke",
+        "openai-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "repo": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
+      "revision": "62aa73156aea1ea66d752916ad281b9e344115b3",
+      "selector": "Q4_K_M",
+      "files": [
+        "SmolLM2-135M-Instruct.Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "SmolLM2-135M-Instruct.Q4_K_M.gguf": {
+          "size_bytes": 105454144,
+          "blob_id": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684"
+        }
+      },
+      "model_ref": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf"
+      ],
+      "file": "SmolLM2-135M-Instruct.Q4_K_M.gguf",
+      "size_bytes": 105454144,
+      "sha256": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684",
+      "url": "https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf",
+      "notes": "Real Rust Hugging Face resolve/download identity fixture."
+    }
+  ]
+}

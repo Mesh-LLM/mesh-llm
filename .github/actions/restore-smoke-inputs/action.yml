@@ -23,6 +23,14 @@ inputs:
     description: Model filename under ~/.models.
     required: false
     default: ''
+  model_manifest:
+    description: Generated test-model manifest containing one immutable model artifact.
+    required: false
+    default: ''
+  model_cadence:
+    description: Registry cadence authorized for this workflow invocation.
+    required: false
+    default: ''
   model_cache_scope:
     description: Cache scope shared by smoke lanes that can reuse the same model.
     required: false
@@ -35,6 +43,20 @@ inputs:
     description: Whether to save model cache misses.
     required: false
     default: 'false'
+
+outputs:
+  model_url:
+    description: Immutable model download URL resolved from the manifest.
+    value: ${{ steps.resolve-model.outputs.url }}
+  model_file:
+    description: Immutable model filename resolved from the manifest.
+    value: ${{ steps.resolve-model.outputs.file }}
+  model_sha256:
+    description: Expected model SHA-256, when supplied by the manifest.
+    value: ${{ steps.resolve-model.outputs.sha256 }}
+  model_size_bytes:
+    description: Expected model size, when supplied by the manifest.
+    value: ${{ steps.resolve-model.outputs.size_bytes }}
 
 runs:
   using: composite
@@ -248,23 +270,67 @@ runs:
           exit 1
         }
 
+    - name: Resolve immutable integration model manifest
+      id: resolve-model
+      shell: bash
+      env:
+        MODEL_MANIFEST: ${{ inputs.model_manifest }}
+        MODEL_CADENCE: ${{ inputs.model_cadence }}
+        INPUT_MODEL_URL: ${{ inputs.model_url }}
+        INPUT_MODEL_FILE: ${{ inputs.model_file }}
+      run: |
+        set -euo pipefail
+        if [[ -n "$INPUT_MODEL_URL" || -n "$INPUT_MODEL_FILE" ]]; then
+          if [[ -z "$INPUT_MODEL_URL" || -z "$INPUT_MODEL_FILE" ]]; then
+            echo "model_url and model_file must be supplied together" >&2
+            exit 2
+          fi
+          if [[ ! "$INPUT_MODEL_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "model_file must be a safe single filename" >&2
+            exit 2
+          fi
+          {
+            printf 'url=%s\n' "$INPUT_MODEL_URL"
+            printf 'file=%s\n' "$INPUT_MODEL_FILE"
+            printf 'sha256=\n'
+            printf 'size_bytes=\n'
+          } >> "$GITHUB_OUTPUT"
+        elif [[ -n "$MODEL_MANIFEST" ]]; then
+          if [[ -z "$MODEL_CADENCE" ]]; then
+            echo "model_cadence is required with model_manifest" >&2
+            exit 2
+          fi
+          python3 scripts/resolve-test-model-manifest.py \
+            "$MODEL_MANIFEST" \
+            --cadence "$MODEL_CADENCE" \
+            --require-single-file \
+            --github-output "$GITHUB_OUTPUT"
+        else
+          {
+            printf 'url=\n'
+            printf 'file=\n'
+            printf 'sha256=\n'
+            printf 'size_bytes=\n'
+          } >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Restore integration model cache
-      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
+      if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' }}
       id: cache-model
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
-        path: ~/.models/${{ inputs.model_file }}
-        key: ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-${{ hashFiles('.github/cache-version.txt') }}
-        restore-keys: |
-          ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ inputs.model_file }}-
+        path: ~/.models/${{ steps.resolve-model.outputs.file }}
+        key: ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.model_cache_scope }}-${{ steps.resolve-model.outputs.file }}-${{ steps.resolve-model.outputs.sha256 || 'unverified' }}-${{ hashFiles('.github/cache-version.txt') }}
 
     - name: Check restored integration model
-      if: ${{ inputs.model_url != '' && inputs.model_file != '' }}
+      if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' }}
       id: model-file
       shell: bash
+      env:
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
       run: |
         set -euo pipefail
-        model_path="$HOME/.models/${{ inputs.model_file }}"
+        model_path="$HOME/.models/$MODEL_FILE"
         if [[ -s "$model_path" ]]; then
           echo "present=true" >> "$GITHUB_OUTPUT"
         else
@@ -272,8 +338,11 @@ runs:
         fi
 
     - name: Download integration model
-      if: ${{ inputs.model_url != '' && inputs.model_file != '' && steps.model-file.outputs.present != 'true' }}
+      if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' && steps.model-file.outputs.present != 'true' }}
       shell: bash
+      env:
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
+        MODEL_URL: ${{ steps.resolve-model.outputs.url }}
       run: |
         set -euo pipefail
         mkdir -p ~/.models
@@ -291,18 +360,36 @@ runs:
         if [[ -n "$token" ]]; then
           curl_args+=(--header "Authorization: Bearer ${token}")
         fi
-        output="$HOME/.models/${{ inputs.model_file }}"
+        output="$HOME/.models/$MODEL_FILE"
         partial="${output}.download"
         rm -f "$partial"
         curl "${curl_args[@]}" \
-          "${{ inputs.model_url }}" \
+          "$MODEL_URL" \
           -o "$partial"
         mv "$partial" "$output"
         ls -lh "$output"
 
+    - name: Verify integration model integrity
+      if: ${{ steps.resolve-model.outputs.sha256 != '' && steps.resolve-model.outputs.file != '' }}
+      shell: bash
+      env:
+        MODEL_CADENCE: ${{ inputs.model_cadence }}
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
+        MODEL_MANIFEST: ${{ inputs.model_manifest }}
+        MODEL_URL: ${{ steps.resolve-model.outputs.url }}
+      run: |
+        set -euo pipefail
+        test -n "$MODEL_FILE"
+        test -n "$MODEL_URL"
+        python3 scripts/resolve-test-model-manifest.py \
+          "$MODEL_MANIFEST" \
+          --cadence "$MODEL_CADENCE" \
+          --require-single-file \
+          --verify-root "$HOME/.models"
+
     - name: Save integration model cache
-      if: ${{ inputs.model_url != '' && inputs.model_file != '' && inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
+      if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' && inputs.save_model_cache == 'true' && steps.cache-model.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
-        path: ~/.models/${{ inputs.model_file }}
+        path: ~/.models/${{ steps.resolve-model.outputs.file }}
         key: ${{ steps.cache-model.outputs.cache-primary-key }}

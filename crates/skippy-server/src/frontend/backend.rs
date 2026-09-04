@@ -1,3 +1,6 @@
+use crate::frontend::admission::GenerationTokenBudget;
+use crate::frontend::admission::GenerationTokenBudgetRequest;
+use crate::frontend::admission::GenerationTokenReservation;
 use crate::frontend::generation::ChatOutputStreamParser;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationActiveWorkReservation;
@@ -327,19 +330,27 @@ impl GenerationSessionPermit {
 
     async fn acquire_until(
         mut self,
-        deadline: Instant,
+        deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &openai_frontend::CancellationToken,
     ) -> OpenAiResult<Self> {
-        let acquire = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline),
-            self.entry.semaphore.clone().acquire_owned(),
-        );
-        let permit = tokio::select! {
-            result = acquire => result
-                .map_err(|_| generation_queue_timeout_error(admission_timeout))?
-                .map_err(|_| OpenAiError::backend("generation session lock closed"))?,
-            () = cancellation.cancelled() => return Err(request_cancelled_error()),
+        let permit = if let Some(deadline) = deadline {
+            let acquire = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.entry.semaphore.clone().acquire_owned(),
+            );
+            tokio::select! {
+                result = acquire => result
+                    .map_err(|_| generation_queue_timeout_error(admission_timeout))?
+                    .map_err(|_| OpenAiError::backend("generation session lock closed"))?,
+                () = cancellation.cancelled() => return Err(request_cancelled_error()),
+            }
+        } else {
+            tokio::select! {
+                result = self.entry.semaphore.clone().acquire_owned() => result
+                    .map_err(|_| OpenAiError::backend("generation session lock closed"))?,
+                () = cancellation.cancelled() => return Err(request_cancelled_error()),
+            }
         };
         if cancellation.is_cancelled() {
             return Err(request_cancelled_error());
@@ -376,6 +387,7 @@ struct GenerationAdmissionController {
     generation_queue_limit: usize,
     generation_service_estimator: Arc<GenerationServiceEstimator>,
     generation_session_locks: Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
+    generation_token_budget: Arc<GenerationTokenBudget>,
 }
 
 impl GenerationAdmissionController {
@@ -386,6 +398,7 @@ impl GenerationAdmissionController {
             generation_queue_limit: backend.generation_queue_limit,
             generation_service_estimator: backend.generation_service_estimator.clone(),
             generation_session_locks: backend.generation_session_locks.clone(),
+            generation_token_budget: backend.generation_token_budget.clone(),
         }
     }
 
@@ -431,14 +444,22 @@ impl GenerationAdmissionController {
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
     ) -> OpenAiResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
-        let deadline = Instant::now()
-            .checked_add(admission_timeout)
-            .ok_or_else(|| OpenAiError::backend("generation admission deadline overflow"))?;
+        let deadline = if admission_timeout.is_zero() {
+            None
+        } else {
+            Some(
+                Instant::now()
+                    .checked_add(admission_timeout)
+                    .ok_or_else(|| {
+                        OpenAiError::backend("generation admission deadline overflow")
+                    })?,
+            )
+        };
         let session_permit = self
             .acquire_session_until(ids, deadline, admission_timeout, cancellation)
             .await?;
 
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err(generation_queue_timeout_error(admission_timeout));
         }
         let generation_permit = self
@@ -459,7 +480,7 @@ impl GenerationAdmissionController {
     async fn acquire_session_until(
         &self,
         ids: &OpenAiGenerationIds,
-        deadline: Instant,
+        deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &openai_frontend::CancellationToken,
     ) -> OpenAiResult<Option<GenerationSessionPermit>> {
@@ -482,7 +503,7 @@ impl GenerationAdmissionController {
 
     async fn acquire_generation_permit_until(
         &self,
-        deadline: Instant,
+        deadline: Option<Instant>,
         admission_timeout: Duration,
         cancellation: &openai_frontend::CancellationToken,
         work: GenerationAdmissionWork,
@@ -493,13 +514,19 @@ impl GenerationAdmissionController {
         }
         let claim = self.generation_limit.admission_queue().claim_or_enqueue(
             self.generation_limit.semaphore(),
+            self.generation_token_budget.clone(),
+            GenerationTokenBudgetRequest::new(
+                usize::try_from(work.prompt_tokens).unwrap_or(usize::MAX),
+                u32::try_from(work.decode_tokens).unwrap_or(u32::MAX),
+            ),
             scheduling,
             self.generation_queue_depth.clone(),
             self.generation_queue_limit,
         )?;
         match claim {
-            GenerationAdmissionClaim::Acquired(permit) => Ok(GenerationAdmissionPermit {
-                _lane: self.generation_limit.wrap_permit(permit),
+            GenerationAdmissionClaim::Acquired(resources) => Ok(GenerationAdmissionPermit {
+                _lane: self.generation_limit.wrap_permit(resources.lane),
+                token_budget: resources.token_budget,
                 _active_work: self.generation_service_estimator.start_active(work),
                 predicted_wait_ms: Some(0.0),
                 demand_epoch: self.generation_limit.demand_epoch(),
@@ -519,7 +546,7 @@ impl GenerationAdmissionController {
                     .map_err(|predicted_wait_ms| {
                         generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
                     })?;
-                let lane = lease
+                let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
                         admission_timeout,
@@ -528,7 +555,8 @@ impl GenerationAdmissionController {
                     )
                     .await?;
                 Ok(GenerationAdmissionPermit {
-                    _lane: self.generation_limit.wrap_permit(lane),
+                    _lane: self.generation_limit.wrap_permit(resources.lane),
+                    token_budget: resources.token_budget,
                     _active_work: queued_work.promote(),
                     predicted_wait_ms,
                     demand_epoch: self.generation_limit.demand_epoch(),
@@ -543,6 +571,7 @@ impl GenerationAdmissionController {
 }
 
 pub(in crate::frontend) struct GenerationAdmissionPermit {
+    token_budget: GenerationTokenReservation,
     _lane: GenerationConcurrencyPermit,
     _active_work: GenerationActiveWorkReservation,
     predicted_wait_ms: Option<f64>,
@@ -554,6 +583,13 @@ pub(in crate::frontend) struct GenerationAdmissionPermit {
 }
 
 impl GenerationAdmissionPermit {
+    fn token_budget_stats(&self) -> (usize, usize) {
+        (
+            self.token_budget.tokens(),
+            self.token_budget.active_tokens_after_reservation(),
+        )
+    }
+
     fn demand_observation(&self) -> GenerationDemandObservation {
         GenerationDemandObservation {
             demand_epoch: self.demand_epoch,
@@ -1457,6 +1493,7 @@ impl StageOpenAiBackend {
         );
         self.emit_openai_phase("stage.openai_generation_admit", admit_timer, admit_attrs);
         let demand = permit.demand_observation();
+        let token_budget_stats = permit.token_budget_stats();
         let backend = self.clone();
         let hook_runtime = Some(tokio::runtime::Handle::current());
         let worker_context = context.clone();
@@ -1467,6 +1504,7 @@ impl StageOpenAiBackend {
                     prompt,
                     max_tokens,
                     prepared_text,
+                    token_budget_stats,
                     stop.as_ref(),
                     sampling,
                     hook_request,
@@ -1550,6 +1588,7 @@ impl StageOpenAiBackend {
         );
         self.emit_openai_phase("stage.openai_generation_admit", admit_timer, admit_attrs);
         let demand = permit.demand_observation();
+        let token_budget_stats = permit.token_budget_stats();
         let backend = self.clone();
         let chat_parse_metadata = prompt.chat_parse_metadata.clone();
         let (tx, rx) = mpsc::channel(16);
@@ -1593,6 +1632,7 @@ impl StageOpenAiBackend {
                 prompt,
                 max_tokens,
                 prepared_text,
+                token_budget_stats,
                 stop.as_ref(),
                 sampling,
                 hook_request,

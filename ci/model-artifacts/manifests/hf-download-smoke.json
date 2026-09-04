@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "hf-download-smoke",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "smollm2-q4-download",
+      "family": "smollm2",
+      "capability_tags": [
+        "dense",
+        "download",
+        "gguf",
+        "small"
+      ],
+      "suites": [
+        "hf-download-smoke",
+        "openai-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "repo": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF",
+      "revision": "62aa73156aea1ea66d752916ad281b9e344115b3",
+      "selector": "Q4_K_M",
+      "files": [
+        "SmolLM2-135M-Instruct.Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "SmolLM2-135M-Instruct.Q4_K_M.gguf": {
+          "size_bytes": 105454144,
+          "blob_id": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684"
+        }
+      },
+      "model_ref": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf"
+      ],
+      "file": "SmolLM2-135M-Instruct.Q4_K_M.gguf",
+      "size_bytes": 105454144,
+      "sha256": "8030f04528538d47bda434f6f0bdf3952c40a58123e4d5e755332f23731a8684",
+      "url": "https://huggingface.co/jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF/resolve/62aa73156aea1ea66d752916ad281b9e344115b3/SmolLM2-135M-Instruct.Q4_K_M.gguf",
+      "notes": "Real Rust Hugging Face resolve/download identity fixture."
+    },
+    {
+      "id": "gemma3-bf16-metadata",
+      "family": "gemma3",
+      "capability_tags": [
+        "bf16",
+        "gguf",
+        "metadata-only",
+        "multipart"
+      ],
+      "suites": [
+        "hf-download-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "repo": "unsloth/gemma-3-27b-it-GGUF",
+      "revision": "7cd0121f2530b00e42c4df952d4cad4418c0b3c1",
+      "selector": "BF16",
+      "files": [
+        "BF16/gemma-3-27b-it-BF16-00001-of-00002.gguf",
+        "BF16/gemma-3-27b-it-BF16-00002-of-00002.gguf"
+      ],
+      "file_integrity": {
+        "BF16/gemma-3-27b-it-BF16-00001-of-00002.gguf": {
+          "size_bytes": 49898757248,
+          "blob_id": "75fbc33e46f7e5f4798fb0940bef3d70d324b8bfe7be95e6d18d8e3aa2330014"
+        },
+        "BF16/gemma-3-27b-it-BF16-00002-of-00002.gguf": {
+          "size_bytes": 4129207200,
+          "blob_id": "4dc1b732f3ffff1a4db5f14367181204f575c52258f5286455d3a25d58b95275"
+        }
+      },
+      "model_ref": "unsloth/gemma-3-27b-it-GGUF:BF16",
+      "urls": [
+        "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/7cd0121f2530b00e42c4df952d4cad4418c0b3c1/BF16/gemma-3-27b-it-BF16-00001-of-00002.gguf",
+        "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/7cd0121f2530b00e42c4df952d4cad4418c0b3c1/BF16/gemma-3-27b-it-BF16-00002-of-00002.gguf"
+      ],
+      "size_bytes": 54027964448,
+      "notes": "API-only multipart GGUF listing fixture; its large shards are never downloaded by the smoke test."
+    }
+  ]
+}

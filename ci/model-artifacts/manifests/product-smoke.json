@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "product-smoke",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "smollm2-q8-inference",
+      "family": "smollm2",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "inference",
+        "small"
+      ],
+      "suites": [
+        "product-smoke",
+        "scripted-binary-smoke",
+        "sdk-smoke"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "release"
+      ],
+      "repo": "unsloth/SmolLM2-135M-Instruct-GGUF",
+      "revision": "9e6855bc4be717fca1ef21360a1db4b29d5c559a",
+      "selector": "Q8_0",
+      "files": [
+        "SmolLM2-135M-Instruct-Q8_0.gguf"
+      ],
+      "file_integrity": {
+        "SmolLM2-135M-Instruct-Q8_0.gguf": {
+          "size_bytes": 144811072,
+          "blob_id": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a"
+        }
+      },
+      "model_ref": "unsloth/SmolLM2-135M-Instruct-GGUF:Q8_0",
+      "urls": [
+        "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf"
+      ],
+      "file": "SmolLM2-135M-Instruct-Q8_0.gguf",
+      "size_bytes": 144811072,
+      "sha256": "c4a3dd037301b6ecea31d6da37f5cd793ead920dd5ddfe6d589294628d6ce66a",
+      "url": "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/9e6855bc4be717fca1ef21360a1db4b29d5c559a/SmolLM2-135M-Instruct-Q8_0.gguf",
+      "notes": "Shared product, scripted-binary, and SDK inference fixture."
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "safetensors-runtime-smoke",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "smollm2-safetensors",
+      "family": "smollm2",
+      "capability_tags": [
+        "safetensors",
+        "direct-load",
+        "dense",
+        "small"
+      ],
+      "suites": [
+        "safetensors-runtime-smoke"
+      ],
+      "cadences": [
+        "pull-request"
+      ],
+      "repo": "HuggingFaceTB/SmolLM2-135M-Instruct",
+      "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+      "selector": "safetensors",
+      "files": [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "model.safetensors"
+      ],
+      "file_integrity": {
+        "config.json": {
+          "size_bytes": 861,
+          "blob_id": "8eb740e8bbe4cff95ea7b4588d17a2432deb16e8075bc5828ff7ba9be94d982a"
+        },
+        "tokenizer.json": {
+          "size_bytes": 2104556,
+          "blob_id": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+        },
+        "tokenizer_config.json": {
+          "size_bytes": 3764,
+          "blob_id": "4ec77d44f62efeb38d7e044a1db318f6a939438425312dfa333b8382dbad98df"
+        },
+        "model.safetensors": {
+          "size_bytes": 269060552,
+          "blob_id": "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+        }
+      },
+      "model_ref": "HuggingFaceTB/SmolLM2-135M-Instruct:safetensors",
+      "urls": [
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/config.json",
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/tokenizer.json",
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/tokenizer_config.json",
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/12fd25f77366fa6b3b4b768ec3050bf629380bac/model.safetensors"
+      ],
+      "size_bytes": 271169733,
+      "quantizations": [
+        "preserve",
+        "F32",
+        "F16",
+        "BF16",
+        "Q1_0",
+        "Q2_0",
+        "Q4_0",
+        "Q4_1",
+        "Q5_0",
+        "Q5_1",
+        "IQ2_XXS",
+        "IQ2_XS",
+        "IQ2_S",
+        "IQ2_M",
+        "IQ1_S",
+        "IQ1_M",
+        "TQ1_0",
+        "TQ2_0",
+        "Q2_K",
+        "Q2_K_S",
+        "IQ3_XS",
+        "IQ3_XXS",
+        "IQ3_S",
+        "IQ3_M",
+        "Q3_K_S",
+        "Q3_K_M",
+        "Q3_K_L",
+        "IQ4_NL",
+        "IQ4_XS",
+        "Q4_K_S",
+        "Q4_K_M",
+        "Q5_K_S",
+        "Q5_K_M",
+        "Q6_K",
+        "Q8_0",
+        "MXFP4_MOE"
+      ],
+      "notes": "SafeTensors direct-load fixture used across every supported load-time quantization."
+    }
+  ]
+}

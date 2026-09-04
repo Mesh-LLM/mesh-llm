@@ -3257,47 +3257,47 @@
   ],
   "crates/model-hf/tests/hf_download.rs": [
     {
-      "line": 62,
+      "line": 143,
       "macro_name": "eprintln!"
     },
     {
-      "line": 92,
+      "line": 171,
       "macro_name": "eprintln!"
     },
     {
-      "line": 135,
+      "line": 216,
       "macro_name": "eprintln!"
     },
     {
-      "line": 160,
+      "line": 243,
       "macro_name": "eprintln!"
     },
     {
-      "line": 199,
+      "line": 282,
       "macro_name": "eprintln!"
     },
     {
-      "line": 260,
+      "line": 340,
       "macro_name": "eprintln!"
     },
     {
-      "line": 278,
+      "line": 359,
       "macro_name": "eprintln!"
     },
     {
-      "line": 303,
+      "line": 384,
       "macro_name": "eprintln!"
     },
     {
-      "line": 323,
+      "line": 405,
       "macro_name": "eprintln!"
     },
     {
-      "line": 341,
+      "line": 423,
       "macro_name": "eprintln!"
     },
     {
-      "line": 365,
+      "line": 445,
       "macro_name": "eprintln!"
     }
   ],
@@ -4359,11 +4359,11 @@
   ],
   "crates/skippy-server/src/frontend/generation/server.rs": [
     {
-      "line": 196,
+      "line": 193,
       "macro_name": "println!"
     },
     {
-      "line": 343,
+      "line": 340,
       "macro_name": "println!"
     }
   ],
