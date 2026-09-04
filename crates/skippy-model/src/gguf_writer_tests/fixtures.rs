@@ -1,3 +1,4 @@
+// Test fixtures for canonical GGUF conversion.
 fn unique_temp_dir() -> PathBuf {
     static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
@@ -290,14 +291,16 @@ fn write_dense_hf_safetensor(root: &Path) {
             (
                 "model.layers.0.self_attn.q_proj.weight",
                 "F32",
-                &[1],
-                &[3, 0, 0, 0],
+                &[4, 1],
+                &[
+                    0, 0, 0x40, 0x40, 0, 0, 0x80, 0x40, 0, 0, 0xa0, 0x40, 0, 0, 0xc0, 0x40,
+                ],
             ),
             (
                 "model.layers.0.self_attn.k_proj.weight",
                 "F32",
-                &[1],
-                &[4, 0, 0, 0],
+                &[2, 1],
+                &[0, 0, 0x80, 0x40, 0, 0, 0xa0, 0x40],
             ),
             (
                 "model.layers.0.self_attn.v_proj.weight",

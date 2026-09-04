@@ -42,7 +42,7 @@ use crate::runtime::{
     InstanceLifecycleRecord, InstanceLifecycleState, tracing_writer::init_audit_logging,
 };
 use crate::system::{autoupdate, benchmark, hardware};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mesh_llm_events::{LogFormat, OutputEvent, RuntimeStatus, emit_event, output_sink};
 use skippy_protocol::FlashAttentionType;
 use std::collections::{BTreeSet, HashMap};
@@ -295,7 +295,17 @@ pub(super) async fn run_runtime_cli(
         anyhow::bail!("mode conflict: {error}");
     }
     options.client = effective_mode == mesh_llm_config::RuntimeMode::Client;
+    anyhow::ensure!(
+        !options.client
+            || (options.checkpoint_quantization.is_none() && options.checkpoint_imatrix.is_none()),
+        "--checkpoint-quantization and --checkpoint-imatrix are only valid with mesh-llm serve"
+    );
     apply_runtime_cli_speculative_overrides(&mut config, options.speculative_overrides.as_ref());
+    apply_runtime_cli_checkpoint_overrides(
+        &mut config,
+        options.checkpoint_quantization.as_deref(),
+        options.checkpoint_imatrix.as_deref(),
+    )?;
     apply_runtime_config_options(&mut options, &config);
 
     initialize_audit_logging_for_options(&options)?;
@@ -459,6 +469,72 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
             defaults.as_ref(),
         ));
     }
+}
+
+pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
+    config: &mut plugin::MeshConfig,
+    quantization: Option<&str>,
+    imatrix: Option<&Path>,
+) -> Result<()> {
+    if quantization.is_none() && imatrix.is_none() {
+        return Ok(());
+    }
+
+    let quantization = quantization
+        .map(|value| {
+            value
+                .parse::<skippy_runtime::CheckpointQuantization>()
+                .map(|parsed| parsed.canonical_name().to_string())
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("invalid --quant {value:?}"))
+        })
+        .transpose()?;
+    let imatrix = imatrix
+        .map(|path| {
+            let canonical = std::fs::canonicalize(path).with_context(|| {
+                format!(
+                    "resolve --checkpoint-imatrix path {} from the current directory",
+                    path.display()
+                )
+            })?;
+            anyhow::ensure!(
+                canonical.is_file(),
+                "--checkpoint-imatrix must name a file: {}",
+                canonical.display()
+            );
+            Ok::<_, anyhow::Error>(canonical.to_string_lossy().into_owned())
+        })
+        .transpose()?;
+
+    let defaults = config
+        .defaults
+        .get_or_insert_with(plugin::ModelConfigDefaults::default);
+    let default_hardware = defaults
+        .hardware
+        .get_or_insert_with(plugin::HardwareConfig::default);
+    if let Some(value) = quantization.as_ref() {
+        default_hardware.checkpoint_quantization = Some(value.clone());
+    }
+    if let Some(value) = imatrix.as_ref() {
+        default_hardware.checkpoint_imatrix = Some(value.clone());
+    }
+
+    // Runtime CLI flags are process-wide serving overrides. Apply them to
+    // config-declared models as well as defaults so model-local config cannot
+    // unexpectedly take precedence over the explicit command line.
+    for model in &mut config.models {
+        let hardware = model
+            .hardware
+            .get_or_insert_with(plugin::HardwareConfig::default);
+        if let Some(value) = quantization.as_ref() {
+            hardware.checkpoint_quantization = Some(value.clone());
+        }
+        if let Some(value) = imatrix.as_ref() {
+            hardware.checkpoint_imatrix = Some(value.clone());
+        }
+    }
+
+    Ok(())
 }
 
 pub fn load_resolved_plugins(options: &RuntimeOptions) -> Result<plugin::ResolvedPlugins> {

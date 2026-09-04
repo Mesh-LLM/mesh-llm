@@ -8,8 +8,8 @@ use crate::{
         ChatCompletionStream, CompletionStream, OpenAiBackend, OpenAiRequestContext, OpenAiResult,
     },
     chat::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, MessageContent,
-        MessageContentPart,
+        CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
+        ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid,
     },
     completions::{CompletionRequest, CompletionResponse},
     models::ModelObject,
@@ -108,6 +108,325 @@ pub trait OpenAiHookPolicy: Send + Sync + 'static {
     ) -> OpenAiResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
+
+    /// Observe the effective (post-mutation) request immediately before it is
+    /// dispatched to the backend for a non-streaming chat completion.
+    ///
+    /// This fires after [`Self::before_chat_completion`] has run and its
+    /// outcome has been applied, so `request` reflects what will actually be
+    /// sent. The route carries only what this layer knows about backend
+    /// selection: the frontend dispatches every request to one already-chosen
+    /// [`crate::backend::OpenAiBackend`], so there is no per-request backend
+    /// identity to report here.
+    async fn on_effective_chat_completion(
+        &self,
+        _request: &ChatCompletionRequest,
+        _route: &ChatExchangeRoute,
+    ) {
+    }
+
+    /// Observe the terminal outcome of a non-streaming chat completion:
+    /// success, a backend error, or denial by an earlier hook.
+    ///
+    /// `exchange_id` is the same value [`ChatExchangeRoute::exchange_id`]
+    /// carried on this exchange's [`Self::on_effective_chat_completion`]
+    /// call (or, for a denied request, the id minted for an exchange that
+    /// never reached admission) — a plugin observing both events can pair
+    /// them without guessing from timing on a model shared by concurrent
+    /// requests.
+    async fn on_chat_completion_terminal(
+        &self,
+        _request: &ChatCompletionRequest,
+        _exchange_id: &str,
+        _outcome: &ChatCompletionOutcome<'_>,
+    ) {
+    }
+
+    /// Mint an optional rung-ladder response-leg marker for a successful
+    /// non-streaming chat completion.
+    ///
+    /// Fires once, after the backend has returned a response and before
+    /// [`Self::on_chat_completion_terminal`] and the HTTP response are
+    /// produced. A `Some` return is attached to
+    /// [`ChatCompletionResponse::capsule_marker`], which the router turns
+    /// into an `X-Capsule-Id` response header (see
+    /// `frontend_lifecycle_middleware` in `router.rs`) — the write-capable
+    /// half of the response leg that a plain observer method cannot provide,
+    /// since every other hook method here takes `&ChatCompletionResponse`.
+    /// Default: no marker (unchanged behavior for existing implementors).
+    async fn capsule_marker_for_response(
+        &self,
+        _request: &ChatCompletionRequest,
+        _response: &ChatCompletionResponse,
+    ) -> Option<CapsuleMarker> {
+        None
+    }
+
+    /// Whether this policy reads the `request` argument passed to
+    /// [`Self::on_chat_completion_terminal`] or
+    /// [`Self::capsule_marker_for_response`]. Both fire after the backend
+    /// has already taken the effective request by value, so
+    /// `HookedOpenAiBackend` must clone it up front to still have one to
+    /// hand them — a clone that copies real bytes (message content, inline
+    /// media) on every non-streaming completion regardless of whether
+    /// either hook looks at it. [`Self::on_effective_chat_completion`]
+    /// doesn't need this: it runs before that move, on `&request` directly.
+    ///
+    /// Defaults to `true` (always clone) so a policy that starts reading
+    /// the post-dispatch request keeps getting the real one without also
+    /// having to remember to flip this. A policy that only implements the
+    /// pre-dispatch hooks — or ignores `request` in the post-dispatch ones —
+    /// can override this to `false` to skip the clone; in that case the two
+    /// post-dispatch hooks still fire, but with a default/empty
+    /// `ChatCompletionRequest` in place of the real one.
+    fn observes_dispatched_request(&self) -> bool {
+        true
+    }
+}
+
+/// The route information available to a hook at dispatch time.
+///
+/// Deliberately narrow: see [`OpenAiHookPolicy::on_effective_chat_completion`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatExchangeRoute {
+    pub model: String,
+    /// Stable id for this exchange, shared with the terminal event's
+    /// `exchange_id` — see [`OpenAiHookPolicy::on_chat_completion_terminal`].
+    pub exchange_id: String,
+}
+
+impl ChatExchangeRoute {
+    pub fn for_request(request: &ChatCompletionRequest, exchange_id: impl Into<String>) -> Self {
+        Self {
+            model: request.model.clone(),
+            exchange_id: exchange_id.into(),
+        }
+    }
+}
+
+/// The terminal outcome of a non-streaming chat completion, as seen by
+/// [`OpenAiHookPolicy::on_chat_completion_terminal`].
+///
+/// `#[non_exhaustive]`: [`Self::Cancelled`] was added after this type
+/// shipped, precisely so a downstream `match` without a wildcard arm fails
+/// loudly instead of silently missing the case it needs to handle.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum ChatCompletionOutcome<'a> {
+    /// The backend returned a response.
+    Success {
+        response: &'a ChatCompletionResponse,
+    },
+    /// The backend call failed or timed out.
+    Error { status: u16, message: &'a str },
+    /// An earlier hook (`before_chat_completion`) denied the request before
+    /// it reached the backend.
+    Denied { status: u16, reason: &'a str },
+    /// The exchange's future was dropped (an outer timeout, or the client
+    /// disconnecting) before the backend call returned — see
+    /// [`TerminalGuard`]. There is no HTTP status or response to report;
+    /// this variant exists so every admitted exchange still gets exactly
+    /// one terminal callback instead of none.
+    Cancelled,
+    /// A streaming chat completion sent every chunk to the client and the
+    /// underlying stream ended on its own (as opposed to being dropped
+    /// mid-stream, which reports [`Self::Cancelled`] instead). Streaming
+    /// dispatches whole [`crate::chat::ChatCompletionChunk`]s rather than
+    /// one assembled [`ChatCompletionResponse`], so unlike [`Self::Success`]
+    /// there is no response to report here.
+    StreamCompleted,
+}
+
+/// Guarantees exactly one [`OpenAiHookPolicy::on_chat_completion_terminal`]
+/// call per admitted exchange, even if the future driving the backend call
+/// is dropped mid-flight (an outer request timeout, or the client
+/// disconnecting) before it can report success/error itself.
+///
+/// [`Self::fire`] is the normal path: it awaits the hook, then marks the
+/// guard fired. If `fire`'s future is itself dropped mid-await (the
+/// enclosing future was cancelled while the hook call was in flight) the
+/// guard is still unfired, so [`Drop::drop`] below still fires the terminal
+/// callback — exactly one call either way. If the caller instead drops the
+/// guard without calling `fire` at all — because the enclosing future was
+/// cancelled before `fire` was even invoked — [`Drop::drop`] spawns the
+/// terminal call with
+/// [`ChatCompletionOutcome::Cancelled`] so it still happens, just detached
+/// from (and unable to block) whatever cancelled the original future.
+pub struct TerminalGuard {
+    hooks: Arc<dyn OpenAiHookPolicy>,
+    request: ChatCompletionRequest,
+    exchange_id: String,
+    fired: bool,
+}
+
+/// A [`ChatCompletionOutcome`] with no borrowed fields, for the streaming
+/// terminal path: [`TerminalGuard::fire_detached`] hands the outcome to a
+/// spawned task that outlives the caller's stack frame, so it needs data it
+/// owns rather than a reference into a local that's about to go away.
+/// Deliberately narrower than [`ChatCompletionOutcome`] — it omits
+/// [`ChatCompletionOutcome::Success`], which streaming never has a
+/// [`ChatCompletionResponse`] to report; [`ChatCompletionOutcome::Denied`],
+/// which is always fired inline (before any stream exists to detach from);
+/// and [`ChatCompletionOutcome::Cancelled`], which [`Drop`] below fires
+/// directly without going through `fire_detached` at all.
+enum OwnedChatCompletionOutcome {
+    Error { status: u16, message: String },
+    StreamCompleted,
+}
+
+impl OwnedChatCompletionOutcome {
+    fn as_ref(&self) -> ChatCompletionOutcome<'_> {
+        match self {
+            Self::Error { status, message } => ChatCompletionOutcome::Error {
+                status: *status,
+                message,
+            },
+            Self::StreamCompleted => ChatCompletionOutcome::StreamCompleted,
+        }
+    }
+}
+
+impl TerminalGuard {
+    pub fn new(
+        hooks: Arc<dyn OpenAiHookPolicy>,
+        request: ChatCompletionRequest,
+        exchange_id: String,
+    ) -> Self {
+        Self {
+            hooks,
+            request,
+            exchange_id,
+            fired: false,
+        }
+    }
+
+    pub fn set_request(&mut self, request: ChatCompletionRequest) {
+        self.request = request;
+    }
+
+    pub async fn fire(mut self, outcome: &ChatCompletionOutcome<'_>) {
+        self.hooks
+            .on_chat_completion_terminal(&self.request, &self.exchange_id, outcome)
+            .await;
+        self.fired = true;
+    }
+
+    /// Fire the terminal callback from a context that cannot `.await` — a
+    /// `Stream::poll_next` implementation, specifically — by handing it to a
+    /// detached task on the current Tokio runtime, exactly like [`Drop`]'s
+    /// own fallback below. Consumes `self` (after marking it fired) so the
+    /// guard's own `Drop` can never also fire once this returns.
+    fn fire_detached(mut self, outcome: OwnedChatCompletionOutcome) {
+        self.fired = true;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!(
+                exchange_id = %self.exchange_id,
+                "TerminalGuard dropped outside a Tokio runtime; skipping terminal callback"
+            );
+            return;
+        };
+        let hooks = self.hooks.clone();
+        let request = std::mem::take(&mut self.request);
+        let exchange_id = std::mem::take(&mut self.exchange_id);
+        handle.spawn(async move {
+            hooks
+                .on_chat_completion_terminal(&request, &exchange_id, &outcome.as_ref())
+                .await;
+        });
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if self.fired {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No runtime to spawn onto — this only happens at process/runtime
+            // teardown, where a detached terminal callback would be moot anyway.
+            tracing::debug!(
+                exchange_id = %self.exchange_id,
+                "TerminalGuard dropped outside a Tokio runtime; skipping terminal callback"
+            );
+            return;
+        };
+        let hooks = self.hooks.clone();
+        let request = std::mem::take(&mut self.request);
+        let exchange_id = std::mem::take(&mut self.exchange_id);
+        handle.spawn(async move {
+            hooks
+                .on_chat_completion_terminal(
+                    &request,
+                    &exchange_id,
+                    &ChatCompletionOutcome::Cancelled,
+                )
+                .await;
+        });
+    }
+}
+
+/// Wraps a [`ChatCompletionStream`] so its admitted exchange still gets
+/// exactly one terminal callback, the same guarantee
+/// [`HookedOpenAiBackend::chat_completion_with_context`] gives a
+/// non-streaming exchange via [`TerminalGuard`] — just adapted for a type
+/// that can outlive the call that created it and whose `Stream::poll_next`
+/// cannot `.await`.
+///
+/// - The stream ending on its own (`poll_next` returns `Ready(None)`) fires
+///   [`ChatCompletionOutcome::StreamCompleted`].
+/// - A chunk carrying an error fires [`ChatCompletionOutcome::Error`]
+///   immediately — matching the non-streaming path, which never waits for a
+///   graceful end once the backend has already reported failure.
+/// - Both fire via [`TerminalGuard::fire_detached`], since neither can
+///   `.await` inside `poll_next`.
+/// - Dropping this wrapper before either of the above happens — an outer
+///   timeout, or the client disconnecting mid-stream — drops the
+///   still-armed [`TerminalGuard`], whose own `Drop` fires
+///   [`ChatCompletionOutcome::Cancelled`]. Exactly one of
+///   {`StreamCompleted`, `Error`, `Cancelled`} can ever happen, because each
+///   path takes the guard out of `self.guard` (an `Option`) before firing,
+///   and a `None` guard fires nothing on drop.
+pub struct TerminalGuardedChatStream {
+    inner: ChatCompletionStream,
+    guard: Option<TerminalGuard>,
+}
+
+impl TerminalGuardedChatStream {
+    pub fn pinned(inner: ChatCompletionStream, guard: TerminalGuard) -> ChatCompletionStream {
+        Box::pin(Self {
+            inner,
+            guard: Some(guard),
+        })
+    }
+}
+
+impl futures_core::Stream for TerminalGuardedChatStream {
+    type Item = OpenAiResult<ChatCompletionChunk>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let poll = this.inner.as_mut().poll_next(cx);
+        match &poll {
+            std::task::Poll::Ready(Some(Err(error))) => {
+                if let Some(guard) = this.guard.take() {
+                    guard.fire_detached(OwnedChatCompletionOutcome::Error {
+                        status: error.status().as_u16(),
+                        message: error.to_string(),
+                    });
+                }
+            }
+            std::task::Poll::Ready(None) => {
+                if let Some(guard) = this.guard.take() {
+                    guard.fire_detached(OwnedChatCompletionOutcome::StreamCompleted);
+                }
+            }
+            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+        }
+        poll
+    }
 }
 
 pub struct HookedOpenAiBackend {
@@ -140,11 +459,83 @@ impl OpenAiBackend for HookedOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionResponse> {
-        let outcome = self.hooks.before_chat_completion(&mut request).await?;
+        let exchange_id = uuid::Uuid::new_v4().to_string();
+        // Armed immediately after minting the exchange id — before
+        // `before_chat_completion` and `on_effective_chat_completion` run —
+        // so a future dropped during either of those pre-backend awaits
+        // still gets exactly one terminal callback via the guard's `Drop`.
+        // The pre-mutation `request` clone is fine for that fallback: it
+        // only ever surfaces on the `Cancelled` path, which doesn't need the
+        // post-dispatch copy.
+        let mut guard =
+            TerminalGuard::new(self.hooks.clone(), request.clone(), exchange_id.clone());
+        let outcome = match self.hooks.before_chat_completion(&mut request).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let reason = error.to_string();
+                let denial = ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &reason,
+                };
+                guard.request = request.clone();
+                guard.fire(&denial).await;
+                return Err(error);
+            }
+        };
         apply_chat_hook_outcome(&mut request, &outcome);
-        self.backend
+        let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
+        self.hooks
+            .on_effective_chat_completion(&request, &route)
+            .await;
+        // Only clone the effective request when a hook actually observes it
+        // after dispatch — `chat_completion_with_context` below takes
+        // `request` by value, so without a hook that needs the post-dispatch
+        // copy, moving the original straight in (no clone) is enough.
+        let dispatched_request = if self.hooks.observes_dispatched_request() {
+            request.clone()
+        } else {
+            ChatCompletionRequest::default()
+        };
+        // Swap in the post-mutation request now that dispatch is imminent,
+        // so the backend-call `Cancelled` fallback and the final
+        // success/error terminal both report what was actually sent.
+        guard.request = dispatched_request.clone();
+        let mut result = self
+            .backend
             .chat_completion_with_context(request, context)
-            .await
+            .await;
+        if let Ok(response) = &mut result
+            && let Some(marker) = self
+                .hooks
+                .capsule_marker_for_response(&dispatched_request, &*response)
+                .await
+        {
+            // A marker whose capsule id can't become a valid `X-Capsule-Id`
+            // header must not be attached at all — otherwise a plugin
+            // observing the terminal event below would see a capsule id the
+            // client's own response never carried.
+            if capsule_id_is_valid(&marker.capsule_id) {
+                response.capsule_marker = Some(marker);
+            } else {
+                tracing::warn!(
+                    capsule_id = %marker.capsule_id,
+                    "dropping capsule marker: invalid capsule id"
+                );
+            }
+        }
+        let error_message;
+        let terminal = match &result {
+            Ok(response) => ChatCompletionOutcome::Success { response },
+            Err(error) => {
+                error_message = error.to_string();
+                ChatCompletionOutcome::Error {
+                    status: error.status().as_u16(),
+                    message: &error_message,
+                }
+            }
+        };
+        guard.fire(&terminal).await;
+        result
     }
 
     async fn chat_completion_stream(
@@ -152,9 +543,50 @@ impl OpenAiBackend for HookedOpenAiBackend {
         mut request: ChatCompletionRequest,
         context: OpenAiRequestContext,
     ) -> OpenAiResult<ChatCompletionStream> {
-        let outcome = self.hooks.before_chat_completion(&mut request).await?;
+        let exchange_id = uuid::Uuid::new_v4().to_string();
+        // Same admission-time arming as `chat_completion_with_context` above
+        // — see its comment. A future dropped while `before_chat_completion`
+        // is still running still gets exactly one terminal callback.
+        let mut guard =
+            TerminalGuard::new(self.hooks.clone(), request.clone(), exchange_id.clone());
+        let outcome = match self.hooks.before_chat_completion(&mut request).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let reason = error.to_string();
+                let denial = ChatCompletionOutcome::Denied {
+                    status: error.status().as_u16(),
+                    reason: &reason,
+                };
+                guard.set_request(request.clone());
+                guard.fire(&denial).await;
+                return Err(error);
+            }
+        };
         apply_chat_hook_outcome(&mut request, &outcome);
-        self.backend.chat_completion_stream(request, context).await
+        let route = ChatExchangeRoute::for_request(&request, exchange_id.clone());
+        self.hooks
+            .on_effective_chat_completion(&request, &route)
+            .await;
+        // Post-mutation copy for the guard, mirroring the non-streaming path
+        // — the stream itself will own `request` from here.
+        guard.set_request(request.clone());
+        match self.backend.chat_completion_stream(request, context).await {
+            Ok(stream) => Ok(TerminalGuardedChatStream::pinned(stream, guard)),
+            Err(error) => {
+                // The backend failed before yielding a stream at all — an
+                // `Error` terminal, exactly like a non-streaming backend
+                // failure, not the `Cancelled` the guard's `Drop` would
+                // report if left to fire on its own.
+                let message = error.to_string();
+                guard
+                    .fire(&ChatCompletionOutcome::Error {
+                        status: error.status().as_u16(),
+                        message: &message,
+                    })
+                    .await;
+                Err(error)
+            }
+        }
     }
 
     async fn completion(&self, request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
@@ -419,320 +851,5 @@ fn is_video_container(container_key: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use serde_json::json;
-
-    use super::*;
-    use crate::Usage;
-
-    struct RecordingBackend {
-        seen: Mutex<Option<ChatCompletionRequest>>,
-    }
-
-    #[async_trait]
-    impl OpenAiBackend for RecordingBackend {
-        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
-            Ok(vec![ModelObject::new("auto")])
-        }
-
-        async fn chat_completion(
-            &self,
-            request: ChatCompletionRequest,
-        ) -> OpenAiResult<ChatCompletionResponse> {
-            *self.seen.lock().unwrap() = Some(request.clone());
-            Ok(ChatCompletionResponse::new(
-                request.model,
-                "ok",
-                Usage::new(0, 0),
-            ))
-        }
-
-        async fn chat_completion_stream(
-            &self,
-            request: ChatCompletionRequest,
-            _context: OpenAiRequestContext,
-        ) -> OpenAiResult<ChatCompletionStream> {
-            *self.seen.lock().unwrap() = Some(request);
-            Ok(Box::pin(futures_util::stream::empty()))
-        }
-    }
-
-    struct InjectingHook;
-
-    #[async_trait]
-    impl OpenAiHookPolicy for InjectingHook {
-        async fn before_chat_completion(
-            &self,
-            _request: &mut ChatCompletionRequest,
-        ) -> OpenAiResult<ChatHookOutcome> {
-            Ok(ChatHookOutcome::injected("[hint]\n"))
-        }
-    }
-
-    struct MediaRescueHook;
-
-    #[async_trait]
-    impl OpenAiHookPolicy for MediaRescueHook {
-        async fn before_chat_completion(
-            &self,
-            request: &mut ChatCompletionRequest,
-        ) -> OpenAiResult<ChatHookOutcome> {
-            let media = first_chat_media(&request.messages).expect("media");
-            Ok(ChatHookOutcome::injected_with_consumed_media(
-                "[Audio context: hello]\n\n",
-                media,
-            ))
-        }
-    }
-
-    #[test]
-    fn chat_mesh_hooks_enabled_reads_extra_flag() {
-        let mut request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{"role": "user", "content": "hello"}],
-            "mesh_hooks": true
-        }))
-        .unwrap();
-
-        assert!(chat_mesh_hooks_enabled(&request));
-
-        set_chat_mesh_hooks_enabled(&mut request, false);
-
-        assert!(!chat_mesh_hooks_enabled(&request));
-    }
-
-    #[test]
-    fn first_chat_media_extracts_image_url_and_user_text() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "what is this?"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-                ]
-            }]
-        }))
-        .unwrap();
-
-        let media = first_chat_media(&request.messages).expect("media");
-
-        assert_eq!(media.kind, ChatMediaKind::Image);
-        assert_eq!(media.url, "data:image/png;base64,abc");
-        assert_eq!(media.user_text, "what is this?");
-        assert_eq!(media.message_index, 0);
-        assert_eq!(media.part_index, 1);
-    }
-
-    #[test]
-    fn first_chat_media_extracts_audio_url_and_user_text() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "please transcribe this"},
-                    {"type": "audio_url", "audio_url": {"url": "data:audio/wav;base64,abc"}}
-                ]
-            }]
-        }))
-        .unwrap();
-
-        let media = first_chat_media(&request.messages).expect("media");
-
-        assert_eq!(media.kind, ChatMediaKind::Audio);
-        assert_eq!(media.url, "data:audio/wav;base64,abc");
-        assert_eq!(media.user_text, "please transcribe this");
-        assert_eq!(media.message_index, 0);
-        assert_eq!(media.part_index, 1);
-    }
-
-    #[test]
-    fn first_chat_media_extracts_inline_input_audio_data() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "what does this say?"},
-                    {"type": "input_audio", "input_audio": {
-                        "data": "YWJj",
-                        "format": "wav"
-                    }}
-                ]
-            }]
-        }))
-        .unwrap();
-
-        let media = first_chat_media(&request.messages).expect("media");
-
-        assert_eq!(media.kind, ChatMediaKind::Audio);
-        assert_eq!(media.url, "data:audio/wav;base64,YWJj");
-        assert_eq!(media.user_text, "what does this say?");
-        assert_eq!(media.message_index, 0);
-        assert_eq!(media.part_index, 1);
-    }
-
-    #[test]
-    fn image_only_message_with_mesh_hooks_is_valid_before_hook_injection() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-                ]
-            }],
-            "mesh_hooks": true
-        }))
-        .unwrap();
-
-        request.validate().unwrap();
-    }
-
-    #[test]
-    fn image_only_message_without_mesh_hooks_is_valid_for_native_multimodal_backend() {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-                ]
-            }]
-        }))
-        .unwrap();
-
-        request.validate().unwrap();
-    }
-
-    #[test]
-    fn inject_text_into_chat_messages_prepends_last_user_text() {
-        let mut request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{"role": "user", "content": "original"}]
-        }))
-        .unwrap();
-
-        inject_text_into_chat_messages(&mut request.messages, "[hint]\n");
-
-        assert_eq!(
-            request.messages[0].content,
-            Some(MessageContent::Text("[hint]\noriginal".to_string()))
-        );
-    }
-
-    #[tokio::test]
-    async fn hooked_backend_applies_injection_once_before_forwarding() {
-        let backend = Arc::new(RecordingBackend {
-            seen: Mutex::new(None),
-        });
-        let hooked = HookedOpenAiBackend::new(backend.clone(), Arc::new(InjectingHook));
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{"role": "user", "content": "original"}],
-            "mesh_hooks": true
-        }))
-        .unwrap();
-
-        hooked.chat_completion(request).await.unwrap();
-
-        let seen = backend.seen.lock().unwrap().clone().unwrap();
-        assert_eq!(
-            seen.messages[0].content,
-            Some(MessageContent::Text("[hint]\noriginal".to_string()))
-        );
-    }
-
-    #[tokio::test]
-    async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
-        let backend = Arc::new(RecordingBackend {
-            seen: Mutex::new(None),
-        });
-        let hooked = HookedOpenAiBackend::new(backend.clone(), Arc::new(MediaRescueHook));
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "please transcribe this"},
-                    {"type": "input_audio", "input_audio": {
-                        "data": "YWJj",
-                        "format": "wav"
-                    }}
-                ]
-            }],
-            "mesh_hooks": true
-        }))
-        .unwrap();
-
-        hooked.chat_completion(request).await.unwrap();
-
-        let seen = backend.seen.lock().unwrap().clone().unwrap();
-        assert_eq!(first_chat_media(&seen.messages), None);
-        assert_eq!(
-            seen.messages[0].content,
-            Some(MessageContent::Parts(vec![
-                MessageContentPart {
-                    content_type: "text".to_string(),
-                    text: Some("[Audio context: hello]\n\n".to_string()),
-                    extra: Default::default(),
-                },
-                MessageContentPart {
-                    content_type: "text".to_string(),
-                    text: Some("please transcribe this".to_string()),
-                    extra: Default::default(),
-                },
-            ]))
-        );
-    }
-
-    #[test]
-    fn consumed_media_action_removes_only_matching_media_part() {
-        let mut request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "what is here?"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                    {"type": "input_audio", "input_audio": {"url": "data:audio/wav;base64,def"}}
-                ]
-            }],
-            "mesh_hooks": true
-        }))
-        .unwrap();
-        let media = ChatMediaRef {
-            kind: ChatMediaKind::Audio,
-            url: "data:audio/wav;base64,def".to_string(),
-            user_text: "what is here?".to_string(),
-            message_index: 0,
-            part_index: 2,
-        };
-
-        apply_chat_hook_outcome(
-            &mut request,
-            &ChatHookOutcome::injected_with_consumed_media("[Audio context: beep]\n\n", media),
-        );
-
-        let Some(MessageContent::Parts(parts)) = &request.messages[0].content else {
-            panic!("expected multipart content");
-        };
-        assert_eq!(
-            parts
-                .iter()
-                .filter(|part| part.content_type == "input_audio")
-                .count(),
-            0
-        );
-        assert_eq!(
-            parts
-                .iter()
-                .filter(|part| part.content_type == "image_url")
-                .count(),
-            1
-        );
-    }
-}
+#[path = "hooks_tests.rs"]
+mod tests;

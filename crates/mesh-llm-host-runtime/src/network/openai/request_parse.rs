@@ -149,6 +149,20 @@ impl BufferedHttpRequest {
         }
     }
 
+    /// The stabilized capsule client nonce and origin marker carried on the
+    /// already-rebuilt `raw` request.
+    ///
+    /// `finalize_forwarded_request` resolves the nonce once at ingress and
+    /// re-stamps `x-capsule-client-nonce` (and, only when this frontend minted
+    /// the value, `x-capsule-nonce-origin`) into `raw`. Paths that rebuild the
+    /// forwarded request from a parsed body instead of forwarding `raw`
+    /// byte-for-byte (the pipeline / MoA strong-model proxy) must read the
+    /// stabilized value back out here so the outbound request carries the same
+    /// nonce every downstream reader expects, rather than dropping it.
+    pub fn capsule_nonce_headers(&self) -> (Option<String>, Option<String>) {
+        capsule_nonce_headers_from_raw(&self.raw)
+    }
+
     /// The only semantic request media kind trusted by artifact capture.
     ///
     /// This derives from the closed OpenAI ingress route vocabulary and a
@@ -545,6 +559,13 @@ fn finalize_forwarded_request(
     let path = rewritten_path.unwrap_or_else(|| req.path.unwrap_or("/"));
     let version = req.version.unwrap_or(1);
 
+    // Resolve the capsule client nonce once here, at the single point every
+    // forwarded request is rebuilt — so local, remote, plugin-endpoint, and
+    // every retry/hop path receives the identical, stabilized value regardless
+    // of which downstream code forwards `request.raw`. Mirrors how the
+    // canonical `x-request-id` is resolved and re-stamped below.
+    let (client_nonce, client_nonce_origin) = client_nonce_from_headers(req.headers);
+
     let mut rebuilt = format!("{method} {path} HTTP/1.{version}\r\n");
 
     for header in req.headers.iter() {
@@ -553,6 +574,18 @@ fn finalize_forwarded_request(
             continue;
         }
         if name.eq_ignore_ascii_case("x-request-id") {
+            continue;
+        }
+        // Strip every inbound capsule nonce header on every ingress path. A
+        // caller must never be able to smuggle a forged `x-capsule-nonce-origin`
+        // marker (which asserts *this* frontend minted the value) or a duplicate
+        // nonce through the raw proxy; both are re-stamped from the resolved,
+        // validated value below.
+        if name.eq_ignore_ascii_case(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+            || name.eq_ignore_ascii_case(
+                openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+            )
+        {
             continue;
         }
         if name.eq_ignore_ascii_case(RAW_LIFECYCLE_OWNER_HEADER) {
@@ -574,6 +607,17 @@ fn finalize_forwarded_request(
         rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     rebuilt.push_str(&format!("x-request-id: {}\r\n", request_id.as_uuid()));
+    rebuilt.push_str(&format!(
+        "{}: {}\r\n",
+        openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+        client_nonce,
+    ));
+    if let Some(origin) = client_nonce_origin {
+        rebuilt.push_str(&format!(
+            "{}: {origin}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+        ));
+    }
 
     // The proxy buffers exactly one request for routing, so force a single-request
     // connection contract upstream instead of reusing the client connection blindly.
@@ -770,6 +814,69 @@ fn canonical_request_id_from_headers(headers: &[httparse::Header<'_>]) -> Option
         .filter(|header| header.name.eq_ignore_ascii_case("x-request-id"))
         .map(|header| std::str::from_utf8(header.value).ok());
     openai_frontend::parse_single_request_id(request_id_values)
+}
+
+/// Resolve the capsule client nonce for a forwarded request, using the same
+/// single-valid-UUIDv4 acceptance rule as the axum frontend ingress.
+///
+/// Returns the nonce value to stamp and, only when this ingress minted it, the
+/// trusted origin marker to stamp alongside it. A forwarded (client-supplied)
+/// nonce is returned with no origin marker, so a caller can never make a value
+/// it chose look as though this frontend minted it.
+/// Read the stabilized `x-capsule-client-nonce` / `x-capsule-nonce-origin`
+/// headers back out of an already-rebuilt raw HTTP request.
+///
+/// Only the request-header block is scanned. Used by request-rebuilding proxy
+/// paths (pipeline / MoA) that would otherwise emit an outbound request with no
+/// nonce because they construct it from a parsed JSON body rather than
+/// forwarding `raw`.
+fn capsule_nonce_headers_from_raw(raw: &[u8]) -> (Option<String>, Option<String>) {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(raw.len(), |pos| pos);
+    let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut req = httparse::Request::new(&mut headers_buf);
+    if req
+        .parse(&raw[..header_end.saturating_add(4).min(raw.len())])
+        .is_err()
+    {
+        return (None, None);
+    }
+    let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+    let origin_header = openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
+    let find = |name: &str| {
+        req.headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case(name))
+            .and_then(|header| std::str::from_utf8(header.value).ok())
+            .map(str::to_string)
+    };
+    (find(nonce_header), find(origin_header))
+}
+
+fn client_nonce_from_headers(headers: &[httparse::Header<'_>]) -> (String, Option<&'static str>) {
+    let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+    let inbound = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(nonce_header))
+        .map(|header| std::str::from_utf8(header.value).ok());
+    match openai_frontend::parse_single_client_nonce(inbound) {
+        Some(value) => (
+            value
+                .to_str()
+                .expect("a parsed UUIDv4 nonce is always ASCII")
+                .to_string(),
+            None,
+        ),
+        None => (
+            openai_frontend::lifecycle::generate_client_nonce()
+                .to_str()
+                .expect("a minted UUIDv4 nonce is always ASCII")
+                .to_string(),
+            Some(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_FRONTEND),
+        ),
+    }
 }
 
 async fn read_more<S: AsyncRead + Unpin>(stream: &mut S, buf: &mut Vec<u8>) -> Result<()> {

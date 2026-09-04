@@ -2,9 +2,25 @@ use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
 use tokio::io::AsyncWriteExt;
 
+use super::probe::append_capsule_nonce_headers;
 use crate::network::openai::request_parse::pipeline_request_supported;
 use crate::network::openai::response::common::parse_token_usage_from_json_body;
 use mesh_llm_events::logging::events::TokenUsage;
+
+/// Read the capsule client nonce and origin-marker headers off a reqwest
+/// response, so the hand-built responses below (which otherwise carry over
+/// only `content-type`) still echo them to the client.
+fn capsule_nonce_headers(headers: &reqwest::header::HeaderMap) -> (Option<String>, Option<String>) {
+    let nonce = headers
+        .get(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let origin = headers
+        .get(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str())
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    (nonce, origin)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineProxyResult {
@@ -12,6 +28,17 @@ pub enum PipelineProxyResult {
     RespondedWithUsage { status_code: u16, usage: TokenUsage },
     Dropped,
     FallbackToDirect,
+}
+
+/// The stabilized capsule client nonce and origin marker for a pipeline
+/// request.
+///
+/// Resolved once at ingress and threaded onto the outbound strong-model call so
+/// the downstream response echoes the same value.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineCapsuleNonce {
+    pub client_nonce: Option<String>,
+    pub nonce_origin: Option<String>,
 }
 
 /// Pipeline-aware HTTP proxy for local targets.
@@ -22,6 +49,10 @@ pub enum PipelineProxyResult {
 /// 3. Injects the plan into the request
 /// 4. Forwards to the strong model via HTTP
 /// 5. Streams the response back to the client
+// The pipeline proxy already threads the client stream, request path, body,
+// planner/strong ports and model, and node handle; the capsule nonce is one
+// more borrowed value on that established plumbing rather than a new grouping.
+#[allow(clippy::too_many_arguments)]
 pub async fn pipeline_proxy_local(
     client_stream: &mut ClientStream,
     request_path: &str,
@@ -30,6 +61,7 @@ pub async fn pipeline_proxy_local(
     planner_model: &str,
     strong_port: u16,
     node: &mesh::Node,
+    capsule_nonce: &PipelineCapsuleNonce,
 ) -> PipelineProxyResult {
     if !pipeline_request_supported(request_path, &body) {
         tracing::debug!("pipeline: request path/body not eligible, falling back to direct proxy");
@@ -46,10 +78,48 @@ pub async fn pipeline_proxy_local(
     let _inflight = node.begin_inflight_request();
     let is_streaming = pipeline_streaming_requested(&body);
     if is_streaming {
-        pipeline_proxy_streaming(client_stream, &http_client, &strong_url, &body).await
+        pipeline_proxy_streaming(
+            client_stream,
+            &http_client,
+            &strong_url,
+            &body,
+            capsule_nonce,
+        )
+        .await
     } else {
-        pipeline_proxy_non_streaming(client_stream, &http_client, &strong_url, &body).await
+        pipeline_proxy_non_streaming(
+            client_stream,
+            &http_client,
+            &strong_url,
+            &body,
+            capsule_nonce,
+        )
+        .await
     }
+}
+
+/// Attach the stabilized capsule nonce headers to an outbound strong-model
+/// request. The strong model echoes them back on its response, which the relay
+/// helpers below then forward to the client — so the pipeline path honors the
+/// same nonce contract as the byte-for-byte proxy paths.
+fn attach_capsule_nonce_headers(
+    builder: reqwest::RequestBuilder,
+    capsule_nonce: &PipelineCapsuleNonce,
+) -> reqwest::RequestBuilder {
+    let mut builder = builder;
+    if let Some(nonce) = capsule_nonce.client_nonce.as_deref() {
+        builder = builder.header(
+            openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+            nonce,
+        );
+    }
+    if let Some(origin) = capsule_nonce.nonce_origin.as_deref() {
+        builder = builder.header(
+            openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str(),
+            origin,
+        );
+    }
+    builder
 }
 
 fn pipeline_streaming_requested(body: &serde_json::Value) -> bool {
@@ -94,8 +164,11 @@ async fn pipeline_proxy_streaming(
     http_client: &reqwest::Client,
     strong_url: &str,
     body: &serde_json::Value,
+    capsule_nonce: &PipelineCapsuleNonce,
 ) -> PipelineProxyResult {
-    match http_client.post(strong_url).json(body).send().await {
+    let request =
+        attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
+    match request.send().await {
         Ok(resp) => relay_pipeline_streaming_response(client_stream, resp).await,
         Err(err) => {
             tracing::warn!(
@@ -133,9 +206,16 @@ async fn relay_pipeline_streaming_response(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("text/event-stream")
         .to_string();
-    let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n\r\n",
+    let (client_nonce, nonce_origin) = capsule_nonce_headers(resp.headers());
+    let mut header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
     );
+    append_capsule_nonce_headers(
+        &mut header,
+        client_nonce.as_deref(),
+        nonce_origin.as_deref(),
+    );
+    header.push_str("\r\n");
     if client_stream.write_all(header.as_bytes()).await.is_err() {
         return PipelineProxyResult::Dropped;
     }
@@ -210,8 +290,11 @@ async fn pipeline_proxy_non_streaming(
     http_client: &reqwest::Client,
     strong_url: &str,
     body: &serde_json::Value,
+    capsule_nonce: &PipelineCapsuleNonce,
 ) -> PipelineProxyResult {
-    match http_client.post(strong_url).json(body).send().await {
+    let request =
+        attach_capsule_nonce_headers(http_client.post(strong_url).json(body), capsule_nonce);
+    match request.send().await {
         Ok(resp) => relay_pipeline_non_streaming_response(client_stream, resp).await,
         Err(err) => {
             tracing::warn!(
@@ -227,13 +310,20 @@ async fn relay_pipeline_non_streaming_response(
     resp: reqwest::Response,
 ) -> PipelineProxyResult {
     let status = resp.status();
+    let (client_nonce, nonce_origin) = capsule_nonce_headers(resp.headers());
     match resp.bytes().await {
         Ok(resp_bytes) => {
             let usage = parse_token_usage_from_json_body(&resp_bytes);
-            let header = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            let mut header = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
                 resp_bytes.len()
             );
+            append_capsule_nonce_headers(
+                &mut header,
+                client_nonce.as_deref(),
+                nonce_origin.as_deref(),
+            );
+            header.push_str("\r\n");
             if client_stream.write_all(header.as_bytes()).await.is_err()
                 || client_stream.write_all(&resp_bytes).await.is_err()
                 || client_stream.shutdown().await.is_err()
@@ -282,6 +372,53 @@ mod tests {
         let mut parser = SseUsageParser::default();
         parser.push(b"data: {\"usage\":{\"completion_tokens\":3}}\n\n");
         assert_eq!(parser.usage, None);
+    }
+
+    #[test]
+    fn attach_capsule_nonce_headers_forwards_stabilized_nonce_to_strong_model() {
+        let http_client = reqwest::Client::new();
+        let capsule_nonce = PipelineCapsuleNonce {
+            client_nonce: Some("11111111-2222-4333-8444-555555555555".to_string()),
+            nonce_origin: Some("frontend".to_string()),
+        };
+        let request = attach_capsule_nonce_headers(
+            http_client.post("http://127.0.0.1:1/v1/chat/completions"),
+            &capsule_nonce,
+        )
+        .build()
+        .expect("request should build");
+        let headers = request.headers();
+        assert_eq!(
+            headers
+                .get(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+                .and_then(|value| value.to_str().ok()),
+            Some("11111111-2222-4333-8444-555555555555"),
+            "the stabilized nonce must reach the strong-model request"
+        );
+        assert_eq!(
+            headers
+                .get(openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str())
+                .and_then(|value| value.to_str().ok()),
+            Some("frontend"),
+            "the origin marker must reach the strong-model request"
+        );
+    }
+
+    #[test]
+    fn attach_capsule_nonce_headers_omits_absent_nonce() {
+        let http_client = reqwest::Client::new();
+        let request = attach_capsule_nonce_headers(
+            http_client.post("http://127.0.0.1:1/v1/chat/completions"),
+            &PipelineCapsuleNonce::default(),
+        )
+        .build()
+        .expect("request should build");
+        assert!(
+            request
+                .headers()
+                .get(openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str())
+                .is_none()
+        );
     }
 
     #[test]

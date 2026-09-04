@@ -269,9 +269,11 @@ runtime producers are not duplicated.
   toolchain epoch. Batches that exercise Skippy correctness tests restore an
   exact revision- and SHA-256-pinned model cache, verify the file before use,
   and leave publication to one trusted-main batch. Related Skippy crate changes
-  on pull requests also run an immutable SmolLM2 revision through the complete
-  Mesh config/resolver/server/native SafeTensors path through tokenizer, sampled
-  prefill, and decode with every supported load-time quantization.
+  on pull requests also compile one fully qualified runtime test, fail if that
+  test is absent, then run its binary against an immutable SmolLM2 revision
+  through the complete Mesh config/resolver/server/native SafeTensors path
+  through tokenizer, sampled prefill, and decode with every supported load-time
+  quantization.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime

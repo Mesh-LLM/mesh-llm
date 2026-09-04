@@ -22,6 +22,7 @@ llama-quant-ffi = { path = "../llama-quant-ffi" }
 serde.workspace = true
 serde_json.workspace = true
 skippy-ffi = { path = "../skippy-ffi", default-features = false }
+skippy-model = { path = "../skippy-model" }
 skippy-runtime = { path = "../skippy-runtime", default-features = false }
 
 [dev-dependencies]
