@@ -33,16 +33,24 @@ use lanes::{DiagnosticLane, StateLane};
 /// `outcome: Unknown` and `reason: TerminalNotDelivered` already set.
 pub type SyntheticTerminal = fn() -> RuntimeFact;
 
-/// One admitted child slot under a root: its reservation-table index plus
-/// the family-supplied synthesizer. The SAME synthesizer a genuinely-
-/// dropped guard uses (`OperationReservation::drop` below) is reused by
-/// `engine::drain::settle_pending_root_releases` at child-settle-grace
-/// expiry (task 5, `.omo/plans/event-system-fixes.md`), so a forgotten
-/// child gets the identical family-correct `terminal_not_delivered` fact
-/// either way.
+/// One admitted child slot under a root: its reservation-table index and
+/// the GENERATION it was admitted at, plus the family-supplied
+/// synthesizer. The SAME synthesizer a genuinely-dropped guard uses
+/// (`OperationReservation::drop` below) is reused by `engine::drain::
+/// settle_pending_root_releases` at child-settle-grace expiry (task 5,
+/// `.omo/plans/event-system-fixes.md`), so a forgotten child gets the
+/// identical family-correct `terminal_not_delivered` fact either way.
+/// `generation` is captured at RESERVE time (not re-read from the table at
+/// synthesis time): re-reading `current_generation(index)` at synthesis
+/// time would return whatever generation currently occupies that index --
+/// including a DIFFERENT operation's, if this child's slot was already
+/// released and reused between the outstanding-children snapshot and the
+/// synthesis call -- landing a stale synthesized terminal in a reused
+/// slot instead of safely no-op'ing.
 #[derive(Clone, Copy)]
 struct ChildSlot {
     index: usize,
+    generation: u64,
     synthetic_terminal: SyntheticTerminal,
 }
 
@@ -275,6 +283,7 @@ impl RuntimeEventEngine {
                         .or_default()
                         .push(ChildSlot {
                             index: handle.index,
+                            generation: handle.generation,
                             synthetic_terminal,
                         });
                 }

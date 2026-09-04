@@ -410,15 +410,27 @@ fn release_pending_root(engine: &RuntimeEventEngine, root: OperationId, handle: 
 
 /// Write and enqueue `child`'s own synthesized `terminal_not_delivered`
 /// terminal -- a no-op if it already settled on its own (a real
-/// submission, or a caller-side guard drop) between the outstanding-
-/// children snapshot in [`settle_pending_root_releases`] and this call.
+/// submission, or a caller-side guard drop), OR if its slot was released
+/// and reused by a DIFFERENT operation, between the outstanding-children
+/// snapshot in [`settle_pending_root_releases`] and this call.
+///
+/// Uses `child.generation` -- captured at RESERVE time -- rather than
+/// re-reading `current_generation(child.index)` here: re-reading would
+/// return whatever generation currently occupies that index, which
+/// `write_terminal`'s own generation check would then always match
+/// (having just been read from the same slot), landing this child's stale
+/// synthesized terminal in a slot a completely different, currently
+/// in-flight operation now legitimately owns -- and rejecting THAT
+/// operation's real terminal afterward as a duplicate. The reserve-time
+/// generation makes `write_terminal` correctly detect the mismatch and
+/// no-op instead.
 fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot) {
     if engine.table().is_occupied(child.index).is_none() {
         return;
     }
     let handle = SlotHandle {
         index: child.index,
-        generation: engine.table().current_generation(child.index),
+        generation: child.generation,
     };
     let record = TerminalRecord {
         fact: (child.synthetic_terminal)(),

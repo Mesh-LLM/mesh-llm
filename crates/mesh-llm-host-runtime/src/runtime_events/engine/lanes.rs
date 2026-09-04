@@ -150,6 +150,18 @@ pub(super) fn submit_state_transition(
     let sequence = engine.wake().next_ingress_sequence();
     let lane = engine.state_lane();
     let key: StateLaneKey = (scope, fact.kind_id());
+    // Lock `entries` THEN `latest` -- the SAME order `StateLane::drain`
+    // above uses. Taking `latest` first (as this function used to) is an
+    // AB-BA inversion against `drain`'s `entries`-then-`latest` order: a
+    // concurrent drainer holding `entries` while waiting on `latest` and a
+    // submitter holding `latest` while waiting on `entries` deadlock each
+    // other. `inference::skippy::runtime_events::tests::concurrent_roots`
+    // (task 5) was the first test to actually drive concurrent drain +
+    // state-transition submits and surfaced this as an intermittent hang.
+    let mut entries = lane
+        .entries
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut latest = lane
         .latest
         .lock()
@@ -157,10 +169,6 @@ pub(super) fn submit_state_transition(
     if latest.insert(key, (fact, sequence)).is_some() {
         return SubmitOutcome::Coalesced;
     }
-    let mut entries = lane
-        .entries
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     entries.push_back(key);
     if entries.len() > STATE_TRANSITION_LANE_DEPTH {
         if let Some(evicted) = entries.pop_front() {

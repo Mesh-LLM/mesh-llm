@@ -46,13 +46,20 @@
 //! capacity (`config.rs`; by construction it can never hold more entries
 //! than that, see `wake.rs`'s own doc), so every entry actually queued
 //! always drains and `shutdown_degraded` stays at zero in practice. The
-//! frozen `SHUTDOWN_DRAIN_DEADLINE` (2 s) has no async-wait teeth yet --
-//! today's `drain()`/`shutdown()` are synchronous, bounded-in-memory
-//! operations with nothing to wait ON, so there is no wall-clock deadline
-//! to enforce here. Task 5 gives that deadline real meaning (a bounded
-//! child-settle grace before a root with still-occupied children
-//! releases); this module's job is to keep the call site exactly where
-//! task 5 needs it to slot the wait in.
+//! frozen `SHUTDOWN_DRAIN_DEADLINE` (2 s) had no async-wait teeth as of
+//! task 3 -- `drain()`/`shutdown()` were then synchronous, bounded-in-
+//! memory operations with nothing to wait ON. Task 5 (review defect D8)
+//! gave the equivalent `CHILD_SETTLE_GRACE` bound real meaning WITHOUT
+//! touching this module's call site at all: `engine::drain::
+//! release_or_defer` defers a settled root's slot release while it still
+//! has occupied children, and `engine::drain::settle_pending_root_releases`
+//! -- called on every `drain()`/`drain_up_to()` pass, i.e. on every
+//! `Notify`/fallback tick this module already drives -- enforces the
+//! deadline using the `Instant` each pass is processed at. `shutdown()`
+//! force-settles any still-pending root synchronously (it cannot wait out
+//! a real 2 s grace once this module's driver task is about to be
+//! aborted). None of that needed a wait inserted at the `select!` above;
+//! the driver's existing cadence was already the only clock task 5 needed.
 
 use std::sync::Arc;
 
