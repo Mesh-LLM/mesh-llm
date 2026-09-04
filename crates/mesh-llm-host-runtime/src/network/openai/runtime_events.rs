@@ -41,13 +41,9 @@ use openai_frontend::{
     OpenAiRejection, OpenAiTerminalResult,
 };
 
+use crate::logging::MAX_TRACKED_REQUESTS;
 use crate::runtime_events::engine::OperationReservation;
 use crate::runtime_events::runtime_event_engine;
-
-/// Fixed upper bound for requests tracked by one observer instance, matching
-/// `logging/openai_lifecycle.rs::MAX_TRACKED_REQUESTS` so this adapter's own
-/// bookkeeping cannot grow unbounded independent of the logging tracker.
-const MAX_TRACKED_REQUESTS: usize = 1_024;
 
 /// Mint the request root [`OperationId`] byte-equal to the logging
 /// `RequestId`. `RequestId` wraps a `Uuid` (`mesh-llm-events`); reusing its
