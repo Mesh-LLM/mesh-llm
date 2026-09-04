@@ -67,9 +67,6 @@ impl BinaryStageOptions {
         if args.openai_generation_concurrency == Some(0) {
             bail!("--openai-generation-concurrency must be greater than zero");
         }
-        if args.openai_generation_admission_timeout_secs == 0 {
-            bail!("--openai-generation-admission-timeout-secs must be greater than zero");
-        }
         if args.openai_prefill_chunk_size == 0 {
             bail!("--openai-prefill-chunk-size must be greater than zero");
         }
@@ -310,7 +307,7 @@ mod tests {
         assert!(options.native_mtp_enabled);
         assert_eq!(openai.generation_concurrency, 1);
         assert_eq!(openai.generation_queue_capacity, 16);
-        assert_eq!(openai.generation_admission_timeout_secs, 60);
+        assert_eq!(openai.generation_admission_timeout_secs, 0);
         assert_eq!(openai.speculative, expected);
     }
 

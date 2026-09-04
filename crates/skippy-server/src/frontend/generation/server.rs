@@ -81,9 +81,6 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     if args.generation_concurrency == Some(0) {
         bail!("--generation-concurrency must be greater than zero");
     }
-    if args.generation_admission_timeout_secs == 0 {
-        bail!("--generation-admission-timeout-secs must be greater than zero");
-    }
     let generation_concurrency = args
         .generation_concurrency
         .unwrap_or_else(|| usize::try_from(config.lane_count).unwrap_or(usize::MAX));
@@ -412,9 +409,6 @@ fn embedded_openai_backend_with_scheduler(
     }
     if args.generation_concurrency == 0 {
         bail!("--openai-generation-concurrency must be greater than zero");
-    }
-    if args.generation_admission_timeout_secs == 0 {
-        bail!("--openai-generation-admission-timeout-secs must be greater than zero");
     }
     ensure_generation_concurrency_fits_lanes(
         args.generation_concurrency,

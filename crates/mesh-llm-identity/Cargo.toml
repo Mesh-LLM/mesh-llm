@@ -29,5 +29,9 @@ sha2.workspace = true
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# keyring v4's Apple backend requires protected-data support on iOS.
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
 [dev-dependencies]
 serial_test = "4"

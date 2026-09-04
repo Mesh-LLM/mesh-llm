@@ -4029,6 +4029,7 @@ dependencies = [
 name = "mesh-llm-identity"
 version = "0.76.0-rc9"
 dependencies = [
+ "apple-native-keyring-store",
  "argon2",
  "base64 0.23.1",
  "chacha20poly1305 0.11.0",

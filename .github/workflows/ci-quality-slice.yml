@@ -249,7 +249,7 @@ jobs:
     needs: runner_policy
     if: ${{ inputs.cli_surface_changed }}
     runs-on: ${{ needs.runner_policy.outputs.runner_4 }}
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
         with:

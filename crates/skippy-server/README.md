@@ -156,8 +156,10 @@ deadline handling.
   at once and defaults to the config's KV-derived `lane_count`.
   `--generation-queue-capacity` independently bounds additional waiting
   requests (default `clamp(8 * lanes, 16, 256)`), while
-  `--generation-admission-timeout-secs` bounds predicted and actual queue wait
-  (default 60 seconds). KV restore and prefill-record work runs on a separate
+  `--generation-admission-timeout-secs` can bound predicted and actual queue
+  wait; the default `0` waits until client cancellation so capacity pressure
+  drains through the bounded queue instead of rejecting accepted work. KV
+  restore and prefill-record work runs on a separate
   prompt-scaled deadline: admission timeout plus about one minute per 4,000
   prompt tokens, clamped to at least 60 seconds and at most 30 minutes. A
   legitimate prompt-sized prefill is therefore not killed by the queue-wait

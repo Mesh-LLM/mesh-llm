@@ -38,12 +38,12 @@ use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, St
 use skippy_runtime::{ModelInfo, MtpSource};
 use skippy_server::serving_hooks::{ModelServingHooks, SharedModelServingHooksFactory};
 use skippy_server::{
-    DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
-    EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnHub,
-    binary_transport::PredictionReturnListener, binary_transport::WireCondition,
-    embedded_openai_backend, runtime_state::RuntimeState, telemetry::Telemetry,
-    telemetry::TelemetryLevel,
+    DEFAULT_EMBEDDED_MAX_TOKENS, DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs,
+    EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedState,
+    OpenAiGuardrailsConfig, OpenAiGuardrailsStatus, OpenAiGuardrailsTarget, SkippyRuntimeHandle,
+    binary_transport::PredictionReturnHub, binary_transport::PredictionReturnListener,
+    binary_transport::WireCondition, embedded_openai_backend, runtime_state::RuntimeState,
+    telemetry::Telemetry, telemetry::TelemetryLevel,
 };
 
 pub use certification::{
@@ -552,7 +552,7 @@ fn embedded_openai_args_from(
             .generation_concurrency
             .saturating_mul(8)
             .clamp(16, 256),
-        generation_admission_timeout_secs: 60,
+        generation_admission_timeout_secs: DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS,
         prefill_chunk_size: embedded_args.prefill_chunk_size,
         prefill_chunk_policy: embedded_args.prefill_chunk_policy,
         prefill_chunk_schedule: embedded_args.prefill_chunk_schedule,
