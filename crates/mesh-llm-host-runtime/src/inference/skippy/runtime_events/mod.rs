@@ -268,13 +268,13 @@ impl SkippyGenerationRuntimeEventAdapter {
         // ingress sequence than that terminal and silently drop them, now
         // that state-transition facts actually reach the reducer instead
         // of sitting unapplied in the engine's state lane.
-        if let Some(scope) = anchor_scope {
-            if let Some(engine) = runtime_event_engine() {
-                let ingress = engine.unreserved_ingress(scope);
-                let _ = ingress.try_submit(session_idle_fact());
-                if stop_condition_reached {
-                    let _ = ingress.try_submit(stop_condition_reached_fact());
-                }
+        if let Some(scope) = anchor_scope
+            && let Some(engine) = runtime_event_engine()
+        {
+            let ingress = engine.unreserved_ingress(scope);
+            let _ = ingress.try_submit(session_idle_fact());
+            if stop_condition_reached {
+                let _ = ingress.try_submit(stop_condition_reached_fact());
             }
         }
         if let Some(prefill) = tracking.prefill.as_ref() {

@@ -28,12 +28,13 @@ use crate::runtime_events::engine::{OperationReservation, RuntimeEventEngine};
 use crate::runtime_events::runtime_event_engine;
 
 fn topology_scope(topology_id: &str) -> FactData {
-    let mut data = FactData::default();
-    data.scope = ScopeIdentities {
-        topology_id: TopologyId::new(topology_id).ok(),
-        ..ScopeIdentities::default()
-    };
-    data
+    FactData {
+        scope: ScopeIdentities {
+            topology_id: TopologyId::new(topology_id).ok(),
+            ..ScopeIdentities::default()
+        },
+        ..FactData::default()
+    }
 }
 
 fn terminal_not_delivered() -> FactData {

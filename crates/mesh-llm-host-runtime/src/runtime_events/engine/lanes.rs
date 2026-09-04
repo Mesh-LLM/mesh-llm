@@ -176,10 +176,10 @@ pub(super) fn submit_state_transition(
         return SubmitOutcome::Coalesced;
     }
     entries.push_back(key);
-    if entries.len() > STATE_TRANSITION_LANE_DEPTH {
-        if let Some(evicted) = entries.pop_front() {
-            latest.remove(&evicted);
-        }
+    if entries.len() > STATE_TRANSITION_LANE_DEPTH
+        && let Some(evicted) = entries.pop_front()
+    {
+        latest.remove(&evicted);
     }
     SubmitOutcome::Accepted
 }

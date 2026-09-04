@@ -1385,6 +1385,80 @@ pub(super) struct RunAutoContext {
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 }
 
+/// Installs the mesh-serve path's runtime-event stack -- engine,
+/// drain-loop driver, OTLP telemetry consumer, and presentation subscriber
+/// -- as one unit. Extracted out of `run_auto` (this call site is its
+/// first non-setup action, unchanged) purely to keep that function under
+/// `clippy::too_many_lines`; call order and every side effect below are
+/// identical to what `run_auto` used to do inline.
+///
+/// Only `driver` and `presentation_subscriber` are returned. The engine
+/// handle's own lifetime doesn't matter past setup: a clone is already
+/// installed globally via `install_runtime_event_engine`, and another is
+/// held by the driver task itself, so the local `Arc` dropping at the end
+/// of this function (Arc drop glue only frees the shared `RuntimeEventEngine`
+/// when its LAST clone goes) is exactly as inert as it was when `run_auto`
+/// held that binding inline and never read it again either. Likewise
+/// `RuntimeEventTelemetry::start`'s own doc states its worker and sampler
+/// are detached tasks, so "nothing needs to keep this handle alive for
+/// telemetry to keep running" -- dropping it here is documented-safe.
+struct RunAutoRuntimeEventStack {
+    driver: tokio::task::JoinHandle<()>,
+    presentation_subscriber: Option<tokio::task::JoinHandle<()>>,
+}
+
+fn install_run_auto_runtime_event_stack(
+    config: &plugin::MeshConfig,
+) -> Result<RunAutoRuntimeEventStack> {
+    // Task 9: the runtime-event engine is installed here too (not only for
+    // `--local-model-only`) so `LoadOperation`/`UnloadOperation` in
+    // `runtime/model_lifecycle/{load,unload}.rs` are live on the mesh path.
+    // Task 14: the presentation subscriber attaches from this call, the
+    // full mesh-serve/TUI path -- deliberately NOT on the
+    // `--local-model-only` path, which keeps its own documented "zero
+    // management subscribers" invariant (see `run_local_model_only`). A
+    // capacity-exhausted attach degrades to no presentation rather than
+    // failing startup.
+    let engine = crate::runtime_events::engine::RuntimeEventEngine::new();
+    crate::runtime_events::install_runtime_event_engine(engine.clone());
+    // Task 3: the engine-owned driver is the process's one production
+    // drain loop (defect D3 -- previously nothing but the presentation
+    // subscriber's own tick ever drained anything, and that tick is now a
+    // pure consumer; see `runtime_events::driver`'s module doc). Spawned
+    // immediately after install, same as the presentation subscriber below.
+    let driver = crate::runtime_events::driver::spawn_engine_driver(engine.clone());
+    // Task 19: the hidden, TEST-ONLY `event-disabled` A/B certification
+    // selector. `event_system_progress_diagnostic_bypass_enabled()` is
+    // `false` unless BOTH `MESH_LLM_BENCHMARK_TUNE_TRIAL=1` and
+    // `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=event-disabled` are set, so this is
+    // a no-op on every normal startup; an invalid selector value is a hard
+    // startup error rather than a silent fallback (see
+    // `mesh_llm_config::env_overrides`).
+    engine.set_progress_diagnostic_class_bypass(
+        mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
+    );
+    // Task 16: the OTLP-specific runtime-event telemetry consumer. Reuses
+    // `[telemetry]` config the same way `survey::SurveyTelemetry::start`
+    // does; a disabled or failed exporter degrades to a no-op instance and
+    // never affects startup. Installs its sample queue onto `engine`
+    // itself, so every real producer's `try_submit` (which already funnels
+    // through that engine) feeds the ingress-latency and class-outcome
+    // instruments -- see `survey/runtime_events.rs`'s doc.
+    let _telemetry = survey::runtime_events::RuntimeEventTelemetry::start(config, &engine);
+    let presentation_subscriber =
+        crate::runtime_events::presentation::spawn_presentation_subscriber(&engine)
+            .inspect_err(|_| {
+                tracing::warn!(
+                    "presentation subscriber attach failed: engine subscriber capacity exhausted"
+                );
+            })
+            .ok();
+    Ok(RunAutoRuntimeEventStack {
+        driver,
+        presentation_subscriber,
+    })
+}
+
 #[expect(
     clippy::cognitive_complexity,
     reason = "run_auto is the top-level runtime orchestration path and preserves startup/shutdown ordering"
@@ -1401,50 +1475,11 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
-    // Task 9: the runtime-event engine is installed here too (not only for
-    // `--local-model-only`) so `LoadOperation`/`UnloadOperation` in
-    // `runtime/model_lifecycle/{load,unload}.rs` are live on the mesh path.
-    // Task 14: the presentation subscriber attaches right here, the full
-    // mesh-serve/TUI path -- deliberately NOT on the `--local-model-only`
-    // path, which keeps its own documented "zero management subscribers"
-    // invariant (see `run_local_model_only`). A capacity-exhausted attach
-    // degrades to no presentation rather than failing startup.
-    let runtime_event_engine = crate::runtime_events::engine::RuntimeEventEngine::new();
-    crate::runtime_events::install_runtime_event_engine(runtime_event_engine.clone());
-    // Task 3: the engine-owned driver is the process's one production
-    // drain loop (defect D3 -- previously nothing but the presentation
-    // subscriber's own tick ever drained anything, and that tick is now a
-    // pure consumer; see `runtime_events::driver`'s module doc). Spawned
-    // immediately after install, same as the presentation subscriber below.
-    let runtime_event_driver =
-        crate::runtime_events::driver::spawn_engine_driver(runtime_event_engine.clone());
-    // Task 19: the hidden, TEST-ONLY `event-disabled` A/B certification
-    // selector. `event_system_progress_diagnostic_bypass_enabled()` is
-    // `false` unless BOTH `MESH_LLM_BENCHMARK_TUNE_TRIAL=1` and
-    // `MESH_LLM_EVENT_SYSTEM_TRIAL_MODE=event-disabled` are set, so this is
-    // a no-op on every normal startup; an invalid selector value is a hard
-    // startup error rather than a silent fallback (see
-    // `mesh_llm_config::env_overrides`).
-    runtime_event_engine.set_progress_diagnostic_class_bypass(
-        mesh_llm_config::event_system_progress_diagnostic_bypass_enabled()?,
-    );
-    // Task 16: the OTLP-specific runtime-event telemetry consumer. Reuses
-    // `[telemetry]` config the same way `survey::SurveyTelemetry::start`
-    // does; a disabled or failed exporter degrades to a no-op instance and
-    // never affects startup. Installs its sample queue onto
-    // `runtime_event_engine` itself, so every real producer's `try_submit`
-    // (which already funnels through that engine) feeds the ingress-latency
-    // and class-outcome instruments -- see `survey/runtime_events.rs`'s doc.
-    let _runtime_event_telemetry =
-        survey::runtime_events::RuntimeEventTelemetry::start(&config, &runtime_event_engine);
-    let presentation_subscriber =
-        crate::runtime_events::presentation::spawn_presentation_subscriber(&runtime_event_engine)
-            .inspect_err(|_| {
-                tracing::warn!(
-                    "presentation subscriber attach failed: engine subscriber capacity exhausted"
-                );
-            })
-            .ok();
+    // Engine + drain-loop driver + OTLP telemetry + presentation
+    // subscriber, installed as one unit -- see
+    // `install_run_auto_runtime_event_stack`'s doc for why each piece is
+    // wired at this exact point in mesh-serve startup (tasks 3/9/14/16/19).
+    let runtime_event_stack = install_run_auto_runtime_event_stack(&config)?;
     super::node_lifecycle_events::emit_node_starting();
     // Stage-control starts accepting before eager model resolution. Register
     // every spelling that can become the model's runtime identity now so a
@@ -1646,8 +1681,8 @@ pub(super) async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         api_proxy_handle,
         console_server_handle,
         discovery_publisher,
-        presentation_subscriber,
-        runtime_event_driver,
+        presentation_subscriber: runtime_event_stack.presentation_subscriber,
+        runtime_event_driver: runtime_event_stack.driver,
         startup_specs: &startup_specs,
         tunnel_mgr: &tunnel_mgr,
         skippy_telemetry: &skippy_telemetry,

@@ -25,15 +25,16 @@ use crate::runtime_events::engine::OperationReservation;
 use crate::runtime_events::runtime_event_engine;
 
 fn stage_scope(topology_id: &str, stage_id: &str, layer_start: u32) -> FactData {
-    let mut data = FactData::default();
-    data.scope = ScopeIdentities {
-        topology_id: TopologyId::new(topology_id).ok(),
-        stage: StageId::new(stage_id)
-            .ok()
-            .map(|id| StageIdentity::new(id, layer_start)),
-        ..ScopeIdentities::default()
-    };
-    data
+    FactData {
+        scope: ScopeIdentities {
+            topology_id: TopologyId::new(topology_id).ok(),
+            stage: StageId::new(stage_id)
+                .ok()
+                .map(|id| StageIdentity::new(id, layer_start)),
+            ..ScopeIdentities::default()
+        },
+        ..FactData::default()
+    }
 }
 
 fn terminal_not_delivered() -> FactData {
