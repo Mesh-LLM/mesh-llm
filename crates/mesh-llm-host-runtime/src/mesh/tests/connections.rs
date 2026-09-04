@@ -1,8 +1,8 @@
 use super::heartbeat::{
     HomeRelayStatusTransition, RELAY_DEGRADED_RTT_MS, RELAY_MISSING_GRACE_SECS,
-    RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS, RelayPathSnapshot, RelayPeerHealth,
-    RelayPeerObservation, RelayReconnectController, RelayReconnectReason, SelectedPathKind,
-    relay_reconnect_reason, should_remove_connection,
+    RELAY_ONLY_DIRECT_RESCUE_SECS, RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS,
+    RelayPathSnapshot, RelayPeerHealth, RelayPeerObservation, RelayReconnectController,
+    RelayReconnectReason, SelectedPathKind, relay_reconnect_reason, should_remove_connection,
 };
 use super::*;
 use crate::api;
@@ -393,6 +393,7 @@ async fn make_test_node_with_requirements(
             requirement_rejected_peers: HashSet::new(),
             recent_mesh_rejections: VecDeque::new(),
         })),
+        direct_rescue_endpoints: Arc::new(Mutex::new(HashMap::new())),
         role: Arc::new(Mutex::new(role)),
         host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
         models: Arc::new(Mutex::new(Vec::new())),

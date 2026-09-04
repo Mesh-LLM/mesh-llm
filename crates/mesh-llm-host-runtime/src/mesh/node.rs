@@ -10,7 +10,9 @@ pub use startup::detect_vram_bytes_capped;
 use startup::{
     bind_mesh_endpoint, init_owner_runtime, startup_secret_key, wait_for_endpoint_online,
 };
-pub(crate) use startup::{default_plugin_event_source, hardware_snapshot_for_start};
+pub(crate) use startup::{
+    default_plugin_event_source, hardware_snapshot_for_start, startup_transport_config,
+};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -65,6 +67,12 @@ pub struct RouteEntry {
 }
 
 #[derive(Clone)]
+pub(crate) struct DirectRescueEndpoint {
+    pub(crate) endpoint: Endpoint,
+    pub(crate) connection_stable_id: usize,
+}
+
+#[derive(Clone)]
 pub struct Node {
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
@@ -74,6 +82,10 @@ pub struct Node {
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MeshState>>,
+    /// Relay-disabled same-identity endpoints that own recovered direct connections.
+    /// The endpoint must outlive its connection; entries are replaced/removed with
+    /// the corresponding tracked connection and closed during node shutdown.
+    pub(crate) direct_rescue_endpoints: Arc<Mutex<HashMap<EndpointId, DirectRescueEndpoint>>>,
     pub(crate) role: Arc<Mutex<NodeRole>>,
     pub(crate) host_role_claims: Arc<Mutex<HostRoleClaims>>,
     pub(crate) models: Arc<Mutex<Vec<String>>>,
@@ -659,6 +671,16 @@ impl Node {
     /// the final gossip updates) has finished. `accept_loop` observes the close
     /// as `Endpoint::accept` returning `None` and exits on its own.
     pub async fn close_endpoint(&self) {
+        let rescue_endpoints: Vec<Endpoint> = self
+            .direct_rescue_endpoints
+            .lock()
+            .await
+            .drain()
+            .map(|(_, rescue)| rescue.endpoint)
+            .collect();
+        for endpoint in rescue_endpoints {
+            close_endpoint_gracefully(&endpoint, "direct-rescue").await;
+        }
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
@@ -777,6 +799,7 @@ impl Node {
                 requirement_rejected_peers: HashSet::new(),
                 recent_mesh_rejections: VecDeque::new(),
             })),
+            direct_rescue_endpoints: Arc::new(Mutex::new(HashMap::new())),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
@@ -957,6 +980,7 @@ impl Node {
                 requirement_rejected_peers: HashSet::new(),
                 recent_mesh_rejections: VecDeque::new(),
             })),
+            direct_rescue_endpoints: Arc::new(Mutex::new(HashMap::new())),
             role: Arc::new(Mutex::new(role)),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
             models: Arc::new(Mutex::new(Vec::new())),
