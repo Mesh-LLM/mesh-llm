@@ -396,7 +396,7 @@ mod tests {
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(8);
         let reservation = engine
-            .reserve_root(OperationId::new(), || terminal_fact())
+            .reserve_root(OperationId::new(), terminal_fact)
             .expect("reserve");
 
         sample_engine(&engine, &queue);
@@ -417,7 +417,7 @@ mod tests {
         let engine = RuntimeEventEngine::with_capacity(4);
         let queue = RuntimeEventTelemetryQueue::new(64);
         let reservation = engine
-            .reserve_root(OperationId::new(), || terminal_fact())
+            .reserve_root(OperationId::new(), terminal_fact)
             .expect("reserve");
         assert_eq!(engine.occupied_count(), 1);
 

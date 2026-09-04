@@ -475,7 +475,6 @@ fn unsettled_operations_survive_the_capacity_sweep_while_settled_ones_are_evicte
 #[test]
 fn category_arrays_preserve_deterministic_insertion_order_not_hashmap_order() {
     let mut snapshot = ReducerSnapshot::empty();
-    let mut sequence = 0u64;
     let facts: Vec<RuntimeFact> = vec![
         model_fact(ModelAvailabilityEventKind::ModelAvailable, "model-a"),
         model_fact(ModelAvailabilityEventKind::ModelAvailable, "model-b"),
@@ -512,12 +511,12 @@ fn category_arrays_preserve_deterministic_insertion_order_not_hashmap_order() {
         session_fact(SessionEventKind::SessionCreated, "sess-e"),
         session_fact(SessionEventKind::SessionClosed, "sess-e"),
     ];
-    for fact in facts {
-        let ReduceOutcome::Applied(next) = apply(&snapshot, input(root(), sequence, fact)) else {
+    for (sequence, fact) in facts.into_iter().enumerate() {
+        let ReduceOutcome::Applied(next) = apply(&snapshot, input(root(), sequence as u64, fact))
+        else {
             panic!("every distinct-category fact must apply");
         };
         snapshot = next;
-        sequence += 1;
     }
 
     assert_eq!(

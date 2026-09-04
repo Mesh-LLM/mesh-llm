@@ -79,11 +79,7 @@ pub(crate) fn extract_non_test_write_method_names(source: &str) -> Vec<String> {
         let Some(rest) = line.trim_start().strip_prefix("pub(crate) fn ") else {
             continue;
         };
-        let name = rest
-            .split(|c: char| c == '(' || c == '<')
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let name = rest.split(['(', '<']).next().unwrap_or("").to_string();
         let is_write = name.starts_with("mark_")
             || name.starts_with("publish_")
             || name.starts_with("replace_")
