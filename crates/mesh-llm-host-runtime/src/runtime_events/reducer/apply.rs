@@ -21,6 +21,14 @@ pub struct ReducerInput {
     pub native_sequence: Option<u64>,
     pub wall_clock_hint: Option<i64>,
     pub synthesized: bool,
+    /// R1 fix (task 6-fix, `.omo/plans/event-system-fixes.md`): whether
+    /// THIS submission arrived through a reservation-bound `ScopedIngress`
+    /// (`true`) or an unreserved `UnreservedIngress` (`false`) -- threaded
+    /// from `engine::submit`'s own `handle.is_some()`. OR-latched, sticky,
+    /// into `OperationState::ever_reserved` in `advance` below; never read
+    /// for accept/reject decisions and unrelated to `synthesized` (which
+    /// is about terminal provenance, not reservation provenance).
+    pub reserved: bool,
     pub fact: RuntimeFact,
 }
 
@@ -99,6 +107,7 @@ fn advance(
 ) -> OperationState {
     let mut next = current.clone();
     next.has_applied = true;
+    next.ever_reserved = next.ever_reserved || input.reserved;
     next.last_ingress_sequence = input.ingress_sequence;
     next.last_native_sequence = resolve_native_sequence(&mut next, input.native_sequence);
 

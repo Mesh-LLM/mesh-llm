@@ -40,6 +40,12 @@ pub fn synthesized_terminal_fact() -> RuntimeFact {
     ))
 }
 
+/// Defaults `reserved: true` (R1 fix, task 6-fix,
+/// `.omo/plans/event-system-fixes.md`): every existing reducer-level test
+/// using this helper models a scope AS IF it has a live reservation
+/// backing it (the pre-R1 default, and what these tests were already
+/// exercising) -- use [`input_unreserved`] to explicitly exercise the
+/// never-reserved bounded-LRU path instead.
 pub fn input(scope: OperationScope, ingress_sequence: u64, fact: RuntimeFact) -> ReducerInput {
     ReducerInput {
         scope,
@@ -47,7 +53,22 @@ pub fn input(scope: OperationScope, ingress_sequence: u64, fact: RuntimeFact) ->
         native_sequence: None,
         wall_clock_hint: None,
         synthesized: false,
+        reserved: true,
         fact,
+    }
+}
+
+/// Same as [`input`] but `reserved: false` -- models a fact that arrived
+/// through `unreserved_ingress` with no `SlotHandle` ever backing its
+/// scope (R1 fix, task 6-fix).
+pub fn input_unreserved(
+    scope: OperationScope,
+    ingress_sequence: u64,
+    fact: RuntimeFact,
+) -> ReducerInput {
+    ReducerInput {
+        reserved: false,
+        ..input(scope, ingress_sequence, fact)
     }
 }
 

@@ -337,11 +337,25 @@ impl RuntimeEventEngine {
         }
         let telemetry = self.telemetry.get();
         let start = telemetry.map(|_| Instant::now());
+        // `handle.is_some()` (R1 fix, task 6-fix,
+        // `.omo/plans/event-system-fixes.md`): whether THIS submission
+        // arrived through a reservation-bound `ScopedIngress`. Threaded
+        // into the StateTransition/Diagnostic lanes -- previously computed
+        // here and then silently discarded for those two classes -- all
+        // the way to the reducer's `ReducerInput::reserved`, so a scope
+        // with no reservation EVER backing it (KV/session/lifecycle
+        // observers minting a fresh `OperationId` per event) can be
+        // bounded by its own dedicated LRU instead of relying on
+        // release-triggered eviction or the settled-only backstop, neither
+        // of which can ever reach it.
+        let reserved = handle.is_some();
         let outcome = match class {
             DeliveryClass::Terminal => lanes::submit_terminal(self, scope, handle, fact),
             DeliveryClass::Progress => lanes::submit_progress(self, handle, fact),
-            DeliveryClass::StateTransition => lanes::submit_state_transition(self, scope, fact),
-            DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, scope, fact),
+            DeliveryClass::StateTransition => {
+                lanes::submit_state_transition(self, scope, reserved, fact)
+            }
+            DeliveryClass::Diagnostic => lanes::submit_diagnostic(self, scope, reserved, fact),
         };
         if let (Some(queue), Some(start)) = (telemetry, start) {
             queue.record_class_outcome(class, outcome, start.elapsed());

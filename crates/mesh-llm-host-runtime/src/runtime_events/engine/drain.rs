@@ -47,7 +47,7 @@ use mesh_llm_runtime_event_contracts::{EventSequence, OperationId, OperationScop
 
 use super::{ChildSlot, PendingRootRelease, RuntimeEventEngine};
 use crate::runtime_events::config::{
-    CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL, RESERVATION_TABLE_CAPACITY,
+    CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL, TOTAL_OPERATION_BOUND,
 };
 use crate::runtime_events::reducer::{ReduceOutcome, ReducerInput, apply};
 use crate::runtime_events::replay::ReplayFrame;
@@ -111,7 +111,15 @@ impl RuntimeEventEngine {
         // scope -- sitting in a different lane, drained a moment later in
         // program order -- ever applies, spuriously rejecting it as
         // `OperationSettled` even though it was never actually stale.
-        let mut pending: Vec<(u64, OperationScope, RuntimeFact, bool)> = Vec::new();
+        // 5th element `reserved` (R1 fix, task 6-fix,
+        // `.omo/plans/event-system-fixes.md`): whether this fact arrived
+        // through a reservation-bound submission -- always `true` for a
+        // drained Terminal record (a terminal is only ever written into an
+        // OCCUPIED reservation-table slot) and for a flushed progress slot
+        // (progress coalescing itself requires a live `SlotHandle`); comes
+        // from the lane's own stored value for state-transition/diagnostic
+        // entries, which MAY be `false` (`unreserved_ingress`).
+        let mut pending: Vec<(u64, OperationScope, RuntimeFact, bool, bool)> = Vec::new();
         let mut released_now: Vec<OperationScope> = Vec::new();
         let mut applied = 0;
         for entry in entries {
@@ -128,6 +136,7 @@ impl RuntimeEventEngine {
                     scope,
                     record.fact,
                     record.synthesized,
+                    true,
                 ));
             }
             if let Some(released_scope) = release_or_defer(self, scope, handle, now) {
@@ -141,7 +150,7 @@ impl RuntimeEventEngine {
         pending.extend(
             state_entries
                 .into_iter()
-                .map(|(scope, fact, sequence)| (sequence, scope, fact, false)),
+                .map(|(scope, fact, sequence, reserved)| (sequence, scope, fact, false, reserved)),
         );
 
         let diagnostic_entries = self.diagnostic_lane().drain();
@@ -149,12 +158,12 @@ impl RuntimeEventEngine {
         pending.extend(
             diagnostic_entries
                 .into_iter()
-                .map(|(scope, fact, sequence)| (sequence, scope, fact, false)),
+                .map(|(scope, fact, sequence, reserved)| (sequence, scope, fact, false, reserved)),
         );
 
         pending.sort_by_key(|(sequence, ..)| *sequence);
-        for (sequence, scope, fact, synthesized) in pending {
-            self.apply_and_publish_fact(scope, sequence, fact, synthesized);
+        for (sequence, scope, fact, synthesized, reserved) in pending {
+            self.apply_and_publish_fact(scope, sequence, fact, synthesized, reserved);
         }
 
         // Defect A (task 6-fix): evict every scope released THIS pass only
@@ -184,6 +193,7 @@ impl RuntimeEventEngine {
         ingress_sequence: u64,
         fact: RuntimeFact,
         synthesized: bool,
+        reserved: bool,
     ) {
         let fact_arc = Arc::new(fact.clone());
         let input = ReducerInput {
@@ -192,6 +202,7 @@ impl RuntimeEventEngine {
             native_sequence: None,
             wall_clock_hint: None,
             synthesized,
+            reserved,
             fact,
         };
         let mut reducer_state = self
@@ -206,10 +217,26 @@ impl RuntimeEventEngine {
         // top of defect A): `with_operation`'s settled-only capacity
         // backstop used to silently `break` out of its sweep when nothing
         // settled was left to evict, restoring unbounded growth with no
-        // counter and no log. Release-triggered eviction above keeps this
-        // structurally unreachable in the steady state, but if it is ever
-        // reached this makes it observable instead of silent.
-        if next.operation_count() > RESERVATION_TABLE_CAPACITY {
+        // counter and no log.
+        //
+        // R1 CORRECTION (task 6-fix, `.omo/plans/event-system-fixes.md`):
+        // the comment that used to sit here claimed release-triggered
+        // eviction made that stall "structurally unreachable in the
+        // steady state" -- false: six production call sites
+        // (`unreserved_ingress` with a fresh `OperationId` per event, no
+        // reservation ever backing them) could genuinely drive the
+        // settled-only sweep's "nothing left to evict" branch forever.
+        // `ReducerSnapshot`'s new `unreserved_order` bounded LRU
+        // (`reducer/state.rs`) fixes that by bounding those scopes
+        // independently, so the check below is now against
+        // `TOTAL_OPERATION_BOUND` (`RESERVATION_TABLE_CAPACITY +
+        // UNRESERVED_OPERATION_BOUND`) -- the TRUE combined ceiling both
+        // mechanisms together guarantee -- rather than the old
+        // reservation-only `RESERVATION_TABLE_CAPACITY`, which legitimate
+        // unreserved traffic can now exceed without anything being
+        // "stalled". This bump should stay unreachable in practice again,
+        // for the right reason this time.
+        if next.operation_count() > TOTAL_OPERATION_BOUND {
             self.health.bump_reducer_eviction_stalled();
         }
         *reducer_state = next;
@@ -266,7 +293,11 @@ impl RuntimeEventEngine {
         let entries = self.table().take_all_progress();
         let processed = entries.len();
         for (scope, fact, sequence) in entries {
-            self.apply_and_publish_fact(scope, sequence, fact, false);
+            // Always `reserved: true`: progress coalescing itself
+            // (`ReservationTable::coalesce_progress`) requires a live
+            // `SlotHandle`, so a slot can only ever appear here via a
+            // reservation-bound submission (R1 fix, task 6-fix).
+            self.apply_and_publish_fact(scope, sequence, fact, false, true);
         }
         processed
     }

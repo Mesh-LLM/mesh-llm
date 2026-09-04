@@ -119,15 +119,28 @@ impl EngineHealth {
     }
 
     /// Task 6-fix (`.omo/plans/event-system-fixes.md`, "also required" review
-    /// finding on top of defect A): the reducer's settled-only capacity
-    /// backstop (`reducer::state::evict_settled_over_capacity`) found
-    /// NOTHING settled left to evict while still over
-    /// `RESERVATION_TABLE_CAPACITY` -- structurally unreachable in
-    /// production now that release-triggered eviction keeps the map far
-    /// below capacity in the steady state, but made observable rather than
-    /// a silent `break` in case it is ever reached. Not projected onto the
-    /// `runtime_health` wire frame -- that is task 7/8's `frames.rs`
-    /// territory, explicitly out of this task's scope.
+    /// finding on top of defect A): bumped when
+    /// `ReducerSnapshot::operation_count()` exceeds `TOTAL_OPERATION_BOUND`
+    /// -- the reducer's TRUE structural ceiling.
+    ///
+    /// R1 CORRECTION (task 6-fix): this doc comment used to claim the
+    /// condition was "structurally unreachable in production now that
+    /// release-triggered eviction keeps the map far below capacity in the
+    /// steady state" -- false. That reasoning covered only
+    /// reservation-backed scopes; six production call sites
+    /// (`unreserved_ingress` with a fresh `OperationId` per event -- KV
+    /// cache lookups, session lifecycle, node/topology/model-lifecycle
+    /// observers) can never settle and never release, so the settled-only
+    /// backstop's "nothing left to evict" branch was genuinely reachable
+    /// and would stall PERMANENTLY once such traffic exceeded
+    /// `RESERVATION_TABLE_CAPACITY`. `ReducerSnapshot`'s new
+    /// `unreserved_order` bounded LRU (`reducer/state.rs`) bounds those
+    /// scopes independently, so this counter now compares against
+    /// `TOTAL_OPERATION_BOUND` (`RESERVATION_TABLE_CAPACITY +
+    /// UNRESERVED_OPERATION_BOUND`) and should stay unreachable in
+    /// practice again -- for the right reason this time. Not projected
+    /// onto the `runtime_health` wire frame -- that is task 7/8's
+    /// `frames.rs` territory, explicitly out of this task's scope.
     pub fn bump_reducer_eviction_stalled(&self) {
         self.counters
             .reducer_eviction_stalled

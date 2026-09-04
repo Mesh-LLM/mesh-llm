@@ -30,7 +30,11 @@ type StateLaneKey = (OperationScope, &'static str);
 #[derive(Default)]
 pub(crate) struct StateLane {
     entries: Mutex<VecDeque<StateLaneKey>>,
-    latest: Mutex<HashMap<StateLaneKey, (RuntimeFact, u64)>>,
+    /// `(fact, ingress_sequence, reserved)` -- `reserved` (R1 fix, task
+    /// 6-fix, `.omo/plans/event-system-fixes.md`) is threaded from
+    /// `submit_state_transition`'s own `handle.is_some()` and carried all
+    /// the way to the reducer's `ReducerInput::reserved`.
+    latest: Mutex<HashMap<StateLaneKey, (RuntimeFact, u64, bool)>>,
 }
 
 impl StateLane {
@@ -50,7 +54,7 @@ impl StateLane {
     /// A submission for the same key that arrives after this call starts
     /// fresh (`Accepted`, not `Coalesced`), matching the terminal lane's
     /// own "drained means gone" contract.
-    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64)> {
+    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64, bool)> {
         let mut entries = self
             .entries
             .lock()
@@ -64,23 +68,24 @@ impl StateLane {
             .filter_map(|key| {
                 latest
                     .remove(&key)
-                    .map(|(fact, sequence)| (key.0, fact, sequence))
+                    .map(|(fact, sequence, reserved)| (key.0, fact, sequence, reserved))
             })
             .collect()
     }
 }
 
 /// Per-engine bounded diagnostic queue: strict FIFO, each entry carrying
-/// the scope and ingress sequence it was submitted with.
+/// the scope, ingress sequence, and reservation provenance (R1 fix, task
+/// 6-fix -- see [`StateLane`]'s identical addition) it was submitted with.
 #[derive(Default)]
 pub(crate) struct DiagnosticLane {
-    queue: Mutex<VecDeque<(OperationScope, RuntimeFact, u64)>>,
+    queue: Mutex<VecDeque<(OperationScope, RuntimeFact, u64, bool)>>,
 }
 
 impl DiagnosticLane {
     /// Drain every currently-queued diagnostic, oldest first, clearing the
     /// queue.
-    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64)> {
+    pub(super) fn drain(&self) -> Vec<(OperationScope, RuntimeFact, u64, bool)> {
         self.queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -145,6 +150,7 @@ pub(super) fn submit_progress(
 pub(super) fn submit_state_transition(
     engine: &RuntimeEventEngine,
     scope: OperationScope,
+    reserved: bool,
     fact: RuntimeFact,
 ) -> SubmitOutcome {
     let sequence = engine.wake().next_ingress_sequence();
@@ -166,7 +172,7 @@ pub(super) fn submit_state_transition(
         .latest
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if latest.insert(key, (fact, sequence)).is_some() {
+    if latest.insert(key, (fact, sequence, reserved)).is_some() {
         return SubmitOutcome::Coalesced;
     }
     entries.push_back(key);
@@ -181,6 +187,7 @@ pub(super) fn submit_state_transition(
 pub(super) fn submit_diagnostic(
     engine: &RuntimeEventEngine,
     scope: OperationScope,
+    reserved: bool,
     fact: RuntimeFact,
 ) -> SubmitOutcome {
     let sequence = engine.wake().next_ingress_sequence();
@@ -194,6 +201,6 @@ pub(super) fn submit_diagnostic(
         engine.health().bump_dropped_diagnostic();
         return SubmitOutcome::DroppedDiagnostic;
     }
-    queue.push_back((scope, fact, sequence));
+    queue.push_back((scope, fact, sequence, reserved));
     SubmitOutcome::Accepted
 }

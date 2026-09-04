@@ -208,6 +208,16 @@ impl DomainState {
             | RuntimeFact::NodeAvailability(_)
             | RuntimeFact::EventSystemHealth(_) => {}
         }
+        // Task 6-fix R1 invariant assertion (`.omo/plans/event-system-fixes.md`):
+        // every bounded category's `*_order` deque must stay exactly 1:1
+        // with its map, or `models()`/`stages()`/`requests()`/`devices()`
+        // silently drop or duplicate a row instead of loudly failing.
+        // Compiled out entirely in release builds -- zero hot-path cost.
+        debug_assert_eq!(next.models_order.len(), next.models.len());
+        debug_assert_eq!(next.stages_order.len(), next.stages.len());
+        debug_assert_eq!(next.requests_order.len(), next.requests.len());
+        debug_assert_eq!(next.devices_order.len(), next.devices.len());
+        debug_assert_eq!(next.sessions_order.len(), next.sessions_active.len());
         next
     }
 }

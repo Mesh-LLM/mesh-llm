@@ -396,6 +396,32 @@ to_shape = "object {pressure?: string, capacity_state?: string}"
 task = "6-fix"
 reason = "Same disclosure gap as sessions above: Task 6 populated runtime_state.cache from DomainState::cache() (a single latest-wins KV pressure/capacity signal) as an aggregate object instead of the empty-array placeholder, undisclosed until task 6-fix."
 
+# Task 6-fix R1 (`.omo/plans/event-system-fixes.md`): disclosure record for
+# a NEW frozen bound this task introduces (not a wire-shape change, hence
+# a separate table from `state_projection_amendments` above). Descriptive
+# only, exactly like that table -- read by neither
+# `scripts/generate-runtime-event-inventory.py` nor the Rust `Inventory`
+# struct (`tests/inventory_contract/support.rs` has no
+# `deny_unknown_fields`), so it cannot perturb the generated manifest/TS
+# fixture. Exists so the constant's provenance and arithmetic are
+# machine-parseable in the canonical inventory per the amendment
+# procedure, alongside `.omo/evidence/event-system-fixes/task-06/amendment-note-2.txt`.
+[[reducer_bound_amendments]]
+constant = "UNRESERVED_OPERATION_BOUND"
+location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+value = 4096
+derivation = "= STATE_TRANSITION_LANE_DEPTH (direct const-expr alias, not a duplicated literal)"
+task = "6-fix"
+reason = "Bounds reducer-tracked operations whose OperationState::ever_reserved is false (a scope that was NEVER associated with a reservation, e.g. unreserved_ingress with a fresh OperationId per event -- KV cache lookups, session lifecycle, node/topology/model-lifecycle observers). Such a scope can never settle (no Terminal is accepted with no SlotHandle) and can never be release-evicted (nothing to release), so it was previously unbounded: the release-triggered eviction path (task 6-fix defect A) cannot reach it, and the settled-only backstop (evict_settled_over_capacity) filters on `settled`, which it never becomes. ReducerSnapshot's new `unreserved_order` bounded LRU (reducer/state.rs) enforces this ceiling directly."
+
+[[reducer_bound_amendments]]
+constant = "TOTAL_OPERATION_BOUND"
+location = "crates/mesh-llm-host-runtime/src/runtime_events/config.rs"
+value = 7232
+derivation = "= RESERVATION_TABLE_CAPACITY (3136) + UNRESERVED_OPERATION_BOUND (4096)"
+task = "6-fix"
+reason = "The reducer's TRUE total structural ceiling on operation_count(): the pre-existing RESERVATION_TABLE_CAPACITY bound (reservation-backed scopes, backstopped by evict_settled_over_capacity) plus the new UNRESERVED_OPERATION_BOUND (never-reserved scopes, unreserved_order). EngineHealth::bump_reducer_eviction_stalled now compares against this combined ceiling instead of the old RESERVATION_TABLE_CAPACITY-only check, which legitimate unreserved traffic could exceed without anything actually being stalled."
+
 [[event_projection_overrides]]
 profile = "progress"
 event_ids = [

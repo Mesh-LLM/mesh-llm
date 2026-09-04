@@ -31,6 +31,41 @@ pub const STATE_TRANSITION_LANE_DEPTH: usize = 4_096;
 /// Diagnostic lane depth.
 pub const DIAGNOSTIC_LANE_DEPTH: usize = 2_048;
 
+/// R1 fix (task 6-fix, `.omo/plans/event-system-fixes.md`): bound on
+/// reducer-tracked operations that were NEVER associated with a
+/// reservation (`OperationState::ever_reserved == false` for their whole
+/// tracked lifetime). Production observers with no bounded operation to
+/// attach to -- KV cache lookups, session lifecycle, and
+/// node/topology/model-lifecycle observers -- submit exactly this shape of
+/// traffic via `unreserved_ingress`, minting a fresh `OperationId` per
+/// event; such a scope can never settle (no Terminal is ever accepted with
+/// no `SlotHandle`) and can never be release-evicted (nothing to release),
+/// so neither of the reducer's two existing eviction paths can ever touch
+/// it. `ReducerSnapshot`'s `unreserved_order` bounded LRU (`reducer/state.rs`)
+/// enforces this ceiling directly, mirroring `reducer/domain.rs`'s existing
+/// `touch`/`remove_bounded` idiom.
+///
+/// A direct const-expr alias to `STATE_TRANSITION_LANE_DEPTH`, not a
+/// duplicated literal: every one of the six known unreserved-mint call
+/// sites is StateTransition-class, so nothing can reach the reducer's
+/// `operations` map for one of these scopes without first passing through
+/// that lane's own admission cap on distinct `(scope, kind)` keys. Reusing
+/// that ceiling for this map's post-drain retention keeps the two related
+/// bounds for the SAME traffic category numerically aligned rather than
+/// introducing a disconnected second magic number.
+pub const UNRESERVED_OPERATION_BOUND: usize = STATE_TRANSITION_LANE_DEPTH;
+
+/// R1 fix total structural ceiling on the reducer's `operations` map:
+/// `RESERVATION_TABLE_CAPACITY` (the reservation table's own hard admission
+/// cap on concurrently-occupied scopes, backstopped by
+/// `reducer::state::evict_settled_over_capacity`) plus
+/// `UNRESERVED_OPERATION_BOUND` (enforced independently by
+/// `ReducerSnapshot`'s `unreserved_order` bounded LRU). No
+/// production-reachable sequence of submissions can push
+/// `ReducerSnapshot::operation_count()` above this value; the engine bumps
+/// `EngineHealth::bump_reducer_eviction_stalled` if it ever somehow does.
+pub const TOTAL_OPERATION_BOUND: usize = RESERVATION_TABLE_CAPACITY + UNRESERVED_OPERATION_BOUND;
+
 /// Wake list depth, equal to the reservation table.
 pub const WAKE_LIST_DEPTH: usize = RESERVATION_TABLE_CAPACITY;
 
@@ -122,6 +157,21 @@ mod tests {
     #[test]
     fn wake_list_depth_equals_reservation_table() {
         assert_eq!(WAKE_LIST_DEPTH, RESERVATION_TABLE_CAPACITY);
+    }
+
+    #[test]
+    fn unreserved_operation_bound_matches_state_transition_lane_depth() {
+        assert_eq!(UNRESERVED_OPERATION_BOUND, STATE_TRANSITION_LANE_DEPTH);
+        assert_eq!(UNRESERVED_OPERATION_BOUND, 4_096);
+    }
+
+    #[test]
+    fn total_operation_bound_derivation_matches_frozen_formula() {
+        assert_eq!(TOTAL_OPERATION_BOUND, 7_232);
+        assert_eq!(
+            TOTAL_OPERATION_BOUND,
+            RESERVATION_TABLE_CAPACITY + UNRESERVED_OPERATION_BOUND
+        );
     }
 
     #[test]
