@@ -506,7 +506,12 @@ mesh-llm serve \
 > three progressively longer `/v1/chat/completions` prompts with one shared
 > prefix through stage 0. The smoke requires the reported cached-token count to
 > increase after each request so either model-state path cannot silently fall
-> back to cold prefill for prefix matches.
+> back to cold prefill for prefix matches. A follow-up request that restores
+> nothing is the one outcome a loaded runner can produce without a regression,
+> because the host answers before the stage lane releases; the smoke retries the
+> whole sequence from a fresh cold prefix up to
+> `MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS` times (3 by default) for that case only.
+> Reuse that is present but not growing fails immediately.
 >
 > Other nearby CI coverage:
 >

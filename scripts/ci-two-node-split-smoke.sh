@@ -23,6 +23,7 @@ WORKER_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_WORKER_CONSOLE_PORT:-3162}"
 WORKER_BIND_PORT="${MESH_TWO_NODE_SPLIT_WORKER_BIND_PORT:-53648}"
 MAX_WAIT="${MESH_TWO_NODE_SPLIT_MAX_WAIT:-300}"
 REQUEST_SETTLE_SECONDS="${MESH_TWO_NODE_SPLIT_REQUEST_SETTLE_SECONDS:-1}"
+PREFIX_ATTEMPTS="${MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS:-3}"
 CTX_SIZE="${MESH_TWO_NODE_SPLIT_CTX_SIZE:-${MESH_LLM_SMOKE_CONTEXT_SIZE:-}}"
 MAX_VRAM="${MESH_TWO_NODE_SPLIT_MAX_VRAM:-1}"
 DEVICE="${MESH_TWO_NODE_SPLIT_DEVICE:-CPU}"
@@ -44,6 +45,7 @@ echo "  worker api:     $WORKER_API_PORT"
 echo "  worker console: $WORKER_CONSOLE_PORT"
 echo "  worker bind:    $WORKER_BIND_PORT"
 echo "  request settle: ${REQUEST_SETTLE_SECONDS}s"
+echo "  prefix attempts: ${PREFIX_ATTEMPTS}"
 echo "  ctx size:       ${CTX_SIZE:-model default}"
 echo "  max vram:       ${MAX_VRAM}GB"
 echo "  device:         $DEVICE"
@@ -294,21 +296,30 @@ if [[ -z "$MODEL_ID" ]]; then
     exit 1
 fi
 
-PREFIX_PAYLOAD_DIR="${WORK_DIR}/prefix-payloads"
-PREFIX_RESPONSE_DIR="${WORK_DIR}/prefix-responses"
-mkdir -p "$PREFIX_PAYLOAD_DIR" "$PREFIX_RESPONSE_DIR"
+PREFIX_PAYLOAD_ROOT="${WORK_DIR}/prefix-payloads"
+PREFIX_RESPONSE_ROOT="${WORK_DIR}/prefix-responses"
 
-python3 - "$MODEL_ID" "$PREFIX_PAYLOAD_DIR" <<'PY'
+# Exit code the prefix validator uses for the one failure this smoke cannot
+# distinguish from a regression on a single pass: a follow-up request that
+# restored nothing, which is what an unreleased stage lane looks like from the
+# outside. Anything else is a real assertion failure and is never retried.
+PREFIX_TRANSIENT_STATUS=75
+
+write_prefix_payloads() {
+    python3 - "$MODEL_ID" "$1" "$2" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-model, output_dir = sys.argv[1:3]
+model, output_dir, nonce = sys.argv[1:4]
 output = Path(output_dir)
-shared = (
-    "Split prefix cache smoke shared context. "
-    "Every request keeps these tokens in the same order. "
-) * 48
+# The nonce leads the prompt so every attempt starts from a genuinely cold
+# prefix. Without it, a retry would run against the cache the previous attempt
+# already warmed and the cold-request assertion below would stop meaning
+# anything.
+shared = f"Split prefix cache smoke shared context {nonce}. " + (
+    "Every request keeps these tokens in the same order. " * 48
+)
 extensions = [
     "First extension block remains reusable by later prompts. " * 16,
     "Second extension block makes the reusable prefix longer. " * 16,
@@ -320,7 +331,7 @@ for index, extension in enumerate(extensions, start=1):
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "user": "ci-split-prefix-growth",
+        "user": f"ci-split-prefix-growth-{nonce}",
         "stream": False,
         "max_tokens": 1,
         "temperature": 0,
@@ -328,23 +339,15 @@ for index, extension in enumerate(extensions, start=1):
     with (output / f"prompt-{index}.json").open("w", encoding="utf-8") as fh:
         json.dump(payload, fh)
 PY
+}
 
-for index in 1 2 3; do
-    curl -fsS --max-time 180 \
-        "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
-        -H 'content-type: application/json' \
-        -d @"${PREFIX_PAYLOAD_DIR}/prompt-${index}.json" \
-        -o "${PREFIX_RESPONSE_DIR}/response-${index}.json"
-    # The host returns the OpenAI response before the stage connection has
-    # released its single CI lane. Give graceful Stop enough time to finish so
-    # the next request tests cache reuse rather than transient admission.
-    sleep "$REQUEST_SETTLE_SECONDS"
-done
-
-python3 - "$PREFIX_RESPONSE_DIR" <<'PY'
+validate_prefix_responses() {
+    python3 - "$1" <<'PY'
 import json
 from pathlib import Path
 import sys
+
+TRANSIENT_STATUS = 75
 
 response_dir = Path(sys.argv[1])
 metrics = []
@@ -371,7 +374,16 @@ if not prompt_counts[0] < prompt_counts[1] < prompt_counts[2]:
     raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
 if cached_counts[0] != 0:
     raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
-if not 0 < cached_counts[1] < cached_counts[2]:
+# Zero reuse on a follow-up is reported separately from reuse that failed to
+# grow. Only the former is consistent with a stage lane that had not released
+# yet, and only the former earns another attempt.
+if 0 in cached_counts[1:]:
+    print(
+        f"split prefix reuse was empty on a follow-up request: {cached_counts}",
+        file=sys.stderr,
+    )
+    raise SystemExit(TRANSIENT_STATUS)
+if not cached_counts[1] < cached_counts[2]:
     raise SystemExit(f"split prefix reuse did not increase: {cached_counts}")
 if any(cached >= prompt for prompt, cached in metrics[1:]):
     raise SystemExit(f"growing prompts must retain an uncached suffix: {metrics}")
@@ -384,5 +396,44 @@ print(
     )
 )
 PY
+}
+
+prefix_validated=0
+for attempt in $(seq 1 "$PREFIX_ATTEMPTS"); do
+    payload_dir="${PREFIX_PAYLOAD_ROOT}/attempt-${attempt}"
+    response_dir="${PREFIX_RESPONSE_ROOT}/attempt-${attempt}"
+    mkdir -p "$payload_dir" "$response_dir"
+    write_prefix_payloads "$payload_dir" "attempt-${attempt}"
+
+    for index in 1 2 3; do
+        curl -fsS --max-time 180 \
+            "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
+            -H 'content-type: application/json' \
+            -d @"${payload_dir}/prompt-${index}.json" \
+            -o "${response_dir}/response-${index}.json"
+        # The host returns the OpenAI response before the stage connection has
+        # released its single CI lane. Give graceful Stop enough time to finish
+        # so the next request tests cache reuse rather than transient admission.
+        sleep "$REQUEST_SETTLE_SECONDS"
+    done
+
+    set +e
+    validate_prefix_responses "$response_dir"
+    prefix_status=$?
+    set -e
+    if [[ "$prefix_status" -eq 0 ]]; then
+        prefix_validated=1
+        break
+    fi
+    if [[ "$prefix_status" -ne "$PREFIX_TRANSIENT_STATUS" ]]; then
+        exit "$prefix_status"
+    fi
+    echo "prefix attempt ${attempt} of ${PREFIX_ATTEMPTS} saw no reuse; retrying from a cold prefix" >&2
+done
+
+if [[ "$prefix_validated" -ne 1 ]]; then
+    echo "split prefix reuse never materialized across ${PREFIX_ATTEMPTS} attempts" >&2
+    exit 1
+fi
 
 echo "Two-node split smoke passed"

@@ -130,6 +130,20 @@ pub enum StageKvMode {
     Correctness,
 }
 
+/// Byte budget for the exact-state catalog.
+///
+/// `soft_bytes` is the stage cache budget, which is derived from attention KV
+/// metadata and therefore cannot account for the recurrent and convolution
+/// buffers an exact-state snapshot also carries. A single snapshot can
+/// legitimately exceed it, so the soft budget only bounds the catalog once it
+/// already holds a working set. `hard_bytes` is the ceiling that allowance is
+/// never permitted to cross. Zero means unbounded for either field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExactStateByteLimits {
+    pub(crate) soft_bytes: u64,
+    pub(crate) hard_bytes: u64,
+}
+
 #[derive(Clone)]
 pub struct KvStageIntegration {
     pub(crate) mode: StageKvMode,
@@ -145,7 +159,7 @@ pub struct KvStageIntegration {
     pub(crate) radix: Arc<Mutex<UnifiedRadixCache<RadixResidentEntry, RadixExactEntry>>>,
     pub(crate) exact_blobs: Arc<Mutex<CacheBlobStore>>,
     pub(crate) exact_max_entries: usize,
-    pub(crate) exact_max_bytes: u64,
+    pub(crate) exact_byte_limits: ExactStateByteLimits,
     pub(crate) exact_state_record_tx: SyncSender<PendingExactStateRecord>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
@@ -708,7 +722,14 @@ impl KvStageIntegration {
                         .load(std::sync::atomic::Ordering::Relaxed)
                 ),
             ),
-            ("skippy.exact_cache.max_bytes", json!(self.exact_max_bytes)),
+            (
+                "skippy.exact_cache.max_bytes",
+                json!(self.exact_byte_limits.soft_bytes),
+            ),
+            (
+                "skippy.exact_cache.hard_max_bytes",
+                json!(self.exact_byte_limits.hard_bytes),
+            ),
             (
                 "skippy.exact_cache.max_entries",
                 json!(self.exact_max_entries),
