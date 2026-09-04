@@ -88,6 +88,18 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "max_parallel: ${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}",
             swift,
         )
+        self.assertIn(
+            "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
+            swift,
+        )
+        swift_producer = (WORKFLOWS / "swift-sdk-artifact.yml").read_text()
+        self.assertIn("fail-fast: ${{ inputs.fail_fast }}", swift_producer)
+        release = (WORKFLOWS / "release.yml").read_text()
+        release_swift = release[
+            release.index("  build_swift_sdk_artifact:"):
+            release.index("  publish:")
+        ]
+        self.assertIn("fail_fast: false", release_swift)
         self.assertIn("needs: [runtime_product, kotlin_sdk_input]", linux)
         self.assertIn(
             "needs: [validate_plan, runtime_product, swift_sdk_input]",

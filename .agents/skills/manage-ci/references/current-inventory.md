@@ -517,8 +517,9 @@ scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) po
 image's baked store instead of an Actions cache — there is no shared pnpm
 key or publisher to race. Trusted main owns shared publication.
 
-PR Rust-test, host, native-runtime, product, and platform-check matrices receive
-`fail_fast: true`; main/manual pass `false`. Quality matrices remain
+PR Rust-test, host, native-runtime, product, platform-check, and full Swift
+target matrices receive `fail_fast: true`; main/manual and release pass
+`false`. Quality matrices remain
 non-fail-fast and failed producers suppress impossible consumers through
 `needs`. One protected, default-branch `workflow_run` monitor starts with
 `PR · Quality`, polls the five exact-PR/exact-SHA validation runs, preserves the

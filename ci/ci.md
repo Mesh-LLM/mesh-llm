@@ -364,10 +364,11 @@ the PR runs; this bounded overhead replaces five per-lane polling jobs and is
 expected to recover more capacity whenever a lane fails early.
 
 Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
-Rust-test, host, native-runtime, product, and platform-check matrices. The
+Rust-test, host, native-runtime, product, platform-check, and full Swift target
+matrices. The
 first required failure cancels queued and in-progress siblings in that matrix.
-Main and manual-full pass `false` so exhaustive runs retain complete backend
-and platform diagnostics. Quality's Clippy matrix also remains non-fail-fast:
+Main, manual-full, and release pass `false` so exhaustive runs retain complete
+backend and platform diagnostics. Quality's Clippy matrix also remains non-fail-fast:
 quality failures are independent findings and never make a product producer
 unusable.
 

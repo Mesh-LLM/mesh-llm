@@ -61,6 +61,11 @@ on:
         required: false
         default: 4
         type: number
+      fail_fast:
+        description: Cancel sibling target builds after the first failure.
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   runner_policy:
@@ -133,7 +138,7 @@ jobs:
     if: ${{ inputs.mode == 'full' }}
     needs: runner_policy
     strategy:
-      fail-fast: true
+      fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}
       matrix:
         target:
@@ -206,7 +211,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .deps/llama-build/build-stage-abi-${{ matrix.target }}-metal
-          key: ${{ format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}', matrix.target, runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
+          key: ${{ format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}', matrix.target, runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-host-macos-xcframework.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
 
       - name: Prepare dispatched release version
         if: ${{ inputs.prepare_release_version }}
@@ -300,7 +305,7 @@ jobs:
           workspaces: . -> target
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ runner.os }}-${{ hashFiles('.github/cache-version.txt') }}
-          shared-key: swift-sdk
+          shared-key: ${{ format('swift-sdk-{0}', runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}
           key: ${{ steps.native_toolchain.outputs.epoch }}
           add-job-id-key: "false"
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -309,11 +314,11 @@ jobs:
         if: ${{ needs.runner_policy.outputs.allow_native_github_cache == 'true' }}
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: .deps/llama-build
-          # The full and host-only producers share target-specific ABI directories.
-          # GitHub scopes PR writes to the merge ref, so a trusted main full build
-          # can seed this exact mode-independent key without a PR shadowing it.
-          key: ${{ format('mesh-llm-swift-sdk-{0}-{1}-{2}-{3}', runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-host-macos-xcframework.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
+          path: ${{ format('.deps/llama-build/build-stage-abi-{0}-metal', runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') }}
+          # The host-only producer and the matching full-matrix macOS target use
+          # the same build recipe, directory, and exact key. Trusted main can
+          # therefore warm a PR without a restore prefix or cross-target reuse.
+          key: ${{ format('mesh-llm-swift-sdk-target-{0}-{1}-{2}-{3}-{4}', runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin', runner.os, runner.arch, steps.native_toolchain.outputs.epoch, hashFiles('Cargo.lock', 'scripts/build-llama.sh', 'scripts/prepare-llama.sh', 'sdk/swift/scripts/build-host-macos-xcframework.sh', 'sdk/swift/scripts/build-xcframework.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', '.github/actions/resolve-native-toolchain-epoch/action.yml', '.github/cache-version.txt')) }}
 
       - name: Prepare dispatched release version
         if: ${{ inputs.prepare_release_version }}
@@ -338,7 +343,10 @@ jobs:
         if: ${{ inputs.mode == 'full' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v7.0.0
         with:
-          pattern: swift-sdk-target-*-${{ github.run_attempt }}
+          # A failed-jobs rerun keeps successful target artifacts from earlier
+          # attempts in this run. Download every attempt so both assembly-only
+          # and partial-matrix retries retain the complete seven-target set.
+          pattern: swift-sdk-target-*
           path: dist/swift-targets
           merge-multiple: true
 

@@ -225,9 +225,10 @@ build one prepared UI artifact per active platform lane; that is the accepted
 readability tradeoff, while UI tests remain owned by the Website graph. Every
 heavy job has a timeout and a deterministic row identity.
 
-PR platform matrices for compilation, Rust tests, products and functional
-platform checks fail fast. Main/manual matrices continue all rows for exhaustive
-diagnostics, and Quality remains non-fail-fast within its own matrix. Declared
+PR platform matrices for compilation, Rust tests, products, functional
+platform checks, and full Swift targets fail fast. Main/manual and release
+matrices continue all rows for exhaustive diagnostics, and Quality remains
+non-fail-fast within its own matrix. Declared
 producer dependencies suppress consumers that can no longer run. Across the
 five focused PR workflows, the protected sibling monitor preserves the lane
 with the first definitive job failure and cancels the other exact-PR,
