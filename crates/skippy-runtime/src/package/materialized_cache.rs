@@ -91,6 +91,9 @@ struct MaterializedCacheRecord {
 }
 
 pub(super) struct MaterializedOutputLock {
+    // Read by the unix flock paths; elsewhere the handle is held only to
+    // keep the lock file open for the lock's lifetime.
+    #[cfg_attr(not(unix), allow(dead_code))]
     file: fs::File,
 }
 
