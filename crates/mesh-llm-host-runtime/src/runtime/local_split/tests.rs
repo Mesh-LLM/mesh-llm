@@ -270,6 +270,7 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
                 },
                 Some(u32::from(seed) * 40),
                 true,
+                SplitParticipantPerf::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -285,6 +286,7 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
                 },
                 Some(u32::from(4 - seed)),
                 false,
+                SplitParticipantPerf::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -292,6 +294,61 @@ fn canonical_coordinator_is_identical_with_divergent_observer_signals() {
     let expected = [make_id(2), make_id(3)].into_iter().min().unwrap();
     assert_eq!(canonical_split_coordinator(&observer_a), Some(expected));
     assert_eq!(canonical_split_coordinator(&observer_b), Some(expected));
+}
+
+#[test]
+fn rtt_floor_requires_settle_window_corroboration_for_remote_perf() {
+    let signal = SplitParticipantPackageSignal {
+        cached_slice_bytes: 100_000,
+        missing_artifact_bytes: 0,
+        availability_score: 4,
+    };
+    let perf = SplitParticipantPerf {
+        sustained_mem_bandwidth_mib_per_s: Some(400_000),
+        sustained_compute_gflop_per_s: Some(15_000),
+        observed_decode_us_per_layer: Some(2_500),
+    };
+
+    let uncorroborated = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(Some(crate::mesh::RttObservationAges {
+            sample_count: 1,
+            first_sample_age_ms: 200,
+            last_sample_age_ms: 200,
+        }));
+    assert!(!uncorroborated.rtt_corroborated);
+    assert_eq!(uncorroborated.rtt_ms, None);
+    assert_eq!(uncorroborated.sustained_mem_bandwidth_mib_per_s, None);
+    assert_eq!(uncorroborated.sustained_compute_gflop_per_s, None);
+    assert_eq!(uncorroborated.observed_decode_us_per_layer, None);
+
+    let corroborated = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(Some(crate::mesh::RttObservationAges {
+            sample_count: 2,
+            first_sample_age_ms: 5_500,
+            last_sample_age_ms: 200,
+        }));
+    assert!(corroborated.rtt_corroborated);
+    assert_eq!(
+        corroborated.sustained_mem_bandwidth_mib_per_s,
+        perf.sustained_mem_bandwidth_mib_per_s
+    );
+    assert_eq!(
+        corroborated.observed_decode_us_per_layer,
+        perf.observed_decode_us_per_layer
+    );
+
+    let missing_confidence = SplitParticipant::new(make_id(1), 32_000_000_000, None)
+        .with_package_signals(signal, Some(8), true, perf)
+        .with_rtt_observation(None);
+    assert_eq!(missing_confidence.rtt_ms, None);
+    assert_eq!(missing_confidence.sustained_mem_bandwidth_mib_per_s, None);
+    assert_ne!(
+        split_participant_set_hash(&[uncorroborated]),
+        split_participant_set_hash(&[corroborated]),
+        "settle confidence transition must invalidate the placement signature"
+    );
 }
 
 #[test]
@@ -352,6 +409,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(200),
         true,
+        SplitParticipantPerf::default(),
     );
     let fast_a = SplitParticipant::new(make_id(2), 32_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -361,6 +419,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(1),
         true,
+        SplitParticipantPerf::default(),
     );
     let fast_b = SplitParticipant::new(make_id(3), 32_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -370,6 +429,7 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
         },
         Some(1),
         true,
+        SplitParticipantPerf::default(),
     );
     let participants = [canonical, fast_a, fast_b];
     let package = package(40);
@@ -404,6 +464,7 @@ fn split_topology_planner_prefers_cached_participant_in_runtime_path() {
         },
         Some(80),
         true,
+        SplitParticipantPerf::default(),
     );
     let warm = SplitParticipant::new(make_id(2), 24_000_000_000, None).with_package_signals(
         SplitParticipantPackageSignal {
@@ -413,6 +474,7 @@ fn split_topology_planner_prefers_cached_participant_in_runtime_path() {
         },
         Some(5),
         true,
+        SplitParticipantPerf::default(),
     );
 
     let stages = plan_runtime_slice_topology(
@@ -1109,6 +1171,7 @@ fn split_participant_signature_includes_package_signals_for_claim_identity() {
             },
             Some(20),
             true,
+            SplitParticipantPerf::default(),
         ),
     ];
 

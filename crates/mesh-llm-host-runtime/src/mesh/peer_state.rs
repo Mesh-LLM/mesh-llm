@@ -172,6 +172,20 @@ pub struct DirectLatencyObservation {
     pub observed_at: std::time::Instant,
 }
 
+/// A large-frame throughput observation on a peer link, measured passively
+/// from a real artifact transfer (bulk bytes over the same QUIC transport
+/// the split pipeline uses). Latest-wins; `observed_at` lets consumers
+/// discard stale samples.
+#[derive(Debug, Clone)]
+pub struct LargeFrameObservation {
+    pub mib_per_s: u32,
+    pub observed_at: std::time::Instant,
+}
+
+/// How long a passive large-frame observation stays planner-relevant.
+pub const LARGE_FRAME_OBSERVATION_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
 /// Latency propagated via transitive gossip (not measured directly).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropagatedLatencyObservation {
@@ -198,6 +212,26 @@ pub struct DisplayLatency {
     pub observer_id: Option<EndpointId>,
 }
 
+/// Confidence metadata retained behind the planner's best-seen RTT floor.
+///
+/// This intentionally records only observation count and timing. It is not a
+/// variance or jitter estimate: iroh owns path-quality selection, while split
+/// placement only needs to distinguish a one-off early sample from a floor
+/// corroborated across the connection-settle window.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RttObservationWindow {
+    pub(crate) sample_count: u32,
+    pub(crate) first_observed_at: std::time::Instant,
+    pub(crate) last_observed_at: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RttObservationAges {
+    pub(crate) sample_count: u32,
+    pub(crate) first_sample_age_ms: u64,
+    pub(crate) last_sample_age_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     pub id: EndpointId,
@@ -210,6 +244,9 @@ pub struct PeerInfo {
     pub models: Vec<String>,
     pub vram_bytes: u64,
     pub rtt_ms: Option<u32>,
+    /// Observation confidence for `rtt_ms`, whose value remains the minimum
+    /// accepted sample. Higher samples still advance this window.
+    pub(crate) rtt_observation_window: Option<RttObservationWindow>,
     pub model_source: Option<String>,
     pub admitted: bool,
     /// All models assigned to this peer, even if not yet healthy.
@@ -264,6 +301,11 @@ pub struct PeerInfo {
     pub display_rtt: Option<DirectLatencyObservation>,
     /// Last selected path observed on the mesh control connection to this peer.
     pub(crate) selected_path: Option<SelectedPathObservation>,
+    /// Latest large-frame throughput observed on this peer's link, measured
+    /// passively from real artifact transfers (either direction). Used as the
+    /// edge bandwidth signal for topology planning; stale observations decay
+    /// to `None` (latency-only edge).
+    pub(crate) observed_large_frame: Option<LargeFrameObservation>,
     /// Latency propagated via transitive gossip.
     pub propagated_latency: Option<PropagatedLatencyObservation>,
     pub owner_summary: OwnershipSummary,
@@ -315,6 +357,7 @@ impl PeerInfo {
             models: ann.models.clone(),
             vram_bytes: ann.vram_bytes,
             rtt_ms: None,
+            rtt_observation_window: None,
             model_source: ann.model_source.clone(),
             admitted: false,
             serving_models: ann.serving_models.clone(),
@@ -352,6 +395,7 @@ impl PeerInfo {
             cache_affinity: ann.cache_affinity.clone(),
             display_rtt: None,
             selected_path: None,
+            observed_large_frame: None,
             propagated_latency: None,
             owner_summary,
             inference_admission_state: ann.inference_admission_state,
@@ -365,6 +409,26 @@ impl PeerInfo {
     /// Return the most recent direct RTT sample for display, falling back to best-seen RTT.
     pub fn current_direct_rtt_ms(&self) -> Option<u32> {
         self.display_rtt.as_ref().map(|d| d.rtt_ms).or(self.rtt_ms)
+    }
+
+    pub(crate) fn rtt_observation_ages(&self) -> Option<RttObservationAges> {
+        let window = self.rtt_observation_window?;
+        Some(RttObservationAges {
+            sample_count: window.sample_count,
+            first_sample_age_ms: super::elapsed_ms_u64(window.first_observed_at.elapsed()),
+            last_sample_age_ms: super::elapsed_ms_u64(window.last_observed_at.elapsed()),
+        })
+    }
+
+    /// Sustained large-frame throughput for this peer link from a recent
+    /// passive artifact-transfer observation. `None` when never measured or
+    /// the observation has aged out — the planner then treats the edge as
+    /// latency-only, which is exactly the pre-probing behavior.
+    pub fn large_frame_mib_per_s(&self) -> Option<u32> {
+        self.observed_large_frame
+            .as_ref()
+            .filter(|observed| observed.observed_at.elapsed() <= LARGE_FRAME_OBSERVATION_MAX_AGE)
+            .map(|observed| observed.mib_per_s)
     }
 
     pub(crate) fn split_stage_path_fallback(&self) -> Option<SelectedPathObservation> {
@@ -885,6 +949,28 @@ impl Node {
     /// Accelerator-resident capacity used for mesh stage placement.
     pub fn vram_bytes(&self) -> u64 {
         self.vram_bytes
+    }
+
+    /// Measured sustained node performance for split planning: summed
+    /// memory bandwidth in MiB/s and fp16 compute in GFLOP/s across GPUs.
+    /// `(None, None)` until gpu-bench measurements populate the metrics —
+    /// the planner treats unreported nodes as capacity-only.
+    pub async fn sustained_perf_signals(&self) -> (Option<u32>, Option<u32>) {
+        let bandwidth = {
+            let metrics = self.gpu_mem_bandwidth_gbps.lock().await;
+            metrics.as_ref().map(|values| values.iter().sum::<f64>())
+        };
+        let compute = {
+            let metrics = self.gpu_compute_tflops_fp16.lock().await;
+            metrics.as_ref().map(|values| values.iter().sum::<f64>())
+        };
+        let bandwidth_mib = bandwidth
+            .map(|gbps| gbps * 1_000_000_000.0 / 1_048_576.0)
+            .and_then(|mib| u32::try_from(mib.max(0.0) as u64).ok());
+        let compute_gflops = compute
+            .map(|tflops| tflops * 1_000.0)
+            .and_then(|gflops| u32::try_from(gflops.max(0.0) as u64).ok());
+        (bandwidth_mib, compute_gflops)
     }
 
     /// Local model-fit budget, including supported CPU offload memory.

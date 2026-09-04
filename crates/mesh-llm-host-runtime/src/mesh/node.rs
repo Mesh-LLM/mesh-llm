@@ -1503,6 +1503,21 @@ impl Node {
         let updated_peer = {
             let mut state = self.state.lock().await;
             if let Some(peer) = state.peers.get_mut(&id) {
+                let observed_at = std::time::Instant::now();
+                match peer.rtt_observation_window.as_mut() {
+                    Some(window) => {
+                        window.sample_count = window.sample_count.saturating_add(1);
+                        window.last_observed_at = observed_at;
+                    }
+                    None => {
+                        peer.rtt_observation_window =
+                            Some(crate::mesh::peer_state::RttObservationWindow {
+                                sample_count: 1,
+                                first_observed_at: observed_at,
+                                last_observed_at: observed_at,
+                            });
+                    }
+                }
                 let prev = peer.rtt_ms;
                 // Only accept equal-or-lower RTT for planner preference and display.
                 // Gossip round-trip timing can inflate the value when routed via
@@ -1512,14 +1527,14 @@ impl Node {
                     // Store display_rtt regardless (for UI refresh), but don't update best RTT.
                     peer.display_rtt = Some(DirectLatencyObservation {
                         rtt_ms,
-                        observed_at: std::time::Instant::now(),
+                        observed_at,
                     });
                     return;
                 }
                 peer.rtt_ms = Some(rtt_ms);
                 peer.display_rtt = Some(DirectLatencyObservation {
                     rtt_ms,
-                    observed_at: std::time::Instant::now(),
+                    observed_at,
                 });
                 Some(peer.clone())
             } else {
@@ -1534,6 +1549,40 @@ impl Node {
                 String::new(),
             )
             .await;
+        }
+    }
+
+    /// Record a passive large-frame throughput observation for a peer link,
+    /// measured from a real bulk transfer (artifact download or upload).
+    /// Samples below the minimum duration/size floor are ignored — they
+    /// measure handshake jitter, not sustained throughput. Latest-wins.
+    pub(crate) async fn record_peer_large_frame_observation(
+        &self,
+        id: EndpointId,
+        bytes: u64,
+        elapsed: std::time::Duration,
+    ) {
+        const MIN_SAMPLE_BYTES: u64 = 512 * 1024;
+        const MIN_SAMPLE_DURATION: std::time::Duration = std::time::Duration::from_millis(100);
+        if bytes < MIN_SAMPLE_BYTES || elapsed < MIN_SAMPLE_DURATION {
+            return;
+        }
+        let elapsed_micros = elapsed.as_micros().max(1);
+        let mib_per_s = ((u128::from(bytes) * 1_000_000 / elapsed_micros) / 1_048_576) as u32;
+        if mib_per_s == 0 {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        if let Some(peer) = state.peers.get_mut(&id) {
+            peer.observed_large_frame = Some(LargeFrameObservation {
+                mib_per_s,
+                observed_at: std::time::Instant::now(),
+            });
+            tracing::debug!(
+                "Peer {} large-frame: {mib_per_s} MiB/s over {} bytes in {elapsed:?}",
+                id.fmt_short(),
+                bytes
+            );
         }
     }
 

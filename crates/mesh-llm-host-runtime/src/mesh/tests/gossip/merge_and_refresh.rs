@@ -326,6 +326,9 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 35_000,
         throughput_samples: 4,
+        observed_stage_us_per_layer: None,
+        stage_timing_samples: None,
+        stage_timing_age_ms: None,
     }];
 
     apply_transitive_ann(
@@ -419,6 +422,9 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 20_000,
         throughput_samples: 2,
+        observed_stage_us_per_layer: None,
+        stage_timing_samples: None,
+        stage_timing_age_ms: None,
     }];
 
     node.add_peer(peer_id, addr.clone(), &ann, None).await;

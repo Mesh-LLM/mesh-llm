@@ -188,6 +188,9 @@ async fn inference_load_is_invisible_to_replica_choice() {
         model_name: BIG_MODELS[0].name.to_string(),
         avg_tokens_per_second_milli: 1_000,
         throughput_samples: 64,
+        observed_stage_us_per_layer: None,
+        stage_timing_samples: None,
+        stage_timing_age_ms: None,
     }];
     node.insert_test_peer(hobbled).await;
 

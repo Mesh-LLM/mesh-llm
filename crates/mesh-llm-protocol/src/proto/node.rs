@@ -141,6 +141,12 @@ pub struct AdvertisedModelThroughput {
     pub avg_tokens_per_second_milli: u64,
     #[prost(uint64, tag = "3")]
     pub throughput_samples: u64,
+    #[prost(uint64, optional, tag = "4")]
+    pub observed_stage_us_per_layer: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "5")]
+    pub stage_timing_samples: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub stage_timing_age_ms: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CacheAffinityAdvertisement {

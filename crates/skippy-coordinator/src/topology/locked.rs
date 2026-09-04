@@ -1,8 +1,9 @@
 use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
-    UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
-    layer_required_bytes, layer_weight_bytes, minimum_valid_context, parallel_lane_candidates,
-    recurrent_bytes_by_layer, sum_u64, usable_nodes, validate_input,
+    UsableNode, context_candidates, decode_tpot_target_from_network_lower_bound,
+    estimate_decode_network_ms_per_token, layer_required_bytes, layer_weight_bytes,
+    minimum_valid_context, parallel_lane_candidates, recurrent_bytes_by_layer, sum_u64,
+    usable_nodes, validate_input,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -164,13 +165,15 @@ fn fit_locked_candidate(
             parallel_lanes,
             stages,
             estimated_decode_network_ms_per_token,
-            decode_tpot_target_met: decode_tpot_target_met(
+            decode_tpot_target_met: decode_tpot_target_from_network_lower_bound(
                 estimated_decode_network_ms_per_token,
                 input.target_decode_tpot_ms,
             ),
+            modeled_decode_tpot_us: None,
         },
         minimum_remaining_vram,
         total_remaining_vram,
+        modeled_decode_tpot_us: None,
     })
 }
 
@@ -188,6 +191,9 @@ mod tests {
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
             stage_transfer_latency_ms: None,
+            sustained_mem_bandwidth_mib_per_s: None,
+            sustained_compute_gflop_per_s: None,
+            observed_decode_us_per_layer: None,
         }
     }
 
@@ -205,6 +211,9 @@ mod tests {
             context_length_override: None,
             parallel_lanes_override: None,
             target_decode_tpot_ms: None,
+            active_weight_fraction_permil: 1000,
+            edges: Vec::new(),
+            activation_frame_bytes: 0,
         }
     }
 
