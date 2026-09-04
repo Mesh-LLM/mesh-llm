@@ -6,7 +6,7 @@ fn writes_raw_gguf_from_safetensors_with_streamed_payloads() {
     write_safetensor(
         &root.join("model.safetensors"),
         &[
-            ("b.weight", "BF16", &[2], &[9, 8, 7, 6]),
+            ("b.weight", "BF16", &[1, 2], &[9, 8, 7, 6]),
             ("a.weight", "F32", &[1], &[1, 2, 3, 4]),
         ],
     );

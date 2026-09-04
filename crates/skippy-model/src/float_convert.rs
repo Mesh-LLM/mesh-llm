@@ -55,10 +55,11 @@ pub(crate) fn target_dtype_for_tensor(
     shape: &[u64],
 ) -> Result<FloatDType> {
     if shape.len() <= 1
-        && matches!(
-            output_type,
-            Some(ConvertOutputType::F16 | ConvertOutputType::Bf16)
-        )
+        && (matches!(source_dtype, FloatDType::F16 | FloatDType::Bf16)
+            || matches!(
+                output_type,
+                Some(ConvertOutputType::F16 | ConvertOutputType::Bf16)
+            ))
     {
         return Ok(FloatDType::F32);
     }
@@ -201,7 +202,15 @@ mod tests {
     }
 
     #[test]
-    fn target_dtype_keeps_rank_one_tensors_f32_for_float16_outputs() {
+    fn target_dtype_keeps_rank_one_half_precision_tensors_f32() {
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, None, &[8]).unwrap(),
+            FloatDType::F32
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::F16, None, &[8]).unwrap(),
+            FloatDType::F32
+        );
         assert_eq!(
             target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8]).unwrap(),
             FloatDType::F32
@@ -213,6 +222,10 @@ mod tests {
         assert_eq!(
             target_dtype_for_tensor(FloatDType::Bf16, Some(ConvertOutputType::Bf16), &[8, 8])
                 .unwrap(),
+            FloatDType::Bf16
+        );
+        assert_eq!(
+            target_dtype_for_tensor(FloatDType::Bf16, None, &[8, 8]).unwrap(),
             FloatDType::Bf16
         );
     }
