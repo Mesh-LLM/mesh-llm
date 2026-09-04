@@ -158,6 +158,56 @@ class ModelArtifactRegistryTests(unittest.TestCase):
         )
         self.assertIn('"manual" not in artifact.get("cadences", [])', parity)
 
+    def test_smoke_identity_overrides_require_nonempty_values(self) -> None:
+        skippy = (ROOT / "scripts" / "skippy-ci-smoke.sh").read_text(
+            encoding="utf-8"
+        )
+        openai = (ROOT / "scripts" / "skippy-openai-smoke.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("DENSE_MODEL_REPO+x", skippy)
+        self.assertNotIn("RECURRENT_MODEL_REPO+x", skippy)
+        self.assertNotIn("MODEL_REPO+x", openai)
+        for variable in (
+            "DENSE_MODEL_REPO",
+            "DENSE_MODEL_FILE",
+            "DENSE_MODEL_SELECTOR",
+            "DENSE_MODEL_REVISION",
+            "DENSE_MODEL_PATH",
+        ):
+            self.assertIn(f'${{{variable}:-}}', skippy)
+        for variable in (
+            "RECURRENT_MODEL_REPO",
+            "RECURRENT_MODEL_FILE",
+            "RECURRENT_MODEL_SELECTOR",
+            "RECURRENT_MODEL_REVISION",
+            "RECURRENT_MODEL_PATH",
+        ):
+            self.assertIn(f'${{{variable}:-}}', skippy)
+        for variable in (
+            "MODEL_REPO",
+            "MODEL_FILE",
+            "MODEL_SELECTOR",
+            "MODEL_REVISION",
+            "MODEL_PATH",
+        ):
+            self.assertIn(f'${{{variable}:-}}', openai)
+
+    def test_hf_smoke_exports_selected_manifest_to_rust_tests(self) -> None:
+        smoke = (ROOT / "scripts" / "ci-hf-download-smoke.sh").read_text(
+            encoding="utf-8"
+        )
+        fixture = (ROOT / "crates" / "model-hf" / "tests" / "hf_download.rs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'export MESH_HF_DOWNLOAD_TEST_MANIFEST="$MODEL_MANIFEST"', smoke
+        )
+        self.assertIn('std::env::var_os("MESH_HF_DOWNLOAD_TEST_MANIFEST")', fixture)
+        self.assertNotIn("include_str!", fixture)
+
     def test_resolver_verifies_size_and_digest(self) -> None:
         payload = b"immutable fixture\n"
         digest = hashlib.sha256(payload).hexdigest()

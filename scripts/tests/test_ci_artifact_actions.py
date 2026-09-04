@@ -2060,6 +2060,14 @@ class CiArtifactActionTests(unittest.TestCase):
         self.assertIn("--require-single-file", action)
         self.assertIn('^[A-Za-z0-9][A-Za-z0-9._-]*$', action)
         self.assertIn("--verify-root \"$HOME/.models\"", action)
+        self.assertIn("MODEL_MANIFEST: ${{ inputs.model_manifest }}", action)
+        self.assertIn("MODEL_CADENCE: ${{ inputs.model_cadence }}", action)
+        self.assertIn("MODEL_URL: ${{ steps.resolve-model.outputs.url }}", action)
+        self.assertIn("MODEL_FILE: ${{ steps.resolve-model.outputs.file }}", action)
+        self.assertNotIn('"${{ inputs.model_manifest }}"', action)
+        self.assertNotIn('"${{ inputs.model_cadence }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.url }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.file }}"', action)
         self.assertIn(
             f"if: ${{{{ {model_inputs_present} }}}}\n"
             "      id: cache-model",

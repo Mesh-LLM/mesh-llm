@@ -326,9 +326,11 @@ runs:
       if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' }}
       id: model-file
       shell: bash
+      env:
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
       run: |
         set -euo pipefail
-        model_path="$HOME/.models/${{ steps.resolve-model.outputs.file }}"
+        model_path="$HOME/.models/$MODEL_FILE"
         if [[ -s "$model_path" ]]; then
           echo "present=true" >> "$GITHUB_OUTPUT"
         else
@@ -338,6 +340,9 @@ runs:
     - name: Download integration model
       if: ${{ steps.resolve-model.outputs.url != '' && steps.resolve-model.outputs.file != '' && steps.model-file.outputs.present != 'true' }}
       shell: bash
+      env:
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
+        MODEL_URL: ${{ steps.resolve-model.outputs.url }}
       run: |
         set -euo pipefail
         mkdir -p ~/.models
@@ -355,11 +360,11 @@ runs:
         if [[ -n "$token" ]]; then
           curl_args+=(--header "Authorization: Bearer ${token}")
         fi
-        output="$HOME/.models/${{ steps.resolve-model.outputs.file }}"
+        output="$HOME/.models/$MODEL_FILE"
         partial="${output}.download"
         rm -f "$partial"
         curl "${curl_args[@]}" \
-          "${{ steps.resolve-model.outputs.url }}" \
+          "$MODEL_URL" \
           -o "$partial"
         mv "$partial" "$output"
         ls -lh "$output"
@@ -367,11 +372,18 @@ runs:
     - name: Verify integration model integrity
       if: ${{ steps.resolve-model.outputs.sha256 != '' && steps.resolve-model.outputs.file != '' }}
       shell: bash
+      env:
+        MODEL_CADENCE: ${{ inputs.model_cadence }}
+        MODEL_FILE: ${{ steps.resolve-model.outputs.file }}
+        MODEL_MANIFEST: ${{ inputs.model_manifest }}
+        MODEL_URL: ${{ steps.resolve-model.outputs.url }}
       run: |
         set -euo pipefail
+        test -n "$MODEL_FILE"
+        test -n "$MODEL_URL"
         python3 scripts/resolve-test-model-manifest.py \
-          "${{ inputs.model_manifest }}" \
-          --cadence "${{ inputs.model_cadence }}" \
+          "$MODEL_MANIFEST" \
+          --cadence "$MODEL_CADENCE" \
           --require-single-file \
           --verify-root "$HOME/.models"
 

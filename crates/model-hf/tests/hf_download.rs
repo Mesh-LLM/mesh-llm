@@ -49,12 +49,21 @@ struct SingleDownloadFixture {
     sha256: String,
 }
 
-/// Read the checked-in fixture generated from ci/model-artifacts/registry.json.
+/// Read the selected fixture manifest generated from ci/model-artifacts/registry.json.
 fn download_fixture(id: &str) -> DownloadFixture {
-    let manifest: DownloadManifest = serde_json::from_str(include_str!(
-        "../../../ci/model-artifacts/manifests/hf-download-smoke.json"
-    ))
-    .expect("valid generated HF download manifest");
+    let default_manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../ci/model-artifacts/manifests/hf-download-smoke.json");
+    let manifest_path = std::env::var_os("MESH_HF_DOWNLOAD_TEST_MANIFEST")
+        .map(PathBuf::from)
+        .unwrap_or(default_manifest);
+    let manifest_contents = std::fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
+        panic!(
+            "read HF download fixture manifest {}: {error}",
+            manifest_path.display()
+        )
+    });
+    let manifest: DownloadManifest = serde_json::from_str(&manifest_contents)
+        .unwrap_or_else(|error| panic!("parse HF download fixture manifest: {error}"));
     manifest
         .artifacts
         .into_iter()

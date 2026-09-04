@@ -487,7 +487,9 @@ fail-open policy.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   runtime rows must match the seed's container image and toolchain epoch.
-- `capture-sccache-stats`: machine-readable cache evidence.
+- `capture-sccache-stats`: machine-readable cache evidence. Warm consumers with
+  a positive floor fail when no cache requests are observable; the zero-floor
+  SafeTensors observation remains non-failing and emits a wiring warning.
 
 Rust-test batches that contain `skippy-runtime` or `skippy-model-package`
 resolve the generated Skippy correctness manifest, then restore the pinned Qwen

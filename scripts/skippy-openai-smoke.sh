@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
 MODEL_MANIFEST="${MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/openai-smoke.json}"
 MODEL_IDENTITY_OVERRIDDEN=0
-if [[ -n "${MODEL_REPO+x}${MODEL_FILE+x}${MODEL_SELECTOR+x}${MODEL_REVISION+x}${MODEL_PATH+x}" ]]; then
+if [[ -n "${MODEL_REPO:-}" || -n "${MODEL_FILE:-}" || -n "${MODEL_SELECTOR:-}" || -n "${MODEL_REVISION:-}" || -n "${MODEL_PATH:-}" ]]; then
   MODEL_IDENTITY_OVERRIDDEN=1
 fi
 MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --cadence manual)"

@@ -273,7 +273,9 @@ runtime producers are not duplicated.
   test is absent, then run its binary against an immutable SmolLM2 revision
   through the complete Mesh config/resolver/server/native SafeTensors path
   through tokenizer, sampled prefill, and decode with every supported load-time
-  quantization.
+  quantization. Its compiler-cache evidence is observational: a restored seed
+  is marked warm with a zero hit-rate floor, and a no-request result warns
+  without failing the correctness smoke.
 - `ci-{linux,macos,windows}-host-slice.yml` — one platform-pure neutral host
   producer consuming that lane's immutable UI distribution.
 - `ci-{linux,macos,windows}-runtime-slice.yml` — platform-pure native runtime

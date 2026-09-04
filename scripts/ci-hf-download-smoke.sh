@@ -16,6 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL_MANIFEST="${MESH_HF_DOWNLOAD_TEST_MANIFEST:-$ROOT/ci/model-artifacts/manifests/hf-download-smoke.json}"
 MODEL_CADENCE="${MESH_HF_DOWNLOAD_TEST_CADENCE:-manual}"
+export MESH_HF_DOWNLOAD_TEST_MANIFEST="$MODEL_MANIFEST"
 
 for artifact_id in smollm2-q4-download gemma3-bf16-metadata; do
   python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
