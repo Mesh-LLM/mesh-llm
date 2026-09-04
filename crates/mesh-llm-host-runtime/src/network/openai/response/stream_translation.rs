@@ -1,6 +1,9 @@
 use super::cache_cost::{CacheCostObservation, parse_cache_cost_from_json_body};
 use super::common::{ResponseRetryPolicy, RouteAttemptResult, parse_token_usage_from_json_body};
-use super::probe::{ResponseProbe, response_is_event_stream, try_parse_response_headers};
+use super::probe::{
+    ResponseProbe, append_capsule_nonce_headers, response_is_event_stream,
+    try_parse_response_headers,
+};
 use super::relay::{relay_error_response, relay_success_response};
 use crate::logging::{OpenAiRouteObserver, OpenAiStreamArtifactCapture};
 use crate::network::openai::client_stream::ClientStream;
@@ -100,7 +103,15 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     let mut state = ChatStreamNormalizationState::default();
     let mut observed_usage = None;
     let mut observed_cache_cost = None;
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
+    );
+    append_capsule_nonce_headers(
+        &mut header,
+        parsed.client_nonce.as_deref(),
+        parsed.nonce_origin.as_deref(),
+    );
+    header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
@@ -272,7 +283,15 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_str
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
     let mut state = ResponsesStreamRelayState::new();
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\n",
+    );
+    append_capsule_nonce_headers(
+        &mut header,
+        parsed.client_nonce.as_deref(),
+        parsed.nonce_origin.as_deref(),
+    );
+    header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
     route_observer.stream_started(None);
@@ -844,6 +863,56 @@ mod tests {
         assert!(body.contains("hello"));
         assert!(body.contains("data: [DONE]"));
         assert_eq!(media_kind.as_deref(), Some("text/event-stream"));
+    }
+
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_stream_echoes_capsule_nonce_headers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nx-capsule-client-nonce: nonce-under-test\r\nx-capsule-nonce-origin: frontend\r\n\r\n";
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.to_vec(),
+                header_end: header.len(),
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_stream(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                OpenAiRouteObserver::default(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer
+            .write_all(b"data: {\"id\":\"chatcmpl-y\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+            .await
+            .unwrap();
+        upstream_writer.shutdown().await.unwrap();
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        server_task.await.expect("server task");
+
+        let output_text = String::from_utf8_lossy(&output);
+        assert!(
+            output_text.contains("x-capsule-client-nonce: nonce-under-test\r\n"),
+            "public-proxy SSE response must echo the client nonce header: {output_text}"
+        );
+        assert!(
+            output_text.contains("x-capsule-nonce-origin: frontend\r\n"),
+            "public-proxy SSE response must echo the nonce origin marker: {output_text}"
+        );
     }
 
     #[tokio::test]

@@ -12,6 +12,34 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     pub(in crate::network::openai::response) status_code: u16,
     pub(in crate::network::openai::response) content_length: Option<usize>,
     pub(in crate::network::openai::response) content_type: Option<String>,
+    /// The capsule client nonce and, if the inner frontend minted it itself,
+    /// the origin marker — both echoed on the inner frontend's response, but
+    /// otherwise lost because the public-proxy response adapters below
+    /// rebuild fresh HTTP responses instead of forwarding upstream headers.
+    pub(in crate::network::openai::response) client_nonce: Option<String>,
+    pub(in crate::network::openai::response) nonce_origin: Option<String>,
+}
+
+/// Append the capsule client nonce and origin-marker headers (when present)
+/// to a hand-built response header string, so response adapters that
+/// otherwise discard the upstream headers still echo them to the client.
+pub(in crate::network::openai::response) fn append_capsule_nonce_headers(
+    header: &mut String,
+    client_nonce: Option<&str>,
+    nonce_origin: Option<&str>,
+) {
+    if let Some(nonce) = client_nonce {
+        header.push_str(&format!(
+            "{}: {nonce}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str()
+        ));
+    }
+    if let Some(origin) = nonce_origin {
+        header.push_str(&format!(
+            "{}: {origin}\r\n",
+            openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str()
+        ));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -64,6 +92,11 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
         Ok(httparse::Status::Complete(header_end)) => {
             let mut content_length = None;
             let mut content_type = None;
+            let mut client_nonce = None;
+            let mut nonce_origin = None;
+            let nonce_header = openai_frontend::lifecycle::CLIENT_NONCE_HEADER.as_str();
+            let nonce_origin_header =
+                openai_frontend::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
             for header in response.headers.iter() {
                 if header.name.eq_ignore_ascii_case("content-length") {
                     let value = std::str::from_utf8(header.value)
@@ -79,6 +112,14 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                             .trim()
                             .to_string(),
                     );
+                } else if header.name.eq_ignore_ascii_case(nonce_header) {
+                    client_nonce = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                } else if header.name.eq_ignore_ascii_case(nonce_origin_header) {
+                    nonce_origin = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
                 }
             }
             Ok(Some(ParsedResponseHeaders {
@@ -86,6 +127,8 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 status_code: response.code.unwrap_or(0),
                 content_length,
                 content_type,
+                client_nonce,
+                nonce_origin,
             }))
         }
         Ok(httparse::Status::Partial) => Ok(None),
