@@ -29,6 +29,12 @@ pub enum OpenAiExchangeDispatchPath {
     /// The raw-proxy ingress (`network/openai/ingress.rs`), used for
     /// plugin-served models; never sees a typed `ChatCompletionRequest`.
     RawProxy,
+    /// The raw-proxy ingress routes this exchange to a peer on the mesh
+    /// rather than serving it locally (`route_missing_local_model`'s
+    /// remote-mesh branch). This node is the requester/router, not the
+    /// server, for the exchange this envelope describes — a downstream
+    /// plugin must not treat it as the served-side event.
+    RemoteMesh,
 }
 
 /// Which moment in an exchange's lifecycle an [`OpenAiExchangeEnvelope`]
