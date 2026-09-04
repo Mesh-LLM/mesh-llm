@@ -34,12 +34,11 @@ impl OpenAiBackend for StructuredGuardrailRecordingBackend {
         ensure_chat_runtime_features_supported(&request)
             .expect("guarded wrapper should downgrade backend-facing structured requests");
         *self.seen.lock().unwrap() = Some(request);
-        Ok(ChatCompletionResponse {
-            id: "chatcmpl-test".to_string(),
-            object: "chat.completion",
-            created: 123,
-            model: "test".to_string(),
-            choices: vec![ChatCompletionChoice {
+        Ok(ChatCompletionResponse::from_parts(
+            "chatcmpl-test".to_string(),
+            123,
+            "test".to_string(),
+            vec![ChatCompletionChoice {
                 index: 0,
                 message: AssistantMessage {
                     role: "assistant",
@@ -57,9 +56,9 @@ impl OpenAiBackend for StructuredGuardrailRecordingBackend {
                 logprobs: None,
                 finish_reason: Some(FinishReason::ToolCalls),
             }],
-            usage: Usage::new(1, 1),
-            timings: None,
-        })
+            Usage::new(1, 1),
+            None,
+        ))
     }
 
     async fn chat_completion_stream(

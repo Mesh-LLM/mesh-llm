@@ -120,6 +120,7 @@ impl OpenAiBackend for GuardrailRescueBackend {
             }],
             usage: Usage::new(3, 2),
             timings: None,
+            capsule_marker: None,
         })
     }
 
@@ -256,6 +257,7 @@ impl OpenAiBackend for FakeBackend {
                 }],
                 usage: Usage::new(3, 2),
                 timings: None,
+                capsule_marker: None,
             });
         }
         Ok(ChatCompletionResponse::new(
@@ -851,6 +853,128 @@ async fn request_id_is_returned_on_success_and_errors() {
         .unwrap();
     assert!(response.headers().get("x-request-id").is_some());
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+struct CapsuleMintingHook;
+
+#[async_trait]
+impl crate::hooks::OpenAiHookPolicy for CapsuleMintingHook {
+    async fn capsule_marker_for_response(
+        &self,
+        _request: &ChatCompletionRequest,
+        response: &ChatCompletionResponse,
+    ) -> Option<crate::chat::CapsuleMarker> {
+        Some(crate::chat::CapsuleMarker {
+            capsule_id: format!("capsule-{}", response.id),
+            nonce: "n".to_string(),
+        })
+    }
+}
+
+/// End-to-end rung-ladder response-leg reference: a hook mints a capsule
+/// marker, and it rides all the way out through the real axum router as an
+/// `X-Capsule-Id` header — not just as an in-process Rust value. This is the
+/// mechanism M1's design note found missing (`ChatCompletionResponse` had no
+/// write path, `frontend_lifecycle_middleware` runs after every hook call).
+#[tokio::test]
+async fn hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header() {
+    let backend =
+        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let app = router_for(Arc::new(backend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header = response
+        .headers()
+        .get("x-capsule-id")
+        .expect("X-Capsule-Id header present")
+        .to_str()
+        .unwrap();
+    assert!(header.starts_with("capsule-chatcmpl"));
+}
+
+/// The same rung-ladder marker must ride out of the non-streaming
+/// `/v1/responses` leg too: it calls the same `chat_completion_with_context`
+/// hook path as `/v1/chat/completions`, but translates the response into a
+/// new `Response` on its way out, which previously dropped the marker
+/// extension before `frontend_lifecycle_middleware` could read it.
+#[tokio::test]
+async fn hook_minted_capsule_marker_is_exposed_on_non_streaming_responses() {
+    let backend =
+        crate::hooks::HookedOpenAiBackend::new(Arc::new(FakeBackend), Arc::new(CapsuleMintingHook));
+    let app = router_for(Arc::new(backend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "input": "hi"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header = response
+        .headers()
+        .get("x-capsule-id")
+        .expect("X-Capsule-Id header present")
+        .to_str()
+        .unwrap();
+    assert!(header.starts_with("capsule-chatcmpl"));
+}
+
+/// A policy that never mints a marker must never produce the header — proves
+/// the wiring is conditional on the hook's own decision, not unconditional.
+#[tokio::test]
+async fn no_capsule_marker_means_no_x_capsule_id_header() {
+    let app = router_for(Arc::new(FakeBackend));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-mesh",
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-capsule-id").is_none());
 }
 
 #[tokio::test]

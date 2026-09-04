@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, Extension, State, rejection::JsonRejection},
-    http::{HeaderMap, Method, Request, StatusCode, Uri, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{IntoResponse, Response, sse::Event},
     routing::{get, post},
@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::{
     backend::{OpenAiBackend, OpenAiRequestContext, OpenAiResult, SharedBackend},
     backend_lifecycle::{call_backend, call_backend_with_context},
-    chat::{ChatCompletionChunk, ChatCompletionRequest},
+    chat::{CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest},
     common::{AgentSessionIdentity, AgentSessionSource, Usage},
     completions::CompletionRequest,
     errors::OpenAiError,
@@ -389,7 +389,14 @@ async fn chat_completions(
             &response.usage,
         );
         let usage = response.usage.clone();
-        Ok(json_response_with_usage(response, &usage))
+        let capsule_marker = response.capsule_marker.clone();
+        let mut http_response = json_response_with_usage(response, &usage);
+        if let Some(marker) = capsule_marker {
+            http_response
+                .extensions_mut()
+                .insert(CapsuleMarkerExtension(marker));
+        }
+        Ok(http_response)
     }
 }
 
@@ -485,8 +492,15 @@ async fn non_streaming_responses(
     .await?;
     state.response_completed(context, OpenAiBackendOperation::Responses, &response.usage);
     let usage = response.usage.clone();
+    let capsule_marker = response.capsule_marker.clone();
     let translated = translate_chat_completion_response_to_responses(&response)?;
-    Ok(json_response_with_usage(translated, &usage))
+    let mut http_response = json_response_with_usage(translated, &usage);
+    if let Some(marker) = capsule_marker {
+        http_response
+            .extensions_mut()
+            .insert(CapsuleMarkerExtension(marker));
+    }
+    Ok(http_response)
 }
 
 fn responses_stream_body_events(
@@ -763,6 +777,17 @@ async fn completions(
 #[derive(Clone, Copy)]
 struct TerminalUsage(TokenUsage);
 
+/// Threads a hook-minted [`CapsuleMarker`] from the handler to
+/// `frontend_lifecycle_middleware`, the same `Response::extensions()` relay
+/// [`TerminalUsage`] already uses to get authoritative usage from inside the
+/// handler out to the one layer that can write response headers.
+#[derive(Clone)]
+struct CapsuleMarkerExtension(CapsuleMarker);
+
+/// The rung-ladder response-leg header: see
+/// `docs/plugins/openai-exchange-lifecycle-design-note.md`.
+static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
+
 fn authoritative_usage(usage: &Usage) -> Option<TokenUsage> {
     TokenUsage::from_counts(
         Some(u64::from(usage.prompt_tokens)),
@@ -872,6 +897,16 @@ async fn frontend_lifecycle_middleware(
     let mut response = next.run(request).await;
     let (header_name, header_value) = request_id_response_header(&request_id);
     response.headers_mut().insert(header_name, header_value);
+    if let Some(marker) = response
+        .extensions()
+        .get::<CapsuleMarkerExtension>()
+        .map(|extension| extension.0.clone())
+        && let Ok(value) = HeaderValue::from_str(&marker.capsule_id)
+    {
+        response
+            .headers_mut()
+            .insert(X_CAPSULE_ID_HEADER.clone(), value);
+    }
     if is_streaming_response(&response) {
         lifecycle.transfer_to_stream();
     } else {
