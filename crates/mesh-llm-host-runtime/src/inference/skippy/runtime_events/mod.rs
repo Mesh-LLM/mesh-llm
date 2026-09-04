@@ -285,6 +285,29 @@ impl SkippyGenerationRuntimeEventAdapter {
             stop_condition_reached,
         );
     }
+
+    /// Receipt-build failure (review defect D1): the generation itself
+    /// completed, but `canonical_session_position`/`export_full_state`
+    /// bookkeeping failed, so `skippy-server` has no receipt to hand
+    /// `record`. Bumps engine health directly (unlike the normal
+    /// `finish`-only paths, whose reservation submissions are expected to
+    /// succeed) and synthesizes the same `terminal_not_delivered` terminals
+    /// a dropped, unresolved reservation would produce -- this is a
+    /// deliberate, immediate synthesis of that outcome rather than a
+    /// caller-cancelled generation, so it never reuses `abort`'s
+    /// `Cancellation` reason.
+    fn handle_receipt_unavailable(&self, unavailable: &GenerationAbort) {
+        if let Some(engine) = runtime_event_engine() {
+            engine.health().bump_terminal_delivery_failed();
+        }
+        self.submission_failures.fetch_add(1, Ordering::Relaxed);
+        self.finish(
+            (unavailable.request_id, unavailable.session_id),
+            synthetic_generation_terminal(),
+            synthetic_prefill_terminal(),
+            false,
+        );
+    }
 }
 
 impl Default for SkippyGenerationRuntimeEventAdapter {
@@ -310,5 +333,9 @@ impl GenerationLifecycleIngress for SkippyGenerationRuntimeEventAdapter {
 
     fn delivery_failures(&self) -> u64 {
         self.submission_failures.load(Ordering::Relaxed)
+    }
+
+    fn receipt_unavailable(&self, unavailable: &GenerationAbort) {
+        self.handle_receipt_unavailable(unavailable);
     }
 }

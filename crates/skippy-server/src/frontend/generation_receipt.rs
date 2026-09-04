@@ -216,6 +216,23 @@ pub trait GenerationLifecycleIngress: Send + Sync {
     fn delivery_failures(&self) -> u64 {
         0
     }
+
+    /// Reports that a generation completed but its receipt could not be
+    /// built: a `canonical_session_position` or `export_full_state`
+    /// bookkeeping failure inside receipt construction. This is deliberately
+    /// distinct from [`Self::try_submit`]'s `Completed`/`Aborted`
+    /// observations -- there is no receipt and no caller-initiated abort to
+    /// hand a consumer, only the fact that a terminal receipt could not be
+    /// produced for this generation.
+    ///
+    /// Health-only, exactly like every other method on this trait: an
+    /// implementation must count it toward [`Self::delivery_failures`], must
+    /// never block, and must never fail. The default no-op is correct for an
+    /// implementation with no additional health/terminal bookkeeping to
+    /// perform.
+    fn receipt_unavailable(&self, unavailable: &GenerationAbort) {
+        let _ = unavailable;
+    }
 }
 
 /// Fans one generation-lifecycle observation out to every installed sink,
@@ -246,6 +263,12 @@ impl GenerationLifecycleIngress for CompositeGenerationLifecycleIngress {
 
     fn delivery_failures(&self) -> u64 {
         self.sinks.iter().map(|sink| sink.delivery_failures()).sum()
+    }
+
+    fn receipt_unavailable(&self, unavailable: &GenerationAbort) {
+        for sink in &self.sinks {
+            sink.receipt_unavailable(unavailable);
+        }
     }
 }
 
@@ -291,6 +314,14 @@ impl GenerationLifecycleIngress for QueuedGenerationReceiptSink {
 
     fn delivery_failures(&self) -> u64 {
         self.delivery_failures.load(Ordering::Relaxed)
+    }
+
+    /// Forwards to the wrapped sink's existing `abort` handler: a
+    /// [`GenerationReceiptSink`] has no separate concept of "receipt could
+    /// not be built" from "generation produced no final receipt", and
+    /// `GenerationAbort`'s own contract already covers exactly that case.
+    fn receipt_unavailable(&self, unavailable: &GenerationAbort) {
+        let _ = self.try_submit(GenerationLifecycleObservation::Aborted(*unavailable));
     }
 }
 
@@ -352,6 +383,20 @@ impl GenerationReceiptConfig {
     /// receipt recording for the affected generation but never fail inference.
     pub fn recording_failures(&self) -> u64 {
         self.recording_failures.load(Ordering::Relaxed)
+    }
+
+    /// Reports a receipt-build failure to the underlying ingress. Health-only
+    /// like every other delivery path on this type: never returns an error,
+    /// never affects the request that produced the generation. Counted
+    /// through the ingress's own [`GenerationLifecycleIngress::delivery_failures`]
+    /// rather than `Self::submission_failures`, which tracks admission
+    /// failures for an observation that was actually built -- this failure
+    /// never reaches that far.
+    pub(crate) fn receipt_unavailable(&self, request_id: u64, session_id: u64) {
+        self.ingress.receipt_unavailable(&GenerationAbort {
+            request_id,
+            session_id,
+        });
     }
 
     pub(crate) fn observation(&self, max_tokens: usize) -> GenerationReceiptObservation {
@@ -523,14 +568,38 @@ impl StageOpenAiBackend {
         delivery: LocalGenerationReceiptDelivery<'_>,
     ) -> OpenAiResult<()> {
         let config = delivery.config;
+        let request_id = delivery.request_id;
+        let session_id = delivery.session_id;
         let receipt = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            build_generation_receipt(&mut *runtime, delivery)?
+            build_generation_receipt(&mut *runtime, delivery)
         };
-        record_generation_receipt(config, receipt)
+        deliver_generation_receipt_outcome(config, request_id, session_id, receipt)
+    }
+}
+
+/// Resolves a built (or failed-to-build) receipt into the request's return
+/// value. A `build_generation_receipt` failure -- `canonical_session_position`
+/// or `export_full_state` bookkeeping failing after a real, successful
+/// generation -- is health-only observability: it is reported through
+/// [`GenerationReceiptConfig::receipt_unavailable`] and the original
+/// generation's success is returned unchanged. The receipt is never on the
+/// request's error path (review defect D1).
+pub(crate) fn deliver_generation_receipt_outcome(
+    config: &GenerationReceiptConfig,
+    request_id: u64,
+    session_id: u64,
+    receipt: OpenAiResult<GenerationReceipt>,
+) -> OpenAiResult<()> {
+    match receipt {
+        Ok(receipt) => record_generation_receipt(config, receipt),
+        Err(_build_failure) => {
+            config.receipt_unavailable(request_id, session_id);
+            Ok(())
+        }
     }
 }
 
@@ -938,6 +1007,66 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(failing_config.delivery_failures(), 1);
+    }
+
+    #[test]
+    fn receipt_build_failure_never_fails_the_request_and_counts_as_a_delivery_failure() {
+        #[derive(Default)]
+        struct ReceiptUnavailableCountingIngress {
+            receipt_unavailable_calls: Mutex<Vec<GenerationAbort>>,
+        }
+
+        impl GenerationLifecycleIngress for ReceiptUnavailableCountingIngress {
+            fn try_submit(&self, _observation: GenerationLifecycleObservation) -> Result<()> {
+                Ok(())
+            }
+
+            fn delivery_failures(&self) -> u64 {
+                self.receipt_unavailable_calls.lock().unwrap().len() as u64
+            }
+
+            fn receipt_unavailable(&self, unavailable: &GenerationAbort) {
+                self.receipt_unavailable_calls
+                    .lock()
+                    .unwrap()
+                    .push(*unavailable);
+            }
+        }
+
+        let ingress = Arc::new(ReceiptUnavailableCountingIngress::default());
+        let config = GenerationReceiptConfig::from_lifecycle_ingress(ingress.clone());
+        let mut runtime = FakeRuntime {
+            position: Err("session session-x has no tracked position"),
+            full_state: Ok(Vec::new()),
+        };
+        let mut observation = test_observation(0);
+        observation.set_model_generation_elapsed(Duration::ZERO);
+        let receipt = build_generation_receipt(
+            &mut runtime,
+            LocalGenerationReceiptDelivery {
+                config: &config,
+                session_label: "session-x",
+                request_id: 7,
+                session_id: 8,
+                agent_session_id: None,
+                prompt_token_ids: Arc::from([]),
+                observation,
+                frontend_request_id: None,
+            },
+        );
+        assert!(receipt.is_err());
+        assert_eq!(config.delivery_failures(), 0);
+
+        let outcome = deliver_generation_receipt_outcome(&config, 7, 8, receipt);
+        assert!(outcome.is_ok());
+        assert_eq!(config.delivery_failures(), 1);
+        assert_eq!(
+            ingress.receipt_unavailable_calls.lock().unwrap().as_slice(),
+            [GenerationAbort {
+                request_id: 7,
+                session_id: 8,
+            }]
+        );
     }
 
     #[test]

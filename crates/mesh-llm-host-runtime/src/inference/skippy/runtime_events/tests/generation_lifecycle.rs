@@ -244,6 +244,31 @@ fn cleanup_without_a_terminal_synthesizes_one_for_generation_and_prefill() {
 
 #[test]
 #[serial_test::serial(runtime_event_engine_state)]
+fn receipt_unavailable_synthesizes_terminal_not_delivered_and_bumps_health() {
+    let engine = install_test_engine();
+    let adapter = SkippyGenerationRuntimeEventAdapter::new();
+
+    adapter
+        .try_submit(GenerationLifecycleObservation::Started(start(5, 6, None)))
+        .unwrap();
+    assert_eq!(engine.occupied_count(), 2);
+
+    adapter.receipt_unavailable(&GenerationAbort {
+        request_id: 5,
+        session_id: 6,
+    });
+    engine.drain();
+
+    assert_eq!(engine.occupied_count(), 0);
+    assert_eq!(engine.health().snapshot().terminal_delivery_failed, 1);
+    assert_eq!(adapter.delivery_failures(), 1);
+    assert!(generation_kinds(&engine).contains(&GenerationEventKind::GenerationFailed));
+    assert!(prefill_kinds(&engine).contains(&PrefillEventKind::PrefillFailed));
+    clear_runtime_event_engine();
+}
+
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
 fn absent_engine_degrades_to_no_op_and_never_fails_inference() {
     clear_runtime_event_engine();
     let adapter = SkippyGenerationRuntimeEventAdapter::new();

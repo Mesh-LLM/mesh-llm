@@ -360,3 +360,88 @@ fn connect_ip(bind_addr: SocketAddr) -> IpAddr {
         bind_addr.ip()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::inference::skippy::{SkippyModelHandle, SkippyModelLoadOptions};
+    use crate::models::local::{huggingface_hub_cache_dir, scan_hf_cache_fast};
+    use openai_frontend::ChatCompletionRequest;
+    use skippy_protocol::{StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
+    use std::path::PathBuf;
+
+    /// The smallest real GGUF already cached under the user's local
+    /// Hugging Face hub cache (the same cache `mesh-llm serve` populates),
+    /// so this test exercises real inference without a network fetch or a
+    /// checked-in fixture. Mirrors the existing `SKIPPY_MM_MODEL`-gated
+    /// smoke tests' skip-when-unavailable convention when no cache exists.
+    fn smallest_cached_gguf() -> Option<PathBuf> {
+        scan_hf_cache_fast(&huggingface_hub_cache_dir())
+            .into_iter()
+            .filter_map(|path| {
+                std::fs::metadata(&path)
+                    .ok()
+                    .filter(std::fs::Metadata::is_file)
+                    .map(|metadata| (path, metadata.len()))
+            })
+            .min_by_key(|(_, size)| *size)
+            .map(|(path, _)| path)
+    }
+
+    /// Review defect D1: local-model-only serving of a KV-disabled model
+    /// failed every request with "session ... has no tracked position".
+    /// `model_id` is unrecognizable to every family heuristic and
+    /// `kv_cache.payload` is forced to `Auto`, so KV integration disables
+    /// itself through the real unknown-family path in
+    /// `kv_integration::model_capability` (the file's own dense tensor
+    /// names, not certified-family knowledge, decide the outcome) exactly
+    /// as it does for a genuinely uncertified model family.
+    #[tokio::test]
+    async fn kv_disabled_model_serves() {
+        let Some(model_path) = smallest_cached_gguf() else {
+            eprintln!(
+                "skipping kv_disabled_model_serves: no cached GGUF found under {}",
+                huggingface_hub_cache_dir().display()
+            );
+            return;
+        };
+        let _ = crate::system::native_runtime::load_local_native_runtime_for_embedded_serving();
+        if !skippy_runtime::native_runtime_loaded() {
+            eprintln!(
+                "skipping kv_disabled_model_serves: no local native runtime bundle discovered (run `just build` first)"
+            );
+            return;
+        }
+
+        let options = SkippyModelLoadOptions::for_direct_gguf(
+            "local-test/unrecognized-family-model",
+            model_path,
+        )
+        .with_ctx_size(512)
+        .with_generation_concurrency(1)
+        .with_kv_cache(Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::Auto,
+            max_entries: 8,
+            max_bytes: 0,
+            min_tokens: 8,
+            shared_prefix_stride_tokens: 8,
+            shared_prefix_record_limit: 2,
+        }));
+
+        let handle = SkippyModelHandle::load(options).expect("load kv-disabled local model");
+        let backend = handle.backend();
+
+        for attempt in 0..3 {
+            let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+                "model": "local-test/unrecognized-family-model",
+                "messages": [{"role": "user", "content": format!("ping {attempt}")}],
+                "max_tokens": 4,
+            }))
+            .expect("build chat completion request");
+            backend
+                .chat_completion(request)
+                .await
+                .unwrap_or_else(|error| panic!("completion {attempt} failed: {error}"));
+        }
+    }
+}
