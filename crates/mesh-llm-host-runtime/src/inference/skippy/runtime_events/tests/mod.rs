@@ -3,6 +3,7 @@
 //! `session_prefill_kv` (the co-derived session/prefill/KV facts and
 //! privacy proofs).
 
+mod concurrent_roots;
 mod edge_cases;
 mod generation_lifecycle;
 mod privacy;

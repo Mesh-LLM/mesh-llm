@@ -66,6 +66,14 @@ pub const TUI_RENDER_TICK: Duration = Duration::from_millis(33);
 /// Shutdown drain deadline.
 pub const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
 
+/// Child-settle grace before root release (task 5,
+/// `.omo/plans/event-system-fixes.md`): how long a root whose own terminal
+/// has already applied and published may hold its slot open while at
+/// least one child is still occupied, before the engine synthesizes a
+/// `terminal_not_delivered` for each remaining child and releases the
+/// root anyway. Frozen equal to `SHUTDOWN_DRAIN_DEADLINE`.
+pub const CHILD_SETTLE_GRACE: Duration = SHUTDOWN_DRAIN_DEADLINE;
+
 /// Callback ingress p99 budget on certification hosts.
 pub const CALLBACK_INGRESS_P99_BUDGET: Duration = Duration::from_micros(100);
 

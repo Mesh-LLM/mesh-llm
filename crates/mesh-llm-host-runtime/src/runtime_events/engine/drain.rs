@@ -12,6 +12,17 @@
 //! stays the SAME single stable entry point the task-3 driver
 //! (`runtime_events::driver`) calls on every `Notify`/fallback tick; this
 //! module is the only place that decides what "drain" now does.
+//!
+//! Task 5 (review defect D8) additionally fixes how a root's release
+//! interacts with its still-occupied children: [`release_or_defer`]
+//! replaces the old `cascade_children`/`force_complete_child` pair, which
+//! force-released every outstanding child the instant the root's own
+//! terminal drained WITHOUT ever writing a terminal for it -- so a real,
+//! still-in-flight child terminal arriving moments later was rejected as
+//! stale (`TerminalDeliveryFailed`) instead of accepted. A root's own
+//! terminal still applies and publishes immediately either way; only the
+//! ROOT's slot release is now deferred while a child remains occupied,
+//! bounded by [`settle_pending_root_releases`]'s `CHILD_SETTLE_GRACE`.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -19,10 +30,11 @@ use std::time::Instant;
 
 use mesh_llm_runtime_event_contracts::{EventSequence, OperationId, OperationScope, RuntimeFact};
 
-use super::RuntimeEventEngine;
-use crate::runtime_events::config::PROGRESS_EXPORT_INTERVAL;
+use super::{ChildSlot, PendingRootRelease, RuntimeEventEngine};
+use crate::runtime_events::config::{CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL};
 use crate::runtime_events::reducer::{ReduceOutcome, ReducerInput, apply};
 use crate::runtime_events::replay::ReplayFrame;
+use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DrainReport {
@@ -100,8 +112,7 @@ impl RuntimeEventEngine {
                     record.synthesized,
                 ));
             }
-            self.table().release(handle);
-            cascade_children(self, scope);
+            release_or_defer(self, scope, handle, now);
             applied += 1;
         }
 
@@ -127,6 +138,7 @@ impl RuntimeEventEngine {
         }
 
         applied += self.maybe_flush_progress(now);
+        settle_pending_root_releases(self, now);
         DrainReport {
             applied,
             left_queued: self.wake().len(),
@@ -232,11 +244,24 @@ impl RuntimeEventEngine {
     /// Begin shutdown: block new admission, then drain at most `budget`
     /// wake entries (`None` drains fully). Entries left queued past the
     /// budget are recorded as shutdown-degraded rather than silently
-    /// dropped, matching the deadline-degradation rule.
+    /// dropped, matching the deadline-degradation rule. A root release
+    /// still deferred at this point (task 5's child-settle grace) cannot
+    /// wait out its real `CHILD_SETTLE_GRACE` here -- shutdown is
+    /// synchronous and the driver task is aborted immediately after this
+    /// call returns -- so it is force-settled now (treated as already past
+    /// its deadline) and drained once more, exactly like a normal grace
+    /// expiry, rather than left occupying its slot for the rest of process
+    /// life.
     pub fn shutdown(&self, budget: Option<usize>) -> ShutdownReport {
         self.shutting_down.store(true, Ordering::Release);
         let started_with = self.wake().len();
-        let report = self.drain_up_to(budget);
+        let mut report = self.drain_up_to(budget);
+        if !self.pending_root_releases_is_empty() {
+            let forced_now = Instant::now() + CHILD_SETTLE_GRACE;
+            settle_pending_root_releases(self, forced_now);
+            let follow_up = self.drain_up_to(budget);
+            report.applied += follow_up.applied;
+        }
         let remaining = self.wake().len();
         if remaining > 0 {
             self.health.bump_shutdown_degraded();
@@ -250,37 +275,156 @@ impl RuntimeEventEngine {
             remaining_after_deadline: remaining,
         }
     }
-}
 
-/// Force-complete every outstanding child reservation under `root` when
-/// `root`'s own reservation is released, bounding child lifetime by root
-/// lifetime. Best-effort: the child's own guard, if it later drops, will
-/// see a mismatched generation and no-op.
-pub(super) fn cascade_children(engine: &RuntimeEventEngine, scope: OperationScope) {
-    let OperationScope::Root(root) = scope else {
-        return;
-    };
-    let indices = take_children(engine, root);
-    for index in indices {
-        force_complete_child(engine, index);
+    fn pending_root_releases_is_empty(&self) -> bool {
+        self.pending_root_releases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
     }
 }
 
-fn take_children(engine: &RuntimeEventEngine, root: OperationId) -> Vec<usize> {
+/// Release `handle`'s now-settled slot for `scope` -- or, for a `Root`
+/// scope with at least one still-occupied child, DEFER the release
+/// instead (review defect D8). A `Child` scope, or a `Root` with no
+/// occupied children right now, releases immediately exactly as a plain
+/// release always did. Shared by the per-entry drain loop above and
+/// `OperationReservation::cancel` (`engine/mod.rs`), so a root released
+/// via explicit pre-work cancellation gets the identical deferred-release
+/// contract as one released by its own terminal draining.
+pub(super) fn release_or_defer(
+    engine: &RuntimeEventEngine,
+    scope: OperationScope,
+    handle: SlotHandle,
+    now: Instant,
+) {
+    let OperationScope::Root(root) = scope else {
+        engine.table().release(handle);
+        return;
+    };
+    if has_occupied_children(engine, root) {
+        engine
+            .pending_root_releases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                root,
+                PendingRootRelease {
+                    handle,
+                    deadline: now + CHILD_SETTLE_GRACE,
+                },
+            );
+        return;
+    }
+    engine.table().release(handle);
+    forget_children(engine, root);
+}
+
+fn has_occupied_children(engine: &RuntimeEventEngine, root: OperationId) -> bool {
     engine
         .children_by_root
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&root)
+        .get(&root)
+        .is_some_and(|children| {
+            children
+                .iter()
+                .any(|child| engine.table().is_occupied(child.index).is_some())
+        })
+}
+
+fn forget_children(engine: &RuntimeEventEngine, root: OperationId) {
+    engine
+        .children_by_root
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&root);
+}
+
+/// Resolve every root whose own terminal has settled but whose slot
+/// release was deferred by [`release_or_defer`]. Called on EVERY drain
+/// pass -- the task-3 engine-owned driver ticks this at least every
+/// `TUI_RENDER_TICK`, plus immediately on `Notify` -- so a root's grace
+/// deadline is enforced without a second background task; the driver's
+/// own cadence is the only clock this needs. A root whose children have
+/// ALL settled since (drained through the ordinary per-entry loop above,
+/// exactly like any other terminal) releases immediately, however much
+/// grace time is left. A root still short a child past `deadline` gets
+/// each remaining child's OWN synthesized `terminal_not_delivered`
+/// written and enqueued through the SAME `write_terminal` + `push_next`
+/// mechanism `OperationReservation::drop` already uses for a genuinely-
+/// dropped guard, so it is picked up and applied+published by the
+/// ordinary per-entry loop on this engine's very next drain call -- there
+/// is no second reducer path here, and no fact is applied synchronously
+/// inside this function.
+fn settle_pending_root_releases(engine: &RuntimeEventEngine, now: Instant) {
+    let candidates: Vec<(OperationId, SlotHandle, Instant)> = engine
+        .pending_root_releases
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|(root, entry)| (*root, entry.handle, entry.deadline))
+        .collect();
+
+    for (root, handle, deadline) in candidates {
+        let outstanding = occupied_children(engine, root);
+        if outstanding.is_empty() {
+            release_pending_root(engine, root, handle);
+            continue;
+        }
+        if now < deadline {
+            continue;
+        }
+        for child in outstanding {
+            synthesize_child_not_delivered(engine, child);
+        }
+        release_pending_root(engine, root, handle);
+    }
+}
+
+fn occupied_children(engine: &RuntimeEventEngine, root: OperationId) -> Vec<ChildSlot> {
+    engine
+        .children_by_root
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&root)
+        .map(|children| {
+            children
+                .iter()
+                .copied()
+                .filter(|child| engine.table().is_occupied(child.index).is_some())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-fn force_complete_child(engine: &RuntimeEventEngine, index: usize) {
-    if engine.table().is_occupied(index).is_none() {
+fn release_pending_root(engine: &RuntimeEventEngine, root: OperationId, handle: SlotHandle) {
+    engine.table().release(handle);
+    engine
+        .pending_root_releases
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&root);
+    forget_children(engine, root);
+}
+
+/// Write and enqueue `child`'s own synthesized `terminal_not_delivered`
+/// terminal -- a no-op if it already settled on its own (a real
+/// submission, or a caller-side guard drop) between the outstanding-
+/// children snapshot in [`settle_pending_root_releases`] and this call.
+fn synthesize_child_not_delivered(engine: &RuntimeEventEngine, child: ChildSlot) {
+    if engine.table().is_occupied(child.index).is_none() {
         return;
     }
-    let generation = engine.table().current_generation(index);
-    let handle = super::super::reservation::SlotHandle { index, generation };
-    engine.health.bump_terminal_delivery_failed();
-    engine.table().release(handle);
+    let handle = SlotHandle {
+        index: child.index,
+        generation: engine.table().current_generation(child.index),
+    };
+    let record = TerminalRecord {
+        fact: (child.synthetic_terminal)(),
+        synthesized: true,
+    };
+    if engine.table().write_terminal(handle, record) {
+        engine.wake().push_next(handle);
+    }
 }

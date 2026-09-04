@@ -54,19 +54,48 @@ fn frontend_generation_reserves_a_child_of_the_request_root() {
     assert_eq!(engine.occupied_count(), 3);
 
     // Dropping the pre-reserved root, without ever resolving the
-    // generation's own terminal, must cascade-release BOTH children --
-    // proof they are genuinely children of this root (task 3's
-    // cascade-on-root-release), not independent roots that merely share
-    // the same byte value. If `begin` reserved its own root instead of a
-    // child (the mutation this test is designed to catch), the
-    // generation's slot would survive the root's drop and this assertion
-    // would fail.
+    // generation's own terminal, synthesizes the root's OWN terminal but
+    // -- since both children are genuinely children of this root, proof
+    // they are not independent roots that merely share the same byte
+    // value -- its slot release DEFERS while they are still occupied
+    // (task 5's child-settle grace, review defect D8: the old cascade
+    // force-released a still-occupied child without ever giving it a
+    // terminal). Simulating the grace elapsing must then synthesize and
+    // publish a real terminal for BOTH children before the root itself
+    // releases. If `begin` reserved its own root instead of a child (the
+    // mutation this test is designed to catch), the generation's slot
+    // would never have been tracked as this root's child and would
+    // survive past grace expiry, so the final assertion would fail.
     drop(root_reservation);
     engine.drain();
     assert_eq!(
         engine.occupied_count(),
+        3,
+        "the root's release defers while its children are still occupied \
+         -- no cascade force-drops them without a terminal"
+    );
+
+    let past_grace =
+        std::time::Instant::now() + crate::runtime_events::config::CHILD_SETTLE_GRACE * 2;
+    engine.drain_up_to_at(None, past_grace);
+    engine.drain_up_to_at(None, past_grace);
+
+    assert_eq!(
+        engine.occupied_count(),
         0,
-        "both child reservations must cascade-release when their root releases"
+        "both child reservations must settle -- via synthesized \
+         terminal_not_delivered at grace expiry -- and the root release \
+         right after"
+    );
+    assert!(
+        generation_kinds(&engine).contains(&GenerationEventKind::GenerationFailed),
+        "the unresolved generation child must publish a real \
+         terminal_not_delivered, not silently vanish"
+    );
+    assert!(
+        prefill_kinds(&engine).contains(&PrefillEventKind::PrefillFailed),
+        "the unresolved prefill child must publish a real \
+         terminal_not_delivered too"
     );
     clear_runtime_event_engine();
 }

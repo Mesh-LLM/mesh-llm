@@ -33,13 +33,41 @@ use lanes::{DiagnosticLane, StateLane};
 /// `outcome: Unknown` and `reason: TerminalNotDelivered` already set.
 pub type SyntheticTerminal = fn() -> RuntimeFact;
 
+/// One admitted child slot under a root: its reservation-table index plus
+/// the family-supplied synthesizer. The SAME synthesizer a genuinely-
+/// dropped guard uses (`OperationReservation::drop` below) is reused by
+/// `engine::drain::settle_pending_root_releases` at child-settle-grace
+/// expiry (task 5, `.omo/plans/event-system-fixes.md`), so a forgotten
+/// child gets the identical family-correct `terminal_not_delivered` fact
+/// either way.
+#[derive(Clone, Copy)]
+struct ChildSlot {
+    index: usize,
+    synthetic_terminal: SyntheticTerminal,
+}
+
+/// A root whose own terminal settled while at least one child was still
+/// occupied: its slot release is deferred until `engine::drain::
+/// settle_pending_root_releases` either finds every child has settled on
+/// its own, or `deadline` (`CHILD_SETTLE_GRACE` past the moment the root
+/// settled) has passed.
+struct PendingRootRelease {
+    handle: SlotHandle,
+    deadline: Instant,
+}
+
 pub struct RuntimeEventEngine {
     table: ReservationTable,
     wake: WakeList,
     replay: ReplayBuffer,
     subscribers: SubscriberRegistry,
     health: EngineHealth,
-    children_by_root: Mutex<HashMap<OperationId, Vec<usize>>>,
+    children_by_root: Mutex<HashMap<OperationId, Vec<ChildSlot>>>,
+    /// Roots deferred by `engine::drain::release_or_defer` -- review
+    /// defect D8 -- and resolved by `engine::drain::
+    /// settle_pending_root_releases` on every drain pass. See
+    /// [`PendingRootRelease`].
+    pending_root_releases: Mutex<HashMap<OperationId, PendingRootRelease>>,
     shutting_down: AtomicBool,
     rebuild_generation: AtomicU64,
     state_lane: StateLane,
@@ -91,6 +119,7 @@ impl RuntimeEventEngine {
             subscribers: SubscriberRegistry::with_capacity(subscriber_lag_frames),
             health: EngineHealth::default(),
             children_by_root: Mutex::new(HashMap::new()),
+            pending_root_releases: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             rebuild_generation: AtomicU64::new(0),
             state_lane: StateLane::default(),
@@ -244,7 +273,10 @@ impl RuntimeEventEngine {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .entry(root)
                         .or_default()
-                        .push(handle.index);
+                        .push(ChildSlot {
+                            index: handle.index,
+                            synthetic_terminal,
+                        });
                 }
                 Some(OperationReservation {
                     engine: Arc::clone(self),
@@ -382,10 +414,11 @@ impl OperationReservation {
     }
 
     /// Explicit pre-work cancellation: releases the reservation without a
-    /// terminal (no synthesis, no wake entry).
+    /// terminal (no synthesis, no wake entry) -- or, for a root with at
+    /// least one still-occupied child, defers the release exactly like a
+    /// terminal-driven release (`engine::drain::release_or_defer`, task 5).
     pub fn cancel(self) {
-        self.engine.table().release(self.handle);
-        drain::cascade_children(&self.engine, self.scope);
+        drain::release_or_defer(&self.engine, self.scope, self.handle, Instant::now());
         std::mem::forget(self);
     }
 }

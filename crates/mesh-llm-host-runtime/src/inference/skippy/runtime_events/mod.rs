@@ -68,14 +68,19 @@ use facts::{
 
 #[derive(Default)]
 struct GenerationTracking {
-    // Declaration order is load-bearing: Rust drops struct fields in
-    // declaration order, and `prefill` (a CHILD of the group root in the
-    // non-frontend case where `generation` itself occupies that root) must
-    // drop -- and so queue its own synthesized-terminal wake entry -- before
-    // `generation` does. Dropping `generation` (the root) first would let
-    // its release cascade-drop the still-occupied `prefill` slot before
-    // `prefill`'s own Drop ever runs, discarding its synthesized terminal
-    // the same way `finish`'s submit ordering has to avoid (see its doc).
+    // Declaration order still matters for LATENCY, though it is no longer
+    // load-bearing for correctness (task 5, review defect D8): Rust drops
+    // struct fields in declaration order, and `prefill` (a CHILD of the
+    // group root in the non-frontend case where `generation` itself
+    // occupies that root) drops -- and so queues its own synthesized-
+    // terminal wake entry -- before `generation` does, letting both
+    // settle in the same drain pass with no wait. Before D8's fix,
+    // dropping `generation` (the root) first would have let its release
+    // cascade-drop the still-occupied `prefill` slot before `prefill`'s
+    // own Drop ever ran, discarding its synthesized terminal; now
+    // `engine::drain::release_or_defer` defers the root's own release
+    // instead, so `prefill` settles correctly (within `CHILD_SETTLE_GRACE`
+    // at worst) regardless of drop order.
     prefill: Option<OperationReservation>,
     generation: Option<OperationReservation>,
     /// Whether §8.10's `first_token_produced` has already been emitted for
@@ -222,16 +227,23 @@ impl SkippyGenerationRuntimeEventAdapter {
     /// path, and would still emit nothing on export failure (the field is
     /// simply absent, indistinguishable from "not requested").
     ///
-    /// Resolution order is load-bearing: the prefill CHILD terminal must be
-    /// submitted (queued, then drained) BEFORE the generation reservation's
-    /// own terminal in the non-frontend case, where the generation
-    /// reservation itself occupies the group ROOT scope. `engine.drain()`
-    /// applies queued wake entries in FIFO order, and resolving a ROOT
-    /// force-cascades (drops without a terminal) any still-occupied CHILD
-    /// under it (`drain.rs::cascade_children`) -- writing generation's
-    /// terminal first would race prefill's own terminal write and silently
-    /// discard it. Submitting prefill first lets its own wake entry drain
-    /// and release cleanly before the root's cascade ever runs.
+    /// Resolution order still matters for LATENCY even though it is no
+    /// longer load-bearing for correctness (task 5, review defect D8):
+    /// submitting the prefill CHILD terminal before the generation
+    /// reservation's own terminal in the non-frontend case, where the
+    /// generation reservation itself occupies the group ROOT scope, lets
+    /// both settle in the SAME drain pass with no wait at all. Before D8's
+    /// fix, resolving a ROOT force-cascaded (dropped without a terminal)
+    /// any still-occupied CHILD under it the instant the root's own
+    /// terminal drained, so this ordering was the only thing standing
+    /// between a real prefill terminal and silent loss.
+    /// `engine::drain::release_or_defer` now defers the root's OWN slot
+    /// release instead of force-releasing its children: a child that
+    /// settles within `CHILD_SETTLE_GRACE` (2s) -- true regardless of
+    /// submit order -- is applied and published normally, and one that
+    /// never settles gets its own synthesized `terminal_not_delivered`
+    /// terminal published through its own slot at grace expiry, never
+    /// silently dropped.
     fn finish(
         &self,
         key: (u64, u64),
