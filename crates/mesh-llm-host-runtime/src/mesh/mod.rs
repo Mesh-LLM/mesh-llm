@@ -82,6 +82,7 @@ mod connection_reservation;
 mod connections;
 mod connectivity;
 mod direct_path;
+mod direct_rescue;
 mod gossip;
 mod heartbeat;
 mod host_role_claims;
