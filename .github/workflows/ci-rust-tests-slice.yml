@@ -212,6 +212,7 @@ jobs:
     env:
       LLAMA_STAGE_BACKEND: cpu
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-static
+      MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
       RUSTC_WRAPPER: sccache
@@ -240,6 +241,11 @@ jobs:
         uses: ./.github/actions/resolve-native-toolchain-epoch
         with:
           pinned_epoch: ${{ inputs.static_abi_toolchain_epoch }}
+      - id: sccache_seed
+        uses: ./.github/actions/restore-sccache-seed
+        with:
+          allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-8d93de6b-epoch-8d93de6b-v2-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -253,6 +259,8 @@ jobs:
           path: ${{ runner.temp }}/static-abi-input
       - name: Restore immutable static ABI input
         run: scripts/restore-static-abi-input.sh "$RUNNER_TEMP/static-abi-input" "$LLAMA_STAGE_BUILD_DIR" x86_64-unknown-linux-gnu cpu
+      - name: Prepare UI placeholder
+        run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
       - name: Download pinned SafeTensors checkpoint
         run: |
           set -euo pipefail
@@ -261,7 +269,37 @@ jobs:
             config.json tokenizer.json tokenizer_config.json model.safetensors \
             --revision "$SAFETENSORS_REVISION" \
             --local-dir "$fixture_dir"
+      - name: Build and locate the SafeTensors smoke test
+        id: safetensors_smoke_test
+        run: |
+          set -euo pipefail
+          test_name="inference::skippy::resolver::tests::safetensors_checkpoint_reaches_mesh_host_runtime"
+          test_binary="$(
+            cargo test --locked -p mesh-llm-host-runtime --no-default-features \
+              --lib --no-run --message-format=json |
+              jq -r 'select(
+                .reason == "compiler-artifact" and
+                .target.name == "mesh_llm_host_runtime" and
+                .profile.test == true and
+                .executable != null
+              ) | .executable' |
+              tail -n 1
+          )"
+          if [[ -z "$test_binary" || ! -x "$test_binary" ]]; then
+            echo "Unable to locate the mesh-llm-host-runtime library test binary" >&2
+            exit 1
+          fi
+          test_listing="$("$test_binary" --list --ignored --format terse)"
+          if ! grep -Fqx "$test_name: test" <<<"$test_listing"; then
+            echo "Required ignored smoke test is absent: $test_name" >&2
+            exit 1
+          fi
+          printf 'test_binary=%s\n' "$test_binary" >> "$GITHUB_OUTPUT"
+          printf 'test_name=%s\n' "$test_name" >> "$GITHUB_OUTPUT"
       - name: Exercise every current direct-load quantization
+        env:
+          SAFETENSORS_SMOKE_TEST_BINARY: ${{ steps.safetensors_smoke_test.outputs.test_binary }}
+          SAFETENSORS_SMOKE_TEST_NAME: ${{ steps.safetensors_smoke_test.outputs.test_name }}
         run: |
           set -euo pipefail
           fixture_dir="$RUNNER_TEMP/safetensors-smollm2"
@@ -270,9 +308,8 @@ jobs:
             SKIPPY_SAFETENSORS_SMOKE_DIR="$fixture_dir" \
               SKIPPY_SAFETENSORS_SMOKE_QUANTIZATION="$quantization" \
               SKIPPY_SAFETENSORS_SMOKE_IMATRIX=synthetic \
-              cargo test --locked -p mesh-llm-host-runtime --no-default-features \
-                safetensors_checkpoint_reaches_mesh_host_runtime -- \
-                --ignored --nocapture
+              "$SAFETENSORS_SMOKE_TEST_BINARY" \
+                "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
             echo "::endgroup::"
           done
       - name: Capture SafeTensors smoke cache evidence
@@ -280,4 +317,4 @@ jobs:
         uses: ./.github/actions/capture-sccache-stats
         with:
           artifact_name: sccache-safetensors-runtime-smoke-${{ github.run_attempt }}
-          cache_expectation: opportunistic
+          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
