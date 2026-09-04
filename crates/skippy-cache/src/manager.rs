@@ -495,9 +495,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(stage_b.activity().writes, 1);
+        let stage_a_usage = stage_a.status().unwrap().usage;
+        let stage_b_usage = stage_b.status().unwrap().usage;
+        // Free filesystem capacity is sampled per status call and may change
+        // between these reads; compare only the manager-owned accounting.
+        assert_eq!(stage_a_usage.budget_bytes, stage_b_usage.budget_bytes);
+        assert_eq!(stage_a_usage.used_bytes, stage_b_usage.used_bytes);
         assert_eq!(
-            stage_a.status().unwrap().usage,
-            stage_b.status().unwrap().usage
+            stage_a_usage.reserved_inflight_bytes,
+            stage_b_usage.reserved_inflight_bytes
+        );
+        assert_eq!(
+            stage_a_usage.minimum_free_bytes,
+            stage_b_usage.minimum_free_bytes
+        );
+        assert_eq!(stage_a_usage.manifests, stage_b_usage.manifests);
+        assert_eq!(stage_a_usage.unique_segments, stage_b_usage.unique_segments);
+        assert_eq!(
+            stage_a_usage.evicted_manifests,
+            stage_b_usage.evicted_manifests
+        );
+        assert_eq!(
+            stage_a_usage.quarantined_objects,
+            stage_b_usage.quarantined_objects
         );
         assert_eq!(stage_a.status().unwrap().restorable_manifests, 1);
         assert_eq!(stage_b.status().unwrap().restorable_manifests, 0);
