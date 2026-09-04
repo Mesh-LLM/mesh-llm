@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "radix-cache",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "family-deepseek2",
+      "family": "deepseek2",
+      "capability_tags": [
+        "gguf",
+        "mla",
+        "moe"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-parity",
+        "radix-cache"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "manual"
+      ],
+      "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+      "selector": "Q4_K_M",
+      "files": [
+        "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 10364416768,
+          "blob_id": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8"
+        }
+      },
+      "model_ref": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
+      "size_bytes": 10364416768,
+      "sha256": "603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
+      "url": "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "id": "family-falcon-h1",
+      "family": "falcon-h1",
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "recurrent"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-ci-smoke",
+        "skippy-parity",
+        "competitive-benchmark",
+        "radix-cache"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "selector": "Q4_K_M",
+      "files": [
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 944786656,
+          "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+        }
+      },
+      "model_ref": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 944786656,
+      "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+      "url": "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "id": "llama-q4-parity-radix",
+      "family": "llama",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "parity",
+        "radix-cache"
+      ],
+      "suites": [
+        "skippy-parity",
+        "radix-cache"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF",
+      "revision": "7d1f70022fcab2038000074bd0342e03e1d8b755",
+      "selector": "Q4_K_M",
+      "files": [
+        "llama-3.2-1b-instruct-q4_k_m.gguf"
+      ],
+      "file_integrity": {
+        "llama-3.2-1b-instruct-q4_k_m.gguf": {
+          "size_bytes": 807690656,
+          "blob_id": "1d0e9419ec4e12aef73ccf4ffd122703e94c48344a96bc7c5f0f2772c2152ce3"
+        }
+      },
+      "model_ref": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF/resolve/7d1f70022fcab2038000074bd0342e03e1d8b755/llama-3.2-1b-instruct-q4_k_m.gguf"
+      ],
+      "file": "llama-3.2-1b-instruct-q4_k_m.gguf",
+      "size_bytes": 807690656,
+      "sha256": "1d0e9419ec4e12aef73ccf4ffd122703e94c48344a96bc7c5f0f2772c2152ce3",
+      "url": "https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF/resolve/7d1f70022fcab2038000074bd0342e03e1d8b755/llama-3.2-1b-instruct-q4_k_m.gguf",
+      "notes": "Shared parity and radix-cache Llama variant; intentionally differs from the family canary repository."
+    },
+    {
+      "id": "gemma2-q4-parity-radix",
+      "family": "gemma2",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "parity",
+        "radix-cache",
+        "sliding-window-attention"
+      ],
+      "suites": [
+        "skippy-parity",
+        "radix-cache"
+      ],
+      "cadences": [
+        "manual"
+      ],
+      "repo": "bartowski/gemma-2-2b-it-GGUF",
+      "revision": "855f67caed130e1befc571b52bd181be2e858883",
+      "selector": "Q4_K_M",
+      "files": [
+        "gemma-2-2b-it-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "gemma-2-2b-it-Q4_K_M.gguf": {
+          "size_bytes": 1708582752,
+          "blob_id": "e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787"
+        }
+      },
+      "model_ref": "bartowski/gemma-2-2b-it-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/855f67caed130e1befc571b52bd181be2e858883/gemma-2-2b-it-Q4_K_M.gguf"
+      ],
+      "file": "gemma-2-2b-it-Q4_K_M.gguf",
+      "size_bytes": 1708582752,
+      "sha256": "e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787",
+      "url": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/855f67caed130e1befc571b52bd181be2e858883/gemma-2-2b-it-Q4_K_M.gguf",
+      "notes": "Shared parity and radix-cache Gemma2 Q4 variant."
+    }
+  ]
+}

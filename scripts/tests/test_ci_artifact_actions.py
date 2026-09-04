@@ -2114,10 +2114,26 @@ class CiArtifactActionTests(unittest.TestCase):
     def test_smoke_restore_model_is_optional(self) -> None:
         action = self.read_action("restore-smoke-inputs")
         model_inputs_present = (
-            "inputs.model_url != '' && inputs.model_file != ''"
+            "steps.resolve-model.outputs.url != '' && "
+            "steps.resolve-model.outputs.file != ''"
         )
 
         self.assertEqual(action.count(model_inputs_present), 4)
+        self.assertIn("model_manifest:", action)
+        self.assertIn("model_cadence:", action)
+        self.assertIn("scripts/resolve-test-model-manifest.py", action)
+        self.assertIn('--cadence "$MODEL_CADENCE"', action)
+        self.assertIn("--require-single-file", action)
+        self.assertIn('^[A-Za-z0-9][A-Za-z0-9._-]*$', action)
+        self.assertIn("--verify-root \"$HOME/.models\"", action)
+        self.assertIn("MODEL_MANIFEST: ${{ inputs.model_manifest }}", action)
+        self.assertIn("MODEL_CADENCE: ${{ inputs.model_cadence }}", action)
+        self.assertIn("MODEL_URL: ${{ steps.resolve-model.outputs.url }}", action)
+        self.assertIn("MODEL_FILE: ${{ steps.resolve-model.outputs.file }}", action)
+        self.assertNotIn('"${{ inputs.model_manifest }}"', action)
+        self.assertNotIn('"${{ inputs.model_cadence }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.url }}"', action)
+        self.assertNotIn('"${{ steps.resolve-model.outputs.file }}"', action)
         self.assertIn(
             f"if: ${{{{ {model_inputs_present} }}}}\n"
             "      id: cache-model",

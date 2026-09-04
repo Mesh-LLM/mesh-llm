@@ -314,6 +314,54 @@ class SccacheEvidenceTests(unittest.TestCase):
         self.assertTrue(stats_file.is_file())
         self.assertIn("::warning title=sccache reported zero compile requests", result.stdout)
 
+    def test_zero_warm_floor_allows_an_observation_without_cache_requests(self) -> None:
+        payload = valid_payload(compile_requests=0)
+        stats = payload["stats"]
+        self.assertIsInstance(stats, dict)
+        stats["requests_executed"] = 0
+        stats["compilations"] = 0
+        stats["cache_writes"] = 0
+        for name in ("cache_hits", "cache_misses"):
+            counts = stats[name]
+            self.assertIsInstance(counts, dict)
+            counts["counts"] = {}
+
+        result, stats_file, github_output = self.run_capture(
+            payload,
+            cache_expectation="warm",
+            minimum_hit_rate="0",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assessment = json.loads(stats_file.read_text())["assessment"]
+        self.assertEqual(assessment["classification"], "warm-pass")
+        self.assertIsNone(assessment["hit_rate"])
+        self.assertIn("cache_passed=true", github_output.read_text())
+        self.assertIn(
+            "::warning title=sccache reported zero compile requests",
+            result.stdout,
+        )
+
+    def test_positive_warm_floor_rejects_missing_cache_requests(self) -> None:
+        payload = valid_payload(compile_requests=0)
+        stats = payload["stats"]
+        self.assertIsInstance(stats, dict)
+        for name in ("cache_hits", "cache_misses"):
+            counts = stats[name]
+            self.assertIsInstance(counts, dict)
+            counts["counts"] = {}
+
+        result, stats_file, github_output = self.run_capture(
+            payload,
+            cache_expectation="warm",
+            minimum_hit_rate="0.01",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assessment = json.loads(stats_file.read_text())["assessment"]
+        self.assertEqual(assessment["classification"], "warm-failure")
+        self.assertIn("cache_passed=false", github_output.read_text())
+
     def test_warm_and_cold_observations_are_classified_separately(self) -> None:
         warm_result, warm_file, warm_output = self.run_capture(
             valid_payload(), cache_expectation="warm", minimum_hit_rate="0.80",
