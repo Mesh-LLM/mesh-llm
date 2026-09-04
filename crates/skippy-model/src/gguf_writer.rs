@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::ConvertOutputType;
 use crate::float_convert::{
-    FloatDType, convert_float_chunk, read_float_element, target_dtype_for, target_dtype_for_tensor,
+    FloatDType, convert_float_chunk, read_float_element, target_dtype_for_tensor,
     write_float_element,
 };
 pub use crate::gguf_metadata::GgufKv;
@@ -1067,10 +1067,14 @@ impl ExpertGroup {
         let source_dtype = FloatDType::from_safetensor(tensor.dtype()).with_context(|| {
             format!("unsupported dtype {} for {}", tensor.dtype(), tensor.name())
         })?;
-        // Individual expert shards are merged into a rank-2-or-higher GGUF
-        // tensor below, so they must retain matrix precision even when a tiny
-        // fixture represents each expert with a rank-one source shape.
-        let target_dtype = target_dtype_for(source_dtype, output_type)?;
+        // The expert dimension is appended when the group becomes a GGUF
+        // tensor. Choose precision from that merged shape so rank-one source
+        // shards retain matrix precision while scalar shards become F32
+        // rank-one runtime operands.
+        let mut merged_shape = Vec::with_capacity(tensor.shape().len() + 1);
+        merged_shape.push(1);
+        merged_shape.extend_from_slice(tensor.shape());
+        let target_dtype = target_dtype_for_tensor(source_dtype, output_type, &merged_shape)?;
         let element_count = tensor_element_count(tensor)?;
         Ok(Self {
             key,
