@@ -1,12 +1,24 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Mesh Launcher",
+  "productName": "Mesh",
   "identifier": "com.mesh-llm.launcher",
   "build": {
     "frontendDist": "assets"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Mesh",
+        "url": "index.html",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 620,
+        "center": true,
+        "visible": true
+      }
+    ],
     "security": {
       "csp": null
     }

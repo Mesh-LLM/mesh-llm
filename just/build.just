@@ -118,6 +118,16 @@ build backend="" cuda_arch="" rocm_arch="":
 build-dev backend="" cuda_arch="" rocm_arch="":
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BUILD_PROFILE='dev'; & './scripts/build-windows.ps1' -Backend '{{ backend }}' -CudaArch '{{ cuda_arch }}' -RocmArch '{{ rocm_arch }}' -DynamicHost"
 
+# Build the local product and open it as the native Mesh desktop application.
+[unix]
+launcher-dev: build
+    @MESH_LLM_BIN="$PWD/target/debug/mesh-llm" rustup run stable cargo run -p mesh-llm-launcher
+
+# Build the local product and open it as the native Mesh desktop application.
+[windows]
+launcher-dev: build
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BIN=(Resolve-Path './target/debug/mesh-llm.exe'); rustup run stable cargo run -p mesh-llm-launcher"
+
 # Low-level static ABI primitive. This builds only the native runtime; it never
 # builds a MeshLLM host. Use `just build` for normal development.
 build-mac:

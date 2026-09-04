@@ -1,1 +1,1 @@
-This directory intentionally has no web interface. Mesh Launcher is tray-only and opens the embedded Mesh web console.
+index.html is the native window's short-lived startup surface. The app navigates this window to the embedded Mesh console as soon as the local runtime is ready.

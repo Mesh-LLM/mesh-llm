@@ -4,25 +4,32 @@ use std::collections::HashSet;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tauri::AppHandle;
+use tauri::Manager as _;
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_deep_link::DeepLinkExt as _;
 use tauri_plugin_notification::NotificationExt as _;
-use tauri_plugin_opener::OpenerExt as _;
 
 const DEFAULT_CONSOLE_PORT: u16 = 3131;
+const MAIN_WINDOW_LABEL: &str = "main";
+const STARTUP_POLL_ATTEMPTS: usize = 900;
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub(crate) fn run() {
     let console_port = configured_console_port(
         std::env::args().skip(1),
         std::env::var("MESH_LLM_CONSOLE_PORT").ok(),
     );
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
             move |app, arguments, _cwd| {
+                let mut opened_pairing = false;
                 for argument in arguments {
-                    handle_pairing_link(app, &argument, console_port);
+                    opened_pairing |= handle_pairing_link(app, &argument, console_port);
+                }
+                if !opened_pairing {
+                    open_app_route(app, &console_url(console_port), console_port);
                 }
             },
         ))
@@ -32,18 +39,35 @@ pub(crate) fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init())
         .setup(move |app| setup(app, console_port))
-        .run(tauri::generate_context!())
-        .expect("Mesh Launcher could not start");
+        .on_window_event(|window, event| {
+            if window.label() == MAIN_WINDOW_LABEL
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        });
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("Mesh could not start");
+    app.run(move |app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            open_app_route(app, &console_url(console_port), console_port);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event, console_port);
+    });
 }
 
 fn setup(app: &mut tauri::App, console_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
-    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
     let status = MenuItem::with_id(app, "status", "Mesh checking…", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open Mesh Console", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Mesh", true, None::<&str>)?;
     let pair = MenuItem::with_id(app, "pair", "Pair a device…", true, None::<&str>)?;
     let pending = MenuItem::with_id(
         app,
@@ -57,14 +81,14 @@ fn setup(app: &mut tauri::App, console_port: u16) -> Result<(), Box<dyn std::err
     let start_at_login = CheckMenuItem::with_id(
         app,
         "start-at-login",
-        "Start launcher at login",
+        "Start Mesh at login",
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
     let diagnostics =
         MenuItem::with_id(app, "diagnostics", "Logs & diagnostics", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit launcher", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Mesh", true, None::<&str>)?;
     let menu = MenuBuilder::new(app)
         .item(&status)
         .separator()
@@ -86,16 +110,16 @@ fn setup(app: &mut tauri::App, console_port: u16) -> Result<(), Box<dyn std::err
     let icon = app
         .default_window_icon()
         .cloned()
-        .ok_or("Mesh Launcher bundle icon is missing")?;
+        .ok_or("Mesh bundle icon is missing")?;
     TrayIconBuilder::new()
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("Mesh Launcher")
+        .tooltip("Mesh")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id().as_ref() {
-            "open" => open_console_route(app, &console_url(console_port), console_port),
-            "pair" | "pending" => open_console_route(app, &pairing_url(console_port), console_port),
+            "open" => open_app_route(app, &console_url(console_port), console_port),
+            "pair" | "pending" => open_app_route(app, &pairing_url(console_port), console_port),
             "start" => match start_mesh(console_port) {
                 Ok(()) => {
                     let _ = start_for_menu.set_enabled(false);
@@ -118,13 +142,13 @@ fn setup(app: &mut tauri::App, console_port: u16) -> Result<(), Box<dyn std::err
                     let _ = login_for_menu.set_checked(!enabled);
                 }
             }
-            "diagnostics" => open_console_route(app, &diagnostics_url(console_port), console_port),
+            "diagnostics" => open_app_route(app, &diagnostics_url(console_port), console_port),
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
 
-    install_deep_link_handlers(app, console_port)?;
+    let opened_deep_link = install_deep_link_handlers(app, console_port)?;
     start_status_monitor(
         app.handle().clone(),
         status,
@@ -133,16 +157,20 @@ fn setup(app: &mut tauri::App, console_port: u16) -> Result<(), Box<dyn std::err
         stop,
         console_port,
     );
+    if !opened_deep_link {
+        open_app_route(app.handle(), &console_url(console_port), console_port);
+    }
     Ok(())
 }
 
 fn install_deep_link_handlers(
     app: &tauri::App,
     console_port: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut opened_deep_link = false;
     if let Some(urls) = app.deep_link().get_current()? {
         for url in urls {
-            handle_pairing_link(app.handle(), url.as_str(), console_port);
+            opened_deep_link |= handle_pairing_link(app.handle(), url.as_str(), console_port);
         }
     }
     let handle = app.handle().clone();
@@ -151,12 +179,15 @@ fn install_deep_link_handlers(
             handle_pairing_link(&handle, url.as_str(), console_port);
         }
     });
-    Ok(())
+    Ok(opened_deep_link)
 }
 
-fn handle_pairing_link(app: &AppHandle, value: &str, console_port: u16) {
+fn handle_pairing_link(app: &AppHandle, value: &str, console_port: u16) -> bool {
     if let Some(url) = pairing_console_url(value, console_port) {
-        open_console_route(app, &url, console_port);
+        open_app_route(app, &url, console_port);
+        true
+    } else {
+        false
     }
 }
 
@@ -182,13 +213,21 @@ fn pairing_console_url(value: &str, console_port: u16) -> Option<String> {
     ))
 }
 
-fn open_url(app: &AppHandle, url: &str) {
-    let _ = app.opener().open_url(url, None::<&str>);
+fn show_app_window(app: &AppHandle, url: &str) -> anyhow::Result<()> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .context("the Mesh application window is unavailable")?;
+    window.navigate(url::Url::parse(url).context("invalid Mesh application route")?)?;
+    window.show()?;
+    window.set_focus()?;
+    Ok(())
 }
 
-fn open_console_route(app: &AppHandle, url: &str, console_port: u16) {
+fn open_app_route(app: &AppHandle, url: &str, console_port: u16) {
     if local_api::mesh_peer_count(console_port).is_some() {
-        open_url(app, url);
+        if let Err(error) = show_app_window(app, url) {
+            notify_start_error(app, &error);
+        }
         return;
     }
     if let Err(error) = start_mesh(console_port) {
@@ -198,29 +237,51 @@ fn open_console_route(app: &AppHandle, url: &str, console_port: u16) {
     let app = app.clone();
     let url = url.to_string();
     std::thread::spawn(move || {
-        for _ in 0..50 {
+        for _ in 0..STARTUP_POLL_ATTEMPTS {
             if local_api::mesh_peer_count(console_port).is_some() {
-                open_url(&app, &url);
+                let window_app = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Err(error) = show_app_window(&window_app, &url) {
+                        notify_start_error(&window_app, &error);
+                    }
+                });
                 return;
             }
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(STARTUP_POLL_INTERVAL);
         }
+        show_startup_failure(
+            &app,
+            "Mesh took too long to start. Quit Mesh, check the runtime installation, and try again.",
+        );
         let _ = app
             .notification()
             .builder()
             .title("Mesh did not start")
-            .body("Open Logs & diagnostics after checking the Mesh installation.")
+            .body("Quit Mesh, check the runtime installation, and try again.")
             .show();
     });
 }
 
 fn notify_start_error(app: &AppHandle, error: &anyhow::Error) {
+    show_startup_failure(app, &format!("Mesh could not start: {error:#}"));
     let _ = app
         .notification()
         .builder()
         .title("Mesh could not start")
         .body(format!("{error:#}"))
         .show();
+}
+
+fn show_startup_failure(app: &AppHandle, message: &str) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return;
+    };
+    let Ok(message) = serde_json::to_string(message) else {
+        return;
+    };
+    let _ = window.eval(format!("window.meshLauncherFailure?.({message})"));
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 fn start_mesh(console_port: u16) -> anyhow::Result<()> {
