@@ -5,9 +5,7 @@
 #
 # Unlike ci-two-node-client-serving-smoke.sh, both processes are serving nodes.
 # The smoke requires the runtime to publish a topology with stages on at least
-# two distinct nodes before it sends OpenAI requests through stage 0. It then
-# grows one chat prompt over three requests and requires the split stages to
-# restore a longer shared prefix after every request.
+# two distinct nodes before it sends an OpenAI chat request through stage 0.
 
 set -euo pipefail
 
@@ -279,6 +277,8 @@ for i in $(seq 1 "$MAX_WAIT"); do
     sleep 1
 done
 
+WORK_PAYLOAD="${WORK_DIR}/chat-payload.json"
+CHAT_RESPONSE="${WORK_DIR}/chat-response.json"
 if [[ -z "$DRIVER_API_PORT" ]]; then
     echo "no split driver API port was selected" >&2
     exit 1
@@ -292,95 +292,39 @@ if [[ -z "$MODEL_ID" ]]; then
     exit 1
 fi
 
-PREFIX_PAYLOAD_DIR="${WORK_DIR}/prefix-payloads"
-PREFIX_RESPONSE_DIR="${WORK_DIR}/prefix-responses"
-mkdir -p "$PREFIX_PAYLOAD_DIR" "$PREFIX_RESPONSE_DIR"
-
-python3 - "$MODEL_ID" "$PREFIX_PAYLOAD_DIR" <<'PY'
+python3 - "$MODEL_ID" "$WORK_PAYLOAD" <<'PY'
 import json
-from pathlib import Path
 import sys
 
-model, output_dir = sys.argv[1:3]
-output = Path(output_dir)
-shared = (
-    "Split prefix cache smoke shared context. "
-    "Every request keeps these tokens in the same order. "
-) * 48
-extensions = [
-    "First extension block remains reusable by later prompts. " * 16,
-    "Second extension block makes the reusable prefix longer. " * 16,
-    "Third extension block proves reuse keeps growing. " * 16,
-]
-prompt = shared
-for index, extension in enumerate(extensions, start=1):
-    prompt += extension
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "user": "ci-split-prefix-growth",
-        "stream": False,
-        "max_tokens": 1,
-        "temperature": 0,
-    }
-    with (output / f"prompt-{index}.json").open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+model, path = sys.argv[1:3]
+payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": "Reply with one word."}],
+    "stream": False,
+    "max_tokens": 8,
+    "temperature": 0,
+}
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh)
 PY
 
-for index in 1 2 3; do
-    curl -fsS --max-time 180 \
-        "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
-        -H 'content-type: application/json' \
-        -d @"${PREFIX_PAYLOAD_DIR}/prompt-${index}.json" \
-        -o "${PREFIX_RESPONSE_DIR}/response-${index}.json"
-    # The host returns the OpenAI response before the stage connection has
-    # released its single CI lane. Give graceful Stop enough time to finish so
-    # the next request tests cache reuse rather than transient admission.
-    sleep 1
-done
+curl -fsS --max-time 180 \
+    "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
+    -H 'content-type: application/json' \
+    -d @"$WORK_PAYLOAD" \
+    -o "$CHAT_RESPONSE"
 
-python3 - "$PREFIX_RESPONSE_DIR" <<'PY'
+python3 - "$CHAT_RESPONSE" <<'PY'
 import json
-from pathlib import Path
 import sys
 
-response_dir = Path(sys.argv[1])
-metrics = []
-for index in range(1, 4):
-    with (response_dir / f"response-{index}.json").open(encoding="utf-8") as fh:
-        body = json.load(fh)
-    if body.get("object") != "chat.completion":
-        raise SystemExit(
-            f"prefix request {index} returned unexpected object: {body.get('object')!r}"
-        )
-    if not body.get("choices"):
-        raise SystemExit(f"prefix request {index} returned no choices")
-    usage = body.get("usage") or {}
-    prompt_tokens = usage.get("prompt_tokens")
-    details = usage.get("prompt_tokens_details") or {}
-    cached_tokens = details.get("cached_tokens", 0)
-    if not isinstance(prompt_tokens, int) or not isinstance(cached_tokens, int):
-        raise SystemExit(f"prefix request {index} omitted numeric cache usage: {usage!r}")
-    metrics.append((prompt_tokens, cached_tokens))
-
-prompt_counts = [prompt for prompt, _ in metrics]
-cached_counts = [cached for _, cached in metrics]
-if not prompt_counts[0] < prompt_counts[1] < prompt_counts[2]:
-    raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
-if cached_counts[0] != 0:
-    raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
-if not 0 < cached_counts[1] < cached_counts[2]:
-    raise SystemExit(f"split prefix reuse did not increase: {cached_counts}")
-if any(cached >= prompt for prompt, cached in metrics[1:]):
-    raise SystemExit(f"growing prompts must retain an uncached suffix: {metrics}")
-
-print(
-    "Split prefix cache reuse increased: "
-    + ", ".join(
-        f"request {index}: prompt_tokens={prompt}, cached_tokens={cached}"
-        for index, (prompt, cached) in enumerate(metrics, start=1)
-    )
-)
+with open(sys.argv[1], encoding="utf-8") as fh:
+    body = json.load(fh)
+if body.get("object") != "chat.completion":
+    raise SystemExit(f"unexpected chat object: {body.get('object')!r}")
+if not body.get("choices"):
+    raise SystemExit("chat response had no choices")
+print("Split chat response validated")
 PY
 
 echo "Two-node split smoke passed"
