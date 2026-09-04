@@ -1,7 +1,7 @@
 //! Node-scoped ownership for the durable L3 cache root.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -14,12 +14,13 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::{
-    l3::{HandoffSegmentStore, StoreLimits, StoreReconciliation, StoreUsage},
+    l3::{HandoffSegmentStore, StoreLimits, StoreReconciliation, StoreUsage, WriteRefusal},
     tier::L3Tier,
 };
 
 static ROOT_MANAGERS: LazyLock<Mutex<BTreeMap<PathBuf, Weak<L3ManagerInner>>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
+const MAX_PENDING_STATE_TRANSITIONS: usize = 64;
 
 /// What every stage attached to the node's L3 root has done since open.
 #[derive(Debug, Default)]
@@ -77,11 +78,51 @@ pub struct L3ActivitySnapshot {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum L3EffectiveState {
+    Active,
+    ReadOnlyLowSpace,
+    Degraded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum L3StateReason {
+    ReadOnlyLowSpace,
+    InsufficientSpace,
+    StorageError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct L3EffectiveStatus {
+    pub state: L3EffectiveState,
+    pub reason: Option<L3StateReason>,
+}
+
+impl Default for L3EffectiveStatus {
+    fn default() -> Self {
+        Self {
+            state: L3EffectiveState::Active,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct L3StateTransition {
+    pub previous: L3EffectiveStatus,
+    pub current: L3EffectiveStatus,
+}
+
 #[derive(Debug)]
 struct L3ManagerInner {
     store: Arc<HandoffSegmentStore>,
     activity: Arc<L3Activity>,
     fill_claims: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    record_claims: Mutex<BTreeMap<String, Arc<Mutex<std::collections::BTreeSet<String>>>>>,
+    effective: Mutex<L3EffectiveStatus>,
+    transitions: Mutex<VecDeque<L3StateTransition>>,
     operations: RwLock<()>,
     reconciliation: StoreReconciliation,
 }
@@ -120,6 +161,9 @@ impl L3CacheManager {
             store,
             activity: Arc::new(L3Activity::default()),
             fill_claims: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
+            record_claims: Mutex::new(BTreeMap::new()),
+            effective: Mutex::new(L3EffectiveStatus::default()),
+            transitions: Mutex::new(VecDeque::new()),
             operations: RwLock::new(()),
             reconciliation,
         });
@@ -128,7 +172,16 @@ impl L3CacheManager {
     }
 
     pub fn tier(&self, state_identity: String, segment_bytes: usize) -> L3Tier {
-        L3Tier::from_manager(self.clone(), state_identity, segment_bytes)
+        self.tier_for_model(state_identity.clone(), state_identity, segment_bytes)
+    }
+
+    pub fn tier_for_model(
+        &self,
+        model_identity: String,
+        state_identity: String,
+        segment_bytes: usize,
+    ) -> L3Tier {
+        L3Tier::from_manager(self.clone(), model_identity, state_identity, segment_bytes)
     }
 
     pub fn root(&self) -> &Path {
@@ -152,14 +205,43 @@ impl L3CacheManager {
         Ok(self.inner.activity.snapshot(Some(&usage)))
     }
 
+    pub fn effective_status(&self) -> L3EffectiveStatus {
+        *self
+            .inner
+            .effective
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn take_state_transitions(&self) -> Vec<L3StateTransition> {
+        self.inner
+            .transitions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+
     pub fn prune_to(&self, target_bytes: u64) -> Result<u64> {
         let _lifecycle = self.lifecycle_guard();
         self.inner.store.prune_to(target_bytes)
     }
 
+    pub fn prune_model_to(&self, model_identity: &str, target_bytes: u64) -> Result<u64> {
+        let _lifecycle = self.lifecycle_guard();
+        self.inner
+            .store
+            .prune_model_to(model_identity, target_bytes)
+    }
+
     pub fn clear(&self) -> Result<u64> {
         let _lifecycle = self.lifecycle_guard();
         self.inner.store.clear()
+    }
+
+    pub fn clear_model(&self, model_identity: &str) -> Result<u64> {
+        let _lifecycle = self.lifecycle_guard();
+        self.inner.store.clear_model(model_identity)
     }
 
     pub fn shares_root_with(&self, other: &Self) -> bool {
@@ -173,6 +255,23 @@ impl L3CacheManager {
         self.inner.fill_claims.clone()
     }
 
+    /// Record claims are shared only by stages with the same full numerical
+    /// state identity. This prevents duplicate exports and temporary writes
+    /// across placement replicas without suppressing a different payload or
+    /// stage layout that happens to use the same radix page id.
+    pub fn record_claims(
+        &self,
+        state_identity: &str,
+    ) -> Arc<Mutex<std::collections::BTreeSet<String>>> {
+        self.inner
+            .record_claims
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(state_identity.to_string())
+            .or_default()
+            .clone()
+    }
+
     pub(crate) fn store(&self) -> &HandoffSegmentStore {
         &self.inner.store
     }
@@ -184,6 +283,64 @@ impl L3CacheManager {
     pub(crate) fn activity_snapshot(&self) -> L3ActivitySnapshot {
         let usage = self.usage().ok();
         self.inner.activity.snapshot(usage.as_ref())
+    }
+
+    pub(crate) fn record_write_refusal(&self, refusal: WriteRefusal) {
+        let next = match refusal {
+            WriteRefusal::SkippedOversize => return,
+            WriteRefusal::ReadOnlyLowSpace => L3EffectiveStatus {
+                state: L3EffectiveState::ReadOnlyLowSpace,
+                reason: Some(L3StateReason::ReadOnlyLowSpace),
+            },
+            WriteRefusal::InsufficientSpace => L3EffectiveStatus {
+                state: L3EffectiveState::Degraded,
+                reason: Some(L3StateReason::InsufficientSpace),
+            },
+        };
+        self.transition_to(next);
+    }
+
+    pub(crate) fn record_successful_write(&self) {
+        let current = self.effective_status();
+        if matches!(
+            current.reason,
+            Some(L3StateReason::ReadOnlyLowSpace | L3StateReason::InsufficientSpace)
+        ) {
+            self.transition_to(L3EffectiveStatus::default());
+        }
+    }
+
+    pub(crate) fn record_storage_error(&self) {
+        self.transition_to(L3EffectiveStatus {
+            state: L3EffectiveState::Degraded,
+            reason: Some(L3StateReason::StorageError),
+        });
+    }
+
+    fn transition_to(&self, next: L3EffectiveStatus) {
+        let mut current = self
+            .inner
+            .effective
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *current == next {
+            return;
+        }
+        let previous = *current;
+        *current = next;
+        drop(current);
+        let mut transitions = self
+            .inner
+            .transitions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if transitions.len() == MAX_PENDING_STATE_TRANSITIONS {
+            transitions.pop_front();
+        }
+        transitions.push_back(L3StateTransition {
+            previous,
+            current: next,
+        });
     }
 
     pub(crate) fn operation_guard(&self) -> RwLockReadGuard<'_, ()> {
@@ -345,6 +502,31 @@ mod tests {
         fs::write(root.join("segments/.tmp-dead"), b"partial").unwrap();
         fs::write(root.join("segments/orphan.seg"), b"orphan").unwrap();
         fs::write(root.join("manifests/corrupt.json"), b"{").unwrap();
+        let mut incompatible =
+            crate::HandoffManifest::new("state".to_string(), "full-state".to_string());
+        incompatible.version = crate::MANIFEST_VERSION + 1;
+        incompatible.payload_digest = "incompatible".to_string();
+        fs::write(
+            root.join("manifests/incompatible.json"),
+            serde_json::to_vec(&incompatible).unwrap(),
+        )
+        .unwrap();
+        let mut incomplete =
+            crate::HandoffManifest::new("state".to_string(), "full-state".to_string());
+        incomplete.payload_digest = "incomplete".to_string();
+        incomplete.total_bytes = 4;
+        incomplete.segments.push(crate::HandoffSegmentRef {
+            index: 0,
+            offset: 0,
+            bytes: 4,
+            digest: "missing-segment".to_string(),
+            meta_json: None,
+        });
+        fs::write(
+            root.join("manifests/incomplete.json"),
+            serde_json::to_vec(&incomplete).unwrap(),
+        )
+        .unwrap();
         let namespace = root.join("prefixes/namespace");
         fs::create_dir_all(&namespace).unwrap();
         fs::write(namespace.join("000000000001-prefix.key"), b"missing").unwrap();
@@ -353,10 +535,67 @@ mod tests {
         let reopened = L3CacheManager::acquire(&root, limits).unwrap();
         let report = reopened.reconciliation();
         assert_eq!(report.removed_temporary_files, 1);
-        assert_eq!(report.quarantined_manifests, 1);
+        assert_eq!(report.quarantined_manifests, 3);
         assert_eq!(report.removed_prefix_links, 1);
         assert_eq!(report.removed_orphan_bytes, 6);
         assert!(!root.join("segments/orphan.seg").exists());
         assert!(root.join("quarantine/corrupt.json").exists());
+        assert!(root.join("quarantine/incompatible.json").exists());
+        assert!(root.join("quarantine/incomplete.json").exists());
+    }
+
+    #[test]
+    fn low_space_state_transitions_once_and_recovers_after_a_write() {
+        let root = temp_root("state-transitions");
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+
+        manager.record_write_refusal(WriteRefusal::ReadOnlyLowSpace);
+        manager.record_write_refusal(WriteRefusal::ReadOnlyLowSpace);
+        assert_eq!(
+            manager.effective_status(),
+            L3EffectiveStatus {
+                state: L3EffectiveState::ReadOnlyLowSpace,
+                reason: Some(L3StateReason::ReadOnlyLowSpace),
+            }
+        );
+        assert_eq!(manager.take_state_transitions().len(), 1);
+
+        manager.record_successful_write();
+        assert_eq!(manager.effective_status(), L3EffectiveStatus::default());
+        let recovery = manager.take_state_transitions();
+        assert_eq!(recovery.len(), 1);
+        assert_eq!(recovery[0].current, L3EffectiveStatus::default());
+    }
+
+    #[test]
+    fn model_clear_matches_internal_identity_exactly() {
+        let root = temp_root("model-clear");
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let model_a = manager.tier_for_model("model-a".to_string(), "state-a".to_string(), 4);
+        let model_b = manager.tier_for_model("model-b".to_string(), "state-b".to_string(), 4);
+        let key_a = model_a
+            .spill(
+                "namespace-a",
+                &[1, 2, 3],
+                &ExactStatePayload::full_state(b"stage-a-state".to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+        let key_b = model_b
+            .spill(
+                "namespace-b",
+                &[1, 2, 3],
+                &ExactStatePayload::full_state(b"stage-b-state".to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert!(manager.clear_model("model-a").unwrap() > 0);
+        assert!(manager.store().load_manifest(&key_a).is_err());
+        assert!(manager.store().load_manifest(&key_b).is_ok());
+        assert_eq!(model_a.status().unwrap().restorable_manifests, 0);
+        assert_eq!(model_b.status().unwrap().restorable_manifests, 1);
     }
 }

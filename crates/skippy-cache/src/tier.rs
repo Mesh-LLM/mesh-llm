@@ -2,11 +2,11 @@
 //!
 //! `UnifiedRadixCache` holds `ExactStatePayload` entries in RAM (L1/L2);
 //! this tier gives them a durable floor: spill a payload under its prefix
-//! identity when the radix cache evicts it, and fill it back on a radix
-//! miss — from local disk, or from a peer via `l3_remote` since both are
-//! backends of the same `HandoffSegmentStore` contract. State never crosses
-//! a numerical-identity boundary: spills stamp the tier's
-//! `exact_state_identity`, and fills refuse manifests stamped differently.
+//! identity when the radix cache evicts it, and fill it back from local disk
+//! on a radix miss. A later peer source may supply the same manifest/segment
+//! format, but it must commit through the local manager before this tier can
+//! fill it. State never crosses a numerical-identity boundary: spills stamp
+//! both model and exact-state identities, and fills require both.
 
 use std::sync::atomic::Ordering;
 
@@ -17,13 +17,15 @@ use crate::l3::{
     HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
     StoreLimits, StoreUsage, segment_digest,
 };
-use crate::manager::{L3ActivitySnapshot, L3CacheManager};
+use crate::manager::{L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus};
 use crate::payload::{ExactStatePayload, ExactStatePayloadKind};
 
 /// Everything the status contract needs from the tier, in one read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct L3Status {
+    pub model_identity: String,
     pub state_identity: String,
+    pub effective: L3EffectiveStatus,
     pub format_version: u32,
     pub usage: StoreUsage,
     /// Manifests stamped with this tier's identity: what a restart can reuse.
@@ -81,6 +83,7 @@ pub struct L3Fill {
 
 pub struct L3Tier {
     manager: L3CacheManager,
+    model_identity: String,
     state_identity: String,
     segment_bytes: usize,
 }
@@ -112,13 +115,26 @@ impl L3Tier {
         Ok(manager.tier(state_identity, segment_bytes))
     }
 
+    pub fn open_with_identities(
+        root: impl Into<std::path::PathBuf>,
+        limits: StoreLimits,
+        model_identity: String,
+        state_identity: String,
+        segment_bytes: usize,
+    ) -> Result<Self> {
+        let manager = L3CacheManager::acquire(root.into(), limits)?;
+        Ok(manager.tier_for_model(model_identity, state_identity, segment_bytes))
+    }
+
     pub(crate) fn from_manager(
         manager: L3CacheManager,
+        model_identity: String,
         state_identity: String,
         segment_bytes: usize,
     ) -> Self {
         Self {
             manager,
+            model_identity,
             state_identity,
             segment_bytes: segment_bytes.max(1),
         }
@@ -136,6 +152,10 @@ impl L3Tier {
         &self.state_identity
     }
 
+    pub fn model_identity(&self) -> &str {
+        &self.model_identity
+    }
+
     /// Point-in-time activity counters.
     pub fn activity(&self) -> L3ActivitySnapshot {
         self.manager.activity_snapshot()
@@ -146,7 +166,9 @@ impl L3Tier {
     pub fn status(&self) -> Result<L3Status> {
         let (restorable_manifests, restorable_tokens, _) = self.restorable_summary()?;
         Ok(L3Status {
+            model_identity: self.model_identity.clone(),
             state_identity: self.state_identity.clone(),
+            effective: self.manager.effective_status(),
             format_version: MANIFEST_VERSION,
             usage: self.store().usage()?,
             restorable_manifests: restorable_manifests as u64,
@@ -228,7 +250,8 @@ impl L3Tier {
         wire.extend_from_slice(&recurrent);
         let payload_digest = segment_digest(&wire);
 
-        let mut manifest = HandoffManifest::new(
+        let mut manifest = HandoffManifest::new_for_model(
+            self.model_identity.clone(),
             self.state_identity.clone(),
             payload.kind().as_str().to_string(),
         );
@@ -276,7 +299,17 @@ impl L3Tier {
             let end = start
                 .checked_add(usize::try_from(len).context("segment length exceeds usize")?)
                 .context("segment range overflows")?;
-            let stored = self.store().put_segment(&wire[start..end])?;
+            let stored = match self.store().try_put_segment(&wire[start..end]) {
+                Ok(Ok(stored)) => stored,
+                Ok(Err(refusal)) => {
+                    self.manager.record_write_refusal(refusal);
+                    bail!("cannot store segment: {}", refusal.reason());
+                }
+                Err(error) => {
+                    self.manager.record_storage_error();
+                    return Err(error);
+                }
+            };
             if stored.put.new {
                 new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
@@ -292,13 +325,30 @@ impl L3Tier {
         // Pin before publishing the manifest so another stage cannot evict
         // it in the gap between commit and prefix-link publication.
         let _manifest_pin = self.store().pin(&payload_digest);
-        self.store().commit(&manifest)?;
-        self.store().link_prefix(
+        match self.store().try_commit(&manifest) {
+            Ok(Ok(())) => {}
+            Ok(Err(refusal)) => {
+                self.manager.record_write_refusal(refusal);
+                bail!(
+                    "cannot commit manifest {}: {}",
+                    manifest.payload_digest,
+                    refusal.reason()
+                );
+            }
+            Err(error) => {
+                self.manager.record_storage_error();
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.store().link_prefix(
             &l3_namespace_key(namespace),
             token_count,
             &l3_prefix_key(namespace, token_ids),
             &payload_digest,
-        )?;
+        ) {
+            self.manager.record_storage_error();
+            return Err(error);
+        }
         drop(held);
         self.manager
             .activity_counters()
@@ -308,6 +358,7 @@ impl L3Tier {
             .activity_counters()
             .bytes_written
             .fetch_add(new_bytes, Ordering::Relaxed);
+        self.manager.record_successful_write();
         Ok(payload_digest)
     }
 
@@ -364,7 +415,9 @@ impl L3Tier {
             else {
                 continue;
             };
-            if manifest.state_identity != self.state_identity {
+            if manifest.model_identity != self.model_identity
+                || manifest.state_identity != self.state_identity
+            {
                 bail!(
                     "L3 entry for this prefix was spilled under state identity {} but the tier serves {}",
                     manifest.state_identity,
@@ -416,7 +469,9 @@ impl L3Tier {
 
     fn load_inner(&self, location: &L3Location) -> Result<L3Fill> {
         let manifest = self.store().load_manifest(&location.manifest_key)?;
-        if manifest.state_identity != self.state_identity {
+        if manifest.model_identity != self.model_identity
+            || manifest.state_identity != self.state_identity
+        {
             bail!(
                 "L3 manifest {} was spilled under state identity {} but the tier serves {}",
                 location.manifest_key,
@@ -466,6 +521,7 @@ impl L3Tier {
         let mut count = 0usize;
         for key in &keys {
             if let Ok(manifest) = self.store().load_manifest(key)
+                && manifest.model_identity == self.model_identity
                 && manifest.state_identity == self.state_identity
             {
                 tokens = tokens.saturating_add(manifest.token_count);
@@ -846,6 +902,33 @@ mod tests {
             )
             .expect("spill");
         let reader = L3Tier::open(&root, 0, "blake3:identity-b".to_string(), 4096).unwrap();
+        assert!(reader.fill_longest("ns", &tokens(128), 64).is_err());
+    }
+
+    #[test]
+    fn model_identity_mismatch_is_refused_even_when_state_identity_matches() {
+        let root = temp_root("model-identity-mismatch");
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let writer = manager.tier_for_model(
+            "blake3:model-a".to_string(),
+            "blake3:state".to_string(),
+            4096,
+        );
+        writer
+            .spill(
+                "ns",
+                &tokens(128),
+                &ExactStatePayload::full_state(vec![1u8; 2048]),
+                None,
+                None,
+            )
+            .expect("spill");
+        let reader = manager.tier_for_model(
+            "blake3:model-b".to_string(),
+            "blake3:state".to_string(),
+            4096,
+        );
+
         assert!(reader.fill_longest("ns", &tokens(128), 64).is_err());
     }
 

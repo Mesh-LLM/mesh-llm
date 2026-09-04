@@ -8,7 +8,7 @@ use mesh_llm_events::OutputEvent;
 use skippy_cache::{
     CacheBlobStore, GeometryBlock, GeometryKind, L3CacheManager, L3Tier, PayloadGeometry,
     ResidentActivationCache, ResidentCacheConfig, SparseCheckpointPolicy, StoreLimits,
-    UnifiedRadixCache, exact_state_identity_for_stage,
+    UnifiedRadixCache, exact_state_identity_for_stage, numerical_model_identity_for_stage,
 };
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
 use skippy_runtime::{ModelStateKind, RuntimeKvPageDesc};
@@ -123,7 +123,10 @@ impl KvStageIntegration {
         let worker_radix = radix.clone();
         let worker_exact_blobs = exact_blobs.clone();
         let worker_l3 = l3.clone();
-        let inflight_records = Arc::new(Mutex::new(BTreeSet::new()));
+        let inflight_records: Arc<Mutex<BTreeSet<String>>> = l3.as_ref().map_or_else(
+            || Arc::new(Mutex::new(BTreeSet::new())),
+            |tier| tier.manager().record_claims(tier.state_identity()),
+        );
         let worker_inflight_records = inflight_records.clone();
         let inflight_fills: Arc<Mutex<BTreeSet<String>>> = l3.as_ref().map_or_else(
             || Arc::new(Mutex::new(BTreeSet::new())),
@@ -291,8 +294,9 @@ fn l3_tier_for_manager(
     manager: L3CacheManager,
 ) -> Result<Arc<L3Tier>> {
     let identity = exact_state_identity_for_stage(config, l3_payload_kind(payload));
+    let model_identity = numerical_model_identity_for_stage(config);
     let root = manager.root().display().to_string();
-    let tier = manager.tier(identity, L3_SEGMENT_BYTES);
+    let tier = manager.tier_for_model(model_identity, identity, L3_SEGMENT_BYTES);
     // Warm state must never be invisible: say what the tier can restore the
     // moment the stage comes up.
     match tier.status() {
@@ -442,6 +446,16 @@ fn emit_cache_disabled_warning(config: &StageConfig, reason: &str) {
     });
 }
 
+fn emit_l3_state_transitions(l3: &L3Tier) {
+    for transition in l3.manager().take_state_transitions() {
+        let context = serde_json::to_string(&transition).ok();
+        let _ = mesh_llm_events::emit_event(OutputEvent::Info {
+            message: "Skippy L3 disk cache state changed".to_string(),
+            context,
+        });
+    }
+}
+
 fn store_exact_radix_record(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
@@ -466,13 +480,15 @@ fn store_exact_radix_record(
             .kv_desc
             .as_ref()
             .and_then(|desc| kv_page_geometry(desc, pending.payload.byte_len()));
-        if let Err(error) = l3.spill(
+        let spill = l3.spill(
             &pending.namespace,
             &pending.token_ids,
             &pending.payload,
             kv_desc_json,
             geometry.as_ref(),
-        ) {
+        );
+        emit_l3_state_transitions(l3);
+        if let Err(error) = spill {
             static WARNED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
             if !WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -1052,7 +1068,20 @@ mod tests {
 
         assert!(first_l3.manager().shares_root_with(second_l3.manager()));
         assert_eq!(first_l3.state_identity(), second_l3.state_identity());
+        assert_eq!(first_l3.model_identity(), second_l3.model_identity());
         assert!(Arc::ptr_eq(&first.inflight_fills, &second.inflight_fills));
+        assert!(Arc::ptr_eq(
+            &first.inflight_records,
+            &second.inflight_records
+        ));
+        assert!(first.try_begin_record("shared-page"));
+        assert!(
+            !second.try_begin_record("shared-page"),
+            "placement replicas performed duplicate record work"
+        );
+        first.finish_record("shared-page");
+        assert!(second.try_begin_record("shared-page"));
+        second.finish_record("shared-page");
     }
 
     #[test]
