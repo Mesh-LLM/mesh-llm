@@ -627,6 +627,23 @@ pub(super) fn stage_source_prepare_timeout(
         .max(MIN_STAGE_SOURCE_PREPARE_TIMEOUT))
 }
 
+/// Whether a stage holds every tensor the native MTP draft graph reads.
+///
+/// The MTP block is the trailing `nextn` block, so it materializes only on the
+/// final stage (`downstream` is `None`). Its graph also reads the token
+/// embedding matrix, and `include_embeddings` is `layer_start == 0`
+/// (`mesh/stage_artifacts.rs`, `mesh/stage_transport.rs`, and the artifact
+/// selection below). When the `nextn` block carries no `embed_tokens` of its
+/// own, the arch graph falls back to `model.tok_embd`; on a stage that starts
+/// past layer 0 that tensor is absent and the fallback is unguarded, so the
+/// graph build dereferences null.
+///
+/// Both conditions therefore hold only when one stage owns the whole layer
+/// range. Any real multi-stage split must run with native MTP off.
+fn stage_can_build_native_mtp_graph(layer_start: u32, downstream_present: bool) -> bool {
+    layer_start == 0 && !downstream_present
+}
+
 pub(super) fn split_runtime_stage_load_request(
     spec: &SplitGenerationLoadSpec<'_>,
     settings: &SplitGenerationLoadSettings<'_>,
@@ -635,6 +652,7 @@ pub(super) fn split_runtime_stage_load_request(
     stage0_return_endpoint: &str,
 ) -> skippy::StageLoadRequest {
     let resolved_config = &settings.runtime_options.config;
+    let downstream_present = downstream.is_some();
     let upstream = if downstream.is_none() {
         split_runtime_stage_upstream(spec, stage0_return_endpoint)
     } else {
@@ -698,7 +716,8 @@ pub(super) fn split_runtime_stage_load_request(
             swa_full: resolved_config.swa_full,
             cache_idle_slots: resolved_config.cache_idle_slots,
         },
-        native_mtp_enabled: resolved_config.native_mtp_enabled,
+        native_mtp_enabled: resolved_config.native_mtp_enabled
+            && stage_can_build_native_mtp_graph(stage.layer_start, downstream_present),
         shutdown_generation: spec.generation.generation,
         coordinator_term: spec.generation.coordinator_term,
         coordinator_id: Some(spec.node.id()),
@@ -1219,6 +1238,23 @@ pub(super) fn split_stage_topology_instance(
                 },
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod native_mtp_stage_tests {
+    use super::stage_can_build_native_mtp_graph;
+
+    #[test]
+    fn only_a_single_stage_owning_the_whole_range_can_build_the_mtp_graph() {
+        // Sole stage: holds the embeddings and the trailing nextn block.
+        assert!(stage_can_build_native_mtp_graph(0, false));
+        // Stage 0 of a split: has embeddings, but the nextn block is downstream.
+        assert!(!stage_can_build_native_mtp_graph(0, true));
+        // Final stage of a split: has the nextn block, but no embeddings.
+        assert!(!stage_can_build_native_mtp_graph(20, false));
+        // Middle stage: neither.
+        assert!(!stage_can_build_native_mtp_graph(20, true));
     }
 }
 

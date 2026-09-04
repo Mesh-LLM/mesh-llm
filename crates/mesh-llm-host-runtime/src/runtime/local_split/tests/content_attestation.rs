@@ -67,6 +67,11 @@ struct StrictMultimodalStageLoads {
     projector_path: PathBuf,
     stage0: skippy::StageLoadRequest,
     worker: skippy::StageLoadRequest,
+    /// Same two stages, rebuilt with the resolver's native-MTP answer forced
+    /// on, so a test can assert the stage-shape gate rather than whichever
+    /// default the fixture's resolved config happens to carry.
+    stage0_mtp_forced: skippy::StageLoadRequest,
+    worker_mtp_forced: skippy::StageLoadRequest,
 }
 
 fn strict_multimodal_config(model_path: &Path, projector_path: &Path) -> plugin::MeshConfig {
@@ -170,7 +175,7 @@ async fn strict_multimodal_stage_loads() -> StrictMultimodalStageLoads {
         &spec,
         &settings,
         &generation.stages[0],
-        Some(downstream),
+        Some(downstream.clone()),
         "127.0.0.1:41000",
     );
     let worker = split_runtime_stage_load_request(
@@ -181,10 +186,29 @@ async fn strict_multimodal_stage_loads() -> StrictMultimodalStageLoads {
         "127.0.0.1:41000",
     );
 
+    let mut mtp_settings = settings;
+    mtp_settings.runtime_options.config.native_mtp_enabled = true;
+    let stage0_mtp_forced = split_runtime_stage_load_request(
+        &spec,
+        &mtp_settings,
+        &generation.stages[0],
+        Some(downstream),
+        "127.0.0.1:41000",
+    );
+    let worker_mtp_forced = split_runtime_stage_load_request(
+        &spec,
+        &mtp_settings,
+        downstream_stage,
+        None,
+        "127.0.0.1:41000",
+    );
+
     StrictMultimodalStageLoads {
         projector_path,
         stage0,
         worker,
+        stage0_mtp_forced,
+        worker_mtp_forced,
     }
 }
 
@@ -201,6 +225,26 @@ async fn strict_multimodal_stage_builder_keeps_local_paths_off_downstream_loads(
     assert!(loads.worker.local_source_required);
     assert!(loads.worker.model_path.is_none());
     assert!(loads.worker.projector_path.is_none());
+}
+
+/// A multi-stage split must never ask a stage to build the native MTP draft
+/// graph. Stage 0 holds the token embeddings but not the trailing `nextn`
+/// block; the final stage holds the `nextn` block but starts past layer 0, so
+/// it has no `model.tok_embd`. The arch graph's embedding fallback is
+/// unguarded, so building it on such a stage dereferences null and the process
+/// dies with SIGSEGV during graph reserve, before serving.
+#[tokio::test]
+async fn multi_stage_split_disables_native_mtp_even_when_the_resolver_enables_it() {
+    let loads = strict_multimodal_stage_loads().await;
+
+    assert!(
+        !loads.stage0_mtp_forced.native_mtp_enabled,
+        "stage 0 of a split has no nextn block"
+    );
+    assert!(
+        !loads.worker_mtp_forced.native_mtp_enabled,
+        "a stage starting past layer 0 has no token embeddings"
+    );
 }
 
 #[test]
