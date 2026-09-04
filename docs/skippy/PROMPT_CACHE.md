@@ -59,10 +59,12 @@ The exact catalog therefore treats that budget as a soft cap. It keeps a small
 working set of snapshots past the soft cap, so concurrent sessions on one stage
 do not evict each other on every request, and it never evicts its last entry,
 because a snapshot that self-evicts leaves the stage with no exact prefix reuse
-at all. A hard ceiling bounds that allowance and defaults to a multiple of the
-soft cap. Set `SKIPPY_KV_CACHE_EXACT_MAX_BYTES` to pin the ceiling in bytes on a
-worker whose memory headroom does not match the attention-derived estimate; `0`
-disables the ceiling. Both limits are reported on
+at all. A hard limit bounds that allowance and defaults to a multiple of the
+soft cap, but it is not an absolute physical-byte ceiling: the last indivisible
+snapshot remains reusable even when it exceeds the limit. Set
+`SKIPPY_KV_CACHE_EXACT_MAX_BYTES` to pin the limit in bytes on a worker whose
+memory headroom does not match the attention-derived estimate; `0` disables the
+limit. Both limits are reported on
 `stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
 `skippy.exact_cache.hard_max_bytes`.
 

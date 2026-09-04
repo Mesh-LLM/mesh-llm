@@ -34,12 +34,13 @@ const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
 
 // That retention floor is not allowed to grow without bound. Once the catalog
 // crosses this multiple of the soft cap it evicts again, down to the single
-// entry that keeps exact prefix reuse alive for the stage.
+// entry that keeps exact prefix reuse alive for the stage. That indivisible
+// entry may itself exceed the limit.
 const EXACT_STATE_HARD_CAP_MULTIPLE: u64 = 8;
 
-// Operator override for the ceiling above, in bytes, for workers whose memory
-// headroom does not match the attention-derived estimate. Zero disables the
-// ceiling.
+// Operator override for the limit above, in bytes, for workers whose memory
+// headroom does not match the attention-derived estimate. The last indivisible
+// snapshot may exceed it. Zero disables the limit.
 const EXACT_STATE_MAX_BYTES_ENV: &str = "SKIPPY_KV_CACHE_EXACT_MAX_BYTES";
 
 impl KvStageIntegration {
@@ -258,10 +259,11 @@ fn store_exact_radix_record(
     // attention KV metadata that cannot include architecture-specific
     // recurrent state, so one snapshot can legitimately exceed it. Hold a small
     // working set past the soft cap so concurrent sessions on a stage stop
-    // evicting each other, then apply the hard ceiling so that allowance stays
-    // bounded. Neither pass evicts the last entry: a snapshot that self-evicts
-    // disables exact prefix caching for the stage entirely, which is the
-    // regression this retention policy exists to prevent.
+    // evicting each other, then apply the hard limit so that allowance stays
+    // bounded apart from one indivisible snapshot. Neither pass evicts the last
+    // entry: a snapshot that self-evicts disables exact prefix caching for the
+    // stage entirely, which is the regression this retention policy exists to
+    // prevent.
     evict_exact_entries_over(
         radix,
         blobs,
@@ -319,10 +321,11 @@ fn evict_exact_entries_over(
 /// Resolves the exact-state byte budget from the stage cache cap.
 ///
 /// `configured_max_bytes` is the attention-derived stage budget, which is used
-/// as the soft cap. The hard ceiling defaults to a multiple of it so the
-/// working set stays bounded without inheriting an estimate that structurally
-/// undercounts exact-state payloads. `override_max_bytes` is the operator
-/// escape hatch and wins outright when it parses; zero means unbounded.
+/// as the soft cap. The hard limit defaults to a multiple of it so the working
+/// set stays bounded without inheriting an estimate that structurally
+/// undercounts exact-state payloads. One indivisible snapshot may remain above
+/// that limit. `override_max_bytes` is the operator escape hatch and wins
+/// outright when it parses; zero means unbounded.
 fn exact_state_byte_limits(
     configured_max_bytes: u64,
     override_max_bytes: Option<&str>,
