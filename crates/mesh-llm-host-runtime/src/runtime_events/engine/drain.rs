@@ -23,6 +23,21 @@
 //! terminal still applies and publishes immediately either way; only the
 //! ROOT's slot release is now deferred while a child remains occupied,
 //! bounded by [`settle_pending_root_releases`]'s `CHILD_SETTLE_GRACE`.
+//!
+//! Task 6-fix defect A (`.omo/plans/event-system-fixes.md`): a scope whose
+//! reservation is actually released here is ALSO evicted from the
+//! reducer's `operations` map (`RuntimeEventEngine::evict_operation`,
+//! `reducer::evict`), so the map tracks in-flight operations only instead
+//! of every settled one forever. [`release_or_defer`] now reports whether
+//! it released THIS call (`Some(scope)`) or deferred (`None`); the
+//! per-entry loop in [`RuntimeEventEngine::drain_up_to_inner`] batches
+//! every scope released this pass and evicts them only AFTER this pass's
+//! `pending` facts -- including that scope's own just-drained terminal --
+//! have already been applied, so eviction can never race an application
+//! that would just re-insert the entry a moment later. [`release_pending_root`]
+//! evicts immediately: by the time a deferred root's slot is finally
+//! released, its own terminal was already applied in whichever earlier
+//! pass first drained it, so there is no such race there.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -31,7 +46,9 @@ use std::time::Instant;
 use mesh_llm_runtime_event_contracts::{EventSequence, OperationId, OperationScope, RuntimeFact};
 
 use super::{ChildSlot, PendingRootRelease, RuntimeEventEngine};
-use crate::runtime_events::config::{CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL};
+use crate::runtime_events::config::{
+    CHILD_SETTLE_GRACE, PROGRESS_EXPORT_INTERVAL, RESERVATION_TABLE_CAPACITY,
+};
 use crate::runtime_events::reducer::{ReduceOutcome, ReducerInput, apply};
 use crate::runtime_events::replay::ReplayFrame;
 use crate::runtime_events::reservation::{SlotHandle, TerminalRecord};
@@ -95,6 +112,7 @@ impl RuntimeEventEngine {
         // program order -- ever applies, spuriously rejecting it as
         // `OperationSettled` even though it was never actually stale.
         let mut pending: Vec<(u64, OperationScope, RuntimeFact, bool)> = Vec::new();
+        let mut released_now: Vec<OperationScope> = Vec::new();
         let mut applied = 0;
         for entry in entries {
             let handle = entry.handle;
@@ -112,7 +130,9 @@ impl RuntimeEventEngine {
                     record.synthesized,
                 ));
             }
-            release_or_defer(self, scope, handle, now);
+            if let Some(released_scope) = release_or_defer(self, scope, handle, now) {
+                released_now.push(released_scope);
+            }
             applied += 1;
         }
 
@@ -135,6 +155,13 @@ impl RuntimeEventEngine {
         pending.sort_by_key(|(sequence, ..)| *sequence);
         for (sequence, scope, fact, synthesized) in pending {
             self.apply_and_publish_fact(scope, sequence, fact, synthesized);
+        }
+
+        // Defect A (task 6-fix): evict every scope released THIS pass only
+        // now that every fact drained this pass has already been applied
+        // above -- see the module doc comment for why the ordering matters.
+        for scope in released_now {
+            self.evict_operation(scope);
         }
 
         applied += self.maybe_flush_progress(now);
@@ -175,6 +202,16 @@ impl RuntimeEventEngine {
             self.health.bump_reducer_rejected();
             return;
         };
+        // Also-required observability fix (task 6-fix, review finding on
+        // top of defect A): `with_operation`'s settled-only capacity
+        // backstop used to silently `break` out of its sweep when nothing
+        // settled was left to evict, restoring unbounded growth with no
+        // counter and no log. Release-triggered eviction above keeps this
+        // structurally unreachable in the steady state, but if it is ever
+        // reached this makes it observable instead of silent.
+        if next.operation_count() > RESERVATION_TABLE_CAPACITY {
+            self.health.bump_reducer_eviction_stalled();
+        }
         *reducer_state = next;
         drop(reducer_state);
 
@@ -189,6 +226,20 @@ impl RuntimeEventEngine {
             self.health.bump_replay_evicted();
         }
         self.subscribers.publish(frame);
+    }
+
+    /// Evict `scope`'s tracked reducer state -- the release-triggered
+    /// eviction path (task 6-fix defect A). Callers must only invoke this
+    /// once `scope`'s reservation-table slot has ACTUALLY been released
+    /// AND every fact drained in the same pass has already been applied
+    /// (see the module doc comment and [`release_or_defer`] /
+    /// [`release_pending_root`] below, the only two call sites).
+    pub(super) fn evict_operation(&self, scope: OperationScope) {
+        let mut reducer_state = self
+            .reducer_state()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *reducer_state = crate::runtime_events::reducer::evict(&reducer_state, scope);
     }
 
     /// Flush every slot with pending progress if at least
@@ -292,15 +343,22 @@ impl RuntimeEventEngine {
 /// `OperationReservation::cancel` (`engine/mod.rs`), so a root released
 /// via explicit pre-work cancellation gets the identical deferred-release
 /// contract as one released by its own terminal draining.
+///
+/// Returns `Some(scope)` when this call released the slot immediately --
+/// the caller then owns evicting `scope` from the reducer (task 6-fix
+/// defect A) once it is safe to (see the module doc comment); returns
+/// `None` when the release was deferred, in which case
+/// [`release_pending_root`] below evicts once the deferred release
+/// actually happens.
 pub(super) fn release_or_defer(
     engine: &RuntimeEventEngine,
     scope: OperationScope,
     handle: SlotHandle,
     now: Instant,
-) {
+) -> Option<OperationScope> {
     let OperationScope::Root(root) = scope else {
         engine.table().release(handle);
-        return;
+        return Some(scope);
     };
     if has_occupied_children(engine, root) {
         engine
@@ -314,10 +372,11 @@ pub(super) fn release_or_defer(
                     deadline: now + CHILD_SETTLE_GRACE,
                 },
             );
-        return;
+        return None;
     }
     engine.table().release(handle);
     forget_children(engine, root);
+    Some(scope)
 }
 
 fn has_occupied_children(engine: &RuntimeEventEngine, root: OperationId) -> bool {
@@ -406,6 +465,13 @@ fn release_pending_root(engine: &RuntimeEventEngine, root: OperationId, handle: 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(&root);
     forget_children(engine, root);
+    // Task 6-fix defect A: safe to evict immediately here, unlike the
+    // per-entry loop's immediate-release path -- this root's OWN operation
+    // state was already durably applied by the `pending` loop in whichever
+    // earlier `drain_up_to_inner` pass first drained its terminal (task 5's
+    // child-settle-grace defers only the SLOT release, never the reducer
+    // apply), so there is no pending-apply-would-re-insert-it race here.
+    engine.evict_operation(OperationScope::root_only(root));
 }
 
 /// Write and enqueue `child`'s own synthesized `terminal_not_delivered`

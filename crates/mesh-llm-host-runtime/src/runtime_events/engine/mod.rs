@@ -426,8 +426,16 @@ impl OperationReservation {
     /// terminal (no synthesis, no wake entry) -- or, for a root with at
     /// least one still-occupied child, defers the release exactly like a
     /// terminal-driven release (`engine::drain::release_or_defer`, task 5).
+    /// When the release happens immediately (not deferred), also evicts
+    /// this scope's reducer state (task 6-fix defect A): there is no
+    /// pending-apply race here the way there is inside the drain loop --
+    /// this is a synchronous, out-of-band cancellation, not a drain pass.
     pub fn cancel(self) {
-        drain::release_or_defer(&self.engine, self.scope, self.handle, Instant::now());
+        if let Some(scope) =
+            drain::release_or_defer(&self.engine, self.scope, self.handle, Instant::now())
+        {
+            self.engine.evict_operation(scope);
+        }
         std::mem::forget(self);
     }
 }

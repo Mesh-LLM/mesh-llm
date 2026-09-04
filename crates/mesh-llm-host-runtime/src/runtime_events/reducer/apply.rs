@@ -30,6 +30,29 @@ pub enum ReduceOutcome {
     Rejected(RejectReason),
 }
 
+/// Evict `scope`'s tracked `OperationState`, if any -- the RELEASE-triggered
+/// eviction path (task 6-fix defect A, `.omo/plans/event-system-fixes.md`:
+/// "evict a settled operation from the reducer's operations map when its
+/// reservation is released"). Pure and transactional exactly like [`apply`]:
+/// `snapshot` itself is never mutated, and a scope that is not currently
+/// tracked is a no-op that returns the SAME `Arc` (no allocation), which is
+/// the common case for a `Child` scope that settled without ever receiving a
+/// `StateTransition`/`Progress`/`Diagnostic` fact first.
+///
+/// The engine (`engine/drain.rs`) calls this once a scope's
+/// reservation-table slot has ACTUALLY been released, and only after every
+/// fact drained in the same pass -- including that scope's own terminal, if
+/// this pass drained one -- has already been applied through [`apply`], so
+/// this can never race an application that would just re-insert the entry a
+/// moment later.
+#[must_use]
+pub fn evict(snapshot: &Arc<ReducerSnapshot>, scope: OperationScope) -> Arc<ReducerSnapshot> {
+    if snapshot.operation(scope).is_none() {
+        return Arc::clone(snapshot);
+    }
+    Arc::new(snapshot.without_operation(scope))
+}
+
 /// Apply `input` against `snapshot`, returning a fresh snapshot on success.
 /// `snapshot` itself is never mutated: rejection leaves the caller's `Arc`
 /// exactly as it was, which is the whole transactional guarantee.

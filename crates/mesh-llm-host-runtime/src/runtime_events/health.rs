@@ -26,6 +26,7 @@ pub struct EngineHealthSnapshot {
     pub shutdown_degraded: u64,
     pub reducer_rejected: u64,
     pub event_cutover_divergence: u64,
+    pub reducer_eviction_stalled: u64,
 }
 
 #[derive(Debug, Default)]
@@ -40,6 +41,7 @@ struct Counters {
     shutdown_degraded: AtomicU64,
     reducer_rejected: AtomicU64,
     event_cutover_divergence: AtomicU64,
+    reducer_eviction_stalled: AtomicU64,
 }
 
 /// Engine health: coalesced counters plus a cadence-gated publish gate.
@@ -116,6 +118,22 @@ impl EngineHealth {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Task 6-fix (`.omo/plans/event-system-fixes.md`, "also required" review
+    /// finding on top of defect A): the reducer's settled-only capacity
+    /// backstop (`reducer::state::evict_settled_over_capacity`) found
+    /// NOTHING settled left to evict while still over
+    /// `RESERVATION_TABLE_CAPACITY` -- structurally unreachable in
+    /// production now that release-triggered eviction keeps the map far
+    /// below capacity in the steady state, but made observable rather than
+    /// a silent `break` in case it is ever reached. Not projected onto the
+    /// `runtime_health` wire frame -- that is task 7/8's `frames.rs`
+    /// territory, explicitly out of this task's scope.
+    pub fn bump_reducer_eviction_stalled(&self) {
+        self.counters
+            .reducer_eviction_stalled
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn set_rebuild_generation(&self, value: u64) {
         self.counters
             .rebuild_generation
@@ -144,6 +162,10 @@ impl EngineHealth {
             event_cutover_divergence: self
                 .counters
                 .event_cutover_divergence
+                .load(Ordering::Relaxed),
+            reducer_eviction_stalled: self
+                .counters
+                .reducer_eviction_stalled
                 .load(Ordering::Relaxed),
         }
     }
@@ -210,6 +232,7 @@ mod tests {
         health.bump_shutdown_degraded();
         health.bump_reducer_rejected();
         health.bump_event_cutover_divergence();
+        health.bump_reducer_eviction_stalled();
         health.set_rebuild_generation(2);
 
         let snapshot = health.snapshot();
@@ -226,6 +249,7 @@ mod tests {
                 shutdown_degraded: 1,
                 reducer_rejected: 1,
                 event_cutover_divergence: 1,
+                reducer_eviction_stalled: 1,
             }
         );
     }

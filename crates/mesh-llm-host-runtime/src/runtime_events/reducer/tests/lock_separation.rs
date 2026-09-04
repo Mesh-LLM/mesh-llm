@@ -26,7 +26,20 @@ fn synthetic_unknown() -> RuntimeFact {
 /// thread reducing them, synchronized only by a `Barrier` (no sleeps). The
 /// reducer's own lock (`reducer_state`) is disjoint from every reservation
 /// slot's lock, so this must complete deterministically without deadlock,
-/// and every accepted terminal must be visible in the final snapshot.
+/// and every accepted terminal must actually be drained (proven by the
+/// `applied` accumulator below reaching exactly `PRODUCERS`, one per
+/// terminal, before the loop can exit).
+///
+/// Task 6-fix defect A (`.omo/plans/event-system-fixes.md`): this test
+/// previously asserted `operation_count() == PRODUCERS` -- i.e. that a
+/// settled operation stays tracked in the reducer's `operations` map
+/// forever, which was precisely the unbounded-growth bug defect A fixes.
+/// Every one of these 16 is a bare root reservation with no children, so
+/// release-triggered eviction now retires each one in the SAME drain pass
+/// that applies its terminal; the corrected expectation is
+/// `operation_count() == 0`, which this test now also uses to prove
+/// release-triggered eviction itself is race-free under concurrent
+/// submit+drain, not just deadlock-free.
 #[test]
 fn concurrent_submit_and_drain_never_deadlock_and_settle_deterministically() {
     let engine = RuntimeEventEngine::with_capacity(32);
@@ -62,7 +75,13 @@ fn concurrent_submit_and_drain_never_deadlock_and_settle_deterministically() {
     }
 
     let snapshot = engine.reducer_snapshot();
-    assert_eq!(snapshot.operation_count(), PRODUCERS);
+    assert_eq!(
+        snapshot.operation_count(),
+        0,
+        "every one of these 16 root-only operations settled and released within the same \
+         drain pass that applied it, so release-triggered eviction must have retired all 16, \
+         even under concurrent submission"
+    );
 }
 
 /// A rejected reducer input never mutates the engine's shared snapshot:

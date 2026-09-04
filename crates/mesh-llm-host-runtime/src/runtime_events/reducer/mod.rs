@@ -21,7 +21,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use apply::{ReduceOutcome, ReducerInput, apply};
+pub use apply::{ReduceOutcome, ReducerInput, apply, evict};
 pub use domain::{
     CacheDomainState, DeviceDomainState, DomainState, ModelDomainState, RequestDomainState,
     SessionRecentEntry, StageDomainState,

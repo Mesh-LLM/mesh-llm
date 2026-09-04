@@ -89,14 +89,18 @@ impl ReducerSnapshot {
     /// untouched; callers swap the shared `Arc` only after this succeeds,
     /// which is what makes application transactional.
     ///
-    /// Also evicts the oldest SETTLED operations (by
-    /// `last_ingress_sequence`) whenever the map would otherwise exceed
-    /// `RESERVATION_TABLE_CAPACITY` -- defect D6's "reducer `operations`
-    /// map never pruned (unbounded)" half. An in-flight (unsettled)
-    /// operation is never evicted: the reservation table itself never
-    /// admits more than `RESERVATION_TABLE_CAPACITY` concurrently-occupied
-    /// scopes, so this bound is always satisfiable by evicting settled
-    /// entries alone.
+    /// Also runs [`evict_settled_over_capacity`] as a defensive backstop
+    /// (task 6-fix defect A, `.omo/plans/event-system-fixes.md`): the
+    /// PRIMARY eviction mechanism is now release-triggered
+    /// (`Self::without_operation`, called by the engine the moment a
+    /// scope's reservation is actually released), which keeps this map far
+    /// below `RESERVATION_TABLE_CAPACITY` in the steady state, so this
+    /// sweep is a no-op (`operations.len() > RESERVATION_TABLE_CAPACITY` is
+    /// false) on essentially every call. It stays here as a safety net for
+    /// the case release-triggered eviction is somehow skipped, evicting the
+    /// oldest SETTLED operations (by `last_ingress_sequence`) until back at
+    /// capacity. An in-flight (unsettled) operation is never evicted by
+    /// this sweep.
     #[must_use]
     pub(super) fn with_operation(
         &self,
@@ -111,6 +115,22 @@ impl ReducerSnapshot {
             operations,
             rebuild_generation: self.rebuild_generation,
             domain,
+        }
+    }
+
+    /// Produce a new snapshot with `scope`'s tracked `OperationState`
+    /// removed, leaving `domain` and `rebuild_generation` untouched -- the
+    /// release-triggered eviction primitive behind
+    /// [`super::apply::evict`]. Pure clone-on-write exactly like
+    /// [`Self::with_operation`]: `self` is never mutated.
+    #[must_use]
+    pub(super) fn without_operation(&self, scope: OperationScope) -> Self {
+        let mut operations = self.operations.clone();
+        operations.remove(&scope);
+        Self {
+            operations,
+            rebuild_generation: self.rebuild_generation,
+            domain: self.domain.clone(),
         }
     }
 

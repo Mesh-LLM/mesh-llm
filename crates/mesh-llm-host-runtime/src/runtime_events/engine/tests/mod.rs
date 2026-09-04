@@ -7,6 +7,7 @@ mod capacity;
 mod children;
 mod class_bypass;
 mod classes;
+mod eviction;
 mod fixtures;
 mod lanes;
 mod ordering;

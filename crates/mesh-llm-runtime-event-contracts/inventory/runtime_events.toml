@@ -371,6 +371,31 @@ default_projection_profile = "health"
 test = "inventory_contract"
 migration_task = 3
 
+# Task 6-fix defect B (`.omo/plans/event-system-fixes.md`): disclosure
+# record for an undisclosed `runtime_state` wire-shape change task 6
+# (d6b5925bc) landed. This table is descriptive only -- read by neither
+# `scripts/generate-runtime-event-inventory.py` nor the Rust
+# `Inventory` struct (`tests/inventory_contract/support.rs` has no
+# `deny_unknown_fields`), so it cannot perturb the generated
+# manifest/TS fixture or the frozen `state_top_level_keys` SET
+# (`fixtures/runtime_events_v1/frames.json`), which is unchanged. It
+# exists purely so a durable, machine-parseable trace of the amendment
+# lives in the canonical inventory, per the amendment procedure above,
+# rather than only in a task's evidence directory.
+[[state_projection_amendments]]
+field = "sessions"
+from_shape = "array (frozen placeholder, always empty, no production write path)"
+to_shape = "object {active_count: number, recent: [{id, state}]}"
+task = "6-fix"
+reason = "Task 6 populated runtime_state.sessions from the reducer per the plan text ('active count and bounded recent') as an aggregate object, changing the wire shape without recording it -- corrected by task 6-fix's disclosure. The frozen state_top_level_keys SET is unchanged; only this key's value type changed."
+
+[[state_projection_amendments]]
+field = "cache"
+from_shape = "array (frozen placeholder, always empty, no production write path)"
+to_shape = "object {pressure?: string, capacity_state?: string}"
+task = "6-fix"
+reason = "Same disclosure gap as sessions above: Task 6 populated runtime_state.cache from DomainState::cache() (a single latest-wins KV pressure/capacity signal) as an aggregate object instead of the empty-array placeholder, undisclosed until task 6-fix."
+
 [[event_projection_overrides]]
 profile = "progress"
 event_ids = [

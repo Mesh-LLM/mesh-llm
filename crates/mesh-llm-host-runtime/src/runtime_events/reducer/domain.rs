@@ -98,14 +98,26 @@ pub struct DomainState {
 }
 
 impl DomainState {
+    /// Task 6-fix defect D (`.omo/plans/event-system-fixes.md`): emits in
+    /// `models_order`'s insertion/touch order, NOT `HashMap` iteration
+    /// order (unspecified, randomized per process) -- `touch()` already
+    /// maintains this deque for bounded eviction; this is the first reader
+    /// that also uses it for output order.
     #[must_use]
     pub fn models(&self) -> Vec<ModelDomainState> {
-        self.models.values().cloned().collect()
+        self.models_order
+            .iter()
+            .filter_map(|id| self.models.get(id).cloned())
+            .collect()
     }
 
+    /// Deterministic insertion/touch order -- see [`Self::models`].
     #[must_use]
     pub fn stages(&self) -> Vec<StageDomainState> {
-        self.stages.values().cloned().collect()
+        self.stages_order
+            .iter()
+            .filter_map(|id| self.stages.get(id).cloned())
+            .collect()
     }
 
     #[must_use]
@@ -118,14 +130,22 @@ impl DomainState {
         self.sessions_recent.iter().cloned().collect()
     }
 
+    /// Deterministic insertion/touch order -- see [`Self::models`].
     #[must_use]
     pub fn requests(&self) -> Vec<RequestDomainState> {
-        self.requests.values().cloned().collect()
+        self.requests_order
+            .iter()
+            .filter_map(|id| self.requests.get(id).cloned())
+            .collect()
     }
 
+    /// Deterministic insertion/touch order -- see [`Self::models`].
     #[must_use]
     pub fn devices(&self) -> Vec<DeviceDomainState> {
-        self.devices.values().cloned().collect()
+        self.devices_order
+            .iter()
+            .filter_map(|id| self.devices.get(id).cloned())
+            .collect()
     }
 
     #[must_use]
