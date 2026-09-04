@@ -1390,7 +1390,7 @@ impl StageOpenAiBackend {
 
         match dispatch(request).await {
             Ok(stream) => Ok(match guard {
-                Some(guard) => TerminalGuardedChatStream::new(stream, guard),
+                Some(guard) => TerminalGuardedChatStream::pinned(stream, guard),
                 None => stream,
             }),
             Err(error) => {
