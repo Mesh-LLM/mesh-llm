@@ -502,7 +502,7 @@ mesh-llm serve \
 > `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
 > tiny GGUF. It starts two serving nodes, waits for a topology with stages on
 > two distinct nodes, checks `/v1/models`, then sends three progressively longer
-> `/v1/completions` prompts with one shared prefix through stage 0. The smoke
+> `/v1/chat/completions` prompts with one shared prefix through stage 0. The smoke
 > requires the reported cached-token count to increase after each request so
 > split serving cannot silently fall back to cold prefill for prefix matches.
 >

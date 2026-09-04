@@ -6,7 +6,7 @@
 # Unlike ci-two-node-client-serving-smoke.sh, both processes are serving nodes.
 # The smoke requires the runtime to publish a topology with stages on at least
 # two distinct nodes before it sends OpenAI requests through stage 0. It then
-# grows one raw prompt over three requests and requires the split stages to
+# grows one chat prompt over three requests and requires the split stages to
 # restore a longer shared prefix after every request.
 
 set -euo pipefail
@@ -317,7 +317,7 @@ for index, extension in enumerate(extensions, start=1):
     prompt += extension
     payload = {
         "model": model,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
         "user": "ci-split-prefix-growth",
         "stream": False,
         "max_tokens": 1,
@@ -329,7 +329,7 @@ PY
 
 for index in 1 2 3; do
     curl -fsS --max-time 180 \
-        "http://127.0.0.1:${DRIVER_API_PORT}/v1/completions" \
+        "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
         -H 'content-type: application/json' \
         -d @"${PREFIX_PAYLOAD_DIR}/prompt-${index}.json" \
         -o "${PREFIX_RESPONSE_DIR}/response-${index}.json"
@@ -349,7 +349,7 @@ metrics = []
 for index in range(1, 4):
     with (response_dir / f"response-{index}.json").open(encoding="utf-8") as fh:
         body = json.load(fh)
-    if body.get("object") != "text_completion":
+    if body.get("object") != "chat.completion":
         raise SystemExit(
             f"prefix request {index} returned unexpected object: {body.get('object')!r}"
         )
