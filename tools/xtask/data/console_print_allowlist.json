@@ -3257,47 +3257,47 @@
   ],
   "crates/model-hf/tests/hf_download.rs": [
     {
-      "line": 134,
+      "line": 143,
       "macro_name": "eprintln!"
     },
     {
-      "line": 162,
+      "line": 171,
       "macro_name": "eprintln!"
     },
     {
-      "line": 207,
+      "line": 216,
       "macro_name": "eprintln!"
     },
     {
-      "line": 234,
+      "line": 243,
       "macro_name": "eprintln!"
     },
     {
-      "line": 273,
+      "line": 282,
       "macro_name": "eprintln!"
     },
     {
-      "line": 331,
+      "line": 340,
       "macro_name": "eprintln!"
     },
     {
-      "line": 350,
+      "line": 359,
       "macro_name": "eprintln!"
     },
     {
-      "line": 375,
+      "line": 384,
       "macro_name": "eprintln!"
     },
     {
-      "line": 396,
+      "line": 405,
       "macro_name": "eprintln!"
     },
     {
-      "line": 414,
+      "line": 423,
       "macro_name": "eprintln!"
     },
     {
-      "line": 436,
+      "line": 445,
       "macro_name": "eprintln!"
     }
   ],
