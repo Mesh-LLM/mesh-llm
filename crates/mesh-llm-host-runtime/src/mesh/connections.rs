@@ -754,10 +754,12 @@ impl Node {
         remote: EndpointId,
         closing_stable_id: usize,
     ) {
-        match self
+        let recovery = self
             .remove_closed_connection(remote, closing_stable_id)
-            .await
-        {
+            .await;
+        self.release_direct_rescue_endpoint(remote, closing_stable_id)
+            .await;
+        match recovery {
             ClosedConnectionRecovery::Reconnect(addr) => {
                 self.reconnect_closed_connection_or_remove(remote, addr)
                     .await;

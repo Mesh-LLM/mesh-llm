@@ -2,6 +2,7 @@
   "cases": [
     {
       "key": "llama-gqa",
+      "artifact_id": "llama-q4-parity-radix",
       "family": "Llama GQA",
       "model_id": "hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF:Q4_K_M",
       "model_path": "$SKIPPY_MODEL_ROOT/llama-gqa/llama-3.2-1b-instruct-q4_k_m.gguf",
@@ -15,6 +16,7 @@
     },
     {
       "key": "gemma2-swa",
+      "artifact_id": "gemma2-q4-parity-radix",
       "family": "Gemma2 SWA",
       "model_id": "bartowski/gemma-2-2b-it-GGUF:Q4_K_M",
       "model_path": "$SKIPPY_MODEL_ROOT/gemma2-swa/gemma-2-2b-it-Q4_K_M.gguf",
@@ -28,6 +30,7 @@
     },
     {
       "key": "deepseek-mla",
+      "artifact_id": "family-deepseek2",
       "family": "DeepSeek MLA",
       "model_id": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q4_K_M",
       "model_path": "$SKIPPY_MODEL_ROOT/deepseek-mla/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
@@ -41,6 +44,7 @@
     },
     {
       "key": "falcon-h1-recurrent",
+      "artifact_id": "family-falcon-h1",
       "family": "Falcon-H1 recurrent",
       "model_id": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
       "model_path": "$SKIPPY_MODEL_ROOT/falcon-h1-recurrent/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",

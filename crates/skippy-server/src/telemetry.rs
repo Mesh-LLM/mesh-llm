@@ -149,9 +149,9 @@ impl Drop for StderrTelemetrySink {
 }
 
 fn stderr_telemetry_loop(rx: std_mpsc::Receiver<StderrTelemetryEvent>) {
-    let stderr = std::io::stderr();
-    let mut writer = BufWriter::new(stderr.lock());
     while let Ok(event) = rx.recv() {
+        let stderr = std::io::stderr();
+        let mut writer = BufWriter::new(stderr.lock());
         if serde_json::to_writer(&mut writer, &event).is_err() || writer.write_all(b"\n").is_err() {
             return;
         }
@@ -166,7 +166,6 @@ fn stderr_telemetry_loop(rx: std_mpsc::Receiver<StderrTelemetryEvent>) {
             return;
         }
     }
-    let _ = writer.flush();
 }
 
 impl Telemetry {
