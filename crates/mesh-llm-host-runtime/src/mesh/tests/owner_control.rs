@@ -354,6 +354,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
         plugins: vec![],
         config_toml: None,
         mesh_requirements: None,
+        lifecycle_log_parser: None,
     };
     write_len_prefixed(
         &mut apply_send,
@@ -499,6 +500,7 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
                         plugins: vec![],
                         config_toml: None,
                         mesh_requirements: None,
+                        lifecycle_log_parser: None,
                     }),
                 }),
                 ..owner_control_request(11)
@@ -658,6 +660,7 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
                         plugins: vec![],
                         config_toml: None,
                         mesh_requirements: None,
+                        lifecycle_log_parser: None,
                     }),
                 }),
                 ..owner_control_request(14)
@@ -738,6 +741,7 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
                     plugins: vec![],
                     config_toml: None,
                     mesh_requirements: None,
+                    lifecycle_log_parser: None,
                 }),
             }),
             ..owner_control_request(request_id)
@@ -819,6 +823,7 @@ async fn control_plane_apply_rejects_malformed_full_config_toml() -> Result<()> 
                         plugins: vec![],
                         config_toml: Some("not valid toml = [".to_string()),
                         mesh_requirements: None,
+                        lifecycle_log_parser: None,
                     }),
                 }),
                 ..owner_control_request(22)
