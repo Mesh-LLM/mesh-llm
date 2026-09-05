@@ -1027,18 +1027,45 @@ def run_paired_trial_plan(
     )
 
 
+# D-6 (`.omo/evidence/event-system-fixes/deferrals/d6/`): per-TRIAL drop
+# counts confirmed IDENTICAL across 3 independent full 30-pair
+# certification runs (`final/f4/f4-manifests.txt`). Not scaled by trial
+# count -- see the docstring below.
+EVENT_DISABLED_EXPECTED_DROPPED_PROGRESS_PER_TRIAL = 1
+EVENT_DISABLED_EXPECTED_DROPPED_DIAGNOSTIC_PER_TRIAL = 0
+
+
 def summarize_health_expectations(mode: str, results: Sequence[TrialResult]) -> dict[str, int]:
     """The exact-count health expectation this manifest can prove without a
-    live console API attached: under `event-disabled`, every attempted
-    trial's underlying process runs with Progress/Diagnostic class
-    submissions bypassed at the engine's single contract boundary, so the
-    exact per-trial attempt count is the exact expected drop count for both
-    classes. Under `production`, expected drops are zero -- a correctly
-    sized reservation table coalesces progress and has ample diagnostic
-    headroom for one benchmark trial's traffic."""
-    attempted = len(results)
+    live console API attached, SCOPED TO THE SAME SINGLE TRIAL that
+    `health` actually reflects (`health_and_p99_from_trial_log` reads only
+    the side's LAST trial's log -- never a per-run total across every
+    trial the matrix attempted).
+
+    D-6 fix: before this change, `event-disabled` mode's expectation
+    scaled with `len(results)` (the whole side's attempted-trial count
+    across the matrix, e.g. 30 for a 20+10-pair run) under the assumption
+    that `health` would be a cumulative count across the whole run. It
+    never was -- `health` has been single-last-trial-scoped since Task 14
+    -- so this fired `health_expectation_violation` on every real
+    event-disabled manifest regardless of pair count, seed, or parser mode
+    (F4 certification wave, `.omo/evidence/event-system-fixes/final/f4/
+    f4-verdict.md`, "New finding" section). Reconciled here to the fixed
+    per-trial counts above, which do NOT scale with `len(results)` --
+    matching what a single trial's Progress/Diagnostic bypass reproducibly
+    produces. Under `production`, expected drops are zero regardless of
+    scope: a correctly sized reservation table coalesces progress and has
+    ample diagnostic headroom for one benchmark trial's traffic. `results`
+    is used only to detect the no-trials-ran edge case (nothing attempted,
+    so nothing expected) -- once at least one trial ran, the expectation
+    does not grow with how many more trials the matrix goes on to run."""
+    if not results:
+        return {"expected_dropped_progress": 0, "expected_dropped_diagnostic": 0}
     if mode == "event-disabled":
-        return {"expected_dropped_progress": attempted, "expected_dropped_diagnostic": attempted}
+        return {
+            "expected_dropped_progress": EVENT_DISABLED_EXPECTED_DROPPED_PROGRESS_PER_TRIAL,
+            "expected_dropped_diagnostic": EVENT_DISABLED_EXPECTED_DROPPED_DIAGNOSTIC_PER_TRIAL,
+        }
     return {"expected_dropped_progress": 0, "expected_dropped_diagnostic": 0}
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "run-event-benchmark-matrix.py"
+COMPARATOR_SCRIPT = ROOT / "scripts" / "compare-event-benchmark-matrix.py"
 RUST_OUTPUT_TYPES = (
     ROOT / "crates" / "mesh-llm-commands" / "src" / "gpus" / "tune" / "output_types.rs"
 )
@@ -25,6 +26,22 @@ def load_module():
     # `_is_type` helper looks the module up via `sys.modules`); omitting
     # this raises `AttributeError: 'NoneType' object has no attribute
     # '__dict__'` the moment the loaded module defines a dataclass.
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_comparator_module():
+    """D-6: loads `compare-event-benchmark-matrix.py` (same mechanism as
+    `load_module()` above) so a manifest built by THIS file's real
+    `build_manifest`/`summarize_health_expectations` can be fed straight
+    into the comparator's real `evaluate_health_expectations` -- an
+    end-to-end proof that a fixture built independently via each module's
+    own hand-authored dict (never exercising the actual producer function)
+    cannot give."""
+    module_name = "compare_event_benchmark_matrix"
+    spec = importlib.util.spec_from_file_location(module_name, COMPARATOR_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
@@ -492,11 +509,38 @@ class SseStreamParsingTests(unittest.TestCase):
 
 
 class HealthExpectationTests(unittest.TestCase):
-    def test_event_disabled_expects_exact_attempted_count_dropped(self):
+    def test_event_disabled_expects_the_fixed_per_trial_counts_not_the_run_total(self):
+        """D-6 fix (`.omo/evidence/event-system-fixes/deferrals/d6/`):
+        `event-disabled` mode's expectation is scoped to the SAME single
+        trial `health` actually reflects (Task 14's
+        `health_and_p99_from_trial_log` reads only the side's LAST trial's
+        log) -- it must NOT scale with `len(results)`, the OLD per-RUN
+        total that fired `health_expectation_violation` on every real
+        event-disabled manifest regardless of pair count (F4 certification
+        wave, `.omo/evidence/event-system-fixes/final/f4/f4-verdict.md`,
+        "New finding" section). 5 and 30 results (30 matches a real
+        20+10-pair matrix's per-side trial count) must produce the
+        IDENTICAL fixed pair -- proof the expectation no longer grows with
+        run length."""
         harness = load_module()
-        results = [_fake_trial_result() for _ in range(5)]
-        expectations = harness.summarize_health_expectations("event-disabled", results)
-        self.assertEqual(expectations, {"expected_dropped_progress": 5, "expected_dropped_diagnostic": 5})
+        five_results = [_fake_trial_result() for _ in range(5)]
+        thirty_results = [_fake_trial_result() for _ in range(30)]
+        self.assertEqual(
+            harness.summarize_health_expectations("event-disabled", five_results),
+            {"expected_dropped_progress": 1, "expected_dropped_diagnostic": 0},
+        )
+        self.assertEqual(
+            harness.summarize_health_expectations("event-disabled", thirty_results),
+            {"expected_dropped_progress": 1, "expected_dropped_diagnostic": 0},
+        )
+
+    def test_event_disabled_with_zero_trials_expects_zero_drops(self):
+        """No trial ran on this side at all, so there is no `health`
+        snapshot to expect anything from -- expected stays honestly zero
+        rather than the fixed per-trial pair."""
+        harness = load_module()
+        expectations = harness.summarize_health_expectations("event-disabled", [])
+        self.assertEqual(expectations, {"expected_dropped_progress": 0, "expected_dropped_diagnostic": 0})
 
     def test_production_expects_zero_drops(self):
         harness = load_module()
@@ -545,10 +589,52 @@ class ManifestBuildingTests(unittest.TestCase):
         self.assertEqual(manifest["metrics_schema"], "streaming_v1")
         self.assertEqual(manifest["mode"], "event-disabled")
         self.assertEqual(manifest["trial_unit"], harness.TRIAL_UNIT_DEFINITION)
+        # D-6 fix: fixed per-trial pair (1, 0), not the OLD len(results)
+        # total -- see the full-scale test below, where the two formulas
+        # actually diverge (this one result count doesn't distinguish them).
         self.assertEqual(manifest["expected_dropped_progress"], 1)
-        self.assertEqual(manifest["expected_dropped_diagnostic"], 1)
+        self.assertEqual(manifest["expected_dropped_diagnostic"], 0)
         self.assertEqual(len(manifest["trials"]), 1)
         self.assertEqual(manifest["trials"][0]["status"], "succeeded")
+
+    def test_manifest_expectations_stay_fixed_at_full_run_scale_not_scaled_by_trial_count(self):
+        """D-6: at a real 20+10-pair matrix's per-side scale (30 trials),
+        expectations must stay (1, 0), never scale to 30 like the OLD
+        per-run-total formula did (F4's health_expectation_violation)."""
+        harness = load_module()
+        results = [
+            harness.TrialResult(
+                scenario=harness.PRIMARY_SCENARIO,
+                pair_index=i,
+                side_order_first="production" if i % 2 == 0 else "event-disabled",
+                status="succeeded",
+                completion_tokens=10,
+                elapsed_ms=1000.0,
+                decode_tok_s=10.0,
+                ttft_ms=100.0,
+                decode_only_tok_s=11.1,
+                setup_ms=50.0,
+                readiness_ms=200.0,
+                shutdown_ms=25.0,
+            )
+            for i in range(30)
+        ]
+        manifest = harness.build_manifest(
+            binary=Path("/nonexistent/mesh-llm"),
+            model="fixture-model",
+            mode="event-disabled",
+            seed=7,
+            pairs_primary=20,
+            pairs_scenario=10,
+            scenarios=["smoke"],
+            results=results,
+            environ={"MESH_LLM_BENCHMARK_TUNE_TRIAL": "1", "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE": "event-disabled"},
+            generated_at="2026-01-01T00:00:00Z",
+            run_version=lambda _b: None,
+        )
+        self.assertEqual(manifest["expected_dropped_progress"], 1)
+        self.assertEqual(manifest["expected_dropped_diagnostic"], 0)
+        self.assertEqual(len(manifest["trials"]), 30)
 
     def test_manifest_records_a_non_default_attempt_number(self):
         harness = load_module()
@@ -657,6 +743,93 @@ class ManifestBuildingTests(unittest.TestCase):
         # Must round-trip through json.dumps without a custom encoder --
         # this is exactly what main() does when writing the manifest file.
         json.dumps(manifest)
+
+
+def _event_disabled_manifest_at_full_scale(harness, *, dropped_progress, dropped_diagnostic):
+    """Builds a manifest through the REAL `build_manifest` (30 trials,
+    matching a 20+10-pair matrix's per-side count) with the given `health`
+    counts -- the same shape D-6's fix targets. Used by
+    `EndToEndHealthExpectationReconciliationTests` so the comparator sees
+    exactly what a real invocation would write, not a hand-authored dict."""
+    results = [
+        harness.TrialResult(
+            scenario=harness.PRIMARY_SCENARIO,
+            pair_index=i,
+            side_order_first="production" if i % 2 == 0 else "event-disabled",
+            status="succeeded",
+            completion_tokens=10,
+            elapsed_ms=1000.0,
+            decode_tok_s=10.0,
+            ttft_ms=100.0,
+            decode_only_tok_s=11.1,
+            setup_ms=50.0,
+            readiness_ms=200.0,
+            shutdown_ms=25.0,
+        )
+        for i in range(30)
+    ]
+    return harness.build_manifest(
+        binary=Path("/nonexistent/mesh-llm"),
+        model="fixture-model",
+        mode="event-disabled",
+        seed=7,
+        pairs_primary=20,
+        pairs_scenario=10,
+        scenarios=["smoke"],
+        results=results,
+        environ={"MESH_LLM_BENCHMARK_TUNE_TRIAL": "1", "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE": "event-disabled"},
+        generated_at="2026-01-01T00:00:00Z",
+        run_version=lambda _b: None,
+        health={
+            "terminal_delivery_failed": 0,
+            "dropped_progress": dropped_progress,
+            "dropped_diagnostic": dropped_diagnostic,
+        },
+    )
+
+
+class EndToEndHealthExpectationReconciliationTests(unittest.TestCase):
+    """D-6 (`.omo/evidence/event-system-fixes/deferrals/d6/`): feeds a
+    manifest built by THIS module's real `build_manifest` straight into
+    the comparator's real `evaluate_health_expectations`, so these tests
+    exercise the actual producer/consumer pair the F4 certification wave
+    ran, not two independently hand-authored fixtures that could agree by
+    construction regardless of whether the producer is fixed."""
+
+    def test_real_f4_captured_event_disabled_manifest_has_no_expectation_violations(self):
+        """Health counts taken verbatim from every one of 3 independent
+        full 30-pair event-disabled manifests in
+        `.omo/evidence/event-system-fixes/final/f4/f4-manifests.txt`
+        (dropped_progress=1, dropped_diagnostic=0). Before the D-6 fix,
+        `build_manifest` computed expected=30/30 here (len(results)), so
+        this genuinely-captured, well-formed manifest showed violations
+        against real data -- the exact defect F4 found."""
+        harness = load_module()
+        comparator = load_comparator_module()
+        manifest = _event_disabled_manifest_at_full_scale(harness, dropped_progress=1, dropped_diagnostic=0)
+        self.assertEqual(comparator.evaluate_health_expectations(manifest), [])
+
+    def test_reconciled_expectation_still_catches_genuine_progress_divergence(self):
+        """The reconciliation must not become a vacuous always-pass: a
+        progress count that genuinely diverges from the reconciled
+        per-trial expectation (1) must still be flagged, and the violation
+        message must cite THAT reconciled count -- not the old,
+        run-scaled 30."""
+        harness = load_module()
+        comparator = load_comparator_module()
+        manifest = _event_disabled_manifest_at_full_scale(harness, dropped_progress=3, dropped_diagnostic=0)
+        violations = comparator.evaluate_health_expectations(manifest)
+        self.assertTrue(any("dropped_progress" in v and "expected count 1" in v for v in violations), violations)
+
+    def test_reconciled_expectation_still_catches_genuine_diagnostic_divergence(self):
+        """Same proof for dropped_diagnostic's independent reconciled
+        value (0): a genuine divergence must still be flagged, citing 0 --
+        not the old, run-scaled 30."""
+        harness = load_module()
+        comparator = load_comparator_module()
+        manifest = _event_disabled_manifest_at_full_scale(harness, dropped_progress=1, dropped_diagnostic=2)
+        violations = comparator.evaluate_health_expectations(manifest)
+        self.assertTrue(any("dropped_diagnostic" in v and "expected count 0" in v for v in violations), violations)
 
 
 class MainThreadsAttemptIntoManifestTests(unittest.TestCase):
