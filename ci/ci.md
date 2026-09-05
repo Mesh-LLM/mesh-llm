@@ -310,6 +310,10 @@ runtime producers are not duplicated.
 Lower-level producers (`native-sdk-artifact.yml`, `swift-sdk-artifact.yml`) and
 consumers (`smoke.yml`, `scripted-binary-smoke.yml`, `sdk-smoke.yml`,
 `hf-download-smoke.yml`) remain reusable building blocks.
+The full Swift producer fans the seven Apple Rust targets into separately
+cached jobs, bounded by the lane's macOS `max-parallel` budget, then assembles
+their immutable static libraries into one verified XCFramework. Host-only PR
+production remains a single job.
 The Swift SDK smoke consumes the lane's immutable UI distribution with
 `--skip-build`; it does not install Node or pnpm and owns no package-manager
 cache.
@@ -321,9 +325,13 @@ The planner records profile budgets: PR drafts/ready runs allow at most
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
 `max-parallel`, and backend/platform rows are selected by ownership rather than
 by a blanket PR fan-out. Host, ABI and runtime producers remain unique per
-selected row. The readability tradeoff is one UI artifact build per active
-platform workflow because artifacts are run-scoped; UI tests still execute
-only in the Website graph and host producers never rebuild the UI themselves.
+selected row. The full Swift target matrix is the intentional exception: its
+seven architecture/platform libraries are independent producer inputs and use
+the existing macOS cap (two for PR profiles and four for main/manual and
+release profiles) before one assembly join. The readability tradeoff is one UI
+artifact build per active platform workflow because artifacts are run-scoped;
+UI tests still execute only in the Website graph and host producers never
+rebuild the UI themselves.
 
 Timing evidence is collected read-only with `scripts/collect-ci-metrics.py`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
@@ -359,10 +367,11 @@ the PR runs; this bounded overhead replaces five per-lane polling jobs and is
 expected to recover more capacity whenever a lane fails early.
 
 Inside Linux, macOS, and Windows, PR-only `fail_fast` inputs are enabled for
-Rust-test, host, native-runtime, product, and platform-check matrices. The
+Rust-test, host, native-runtime, product, platform-check, and full Swift target
+matrices. The
 first required failure cancels queued and in-progress siblings in that matrix.
-Main and manual-full pass `false` so exhaustive runs retain complete backend
-and platform diagnostics. Quality's Clippy matrix also remains non-fail-fast:
+Main, manual-full, and release pass `false` so exhaustive runs retain complete
+backend and platform diagnostics. Quality's Clippy matrix also remains non-fail-fast:
 quality failures are independent findings and never make a product producer
 unusable.
 
