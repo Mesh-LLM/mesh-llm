@@ -45,6 +45,23 @@ use prefix_restore::EmbeddedPrefixRestore;
 use serde_json::json;
 use skippy_protocol::binary::{StageReplyStats, WireReplyKind, recv_reply};
 
+fn prefill_chunk_end(
+    pos_start: usize,
+    chunk_size: usize,
+    prefill_token_count: usize,
+    exact_checkpoint_boundary: Option<usize>,
+) -> usize {
+    let mut end = pos_start
+        .saturating_add(chunk_size)
+        .min(prefill_token_count);
+    if let Some(boundary) = exact_checkpoint_boundary
+        && pos_start < boundary
+    {
+        end = end.min(boundary);
+    }
+    end
+}
+
 impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
         &self,
@@ -137,6 +154,8 @@ impl StageOpenAiBackend {
                 prefill_chain_cache_stats = chain_cache_stats;
                 fused_first_decode = restored_first_decode;
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
+                let exact_checkpoint_boundary =
+                    self.embedded_exact_checkpoint_boundary(&request, prefill_tokens, pos_start);
                 let mut chunk_index = 0usize;
                 while pos_start < prefill_tokens.len() {
                     if request
@@ -152,9 +171,12 @@ impl StageOpenAiBackend {
                     }
                     let chunk_size =
                         prefill_planner.chunk_size_for(chunk_index, prefill_token_count);
-                    let end = pos_start
-                        .saturating_add(chunk_size)
-                        .min(prefill_tokens.len());
+                    let end = prefill_chunk_end(
+                        pos_start,
+                        chunk_size,
+                        prefill_tokens.len(),
+                        exact_checkpoint_boundary,
+                    );
                     let chunk = &prefill_tokens[pos_start..end];
                     prefill_min_chunk_size = prefill_min_chunk_size.min(chunk.len());
                     prefill_max_chunk_size = prefill_max_chunk_size.max(chunk.len());
@@ -259,6 +281,14 @@ impl StageOpenAiBackend {
                         );
                         self.telemetry
                             .emit("stage.openai_kv_record_decision", attrs);
+                    }
+                    if exact_checkpoint_boundary == Some(end) {
+                        prefill_stage0_full_recorded |= self
+                            .record_embedded_stage0_exact_checkpoint(
+                                &session_key,
+                                request.ids,
+                                &prefill_tokens[..end],
+                            )?;
                     }
                     let chunk_stage0_compute_ms = stage0_timer.elapsed_ms();
                     prefill_stage0_compute_ms += chunk_stage0_compute_ms;
@@ -400,7 +430,7 @@ impl StageOpenAiBackend {
                 prefill_downstream_wait_ms += drained.downstream_wait_ms;
                 prefill_downstream_wait_max_ms =
                     prefill_downstream_wait_max_ms.max(drained.downstream_wait_max_ms);
-                if !prefill_chain_cache_restored {
+                if !prefill_chain_cache_restored && !prefill_stage0_full_recorded {
                     prefill_stage0_full_recorded = self.record_embedded_stage0_full_prefill(
                         &session_key,
                         request.ids,
@@ -1910,5 +1940,23 @@ impl StageOpenAiBackend {
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefill_chunk_end;
+
+    #[test]
+    fn exact_checkpoint_splits_prefill_at_the_native_state_boundary() {
+        assert_eq!(prefill_chunk_end(0, 1024, 1400, Some(768)), 768);
+        assert_eq!(prefill_chunk_end(768, 1024, 1400, Some(768)), 1400);
+    }
+
+    #[test]
+    fn exact_checkpoint_preserves_earlier_adaptive_chunks() {
+        assert_eq!(prefill_chunk_end(0, 256, 1400, Some(768)), 256);
+        assert_eq!(prefill_chunk_end(256, 256, 1400, Some(768)), 512);
+        assert_eq!(prefill_chunk_end(512, 512, 1400, Some(768)), 768);
     }
 }

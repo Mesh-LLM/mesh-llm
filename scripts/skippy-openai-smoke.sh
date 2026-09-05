@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
-MODEL_REPO="${MODEL_REPO:-jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF}"
-MODEL_FILE="${MODEL_FILE:-SmolLM2-135M-Instruct.Q4_K_M.gguf}"
-MODEL_SELECTOR="${MODEL_SELECTOR:-Q4_K_M}"
+MODEL_MANIFEST="${MODEL_MANIFEST:-$ROOT/ci/model-artifacts/manifests/openai-smoke.json}"
+MODEL_IDENTITY_OVERRIDDEN=0
+if [[ -n "${MODEL_REPO:-}" || -n "${MODEL_FILE:-}" || -n "${MODEL_SELECTOR:-}" || -n "${MODEL_REVISION:-}" || -n "${MODEL_PATH:-}" ]]; then
+  MODEL_IDENTITY_OVERRIDDEN=1
+fi
+MODEL_FIXTURE="$(python3 "$ROOT/scripts/resolve-test-model-manifest.py" "$MODEL_MANIFEST" --cadence manual)"
+MODEL_REPO="${MODEL_REPO:-$(jq -r '.repo' <<<"$MODEL_FIXTURE")}"
+MODEL_FILE="${MODEL_FILE:-$(jq -r '.file' <<<"$MODEL_FIXTURE")}"
+MODEL_SELECTOR="${MODEL_SELECTOR:-$(jq -r '.selector' <<<"$MODEL_FIXTURE")}"
+MODEL_REVISION="${MODEL_REVISION:-$(jq -r '.revision' <<<"$MODEL_FIXTURE")}"
 MODEL_ID="${MODEL_ID:-${MODEL_REPO}:${MODEL_SELECTOR}}"
 MODEL_PATH="${MODEL_PATH:-}"
 TOKENIZER="${TOKENIZER:-HuggingFaceTB/SmolLM2-135M-Instruct}"
@@ -59,7 +67,7 @@ if [[ -z "$MODEL_PATH" ]]; then
   else
     require_cmd hf
     echo "downloading ${MODEL_REPO}/${MODEL_FILE} into ${MODEL_CACHE_DIR}"
-    MODEL_PATH="$(hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_CACHE_DIR" | sed -n 's/^path=//p' | tail -n 1)"
+    MODEL_PATH="$(hf download "$MODEL_REPO" "$MODEL_FILE" --revision "$MODEL_REVISION" --local-dir "$MODEL_CACHE_DIR" | sed -n 's/^path=//p' | tail -n 1)"
     if [[ -z "$MODEL_PATH" ]]; then
       MODEL_PATH="${MODEL_CACHE_DIR}/${MODEL_FILE}"
     fi
@@ -69,6 +77,12 @@ fi
 if [[ ! -f "$MODEL_PATH" ]]; then
   echo "model path not found: $MODEL_PATH" >&2
   exit 1
+fi
+if [[ "$MODEL_IDENTITY_OVERRIDDEN" == "0" ]]; then
+  python3 "$ROOT/scripts/resolve-test-model-manifest.py" \
+    "$MODEL_MANIFEST" \
+    --cadence manual \
+    --verify-root "$(dirname "$MODEL_PATH")"
 fi
 
 echo "building skippy-server and skippy-model-package"

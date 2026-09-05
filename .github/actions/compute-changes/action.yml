@@ -24,15 +24,6 @@ outputs:
   test_crates:
     description: 'JSON array of crates to test'
     value: ${{ steps.derive.outputs.test_crates }}
-  batches_json:
-    description: 'JSON array of test batches'
-    value: ${{ steps.derive.outputs.batches_json }}
-  test_batches_json:
-    description: 'JSON array of Cargo test batches'
-    value: ${{ steps.derive.outputs.test_batches_json }}
-  clippy_batches_json:
-    description: 'JSON array of deterministic clippy matrix batches'
-    value: ${{ steps.derive.outputs.clippy_batches_json }}
   all_rust:
     description: 'Boolean: true if all changed files are Rust'
     value: ${{ steps.derive.outputs.all_rust }}
