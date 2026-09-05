@@ -630,6 +630,17 @@ class SccacheEvidenceTests(unittest.TestCase):
                 for artifact_name in names:
                     self.assertIn("${{ github.run_attempt }}", artifact_name)
 
+    def test_safetensors_smoke_captures_cache_before_runtime_loop(self) -> None:
+        workflow = yaml.safe_load(WORKFLOWS["rust-tests"].read_text(encoding="utf-8"))
+        steps = workflow["jobs"]["safetensors_runtime_smoke"]["steps"]
+        step_names = [step.get("name") for step in steps]
+
+        build_index = step_names.index("Build and locate the SafeTensors smoke test")
+        capture_index = step_names.index("Capture SafeTensors smoke cache evidence")
+        exercise_index = step_names.index("Exercise every current direct-load quantization")
+        self.assertEqual(capture_index, build_index + 1)
+        self.assertLess(capture_index, exercise_index)
+
 
 class SccacheStatsSummaryTests(unittest.TestCase):
     def write_evidence(

@@ -39,6 +39,41 @@ on:
       model_cache_scope:
         required: true
         type: string
+      model_context_size:
+        description: Optional context-size override passed to model smoke scripts.
+        required: false
+        default: ''
+        type: string
+      expected_exact_payload_kind:
+        description: Optional exact-state payload kind the smoke must observe in stage telemetry.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_model_url:
+        description: Optional second (recurrent) model the KV caching smoke downloads for its second leg.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_model_file:
+        description: Filename under ~/.models for the optional recurrent smoke model.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_model_cache_scope:
+        description: Cache scope for the optional recurrent smoke model.
+        required: false
+        default: two-node-split-recurrent-smoke-model
+        type: string
+      kv_recurrent_context_size:
+        description: Context-size override passed to the recurrent leg of the KV caching smoke.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_expected_exact_payload_kind:
+        description: Exact-state payload kind required only from the recurrent smoke leg.
+        required: false
+        default: ''
+        type: string
       cache_key_prefix:
         required: false
         default: ''
@@ -54,6 +89,12 @@ on:
       HF_TOKEN:
         required: false
 
+env:
+  MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
+  MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.expected_exact_payload_kind }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_MODEL_FILE: ${{ inputs.kv_recurrent_model_file }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE: ${{ inputs.kv_recurrent_context_size }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.kv_recurrent_expected_exact_payload_kind }}
 permissions:
   contents: read
   packages: read
@@ -97,6 +138,52 @@ jobs:
           model_cache_scope: ${{ inputs.model_cache_scope }}
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' }}
+
+      - name: Restore recurrent smoke model cache
+        if: ${{ inputs.kv_recurrent_model_url != '' && inputs.kv_recurrent_model_file != '' }}
+        id: recurrent-model-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.models/${{ inputs.kv_recurrent_model_file }}
+          key: ${{ inputs.cache_key_prefix }}mesh-llm-${{ runner.os }}-${{ inputs.kv_recurrent_model_cache_scope }}-${{ inputs.kv_recurrent_model_file }}-unverified-${{ hashFiles('.github/cache-version.txt') }}
+
+      - name: Resolve recurrent smoke model for the KV caching leg
+        if: ${{ inputs.kv_recurrent_model_url != '' && inputs.kv_recurrent_model_file != '' }}
+        env:
+          MODEL_FILE: ${{ inputs.kv_recurrent_model_file }}
+          MODEL_URL: ${{ inputs.kv_recurrent_model_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.models
+          output="$HOME/.models/$MODEL_FILE"
+          if [[ -s "$output" ]]; then
+            echo "recurrent model already present: $output"
+            exit 0
+          fi
+          token="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+          curl_args=(
+            --fail --location --show-error
+            --retry 12
+            --retry-delay 20
+            --retry-max-time 600
+            --retry-all-errors
+          )
+          if [[ -n "$token" ]]; then
+            curl_args+=(--header "Authorization: Bearer ${token}")
+          fi
+          partial="${output}.download"
+          rm -f "$partial"
+          curl "${curl_args[@]}" "$MODEL_URL" -o "$partial"
+          mv "$partial" "$output"
+          test -s "$output"
+          echo "recurrent model staged: $output"
+
+      - name: Save recurrent smoke model cache
+        if: ${{ inputs.kv_recurrent_model_url != '' && inputs.kv_recurrent_model_file != '' && github.ref == 'refs/heads/main' && github.event.inputs.original_event_name != 'pull_request' && github.event.inputs.original_event_name != 'pull_request_target' && steps.recurrent-model-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.models/${{ inputs.kv_recurrent_model_file }}
+          key: ${{ steps.recurrent-model-cache.outputs.cache-primary-key }}
 
       - name: Run scripted smoke
         run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
