@@ -414,15 +414,49 @@ fn local_hardware_info_to_proto(
     ann: &PeerAnnouncement,
 ) -> Option<crate::proto::node::HardwareInfo> {
     let gpus = local_gpu_info_to_proto(ann);
-    if ann.hostname.is_none() && ann.is_soc.is_none() && gpus.is_empty() {
+    let memory = ann.memory.as_ref().map(local_memory_to_proto);
+    if ann.hostname.is_none() && ann.is_soc.is_none() && gpus.is_empty() && memory.is_none() {
         None
     } else {
         Some(crate::proto::node::HardwareInfo {
             is_soc: ann.is_soc,
             hostname: ann.hostname.clone(),
             gpus,
+            memory,
         })
     }
+}
+
+fn local_memory_to_proto(memory: &crate::mesh::AdvertisedMemory) -> crate::proto::node::MemoryInfo {
+    crate::proto::node::MemoryInfo {
+        total_bytes: Some(memory.total_bytes),
+        reserved_bytes: Some(memory.reserved_bytes),
+        configured_reserve_bytes: Some(memory.configured_reserve_bytes),
+        usable_bytes: Some(memory.usable_bytes),
+        system_ram_bytes: memory.system_ram_bytes,
+        ram_offload_bytes: Some(memory.ram_offload_bytes),
+    }
+}
+
+/// A peer that itemizes its capacity always sends the total and the usable
+/// share; a block missing either, or claiming more usable memory than it
+/// totals, carries nothing the breakdown can use and is dropped.
+fn proto_memory_to_local(
+    memory: &crate::proto::node::MemoryInfo,
+) -> Option<crate::mesh::AdvertisedMemory> {
+    let total_bytes = memory.total_bytes?;
+    let usable_bytes = memory.usable_bytes?;
+    if usable_bytes > total_bytes {
+        return None;
+    }
+    Some(crate::mesh::AdvertisedMemory {
+        total_bytes,
+        reserved_bytes: memory.reserved_bytes.unwrap_or(0),
+        configured_reserve_bytes: memory.configured_reserve_bytes.unwrap_or(0),
+        usable_bytes,
+        system_ram_bytes: memory.system_ram_bytes,
+        ram_offload_bytes: memory.ram_offload_bytes.unwrap_or(0),
+    })
 }
 
 struct LegacyGpuFields {
@@ -947,6 +981,9 @@ pub(crate) fn proto_ann_to_local(
         gpu_reserved_bytes: legacy_gpu_fields
             .gpu_reserved_bytes
             .or_else(|| pa.gpu_reserved_bytes.clone()),
+        memory: hardware
+            .and_then(|hardware| hardware.memory.as_ref())
+            .and_then(proto_memory_to_local),
         gpu_mem_bandwidth_gbps: legacy_gpu_fields
             .gpu_mem_bandwidth_gbps
             .or_else(|| pa.gpu_mem_bandwidth_gbps.clone()),
