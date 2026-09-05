@@ -167,9 +167,8 @@ credentials may differ.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
 - ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
   platform-local inference, backend, two-node, Metal and model-download
-  consumers using only composed artifacts. The Linux two-node split row expands
-  to a fixed dense SmolLM2 plus recurrent Qwen3.5 model matrix, serialized with
-  `max-parallel: 1`; pull requests fail fast while main executes both rows.
+  consumers using only composed artifacts. One Linux KV caching smoke job runs
+  a fixed dense SmolLM2 leg followed by a recurrent Qwen3.5 leg; both must pass.
 - ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
   Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
   producers that start from the plan and static ABI respectively, before

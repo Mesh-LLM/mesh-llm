@@ -8,9 +8,11 @@
 # two distinct nodes before it sends OpenAI requests through stage 0. For each
 # model leg it sends every prompt length twice in a row (X, X, X+more, X+more,
 # ...): the first sight of each length proves reuse keeps growing, and the
-# identical re-send must be served from cache as a near-full restore. With
-# MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the dense leg runs first and the
-# recurrent leg repeats the whole flow against a second model in the same job.
+# identical re-send must restore more of the prompt from cache. Dense KV cache
+# repeats must be near-full restores; recurrent KV cache repeats may restore
+# from the latest checkpoint. With MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the
+# dense leg runs first and the recurrent leg repeats the whole flow against a
+# second model in the same job.
 
 set -euo pipefail
 
@@ -26,10 +28,15 @@ WORKER_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_WORKER_CONSOLE_PORT:-3162}"
 WORKER_BIND_PORT="${MESH_TWO_NODE_SPLIT_WORKER_BIND_PORT:-53648}"
 MAX_WAIT="${MESH_TWO_NODE_SPLIT_MAX_WAIT:-300}"
 # Optional second model: when set, the smoke runs the whole split flow once
-# against MODEL (dense) and once against this (recurrent) in the same process
-# pair, so a single CI job covers both cache families.
+# against MODEL (dense) and once against this (recurrent), restarting both
+# processes between legs so a single CI job covers both cache families.
 RECURRENT_MODEL="${MESH_TWO_NODE_SPLIT_RECURRENT_MODEL:-}"
+RECURRENT_MODEL_FILE="${MESH_TWO_NODE_SPLIT_RECURRENT_MODEL_FILE:-}"
 RECURRENT_CTX_SIZE="${MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE:-4096}"
+RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND="${MESH_TWO_NODE_SPLIT_RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND:-}"
+if [[ -z "$RECURRENT_MODEL" && -n "$RECURRENT_MODEL_FILE" ]]; then
+    RECURRENT_MODEL="${HOME}/.models/${RECURRENT_MODEL_FILE}"
+fi
 REQUEST_SETTLE_SECONDS="${MESH_TWO_NODE_SPLIT_REQUEST_SETTLE_SECONDS:-1}"
 PREFIX_ATTEMPTS="${MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS:-3}"
 EXPECTED_EXACT_PAYLOAD_KIND="${MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND:-}"
@@ -288,9 +295,9 @@ for i in $(seq 1 "$MAX_WAIT"); do
         echo "last peer count: ${PEERS:-unknown}" >&2
         echo "last split summary: ${READY_SUMMARY:-unknown}" >&2
         echo "--- seed /api/runtime/stages at timeout ---" >&2
-        echo "$(stages_json "$SEED_CONSOLE_PORT")" >&2
+        printf '%s\n' "$(stages_json "$SEED_CONSOLE_PORT")" >&2
         echo "--- worker /api/runtime/stages at timeout ---" >&2
-        echo "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
+        printf '%s\n' "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
         tail -160 "$SEED_LOG" >&2 || true
         tail -160 "$WORKER_LOG" >&2 || true
         exit 1
@@ -371,7 +378,7 @@ PY
 PREFIX_REQUEST_COUNT=6
 
 validate_prefix_responses() {
-    python3 - "$1" "$PREFIX_REQUEST_COUNT" <<'PY'
+    python3 - "$1" "$PREFIX_REQUEST_COUNT" "$EXPECTED_EXACT_PAYLOAD_KIND" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -384,6 +391,8 @@ REPEAT_TOKEN_SLACK = 2
 
 response_dir = Path(sys.argv[1])
 request_count = int(sys.argv[2])
+exact_payload_kind = sys.argv[3]
+checkpointed_restore = exact_payload_kind == "kv-recurrent"
 growth_indexes = list(range(1, request_count + 1, 2))
 repeat_pairs = [(index, index + 1) for index in range(1, request_count + 1, 2)]
 metrics = []
@@ -434,11 +443,15 @@ for index in growth_indexes:
         raise SystemExit(
             f"growing prompts must retain an uncached suffix: {metrics}"
         )
-# Each identical re-send must be a near-full restore: it must cover at least
-# everything its first sight restored (the new extension block is in the
-# restored region) and come from cache rather than a recompute.
+# Each identical re-send must extend beyond the first-sight cached region.
+# Dense KV cache can additionally restore nearly the entire prompt. Recurrent
+# KV cache restores at checkpoint boundaries, so a valid repeat may leave a
+# larger suffix uncached even when exact-state cache reuse is working.
 for first, repeat in repeat_pairs:
-    if cached_counts[repeat - 1] < prompt_counts[repeat - 1] - REPEAT_TOKEN_SLACK:
+    if not checkpointed_restore and (
+        cached_counts[repeat - 1]
+        < prompt_counts[repeat - 1] - REPEAT_TOKEN_SLACK
+    ):
         raise SystemExit(
             "identical re-send was not served from cache: "
             f"request {repeat} restored {cached_counts[repeat - 1]} of "
@@ -446,7 +459,7 @@ for first, repeat in repeat_pairs:
         )
     if cached_counts[repeat - 1] <= cached_counts[first - 1]:
         raise SystemExit(
-            f"re-send {repeat} must restore at least the first-sight region of "
+            f"re-send {repeat} must extend beyond the first-sight cache of "
             f"request {first}: {metrics}"
         )
 
@@ -543,6 +556,7 @@ run_recurrent_leg() {
     MODEL="$RECURRENT_MODEL"
     CTX_SIZE="$RECURRENT_CTX_SIZE"
     MODEL_LABEL="recurrent"
+    EXPECTED_EXACT_PAYLOAD_KIND="$RECURRENT_EXPECTED_EXACT_PAYLOAD_KIND"
     export MODEL CTX_SIZE
 
     SEED_PID="$(start_node seed "" "$SEED_API_PORT" "$SEED_CONSOLE_PORT" "$SEED_BIND_PORT" "$SEED_LOG")"
@@ -607,9 +621,9 @@ run_recurrent_leg() {
             echo "last peer count: ${PEERS:-unknown}" >&2
             echo "last split summary: ${READY_SUMMARY:-unknown}" >&2
             echo "--- seed /api/runtime/stages at timeout (recurrent leg) ---" >&2
-            echo "$(stages_json "$SEED_CONSOLE_PORT")" >&2
+            printf '%s\n' "$(stages_json "$SEED_CONSOLE_PORT")" >&2
             echo "--- worker /api/runtime/stages at timeout (recurrent leg) ---" >&2
-            echo "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
+            printf '%s\n' "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
             tail -160 "$SEED_LOG" >&2 || true
             tail -160 "$WORKER_LOG" >&2 || true
             exit 1

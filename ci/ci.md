@@ -287,9 +287,8 @@ runtime producers are not duplicated.
 - `ci-linux-product-smoke-slice.yml` and
   `ci-macos-product-smoke-slice.yml` — platform-local CPU core, CUDA,
   two-node, Metal and model-download consumers using only composed artifacts.
-  The Linux two-node split smoke uses a fixed dense SmolLM2 plus recurrent
-  Qwen3.5 matrix, serialized with `max-parallel: 1`; pull requests fail fast
-  between those rows while main executes both.
+  One Linux KV caching smoke job runs a fixed dense SmolLM2 leg followed by a
+  recurrent Qwen3.5 leg; both must pass.
   CUDA inference uses the
   approved `gpu-nvidia` ephemeral self-hosted scale set, including for
   same-repository PRs. That hardware-qualified exception executes only through
