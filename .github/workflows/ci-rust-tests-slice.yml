@@ -309,6 +309,12 @@ jobs:
           fi
           printf 'test_binary=%s\n' "$test_binary" >> "$GITHUB_OUTPUT"
           printf 'test_name=%s\n' "$test_name" >> "$GITHUB_OUTPUT"
+      - name: Capture SafeTensors smoke cache evidence
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/capture-sccache-stats
+        with:
+          artifact_name: sccache-safetensors-runtime-smoke-${{ github.run_attempt }}
+          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}
       - name: Exercise every current direct-load quantization
         env:
           SAFETENSORS_SMOKE_TEST_BINARY: ${{ steps.safetensors_smoke_test.outputs.test_binary }}
@@ -326,9 +332,3 @@ jobs:
                 "$SAFETENSORS_SMOKE_TEST_NAME" --exact --ignored --nocapture
             echo "::endgroup::"
           done < <(jq -r '.[]' <<<"$SAFETENSORS_QUANTIZATIONS_JSON")
-      - name: Capture SafeTensors smoke cache evidence
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/capture-sccache-stats
-        with:
-          artifact_name: sccache-safetensors-runtime-smoke-${{ github.run_attempt }}
-          cache_expectation: ${{ steps.sccache_seed.outputs.cache_hit == 'true' && 'warm' || 'cold' }}

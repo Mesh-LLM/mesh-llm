@@ -47,6 +47,27 @@ Skippy reports cache state in OpenAI usage and telemetry:
   `skippy.kv.hit_kind`. The hit kind is `none` for disabled or missed cache
   lookups.
 
+## Exact-State Retention
+
+Recurrent and hybrid families store an exact-state snapshot: the complete
+native session state, which is indivisible and includes recurrent and
+convolution buffers. The stage byte budget (`prefix_cache.max_bytes`, or
+`SKIPPY_KV_CACHE_MAX_BYTES`) is derived from attention KV metadata, so it
+systematically undercounts those snapshots and a single snapshot can exceed it.
+
+The exact catalog therefore treats that budget as a soft cap. It keeps a small
+working set of snapshots past the soft cap, so concurrent sessions on one stage
+do not evict each other on every request, and it never evicts its last entry,
+because a snapshot that self-evicts leaves the stage with no exact prefix reuse
+at all. A hard limit bounds that allowance and defaults to a multiple of the
+soft cap, but it is not an absolute physical-byte ceiling: the last indivisible
+snapshot remains reusable even when it exceeds the limit. Set
+`SKIPPY_KV_CACHE_EXACT_MAX_BYTES` to pin the limit in bytes on a worker whose
+memory headroom does not match the attention-derived estimate; `0` disables the
+limit. Both limits are reported on
+`stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
+`skippy.exact_cache.hard_max_bytes`.
+
 ## mesh-llm Defaults
 
 mesh-llm wires Skippy prefix cache through family policy. For supported model

@@ -167,7 +167,8 @@ credentials may differ.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
 - ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
   platform-local inference, backend, two-node, Metal and model-download
-  consumers using only composed artifacts.
+  consumers using only composed artifacts. One Linux KV caching smoke job runs
+  a fixed dense SmolLM2 leg followed by a recurrent Qwen3.5 leg; both must pass.
 - ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
   Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
   producers that start from the plan and static ABI respectively, before
@@ -216,14 +217,16 @@ Initial planner budgets are:
 
 The lane projections pass smaller PR max-parallel values to Clippy, tests,
 hosts, runtimes and platform checks and wider bounded values to main. Host, ABI
-and runtime producer identities are not duplicated. The full Swift target
-matrix is a deliberate fan-out of seven distinct architecture/platform inputs,
+and runtime producer identities are not duplicated. The fixed two-row
+split-model matrix is serialized, so it adds runner-minutes without increasing
+peak workers. The full Swift target matrix is a deliberate fan-out of seven
+distinct architecture/platform inputs,
 bounded to two concurrent jobs for PR profiles and four for main/manual and
 release; a single assembly job restores those libraries and publishes the
-verified XCFramework. Separate run-scoped graphs
-build one prepared UI artifact per active platform lane; that is the accepted
-readability tradeoff, while UI tests remain owned by the Website graph. Every
-heavy job has a timeout and a deterministic row identity.
+verified XCFramework. Separate run-scoped graphs build one prepared UI artifact
+per active platform lane; that is the accepted readability tradeoff, while UI
+tests remain owned by the Website graph. Every heavy job has a timeout and a
+deterministic row identity.
 
 PR platform matrices for compilation, Rust tests, products, functional
 platform checks, and full Swift targets fail fast. Main/manual and release
