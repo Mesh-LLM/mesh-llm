@@ -268,6 +268,10 @@ pub(in crate::runtime) async fn startup_handle_local_fallback_event(
             survey_telemetry: ctx.survey_telemetry.clone(),
         },
         ctx.model_ref,
+        // Split-fallback startup loads have no `LoadOperation` reservation
+        // of their own (event-system-fixes deferral D2) -- degrade rather
+        // than fabricate an uncorrelated root.
+        None,
     )
     .await;
 

@@ -284,7 +284,10 @@ async fn run_loaded_local_model(
     bind_addr: SocketAddr,
     runtime_event_driver: tokio::task::JoinHandle<()>,
 ) -> Result<()> {
-    let (_, model, _death_rx) = start_local_openai_model(launch, model_name).await?;
+    // `--local-model-only` has no `LoadOperation` reservation (event-system-
+    // fixes deferral D2) -- degrade rather than fabricate an uncorrelated
+    // root.
+    let (_, model, _death_rx) = start_local_openai_model(launch, model_name, None).await?;
     if let Err(error) = wait_for_openai_ready(&model, bind_addr).await {
         model.shutdown().await;
         runtime_event_driver.abort();

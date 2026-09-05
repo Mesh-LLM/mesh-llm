@@ -546,6 +546,12 @@ pub(crate) async fn run_auto_load_runtime_model(
             survey_telemetry: ctx.survey_telemetry.clone(),
         },
         &runtime_model_name,
+        // D2 fix (event-system-fixes deferral): correlates every native
+        // `ModelOpenProgress` tick under this SAME load operation's root
+        // (`load_op.progress_ingress`), rather than a fresh, uncorrelated
+        // one. `&self` borrow only -- `load_op` itself is still needed
+        // below on both the success and failure paths.
+        load_op.progress_ingress(),
     )
     .await
     {

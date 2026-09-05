@@ -1,11 +1,28 @@
 use crate::runtime::operational_logging::{
     NativeSkippyOperationalEvent, record_native_skippy_operational_event,
 };
+use crate::runtime_events::engine::ScopedIngress;
 use mesh_llm_events::{OutputEvent, emit_event};
+use mesh_llm_runtime_event_contracts::ProgressUnit;
 use skippy_runtime::{
     RuntimeEvent as SkippyNativeRuntimeEvent, RuntimeEventKind as SkippyNativeRuntimeEventKind,
     RuntimeEventProgressUnit as SkippyNativeRuntimeProgressUnit,
 };
+
+/// Maps the native model-open progress unit onto the runtime-event
+/// contracts' unit -- a direct 1:1 correspondence except `Unknown`, which
+/// degrades to `None` rather than guessing a unit the native side did not
+/// actually report.
+fn translate_progress_unit(unit: SkippyNativeRuntimeProgressUnit) -> ProgressUnit {
+    match unit {
+        SkippyNativeRuntimeProgressUnit::None => ProgressUnit::None,
+        SkippyNativeRuntimeProgressUnit::Bytes => ProgressUnit::Bytes,
+        SkippyNativeRuntimeProgressUnit::Items => ProgressUnit::Items,
+        SkippyNativeRuntimeProgressUnit::Tensors => ProgressUnit::Tensors,
+        SkippyNativeRuntimeProgressUnit::Steps => ProgressUnit::Steps,
+        SkippyNativeRuntimeProgressUnit::Unknown(_) => ProgressUnit::None,
+    }
+}
 
 fn skippy_native_runtime_event_context(
     sequence: u64,
@@ -126,10 +143,29 @@ fn emit_skippy_native_runtime_event(event: SkippyNativeRuntimeEvent) {
     let _ = emit_event(output_event);
 }
 
+/// `progress_ingress` is `Some` only on the single-node runtime-load path
+/// (`LoadOperation::progress_ingress`, event-system-fixes deferral D2) --
+/// every other caller passes `None` and this reporter simply skips the
+/// `ModelLoadProgress` co-emission below, unaffected otherwise.
 pub(super) fn skippy_native_model_open_event_reporter(
-    _model_name: String,
+    model_name: String,
+    progress_ingress: Option<ScopedIngress>,
 ) -> crate::inference::skippy::NativeModelOpenEventReporter {
-    Box::new(emit_skippy_native_runtime_event)
+    Box::new(move |event: SkippyNativeRuntimeEvent| {
+        if event.kind == SkippyNativeRuntimeEventKind::ModelOpenProgress
+            && let Some(ingress) = progress_ingress.as_ref()
+        {
+            let total = (event.progress_total > 0).then_some(event.progress_total);
+            crate::runtime::model_lifecycle::submit_load_progress(
+                ingress,
+                &model_name,
+                event.progress_current,
+                total,
+                translate_progress_unit(event.progress_unit),
+            );
+        }
+        emit_skippy_native_runtime_event(event);
+    })
 }
 
 #[cfg(test)]

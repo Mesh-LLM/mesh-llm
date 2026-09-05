@@ -20,11 +20,11 @@ use mesh_llm_runtime_event_contracts::{
     ChildOperationId, FactData, HumanSummary, LogicalModelId, ModelAvailabilityEventKind,
     ModelAvailabilityFact, ModelLoadingEventKind, ModelLoadingFact, ModelPreparationEventKind,
     ModelPreparationFact, ModelUnloadingEventKind, ModelUnloadingFact, NodeAvailabilityEventKind,
-    NodeAvailabilityFact, OperationId, OperationScope, Outcome, ReasonCode, RuntimeEventIngress,
-    RuntimeFact, ScopeIdentities,
+    NodeAvailabilityFact, OperationId, OperationScope, Outcome, Progress, ProgressUnit, ReasonCode,
+    RuntimeEventIngress, RuntimeFact, ScopeIdentities,
 };
 
-use crate::runtime_events::engine::OperationReservation;
+use crate::runtime_events::engine::{OperationReservation, ScopedIngress};
 use crate::runtime_events::runtime_event_engine;
 
 /// Task 10 addition (plan task 10, line 279's §8.14 `available_model_set_changed`
@@ -188,6 +188,32 @@ fn submit_unloading(
         )));
 }
 
+/// The producer for `ModelLoadingEventKind::ModelLoadProgress` (event-
+/// system-fixes deferral D2: previously unproduced anywhere in the
+/// workspace). `ingress` must come from [`LoadOperation::progress_ingress`]
+/// so this correlates under the same operation root as the load's other
+/// facts. Progress-class: coalesced per-slot and flushed on the engine's
+/// frozen 100ms `PROGRESS_EXPORT_INTERVAL`
+/// (`runtime_events::engine::lanes::submit_progress`) -- callers submit
+/// freely and the engine throttles; this function must never add a second,
+/// producer-side throttle.
+pub(crate) fn submit_load_progress(
+    ingress: &ScopedIngress,
+    model: &str,
+    current: u64,
+    total: Option<u64>,
+    unit: ProgressUnit,
+) {
+    let data = FactData {
+        progress: Some(Progress::new(current, total, unit)),
+        ..model_scope(model)
+    };
+    let _ = ingress.try_submit(RuntimeFact::ModelLoading(ModelLoadingFact::with_data(
+        ModelLoadingEventKind::ModelLoadProgress,
+        data,
+    )));
+}
+
 /// One model-load operation. Acquired before any load work begins; the root
 /// reservation always outlives its three children (`prep` for §8.2 model
 /// resolution, `ready` for §8.2 model preparation completion, `load` for
@@ -303,6 +329,20 @@ impl LoadOperation {
                 ),
             ));
         }
+    }
+
+    /// §8.3 `model load progress` (event-system-fixes deferral D2):
+    /// exposes a narrow, Progress-class-only capability bound to this
+    /// operation's `load` child, so a caller can report native model-open
+    /// progress ticks (e.g. `ModelOpenProgress`'s tensor-loading percentage)
+    /// through [`submit_load_progress`] while they correlate under the SAME
+    /// operation root as `model_load_requested`/`model_load_started`/
+    /// `native_model_load_completed` -- never a fresh, uncorrelated root.
+    /// `None` once reservation exhaustion degraded `begin()` to a no-op, or
+    /// once the `load` child was already consumed by `native_load_completed`
+    /// / `load_failed`.
+    pub(crate) fn progress_ingress(&self) -> Option<ScopedIngress> {
+        self.load.as_ref().map(OperationReservation::ingress)
     }
 
     /// §8.4 `model capacity changed` -- call once local capacity has been
@@ -587,12 +627,15 @@ pub(crate) fn reconcile_process_crash(model: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadOperation, UnloadOperation, reconcile_process_crash};
+    use super::{LoadOperation, UnloadOperation, reconcile_process_crash, submit_load_progress};
+    use crate::runtime_events::config::PROGRESS_EXPORT_INTERVAL;
     use crate::runtime_events::engine::RuntimeEventEngine;
     use crate::runtime_events::{clear_runtime_event_engine, install_runtime_event_engine};
     use mesh_llm_runtime_event_contracts::{
-        ModelUnloadingEventKind, Outcome, ReasonCode, RuntimeFact,
+        ModelLoadingEventKind, ModelUnloadingEventKind, Outcome, ProgressUnit, ReasonCode,
+        RuntimeFact,
     };
+    use std::time::Instant;
 
     fn last_unloading_reason(engine: &RuntimeEventEngine) -> Option<ReasonCode> {
         engine
@@ -729,6 +772,74 @@ mod tests {
             "two concurrent loads sharing a basename must get distinct \
              provisional ids, got: {ids:?}"
         );
+        clear_runtime_event_engine();
+    }
+
+    /// D2 fix (event-system-fixes deferral): `ModelLoadingEventKind::
+    /// ModelLoadProgress` had NO production call site anywhere in the
+    /// workspace before this change (F2 live-sampling: zero progress-class
+    /// ModelLoading frames from any model load). Proves a model load
+    /// submits at least one `ModelLoadProgress` fact through
+    /// `LoadOperation::progress_ingress`, and that it correlates under the
+    /// SAME operation scope as its sibling `model_load_started` fact --
+    /// never a fresh, uncorrelated root.
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn load_progress_reports_under_the_same_operation_scope_as_its_sibling_load_facts() {
+        let engine = install_test_engine();
+        let op = LoadOperation::begin("org/model");
+        engine.drain();
+
+        let sibling_scope = engine
+            .replay()
+            .snapshot()
+            .into_iter()
+            .find_map(|frame| {
+                let RuntimeFact::ModelLoading(fact) = frame.fact.as_ref() else {
+                    return None;
+                };
+                (*fact.kind() == ModelLoadingEventKind::ModelLoadStarted).then_some(frame.scope)
+            })
+            .expect("model_load_started must have published a frame");
+
+        let ingress = op
+            .progress_ingress()
+            .expect("load reservation must still be live before native completion");
+        let t0 = Instant::now();
+        submit_load_progress(&ingress, "org/model", 250, Some(1000), ProgressUnit::Steps);
+
+        // Progress-class facts are coalesced per-slot and flushed only once
+        // the engine's frozen 100ms PROGRESS_EXPORT_INTERVAL has elapsed
+        // (`runtime_events::engine::lanes::submit_progress` +
+        // `engine::drain::maybe_flush_progress`) -- mirrors
+        // `engine::tests::classes::progress_flushes_at_most_once_per_hundred_milliseconds_with_the_latest_value`'s
+        // own pure-`Instant`-arithmetic pattern, never a real sleep.
+        let flushed = engine.drain_up_to_at(None, t0 + PROGRESS_EXPORT_INTERVAL);
+        assert_eq!(
+            flushed.applied, 1,
+            "the coalesced ModelLoadProgress fact must flush once the interval elapses"
+        );
+
+        let progress_scope = engine
+            .replay()
+            .snapshot()
+            .into_iter()
+            .rev()
+            .find_map(|frame| {
+                let RuntimeFact::ModelLoading(fact) = frame.fact.as_ref() else {
+                    return None;
+                };
+                (*fact.kind() == ModelLoadingEventKind::ModelLoadProgress).then_some(frame.scope)
+            })
+            .expect("ModelLoadProgress must have published a frame");
+
+        assert_eq!(
+            progress_scope, sibling_scope,
+            "ModelLoadProgress must correlate under the SAME operation root as model_load_started"
+        );
+
+        op.load_failed("org/model");
+        engine.drain();
         clear_runtime_event_engine();
     }
 

@@ -346,7 +346,14 @@ pub(super) async fn load_split_runtime_generation_inner(
             settings.embedded_openai.clone(),
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
             skippy_telemetry,
-            Some(skippy_native_model_open_event_reporter(reporter_model_ref)),
+            // Split downstream loads have no `LoadOperation` reservation of
+            // their own (event-system-fixes deferral D2 scopes
+            // `ModelLoadProgress` to the single-node runtime-load path) --
+            // degrade rather than fabricate an uncorrelated root.
+            Some(skippy_native_model_open_event_reporter(
+                reporter_model_ref,
+                None,
+            )),
             skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
             serving_hooks_factory,
         )
