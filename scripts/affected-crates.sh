@@ -107,7 +107,6 @@ fail_open() {
 {
   "affected": $all_crates_json,
   "test_crates": [],
-  "batches": [[], [], []],
   "all_rust": true,
   "ui_changed": $([[ "$FAIL_OPEN_UI_CHANGED" == true ]] && echo "true" || echo "false"),
   "website_changed": $([[ "$FAIL_OPEN_WEBSITE_CHANGED" == true ]] && echo "true" || echo "false")
@@ -184,8 +183,6 @@ main() {
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
             [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
-       [[ "$file" =~ ^scripts/plan-clippy-batches\.sh$ ]] || \
-       [[ "$file" =~ ^scripts/plan-test-batches\.sh$ ]] || \
        [[ "$file" =~ ^rust-toolchain(\.toml)?$ ]]; then
       escalate=true
     fi
@@ -206,7 +203,6 @@ main() {
 {
   "affected": $all_crates_json,
   "test_crates": [],
-  "batches": [[], [], []],
   "all_rust": true,
   "ui_changed": $([[ "$ui_changed" == true ]] && echo "true" || echo "false"),
   "website_changed": $([[ "$website_changed" == true ]] && echo "true" || echo "false")
@@ -341,54 +337,15 @@ EOF
     done
   done
 
-  # Step 5: Topologically sort affected crates and bucket into 3 batches
-  # For simplicity, use depth in reverse-dep graph (distance from leaves)
-  local -A depth_map=()
-
-  for crate in "${affected[@]}"; do
-    local max_depth=0
-    local deps="${reverse_deps[$crate]:-}"
-
-    for dep in $deps; do
-      [[ -z "$dep" ]] && continue
-      local dep_depth=${depth_map[$dep]:-0}
-      if [[ $dep_depth -gt $max_depth ]]; then
-        max_depth=$dep_depth
-      fi
-    done
-
-    depth_map[$crate]=$((max_depth + 1))
-  done
-
-  # Bucket by depth % 3
-  local -a batch0=()
-  local -a batch1=()
-  local -a batch2=()
-
-  for crate in "${affected[@]}"; do
-    local d=${depth_map[$crate]:-0}
-    local bucket=$((d % 3))
-
-    case $bucket in
-      0) batch0+=("$crate") ;;
-      1) batch1+=("$crate") ;;
-      2) batch2+=("$crate") ;;
-    esac
-  done
-
-  # Step 6: Emit JSON output using jq
+  # Step 5: Emit JSON output using jq
   jq -n \
     --argjson affected "$(printf '%s\n' "${affected[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
     --argjson test_crates "$(printf '%s\n' "${test_crates[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
-    --argjson batch0 "$(printf '%s\n' "${batch0[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
-    --argjson batch1 "$(printf '%s\n' "${batch1[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
-    --argjson batch2 "$(printf '%s\n' "${batch2[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
     --arg ui_changed "$([[ "$ui_changed" == true ]] && echo "true" || echo "false")" \
     --arg website_changed "$([[ "$website_changed" == true ]] && echo "true" || echo "false")" \
     '{
       affected: $affected,
       test_crates: $test_crates,
-      batches: [$batch0, $batch1, $batch2],
       all_rust: false,
       ui_changed: ($ui_changed == "true"),
       website_changed: ($website_changed == "true")

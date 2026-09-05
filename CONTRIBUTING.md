@@ -169,19 +169,11 @@ For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the
 [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md) before editing CI.
 `.github/AGENTS.md` enforces that sequence.
 
-The five `pr_{quality,website,linux,macos,windows}.yml` files are focused PR
-entrypoints, while `ci.yml` is the thin main entrypoint. On protected main,
-`ci-control.yml` computes one versioned plan from `ci/ownership.yml` and
-`ci/slices.yml`, then dispatches separate Quality, Website, Linux, macOS and
-Windows workflow graphs with bounded native inputs. Each PR entry invokes only
-its matching protected reusable lane, keeping platform/topic logs in separate
-PR-associated runs.
-A PR selects representative rows from the same catalog that `main` runs; it
-does not maintain a second build graph. GitHub-hosted runners are the PR
-provider.
-Trusted main Linux jobs may use Depot only through the checked runner policy;
-PR Depot execution and cache isolation are future work documented in
-[`ci/DEPOT_MIGRATION.md`](ci/DEPOT_MIGRATION.md).
+The current five-way PR/main topology, manual controller, planner profiles,
+and runner/provider/cache policy are documented in [`ci/ci.md`](ci/ci.md),
+especially [Planner and profiles](ci/ci.md#planner-and-profiles) and [Provider
+and cache policy](ci/ci.md#provider-and-cache-policy). The normative rules for
+editing workflows and CI scripts live in the [`manage-ci` skill](.agents/skills/manage-ci/SKILL.md).
 
 Linux CI uses prebuilt public and self-hosted images from
 [`Mesh-LLM/mesh-llm-runner-images`](https://github.com/Mesh-LLM/mesh-llm-runner-images).
@@ -196,24 +188,6 @@ and pin its OCI digest. Do not add a one-off `apt-get`, `pip`, global `npm`,
 `cargo install`, downloaded binary, or similar setup step to an individual
 workflow. Existing workflow-local setup is migration debt, not a pattern for
 new jobs.
-
-### Routing and profiles
-
-| Change class | PR profile | Main profile |
-| --- | --- | --- |
-| Draft pull request | `pr-draft`: stable planner/gate results only; no build slices unless CI-control or runner-infrastructure fail-open applies | n/a |
-| Ready pull request | `pr-ready`: complete targeted rows and affected Rust dependents | n/a |
-| Push to `main` | n/a | `main`: every workspace crate and supported product/platform/backend/SDK row |
-| Manual dispatch | `manual-full` when invoked from the PR entrypoint | `main`-equivalent full validation from `ci.yml` |
-
-For `pr-ready`, docs-only changes select the quality contract slice. Regular
-`pr-draft` docs-only changes stop at the stable planner/gate results. For
-`pr-ready`, UI, website, Rust, protocol, split-serving, model, backend, platform
-and SDK ownership selects the corresponding typed rows. CI-control and
-runner-infrastructure changes fail open to the control rows and supported
-product rows. Paths mapping only to documentation plus `ci-control` retain
-limited documentation routing instead of forcing all product rows. Unknown
-paths fail closed.
 
 ### Local validation and extensions
 
