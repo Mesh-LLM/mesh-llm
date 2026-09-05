@@ -171,6 +171,32 @@ pub(super) struct EmbeddedReplayCheckpointRecord<'a> {
 }
 
 impl StageOpenAiBackend {
+    pub(super) fn embedded_exact_checkpoint_boundary(
+        &self,
+        request: &EmbeddedStageZeroGeneration<'_>,
+        prefill_tokens: &[i32],
+        restored_prefill_tokens: usize,
+    ) -> Option<usize> {
+        let kv = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state())?;
+        let shared_boundary = kv
+            .exact_shared_checkpoint_token_count(prefill_tokens.len() as u64)
+            .and_then(|token_count| usize::try_from(token_count).ok());
+        let chat_boundary = request
+            .recurrent_cache_prefix_token_ids
+            .filter(|tokens| {
+                !tokens.is_empty()
+                    && tokens.len() <= prefill_tokens.len()
+                    && prefill_tokens.starts_with(tokens)
+            })
+            .map(<[i32]>::len);
+        let valid = |boundary: &usize| {
+            *boundary > restored_prefill_tokens && *boundary < prefill_tokens.len()
+        };
+        shared_boundary
+            .filter(valid)
+            .or_else(|| chat_boundary.filter(valid))
+    }
+
     pub(super) fn local_kv_message_base(
         &self,
         session_id: &str,
@@ -574,6 +600,36 @@ impl StageOpenAiBackend {
                 .emit("stage.openai_kv_record_decision", attrs);
         }
         Ok(recorded_any)
+    }
+
+    pub(super) fn record_embedded_stage0_exact_checkpoint(
+        &self,
+        session_id: &str,
+        ids: &OpenAiGenerationIds,
+        checkpoint_tokens: &[i32],
+    ) -> OpenAiResult<bool> {
+        let Some(kv) = self.kv.as_ref() else {
+            return Ok(false);
+        };
+        if checkpoint_tokens.is_empty() || !kv.payload_is_exact_state() || !kv.should_record() {
+            return Ok(false);
+        }
+        let scheduler_backend = self.clone();
+        let scheduler_session_id = session_id.to_string();
+        let scheduler_ids = ids.clone();
+        let scheduler_checkpoint_tokens = checkpoint_tokens.to_vec();
+        self.iteration_scheduler.execute_runtime(
+            "embedded-shared-exact-state-checkpoint",
+            move |runtime| {
+                Ok(scheduler_backend.record_exact_state_at_tokens(
+                    runtime,
+                    &scheduler_session_id,
+                    &scheduler_ids,
+                    &scheduler_checkpoint_tokens,
+                    "embedded_shared_checkpoint",
+                ))
+            },
+        )
     }
 
     pub(super) fn record_embedded_stage0_full_prompt_first_token(

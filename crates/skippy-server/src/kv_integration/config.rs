@@ -13,8 +13,8 @@ use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKv
 use skippy_runtime::ModelStateKind;
 
 use super::{
-    EXACT_STATE_RECORD_CAPACITY, KvStageIntegration, PendingExactStateRecord, RadixExactEntry,
-    ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
+    EXACT_STATE_RECORD_CAPACITY, ExactStateByteLimits, KvStageIntegration, PendingExactStateRecord,
+    RadixExactEntry, ResidentSequencePool, StageKvMode, StagePrefixCachePayload,
     model_capability::{ModelKvCapability, loaded_model_kv_capability},
     output_tokens::OutputTokenCache,
 };
@@ -22,6 +22,27 @@ use super::{
 // Recurrent and hybrid payloads share the native n_ctx cell pool across
 // sequence lanes, so their exact-state catalog must remain deliberately small.
 const RECURRENT_CACHE_MAX_ENTRIES: usize = 16;
+
+// Exact-state snapshots are indivisible and carry architecture-specific state
+// (recurrent and convolution buffers) that `estimate_stage_cache_max_bytes`
+// cannot see, because that estimate is derived from attention KV metadata
+// alone. A single snapshot therefore routinely exceeds the soft cap. Keep this
+// many snapshots (subject to the configured entry limit) before the soft cap
+// evicts anything: falling to one entry
+// turns the catalog into a single-entry cache, where two concurrent sessions
+// on the same stage evict each other on every request.
+const EXACT_STATE_MIN_RETAINED_ENTRIES: usize = 4;
+
+// That retention floor is not allowed to grow without bound. Once the catalog
+// crosses this multiple of the soft cap it evicts again, down to the single
+// entry that keeps exact prefix reuse alive for the stage. That indivisible
+// entry may itself exceed the limit.
+const EXACT_STATE_HARD_CAP_MULTIPLE: u64 = 8;
+
+// Operator override for the limit above, in bytes, for workers whose memory
+// headroom does not match the attention-derived estimate. The last indivisible
+// snapshot may exceed it. Zero disables the limit.
+const EXACT_STATE_MAX_BYTES_ENV: &str = "SKIPPY_KV_CACHE_EXACT_MAX_BYTES";
 
 impl KvStageIntegration {
     pub fn from_loaded_model(
@@ -80,7 +101,10 @@ impl KvStageIntegration {
         // contributes one full token path to the radix tree.
         checkpoint_policy.max_resident_tokens_hint = resident_config.max_resident_tokens;
         let exact_max_entries = cache_config.max_entries.clamp(1, 512);
-        let exact_max_bytes = cache_config.max_bytes;
+        let exact_byte_limits = exact_state_byte_limits(
+            cache_config.max_bytes,
+            std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
+        );
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
@@ -114,7 +138,7 @@ impl KvStageIntegration {
                                 &worker_radix,
                                 &worker_exact_blobs,
                                 exact_max_entries,
-                                exact_max_bytes,
+                                exact_byte_limits,
                                 pending,
                             )
                         },
@@ -137,7 +161,7 @@ impl KvStageIntegration {
             radix,
             exact_blobs,
             exact_max_entries,
-            exact_max_bytes,
+            exact_byte_limits,
             exact_state_record_tx,
             exact_state_records_queued,
             exact_state_records_dropped,
@@ -173,7 +197,7 @@ fn store_exact_radix_record(
     radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
     blobs: &Mutex<CacheBlobStore>,
     max_entries: usize,
-    max_bytes: u64,
+    limits: ExactStateByteLimits,
     pending: PendingExactStateRecord,
 ) -> Result<()> {
     let logical_bytes = pending.payload.byte_len();
@@ -232,13 +256,53 @@ fn store_exact_radix_record(
             payload.release_from(&mut blobs)?;
         }
     }
-    while max_bytes > 0
-        && blobs
+    // Exact snapshots are indivisible, and the soft cap is estimated from
+    // attention KV metadata that cannot include architecture-specific
+    // recurrent state, so one snapshot can legitimately exceed it. Hold a small
+    // working set past the soft cap (never more than the configured entry
+    // limit) so concurrent sessions on a stage stop evicting each other, then
+    // apply the hard limit so that allowance stays bounded apart from one
+    // indivisible snapshot. Neither pass evicts the last entry: a snapshot that
+    // self-evicts disables exact prefix caching for the stage entirely, which
+    // is the regression this retention policy exists to prevent.
+    evict_exact_entries_over(
+        radix,
+        blobs,
+        limits.soft_bytes,
+        EXACT_STATE_MIN_RETAINED_ENTRIES.min(max_entries),
+    )?;
+    evict_exact_entries_over(radix, blobs, limits.hard_bytes, 1)?;
+    Ok(())
+}
+
+/// Evicts least-recently-used exact entries while the catalog holds more than
+/// `limit_bytes`, never dropping below `min_retained_entries`. A zero limit
+/// means the catalog has no byte ceiling and nothing is evicted.
+fn evict_exact_entries_over(
+    radix: &Mutex<UnifiedRadixCache<super::RadixResidentEntry, RadixExactEntry>>,
+    blobs: &Mutex<CacheBlobStore>,
+    limit_bytes: u64,
+    min_retained_entries: usize,
+) -> Result<()> {
+    if limit_bytes == 0 {
+        return Ok(());
+    }
+    let floor = min_retained_entries.max(1);
+    loop {
+        let over_bytes = blobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .physical_bytes()
-            > max_bytes
-    {
+            > limit_bytes;
+        let above_floor = radix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stats()
+            .recurrent_entries
+            > floor;
+        if !over_bytes || !above_floor {
+            break;
+        }
         let evicted = radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -253,6 +317,27 @@ fn store_exact_radix_record(
         )?;
     }
     Ok(())
+}
+
+/// Resolves the exact-state byte budget from the stage cache cap.
+///
+/// `configured_max_bytes` is the attention-derived stage budget, which is used
+/// as the soft cap. The hard limit defaults to a multiple of it so the working
+/// set stays bounded without inheriting an estimate that structurally
+/// undercounts exact-state payloads. One indivisible snapshot may remain above
+/// that limit. `override_max_bytes` is the operator escape hatch and wins
+/// outright when it parses; zero means unbounded.
+fn exact_state_byte_limits(
+    configured_max_bytes: u64,
+    override_max_bytes: Option<&str>,
+) -> ExactStateByteLimits {
+    let hard_bytes = override_max_bytes
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or_else(|| configured_max_bytes.saturating_mul(EXACT_STATE_HARD_CAP_MULTIPLE));
+    ExactStateByteLimits {
+        soft_bytes: configured_max_bytes,
+        hard_bytes,
+    }
 }
 
 fn effective_cache_payload(
@@ -360,6 +445,13 @@ mod tests {
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode};
 
+    fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
+        ExactStateByteLimits {
+            soft_bytes,
+            hard_bytes,
+        }
+    }
+
     fn pending(page_id: &str, tokens: &[i32], bytes: &[u8]) -> PendingExactStateRecord {
         PendingExactStateRecord {
             page_id: page_id.to_string(),
@@ -375,13 +467,19 @@ mod tests {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
 
-        store_exact_radix_record(&radix, &blobs, 1, 0, pending("first", &[1, 2], b"aaaabbbb"))
-            .unwrap();
         store_exact_radix_record(
             &radix,
             &blobs,
             1,
-            0,
+            limits(0, 0),
+            pending("first", &[1, 2], b"aaaabbbb"),
+        )
+        .unwrap();
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            limits(0, 0),
             pending("second", &[1, 3], b"aaaacccc"),
         )
         .unwrap();
@@ -406,9 +504,14 @@ mod tests {
         let radix = Mutex::new(UnifiedRadixCache::new());
         let blobs = Mutex::new(CacheBlobStore::new(4));
 
-        let error =
-            store_exact_radix_record(&radix, &blobs, 1, 0, pending("empty", &[], b"aaaabbbb"))
-                .unwrap_err();
+        let error = store_exact_radix_record(
+            &radix,
+            &blobs,
+            1,
+            limits(0, 0),
+            pending("empty", &[], b"aaaabbbb"),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -416,6 +519,140 @@ mod tests {
         );
         assert_eq!(blobs.lock().unwrap().physical_bytes(), 0);
         assert_eq!(radix.lock().unwrap().stats().recurrent_entries, 0);
+    }
+
+    #[test]
+    fn oversized_exact_payloads_retain_a_reusable_working_set() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        // Every payload here is twice the soft cap, which is the recurrent case:
+        // the attention-derived estimate cannot cover a full-state snapshot.
+        for (page_id, tokens, bytes) in [
+            ("first", [1, 2], b"aaaabbbb"),
+            ("second", [1, 3], b"ccccdddd"),
+            ("third", [1, 4], b"eeeeffff"),
+        ] {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                limits(4, 1024),
+                pending(page_id, &tokens, bytes),
+            )
+            .unwrap();
+        }
+
+        // Concurrent sessions on one stage must not evict each other just
+        // because a single snapshot cannot fit under the soft cap.
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 24);
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 3);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_some());
+        assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
+        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
+    }
+
+    #[test]
+    fn exact_soft_retention_does_not_exceed_the_configured_entry_limit() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        for (page_id, tokens, bytes) in [
+            ("first", [1, 2], b"aaaabbbb"),
+            ("second", [1, 3], b"ccccdddd"),
+            ("third", [1, 4], b"eeeeffff"),
+        ] {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                2,
+                limits(4, 1_024),
+                pending(page_id, &tokens, bytes),
+            )
+            .unwrap();
+        }
+
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 2);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
+        assert!(radix.lookup_recurrent("model", &[1, 3]).is_some());
+        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
+    }
+
+    #[test]
+    fn exact_working_set_is_bounded_by_the_hard_ceiling() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        for (page_id, tokens, bytes) in [
+            ("first", [1, 2], b"aaaabbbb"),
+            ("second", [1, 3], b"ccccdddd"),
+            ("third", [1, 4], b"eeeeffff"),
+        ] {
+            store_exact_radix_record(
+                &radix,
+                &blobs,
+                8,
+                limits(4, 8),
+                pending(page_id, &tokens, bytes),
+            )
+            .unwrap();
+        }
+
+        // The retention floor yields to the ceiling, leaving the most recent
+        // snapshot rather than an unbounded working set.
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_none());
+        assert!(radix.lookup_recurrent("model", &[1, 3]).is_none());
+        assert!(radix.lookup_recurrent("model", &[1, 4]).is_some());
+        assert_eq!(blobs.lock().unwrap().physical_bytes(), 8);
+    }
+
+    #[test]
+    fn single_exact_payload_over_the_ceiling_is_still_reusable() {
+        let radix = Mutex::new(UnifiedRadixCache::new());
+        let blobs = Mutex::new(CacheBlobStore::new(4));
+
+        store_exact_radix_record(
+            &radix,
+            &blobs,
+            8,
+            limits(2, 4),
+            pending("checkpoint", &[1, 2], b"aaaabbbb"),
+        )
+        .unwrap();
+
+        // Self-eviction here is the original regression: it leaves the stage
+        // with no exact prefix cache at all.
+        let mut radix = radix.lock().unwrap();
+        assert_eq!(radix.stats().recurrent_entries, 1);
+        assert!(radix.lookup_recurrent("model", &[1, 2]).is_some());
+    }
+
+    #[test]
+    fn exact_state_byte_limits_scale_the_ceiling_off_the_stage_budget() {
+        assert_eq!(
+            exact_state_byte_limits(1_024, None),
+            limits(1_024, 1_024 * EXACT_STATE_HARD_CAP_MULTIPLE)
+        );
+        // An unset stage budget stays unbounded, as it was before.
+        assert_eq!(exact_state_byte_limits(0, None), limits(0, 0));
+    }
+
+    #[test]
+    fn exact_state_byte_limits_honour_the_operator_override() {
+        assert_eq!(
+            exact_state_byte_limits(1_024, Some(" 4096 ")),
+            limits(1_024, 4_096)
+        );
+        assert_eq!(exact_state_byte_limits(1_024, Some("0")), limits(1_024, 0));
+        // A malformed override must not silently disable the ceiling.
+        assert_eq!(
+            exact_state_byte_limits(1_024, Some("not-a-number")),
+            limits(1_024, 1_024 * EXACT_STATE_HARD_CAP_MULTIPLE)
+        );
     }
 
     #[test]

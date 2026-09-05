@@ -22,7 +22,7 @@ pub(super) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
     }
 }
 
-fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
+pub(crate) fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
     // We only raise the concurrent bidi-stream ceiling; everything else uses
     // iroh's tuned defaults.
     //

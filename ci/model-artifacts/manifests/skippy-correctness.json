@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "skippy-correctness",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "qwen3-q8-correctness",
+      "family": "qwen3-dense",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "skippy-correctness",
+        "small"
+      ],
+      "suites": [
+        "skippy-correctness"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "repo": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "ef4088322893040952513f532f736ddeab518403",
+      "selector": "Q8_0",
+      "files": [
+        "Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file_integrity": {
+        "Qwen3-0.6B-Q8_0.gguf": {
+          "size_bytes": 804753088,
+          "blob_id": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735"
+        }
+      },
+      "model_ref": "Qwen/Qwen3-0.6B-GGUF:Q8_0",
+      "urls": [
+        "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf"
+      ],
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "size_bytes": 804753088,
+      "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
+      "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf",
+      "notes": "Pinned Skippy runtime/model-package correctness fixture."
+    }
+  ]
+}
