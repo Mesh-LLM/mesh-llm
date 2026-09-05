@@ -112,6 +112,7 @@ class SccacheEvidenceTests(unittest.TestCase):
             ("release.yml", "build_native_runtime_linux_x86_64_rocm"): effective_release_runner_16,
             ("release.yml", "build_native_runtime_linux_x86_64_vulkan"): effective_release_runner_16,
             ("static-abi-artifact.yml", "static_abi_artifact"): policy,
+            ("swift-sdk-artifact.yml", "swift_sdk_target"): policy,
             ("swift-sdk-artifact.yml", "swift_sdk_artifact"): policy,
         }
         actual: dict[tuple[str, str], str] = {}

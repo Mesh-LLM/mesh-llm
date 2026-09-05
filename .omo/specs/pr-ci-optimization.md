@@ -180,6 +180,10 @@ credentials may differ.
 Existing native-sdk-artifact.yml, swift-sdk-artifact.yml, smoke.yml,
 scripted-binary-smoke.yml, sdk-smoke.yml and hf-download-smoke.yml remain
 lower-level typed building blocks. Consumers never rebuild missing producers.
+In the full Swift producer, the seven Apple Rust target libraries are immutable
+matrix outputs assembled by one downstream XCFramework job. The matrix obeys
+the lane's bounded macOS parallelism; host-only Swift production stays on its
+single-job path.
 
 ## Product and artifact contract
 
@@ -216,14 +220,19 @@ The lane projections pass smaller PR max-parallel values to Clippy, tests,
 hosts, runtimes and platform checks and wider bounded values to main. Host, ABI
 and runtime producer identities are not duplicated. The fixed two-row
 split-model matrix is serialized, so it adds runner-minutes without increasing
-peak workers. Separate run-scoped graphs build one prepared UI artifact per
-active platform lane; that is the accepted readability tradeoff, while UI tests
-remain owned by the Website graph. Every heavy job has a timeout and a
+peak workers. The full Swift target matrix is a deliberate fan-out of seven
+distinct architecture/platform inputs,
+bounded to two concurrent jobs for PR profiles and four for main/manual and
+release; a single assembly job restores those libraries and publishes the
+verified XCFramework. Separate run-scoped graphs build one prepared UI artifact
+per active platform lane; that is the accepted readability tradeoff, while UI
+tests remain owned by the Website graph. Every heavy job has a timeout and a
 deterministic row identity.
 
-PR platform matrices for compilation, Rust tests, products and functional
-platform checks fail fast. Main/manual matrices continue all rows for exhaustive
-diagnostics, and Quality remains non-fail-fast within its own matrix. Declared
+PR platform matrices for compilation, Rust tests, products, functional
+platform checks, and full Swift targets fail fast. Main/manual and release
+matrices continue all rows for exhaustive diagnostics, and Quality remains
+non-fail-fast within its own matrix. Declared
 producer dependencies suppress consumers that can no longer run. Across the
 five focused PR workflows, the protected sibling monitor preserves the lane
 with the first definitive job failure and cancels the other exact-PR,
