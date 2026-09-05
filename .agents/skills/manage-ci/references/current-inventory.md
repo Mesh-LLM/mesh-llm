@@ -14,14 +14,12 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `pr_macos.yml` (`PR · macOS`) | PR lifecycle | Canonical PR planning plus the protected reusable macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | PR lifecycle | Canonical PR planning plus the protected reusable Windows lane |
 | `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` on `PR · Quality` entering progress | No-PR-checkout monitor that cancels other exact-revision PR validation lanes after the first definitive job failure |
-| `pr_builds.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger |
-| `ci-orchestrator.yml` | `workflow_call` only | Inert migration shim for the pre-merge protected runner-contract filename check; no PR event trigger or lane calls |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Exhaustive main planning plus the same-commit reusable Quality lane |
 | `main_website.yml` (`Main · Website`) | push to `main` | Exhaustive main planning plus the same-commit reusable Website lane |
 | `main_linux.yml` (`Main · Linux`) | push to `main` | Exhaustive main planning plus the same-commit reusable Linux lane |
 | `main_macos.yml` (`Main · macOS`) | push to `main` | Exhaustive main planning plus the same-commit reusable macOS lane |
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
-| `ci.yml` | `workflow_call` only | Inert migration shim for the former main ingress filename; no push trigger or dispatch |
+| `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
 | `release.yml` | release tags, dispatch | Canonical version synchronization, release-only signing, assets and publication |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
@@ -137,10 +135,9 @@ The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
 metadata/control infrastructure, not a sixth validation entrypoint or required
 check. Their separation and direct GitHub log visibility are contractual, not
-a presentation preference. `pr_builds.yml`,
-`ci-orchestrator.yml`, and `ci.yml` are reusable-only migration scaffolding;
-they must never regain event triggers or call the five lanes. They are
-removable after this branch's runner contract is active on protected main.
+a presentation preference. The retained `ci.yml` is reusable-only migration
+scaffolding and must never regain event triggers or call the five lanes; remove
+it after the protected-main runner-contract update is active.
 
 ## Reusable workflows and slices
 

@@ -63,16 +63,12 @@ or cache identity.
   row, build command, matrix, artifact, producer/consumer edge or required
   summary; normal Quality jobs continue using the existing provider selector.
 - Current CI docs, inventory, skill and agent instructions describe this graph.
-- `pr_builds.yml` remains reusable-only and inert during the migration so the
-  pre-merge protected runner contract can find its legacy filename; it has no
-  PR trigger and cannot expand a graph.
-- `ci-orchestrator.yml` likewise remains as a reusable-only, no-op filename
-  shim for the protected pre-merge contract. It has no event trigger or lane
-  calls and must not regain orchestration behavior. Both shims are removable
-  after this branch's runner contract reaches protected main.
-- `ci.yml` is also a reusable-only, no-op filename shim now that routine main
-  pushes enter through the five `main_*.yml` files. It must not regain a push
-  trigger, dispatch behavior, or lane calls.
+- This cleanup retires the obsolete `pr_builds.yml` and `ci-orchestrator.yml`
+  migration shims now that the five focused PR entrypoints own validation.
+- `ci.yml` remains a reusable-only, no-op filename shim while the protected-main
+  runner contract is updated. It must not regain a push trigger, dispatch
+  behavior, or lane calls, and is removable in the follow-up cleanup once that
+  contract is active on protected main.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.

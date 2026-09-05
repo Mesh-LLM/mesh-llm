@@ -15,14 +15,12 @@ and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 | `pr_macos.yml` (`PR · macOS`) | `pull_request` | Plans and calls the protected macOS lane |
 | `pr_windows.yml` (`PR · Windows`) | `pull_request` | Plans and calls the protected Windows lane |
 | `pr-cancel-sibling-runs.yml` (`PR · Cancel sibling lanes`) | protected `workflow_run` for `PR · Quality` | Watches one exact PR revision and cancels its other validation lanes after the first job failure |
-| `pr_builds.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
-| `ci-orchestrator.yml` | `workflow_call` only | Inert compatibility for the pre-migration protected runner-contract filename check |
 | `main_quality.yml` (`Main · Quality`) | push to `main` | Plans and calls the same-commit Quality lane |
 | `main_website.yml` (`Main · Website`) | push to `main` | Plans and calls the same-commit Website lane |
 | `main_linux.yml` (`Main · Linux`) | push to `main` | Plans and calls the same-commit Linux lane |
 | `main_macos.yml` (`Main · macOS`) | push to `main` | Plans and calls the same-commit macOS lane |
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Plans and calls the same-commit Windows lane |
-| `ci.yml` | `workflow_call` only | Inert compatibility for the former main ingress filename |
+| `ci.yml` | `workflow_call` only | Temporary inert compatibility for the former main ingress filename, pending the protected-main runner-contract update |
 | `ci-control.yml` (`CI · Manual Full`) | `workflow_dispatch` on `main` | Explicit operator-only full plan, detached lane dispatch, and correlated diagnostic checks |
 | `ci-*-lane.yml` | `workflow_call`, `workflow_dispatch` | Composable Quality, Website, Linux, macOS and Windows graphs |
 | `nightly-stability.yml` / `nightly-stability-run.yml` | daily schedule, dispatch / reusable | GitHub-hosted live-endpoint evidence. The general stability and KV tool-loop/prefix-reuse harnesses run independently, upload both evidence sets, and preserve either failure. The reusable workflow accepts no runner label. |
@@ -92,11 +90,8 @@ platform/topic boundary unusable in review.
 
 Do not add path filters to these entrypoints. They all start for each relevant
 PR synchronization so their stable results exist; the canonical plan suppresses
-unselected expensive work inside each run. Do not reintroduce
-`ci-orchestrator.yml` as an orchestrator or add another all-lanes PR composer.
-Its temporary reusable-only migration shim has no event trigger or lane calls
-and should be deleted with `pr_builds.yml` after the post-merge runner contract
-is active on the protected default branch.
+unselected expensive work inside each run. Do not add another all-lanes PR
+composer or restore retired compatibility entrypoints.
 
 ### Required main shape and visibility
 
@@ -116,8 +111,8 @@ operator-selected path may use detached dispatch and the synthetic
 `CI Required` aggregate; routine main never does.
 
 The temporary `ci.yml` reusable-only shim has no push trigger, dispatcher, or
-lane calls. It can be removed with the other migration shims after the updated
-runner contract is active on protected main.
+lane calls. Remove it after the updated runner contract is active on protected
+main.
 
 ### Release source and version ownership
 
@@ -228,6 +223,10 @@ Each plan contains source/base identities, direct crates, affected crates,
 semantic domains, signals, selected slices, reasons, typed matrices, runner
 roles, cache modes and fan-out budgets. Unknown paths and malformed inputs fail
 closed.
+
+`scripts/plan-ci.py` is the sole Clippy and Rust-test batch allocator;
+`ci-crate-lists` validates that the main `matrices.rust_tests` covers every
+workspace crate exactly once.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a

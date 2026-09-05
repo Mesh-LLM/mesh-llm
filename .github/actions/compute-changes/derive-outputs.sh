@@ -8,22 +8,9 @@ CRATES_JSON=$(cat /tmp/crates_output.json)
 # Extract fields from JSON
 AFFECTED_CRATES=$(echo "$CRATES_JSON" | jq -c '.affected // []')
 TEST_CRATES=$(echo "$CRATES_JSON" | jq -c '.test_crates // []')
-BATCHES=$(echo "$CRATES_JSON" | jq -c '.batches // []')
 ALL_RUST=$(echo "$CRATES_JSON" | jq -r '.all_rust // false')
 UI_CHANGED=$(echo "$CRATES_JSON" | jq -r '.ui_changed // false')
 WEBSITE_CHANGED=$(echo "$CRATES_JSON" | jq -r '.website_changed // false')
-
-if [[ "$ALL_RUST" == "true" ]]; then
-  CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --all)
-else
-  CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --crates-json "$AFFECTED_CRATES")
-fi
-
-if [[ "$EVENT_NAME" != "pull_request" ]] || [[ "$ALL_RUST" == "true" ]]; then
-  TEST_BATCHES=$(bash scripts/plan-test-batches.sh --all --bins 4)
-else
-  TEST_BATCHES=$(bash scripts/plan-test-batches.sh --crates-json "$AFFECTED_CRATES" --bins 4)
-fi
 
 FORCE_ALL="false"
 if grep -qx "__force_all__" /tmp/changed_files.txt; then
@@ -442,9 +429,6 @@ fi
   echo "EOF"
   echo "affected_crates=$AFFECTED_CRATES"
   echo "test_crates=$TEST_CRATES"
-  echo "batches_json=$BATCHES"
-  echo "test_batches_json=$TEST_BATCHES"
-  echo "clippy_batches_json=$CLIPPY_BATCHES"
   echo "all_rust=$ALL_RUST"
   echo "ui_changed=$UI_CHANGED"
   echo "website_changed=$WEBSITE_CHANGED"

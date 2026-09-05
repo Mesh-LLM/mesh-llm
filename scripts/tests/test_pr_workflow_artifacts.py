@@ -63,15 +63,13 @@ class PrWorkflowArtifactTests(unittest.TestCase):
             self.assertNotIn("actions.createWorkflowDispatch", workflow)
             self.assertNotIn("prepare-host-input", workflow)
 
-    def test_legacy_entrypoints_are_inert_migration_shims(self):
-        for filename in ("pr_builds.yml", "ci-orchestrator.yml", "ci.yml"):
-            with self.subTest(filename=filename):
-                workflow = self.workflow(filename)
-                self.assertIn("workflow_call:", workflow)
-                self.assertNotIn("pull_request:", workflow)
-                self.assertNotIn("\n  push:\n", workflow)
-                self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
-                self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
+    def test_retained_ci_shim_is_inert(self):
+        workflow = self.workflow("ci.yml")
+        self.assertIn("workflow_call:", workflow)
+        self.assertNotIn("pull_request:", workflow)
+        self.assertNotIn("\n  push:\n", workflow)
+        self.assertNotIn("uses: ./.github/workflows/ci-", workflow)
+        self.assertNotIn("Mesh-LLM/mesh-llm/.github/workflows/ci-", workflow)
 
     def test_pr_validation_has_exactly_five_focused_entrypoints(self):
         expected = {
@@ -92,10 +90,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertTrue(NON_VALIDATION_PR_WORKFLOWS <= pr_attached)
         actual = pr_attached - NON_VALIDATION_PR_WORKFLOWS
         self.assertEqual(set(expected), actual)
-        orchestrator = self.workflow("ci-orchestrator.yml")
-        self.assertNotIn("pull_request:", orchestrator)
-        self.assertNotIn("lane_plan_json", orchestrator)
-
         for filename, lane in expected.items():
             workflow = self.workflow(filename)
             protected_calls = [
@@ -150,7 +144,7 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         docs = (ROOT / "ci" / "ci.md").read_text()
         self.assertIn("The five-way split is a hard CI architecture invariant", docs)
         self.assertIn("`dispatched`, with the real work detached", docs)
-        self.assertIn("Do not reintroduce", docs)
+        self.assertIn("Do not add another all-lanes PR", docs)
         self.assertIn("Do not funnel main pushes through `ci-control.yml`", docs)
 
     def test_controller_dispatches_only_named_topic_and_platform_workflows(self):
@@ -160,7 +154,6 @@ class PrWorkflowArtifactTests(unittest.TestCase):
         self.assertEqual(1, workflow.count("uses: ./.github/actions/plan-ci"))
         self.assertIn("name: 'CI Required'", workflow)
         compatibility = self.workflow("ci.yml")
-        self.assertNotIn("ci-orchestrator.yml", compatibility)
         self.assertNotIn("createWorkflowDispatch", compatibility)
 
     def test_platform_consumers_require_only_matching_producers(self):
