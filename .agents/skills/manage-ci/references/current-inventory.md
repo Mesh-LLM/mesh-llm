@@ -164,7 +164,7 @@ removable after this branch's runner contract is active on protected main.
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
 | `ci-runner-contract-slice.yml` | Provider/cache/plan trust and main runner-image checks |
 | `native-sdk-artifact.yml` | Typed native SDK producer |
-| `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
+| `swift-sdk-artifact.yml` | Host-only/full XCFramework producer; full mode builds the seven Apple Rust targets as a bounded matrix (maximum four concurrent macOS runners) and joins their immutable libraries in one assembly job, while host-only remains a single producer. Trusted main remains `macos-15`, while eligible same-repository PRs follow the protected Depot macOS 15 gate |
 | `smoke.yml` | Artifact-based inference/OpenAI/split smoke |
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
@@ -528,8 +528,9 @@ scope for same-PR reruns. UI installs (`ui_quality`, `ui_e2e`, `ui_artifact`) po
 image's baked store instead of an Actions cache — there is no shared pnpm
 key or publisher to race. Trusted main owns shared publication.
 
-PR Rust-test, host, native-runtime, product, and platform-check matrices receive
-`fail_fast: true`; main/manual pass `false`. Quality matrices remain
+PR Rust-test, host, native-runtime, product, platform-check, and full Swift
+target matrices receive `fail_fast: true`; main/manual and release pass
+`false`. Quality matrices remain
 non-fail-fast and failed producers suppress impossible consumers through
 `needs`. One protected, default-branch `workflow_run` monitor starts with
 `PR · Quality`, polls the five exact-PR/exact-SHA validation runs, preserves the

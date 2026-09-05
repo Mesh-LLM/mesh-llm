@@ -319,6 +319,7 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         )
         self.assertIn("mode: full", producer)
         self.assertIn("artifact_name: release-swift-sdk", producer)
+        self.assertIn("max_parallel: 4", producer)
         self.assertIn("timeout_minutes: 180", producer)
         self.assertNotIn("macos_runner:", producer)
         self.assertIn(
