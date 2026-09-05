@@ -10,7 +10,7 @@ inputs:
     required: false
     default: opportunistic
   minimum_hit_rate:
-    description: Minimum hit ratio required when cache_expectation is warm.
+    description: Minimum hit ratio required when cache_expectation is warm; zero permits an observation with no cache requests.
     required: false
     default: "0"
 

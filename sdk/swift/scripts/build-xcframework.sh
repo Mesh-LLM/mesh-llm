@@ -4,11 +4,60 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SWIFT_DIR="$REPO_ROOT/sdk/swift"
 FFI_DIR="$SWIFT_DIR/Generated/FFI"
-TARGET_DIR="$REPO_ROOT/target"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 XCFRAMEWORK_DIR="$SWIFT_DIR/Generated"
 FRAMEWORK_NAME="MeshLLMFFI"
 GENERATED_SWIFT="$SWIFT_DIR/Sources/MeshLLM/Generated/mesh_ffi.swift"
 RUST_FEATURES="host,embedded-runtime"
+SWIFT_TARGET_OUTPUT_DIR="${SWIFT_TARGET_OUTPUT_DIR:-$REPO_ROOT/dist/swift-targets}"
+APPLE_TARGETS=(
+  aarch64-apple-ios
+  aarch64-apple-ios-sim
+  x86_64-apple-ios
+  aarch64-apple-ios-macabi
+  x86_64-apple-ios-macabi
+  aarch64-apple-darwin
+  x86_64-apple-darwin
+)
+
+MODE="all"
+SELECTED_TARGET=""
+ASSEMBLY_INPUT_DIR=""
+
+usage() {
+  cat <<'EOF'
+Usage:
+  build-xcframework.sh
+  build-xcframework.sh --target <rust-target>
+  build-xcframework.sh --assemble-from <target-artifact-directory>
+
+With no arguments, all Apple targets are built serially and assembled. CI may
+build one target per runner with --target, then assemble the staged libraries
+with --assemble-from.
+EOF
+}
+
+case "${1:-}" in
+  "") ;;
+  --target)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    MODE="target"
+    SELECTED_TARGET="$2"
+    ;;
+  --assemble-from)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    MODE="assemble"
+    ASSEMBLY_INPUT_DIR="$2"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
 
 echo "Building $FRAMEWORK_NAME XCFramework..."
 echo "Repo root: $REPO_ROOT"
@@ -18,30 +67,29 @@ if ! cargo metadata --no-deps --format-version 1 2>/dev/null | grep -q '"name":"
   exit 1
 fi
 
-rustup target add \
-  aarch64-apple-ios \
-  aarch64-apple-ios-sim \
-  x86_64-apple-ios \
-  aarch64-apple-ios-macabi \
-  x86_64-apple-ios-macabi \
-  aarch64-apple-darwin \
-  x86_64-apple-darwin \
-  2>/dev/null || true
-
-"$SWIFT_DIR/scripts/generate-swift-bindings.sh"
 IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 export -n IPHONEOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET 2>/dev/null || true
-"$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+RUSTUP_RUSTC=""
 
-# Resolve stable rustc from rustup (avoids Homebrew rustc shadowing)
-RUSTUP_RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
-if [ ! -x "$RUSTUP_RUSTC" ]; then
-  # Fallback: find any stable toolchain
-  STABLE_TOOLCHAIN=$(rustup toolchain list | grep stable | head -1 | awk '{print $1}')
-  RUSTUP_RUSTC="$(rustup run "$STABLE_TOOLCHAIN" which rustc)"
+if [[ "$MODE" != "assemble" ]]; then
+  if [[ "$MODE" == "target" ]]; then
+    rustup target add "$SELECTED_TARGET" 2>/dev/null || true
+  else
+    rustup target add "${APPLE_TARGETS[@]}" 2>/dev/null || true
+  fi
+
+  "$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+
+  # Resolve stable rustc from rustup (avoids Homebrew rustc shadowing)
+  RUSTUP_RUSTC="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
+  if [ ! -x "$RUSTUP_RUSTC" ]; then
+    # Fallback: find any stable toolchain
+    STABLE_TOOLCHAIN=$(rustup toolchain list | grep stable | head -1 | awk '{print $1}')
+    RUSTUP_RUSTC="$(rustup run "$STABLE_TOOLCHAIN" which rustc)"
+  fi
+  echo "Using rustc: $RUSTUP_RUSTC"
 fi
-echo "Using rustc: $RUSTUP_RUSTC"
 
 build_llama_for_target() {
   local RUST_TARGET="$1"
@@ -97,40 +145,101 @@ build_apple_target() {
   build_rust_target "$RUST_TARGET" "$PLATFORM_NAME"
 }
 
-echo "Building for aarch64-apple-ios..."
-build_apple_target aarch64-apple-ios iphoneos arm64 iOS -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+build_target_by_name() {
+  local RUST_TARGET="$1"
 
-echo "Building for aarch64-apple-ios-sim..."
-build_apple_target aarch64-apple-ios-sim iphonesimulator arm64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+  echo "Building for $RUST_TARGET..."
+  case "$RUST_TARGET" in
+    aarch64-apple-ios)
+      build_apple_target "$RUST_TARGET" iphoneos arm64 iOS -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+      ;;
+    aarch64-apple-ios-sim)
+      build_apple_target "$RUST_TARGET" iphonesimulator arm64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+      ;;
+    x86_64-apple-ios)
+      build_apple_target "$RUST_TARGET" iphonesimulator x86_64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+      ;;
+    aarch64-apple-ios-macabi)
+      build_apple_target "$RUST_TARGET" macosx arm64 "Mac Catalyst" \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DGGML_BLAS=OFF \
+        -DCMAKE_C_FLAGS=-target\ arm64-apple-ios16.0-macabi \
+        -DCMAKE_CXX_FLAGS=-target\ arm64-apple-ios16.0-macabi \
+        -DCMAKE_EXE_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi \
+        -DCMAKE_SHARED_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi \
+        -DCMAKE_MODULE_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi
+      ;;
+    x86_64-apple-ios-macabi)
+      build_apple_target "$RUST_TARGET" macosx x86_64 "Mac Catalyst" \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DGGML_BLAS=OFF \
+        -DCMAKE_C_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
+        -DCMAKE_CXX_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
+        -DCMAKE_EXE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
+        -DCMAKE_SHARED_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
+        -DCMAKE_MODULE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi
+      ;;
+    aarch64-apple-darwin)
+      build_apple_target "$RUST_TARGET" macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+      ;;
+    x86_64-apple-darwin)
+      build_apple_target "$RUST_TARGET" macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+      ;;
+    *)
+      echo "ERROR: unsupported Apple Rust target: $RUST_TARGET" >&2
+      exit 2
+      ;;
+  esac
+}
 
-echo "Building for x86_64-apple-ios..."
-build_apple_target x86_64-apple-ios iphonesimulator x86_64 "iOS simulator" -DCMAKE_SYSTEM_NAME=iOS -DGGML_BLAS=OFF
+stage_target_library() {
+  local RUST_TARGET="$1"
+  local SOURCE_LIBRARY="$TARGET_DIR/$RUST_TARGET/release/libmeshllm_ffi.a"
+  local STAGED_DIRECTORY="$SWIFT_TARGET_OUTPUT_DIR/$RUST_TARGET"
 
-echo "Building for aarch64-apple-ios-macabi (Mac Catalyst)..."
-build_apple_target aarch64-apple-ios-macabi macosx arm64 "Mac Catalyst" \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DGGML_BLAS=OFF \
-  -DCMAKE_C_FLAGS=-target\ arm64-apple-ios16.0-macabi \
-  -DCMAKE_CXX_FLAGS=-target\ arm64-apple-ios16.0-macabi \
-  -DCMAKE_EXE_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi \
-  -DCMAKE_SHARED_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi \
-  -DCMAKE_MODULE_LINKER_FLAGS=-target\ arm64-apple-ios16.0-macabi
+  [[ -f "$SOURCE_LIBRARY" ]] || {
+    echo "ERROR: built Swift target library is missing: $SOURCE_LIBRARY" >&2
+    exit 1
+  }
+  mkdir -p "$STAGED_DIRECTORY"
+  install -m 0644 "$SOURCE_LIBRARY" "$STAGED_DIRECTORY/libmeshllm_ffi.a"
+  echo "Staged $RUST_TARGET library at $STAGED_DIRECTORY/libmeshllm_ffi.a"
+}
 
-echo "Building for x86_64-apple-ios-macabi (Mac Catalyst)..."
-build_apple_target x86_64-apple-ios-macabi macosx x86_64 "Mac Catalyst" \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DGGML_BLAS=OFF \
-  -DCMAKE_C_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-  -DCMAKE_CXX_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-  -DCMAKE_EXE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-  -DCMAKE_SHARED_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi \
-  -DCMAKE_MODULE_LINKER_FLAGS=-target\ x86_64-apple-ios16.0-macabi
+restore_staged_libraries() {
+  local RUST_TARGET
+  local SOURCE_LIBRARY
+  local TARGET_DIRECTORY
 
-echo "Building for aarch64-apple-darwin (macOS)..."
-build_apple_target aarch64-apple-darwin macosx arm64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+  for RUST_TARGET in "${APPLE_TARGETS[@]}"; do
+    SOURCE_LIBRARY="$ASSEMBLY_INPUT_DIR/$RUST_TARGET/libmeshllm_ffi.a"
+    TARGET_DIRECTORY="$TARGET_DIR/$RUST_TARGET/release"
+    [[ -f "$SOURCE_LIBRARY" ]] || {
+      echo "ERROR: staged Swift target library is missing: $SOURCE_LIBRARY" >&2
+      exit 1
+    }
+    mkdir -p "$TARGET_DIRECTORY"
+    install -m 0644 "$SOURCE_LIBRARY" "$TARGET_DIRECTORY/libmeshllm_ffi.a"
+  done
+}
 
-echo "Building for x86_64-apple-darwin (macOS)..."
-build_apple_target x86_64-apple-darwin macosx x86_64 macOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+case "$MODE" in
+  target)
+    build_target_by_name "$SELECTED_TARGET"
+    stage_target_library "$SELECTED_TARGET"
+    exit 0
+    ;;
+  all)
+    for SELECTED_TARGET in "${APPLE_TARGETS[@]}"; do
+      build_target_by_name "$SELECTED_TARGET"
+    done
+    ;;
+  assemble)
+    restore_staged_libraries
+    ;;
+esac
+
+"$SWIFT_DIR/scripts/generate-swift-bindings.sh"
 
 echo "Syncing UniFFI API checksums into generated Swift bindings..."
 python3 - "$TARGET_DIR/aarch64-apple-darwin/release/libmeshllm_ffi.a" "$GENERATED_SWIFT" <<'PY'

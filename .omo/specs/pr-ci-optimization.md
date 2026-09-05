@@ -63,16 +63,12 @@ or cache identity.
   row, build command, matrix, artifact, producer/consumer edge or required
   summary; normal Quality jobs continue using the existing provider selector.
 - Current CI docs, inventory, skill and agent instructions describe this graph.
-- `pr_builds.yml` remains reusable-only and inert during the migration so the
-  pre-merge protected runner contract can find its legacy filename; it has no
-  PR trigger and cannot expand a graph.
-- `ci-orchestrator.yml` likewise remains as a reusable-only, no-op filename
-  shim for the protected pre-merge contract. It has no event trigger or lane
-  calls and must not regain orchestration behavior. Both shims are removable
-  after this branch's runner contract reaches protected main.
-- `ci.yml` is also a reusable-only, no-op filename shim now that routine main
-  pushes enter through the five `main_*.yml` files. It must not regain a push
-  trigger, dispatch behavior, or lane calls.
+- This cleanup retires the obsolete `pr_builds.yml` and `ci-orchestrator.yml`
+  migration shims now that the five focused PR entrypoints own validation.
+- `ci.yml` remains a reusable-only, no-op filename shim while the protected-main
+  runner contract is updated. It must not regain a push trigger, dispatch
+  behavior, or lane calls, and is removable in the follow-up cleanup once that
+  contract is active on protected main.
 
 This branch does not change branch rulesets, required checks, Depot settings,
 runner groups, secrets or external capacity.
@@ -167,7 +163,8 @@ credentials may differ.
 - ci-platform-checks-slice.yml: macOS portable/unit and Windows checks.
 - ci-linux-product-smoke-slice.yml and ci-macos-product-smoke-slice.yml:
   platform-local inference, backend, two-node, Metal and model-download
-  consumers using only composed artifacts.
+  consumers using only composed artifacts. One Linux KV caching smoke job runs
+  a fixed dense SmolLM2 leg followed by a recurrent Qwen3.5 leg; both must pass.
 - ci-linux-sdk-slice.yml and ci-macos-sdk-slice.yml: platform-local
   Rust/Kotlin/Swift consumers. Swift and Kotlin SDK artifacts are independent
   producers that start from the plan and static ABI respectively, before
@@ -178,6 +175,10 @@ credentials may differ.
 Existing native-sdk-artifact.yml, swift-sdk-artifact.yml, smoke.yml,
 scripted-binary-smoke.yml, sdk-smoke.yml and hf-download-smoke.yml remain
 lower-level typed building blocks. Consumers never rebuild missing producers.
+In the full Swift producer, the seven Apple Rust target libraries are immutable
+matrix outputs assembled by one downstream XCFramework job. The matrix obeys
+the lane's bounded macOS parallelism; host-only Swift production stays on its
+single-job path.
 
 ## Product and artifact contract
 
@@ -212,14 +213,21 @@ Initial planner budgets are:
 
 The lane projections pass smaller PR max-parallel values to Clippy, tests,
 hosts, runtimes and platform checks and wider bounded values to main. Host, ABI
-and runtime producer identities are not duplicated. Separate run-scoped graphs
-build one prepared UI artifact per active platform lane; that is the accepted
-readability tradeoff, while UI tests remain owned by the Website graph. Every
-heavy job has a timeout and a deterministic row identity.
+and runtime producer identities are not duplicated. The fixed two-row
+split-model matrix is serialized, so it adds runner-minutes without increasing
+peak workers. The full Swift target matrix is a deliberate fan-out of seven
+distinct architecture/platform inputs,
+bounded to two concurrent jobs for PR profiles and four for main/manual and
+release; a single assembly job restores those libraries and publishes the
+verified XCFramework. Separate run-scoped graphs build one prepared UI artifact
+per active platform lane; that is the accepted readability tradeoff, while UI
+tests remain owned by the Website graph. Every heavy job has a timeout and a
+deterministic row identity.
 
-PR platform matrices for compilation, Rust tests, products and functional
-platform checks fail fast. Main/manual matrices continue all rows for exhaustive
-diagnostics, and Quality remains non-fail-fast within its own matrix. Declared
+PR platform matrices for compilation, Rust tests, products, functional
+platform checks, and full Swift targets fail fast. Main/manual and release
+matrices continue all rows for exhaustive diagnostics, and Quality remains
+non-fail-fast within its own matrix. Declared
 producer dependencies suppress consumers that can no longer run. Across the
 five focused PR workflows, the protected sibling monitor preserves the lane
 with the first definitive job failure and cancels the other exact-PR,

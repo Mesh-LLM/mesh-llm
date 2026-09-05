@@ -215,6 +215,7 @@ impl StageOpenAiBackend {
                     native_mtp_enabled: config.native_mtp_enabled
                         && self.speculative.native_mtp.enabled,
                     prompt_token_ids: &prompt_token_ids,
+                    recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids.as_deref(),
                     max_tokens,
                     sampling: &sampling,
                     chat_sampling_metadata,
