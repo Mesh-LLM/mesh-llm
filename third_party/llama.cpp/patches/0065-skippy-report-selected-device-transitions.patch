@@ -1,0 +1,70 @@
+From 33677c7e8d7a802ce03f92693e4297c373830e39 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 5 Sep 2026 14:41:08 -0400
+Subject: [PATCH] skippy: report selected device transitions
+
+---
+ src/skippy/model_load_config.cpp | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
+index 594caf75e..6404f8401 100644
+--- a/src/skippy/model_load_config.cpp
++++ b/src/skippy/model_load_config.cpp
+@@ -58,6 +58,9 @@ using json = nlohmann::ordered_json;
+ #include "skippy/runtime_types.h"
+ 
+ #include "skippy/model_load_config_internal.h"
++
++#include <cstring>
++
+ int32_t skippy_default_thread_count() {
+ #ifdef __linux__
+     std::unordered_set<std::string> siblings;
+@@ -103,15 +106,30 @@ enum skippy_status skippy_apply_selected_backend_device(
+         params.devices = nullptr;
+         params.main_gpu = -1;
+         params.n_gpu_layers = 0;
++        skippy_emit_device_event(
++                SKIPPY_RUNTIME_EVENT_KIND_DEVICE_READY,
++                0,
++                "CPU",
++                sizeof("CPU") - 1);
+         return SKIPPY_STATUS_OK;
+     }
+ 
+     ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
+     if (dev == nullptr) {
++        skippy_emit_device_event(
++                SKIPPY_RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE,
++                0,
++                "selected backend device unavailable",
++                sizeof("selected backend device unavailable") - 1);
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, ("unknown selected backend device: " + device_name).c_str());
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
++        skippy_emit_device_event(
++                SKIPPY_RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE,
++                0,
++                "selected backend device is CPU",
++                sizeof("selected backend device is CPU") - 1);
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, ("selected backend device is CPU; use CPU or CPU0: " + device_name).c_str());
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+@@ -121,6 +139,15 @@ enum skippy_status skippy_apply_selected_backend_device(
+     selected_devices.push_back(nullptr);
+     params.devices = selected_devices.data();
+     params.main_gpu = 0;
++    const char * selected_device_name = ggml_backend_dev_name(dev);
++    if (selected_device_name == nullptr) {
++        selected_device_name = "selected backend device";
++    }
++    skippy_emit_device_event(
++            SKIPPY_RUNTIME_EVENT_KIND_DEVICE_READY,
++            static_cast<uint64_t>(ggml_backend_dev_type(dev)),
++            selected_device_name,
++            static_cast<uint64_t>(std::strlen(selected_device_name)));
+     return SKIPPY_STATUS_OK;
+ }
+ 
