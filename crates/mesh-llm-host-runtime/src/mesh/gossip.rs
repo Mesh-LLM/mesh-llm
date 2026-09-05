@@ -289,6 +289,7 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.version != new.version
         || old.owner_summary != new.owner_summary
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
+        || old.memory != new.memory
         || old.propagated_latency != new.propagated_latency
         || old.inference_admission_state != new.inference_admission_state
 }

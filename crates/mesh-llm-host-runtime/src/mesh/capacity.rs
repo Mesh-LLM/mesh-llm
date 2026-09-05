@@ -70,8 +70,8 @@ pub struct AdvertisedMemory {
     pub usable_bytes: u64,
     /// Total system RAM when the platform reports it.
     pub system_ram_bytes: Option<u64>,
-    /// Portion of the local fit budget backed by system RAM. Never advertised
-    /// as accelerator capacity.
+    /// Portion of the local fit budget backed by system RAM, after any
+    /// `max_vram_gb` cap. Never advertised as accelerator capacity.
     pub ram_offload_bytes: u64,
 }
 
@@ -99,13 +99,20 @@ pub(super) fn advertised_memory(
     let configured_reserve_bytes = total_bytes
         .saturating_sub(reserved_bytes)
         .saturating_sub(usable_bytes);
+    // The survey derives its RAM-backed share from the uncapped budget. A
+    // `max_vram_gb` cap shrinks the local budget first, and only what that
+    // capped budget still carries beyond the device memory is RAM.
+    let local_budget = capped_capacity_bytes(hw.vram_bytes, max_vram_gb);
+    let ram_offload_bytes = hw
+        .ram_offload_bytes
+        .min(local_budget.saturating_sub(device_vram));
     AdvertisedMemory {
         total_bytes,
         reserved_bytes,
         configured_reserve_bytes,
         usable_bytes,
         system_ram_bytes: hw.system_ram_bytes,
-        ram_offload_bytes: hw.ram_offload_bytes,
+        ram_offload_bytes,
     }
 }
 
@@ -265,6 +272,32 @@ mod tests {
         assert_eq!(memory.configured_reserve_bytes, 9_000_000_000);
         assert_eq!(memory.usable_bytes, 30_000_000_000);
         assert_breakdown_adds_up(&memory);
+    }
+
+    #[test]
+    fn max_vram_cap_bounds_the_ram_backed_share_of_the_local_budget() {
+        // 12 GB device credited to 30 GB with RAM: a 20 GB cap leaves 8 GB of
+        // the capped local budget beyond the device, a cap under the device
+        // memory leaves none.
+        let hw = HardwareSurvey {
+            vram_bytes: 30_000_000_000,
+            gpu_vram: vec![12_000_000_000],
+            gpu_reserved: vec![None],
+            gpus: vec![gpu(12_000_000_000, None, false)],
+            system_ram_bytes: Some(32_000_000_000),
+            ram_offload_bytes: 18_000_000_000,
+            ..HardwareSurvey::default()
+        };
+
+        assert_eq!(
+            advertised_memory(&hw, None, 0).ram_offload_bytes,
+            18_000_000_000
+        );
+        assert_eq!(
+            advertised_memory(&hw, Some(20.0), 0).ram_offload_bytes,
+            8_000_000_000
+        );
+        assert_eq!(advertised_memory(&hw, Some(8.0), 0).ram_offload_bytes, 0);
     }
 
     #[test]
