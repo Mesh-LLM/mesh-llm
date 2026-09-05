@@ -188,12 +188,17 @@ class CiWorkflowArtifactTests(unittest.TestCase):
         scripted = (WORKFLOWS / "scripted-binary-smoke.yml").read_text()
 
         self.assertIn("two_node_split:", workflow)
-        self.assertIn("model_state: dense", workflow)
-        self.assertIn("model_state: recurrent", workflow)
-        self.assertIn("max-parallel: 1", workflow)
+        self.assertIn("name: KV caching smoke (dense + recurrent)", workflow)
+        self.assertIn("two-node-split", workflow)
         self.assertEqual(
             workflow.count("smoke_script: scripts/ci-two-node-split-smoke.sh"),
             1,
+        )
+        self.assertIn(
+            "SmolLM2-135M-Instruct-GGUF/resolve/"
+            "9e6855bc4be717fca1ef21360a1db4b29d5c559a/"
+            "SmolLM2-135M-Instruct-Q8_0.gguf",
+            workflow,
         )
         self.assertIn(
             "Qwen3.5-0.8B-GGUF/resolve/"
@@ -201,8 +206,11 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "Qwen3.5-0.8B-Q4_K_M.gguf",
             workflow,
         )
-        self.assertIn("model_context_size: '4096'", workflow)
-        self.assertIn("fail-fast: ${{ inputs.fail_fast }}", workflow)
+        # The recurrent leg rides the same job via the KV smoke inputs; both
+        # models must still be cached and passed to the smoke script.
+        self.assertIn("model_cache_scope: two-node-split-smoke-model", workflow)
+        self.assertIn("kv_recurrent_model_file: Qwen3.5-0.8B-Q4_K_M.gguf", workflow)
+        self.assertIn("kv_recurrent_context_size: '4096'", workflow)
         self.assertIn(
             "fail_fast: ${{ inputs.original_event_name == 'pull_request' }}",
             (WORKFLOWS / "ci-linux-lane.yml").read_text(),
@@ -212,6 +220,13 @@ class CiWorkflowArtifactTests(unittest.TestCase):
             "MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}",
             scripted,
         )
+        self.assertIn(
+            "MESH_TWO_NODE_SPLIT_RECURRENT_MODEL:", scripted
+        )
+        self.assertIn(
+            "Resolve recurrent smoke model for the KV caching leg", scripted
+        )
+        self.assertIn("MESH_TWO_NODE_SPLIT_RECURRENT_MODEL", scripted)
 
     def test_cuda_product_supports_the_registered_gpu_runner_architecture(self):
         runtimes = json.loads(SLICES.read_text())["runtime_rows"]

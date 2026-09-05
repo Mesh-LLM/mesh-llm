@@ -5,9 +5,12 @@
 #
 # Unlike ci-two-node-client-serving-smoke.sh, both processes are serving nodes.
 # The smoke requires the runtime to publish a topology with stages on at least
-# two distinct nodes before it sends OpenAI requests through stage 0. It then
-# grows one chat prompt over three requests and requires the split stages to
-# restore a longer shared prefix after every request.
+# two distinct nodes before it sends OpenAI requests through stage 0. For each
+# model leg it sends every prompt length twice in a row (X, X, X+more, X+more,
+# ...): the first sight of each length proves reuse keeps growing, and the
+# identical re-send must be served from cache as a near-full restore. With
+# MESH_TWO_NODE_SPLIT_RECURRENT_MODEL set, the dense leg runs first and the
+# recurrent leg repeats the whole flow against a second model in the same job.
 
 set -euo pipefail
 
@@ -22,6 +25,11 @@ WORKER_API_PORT="${MESH_TWO_NODE_SPLIT_WORKER_API_PORT:-9368}"
 WORKER_CONSOLE_PORT="${MESH_TWO_NODE_SPLIT_WORKER_CONSOLE_PORT:-3162}"
 WORKER_BIND_PORT="${MESH_TWO_NODE_SPLIT_WORKER_BIND_PORT:-53648}"
 MAX_WAIT="${MESH_TWO_NODE_SPLIT_MAX_WAIT:-300}"
+# Optional second model: when set, the smoke runs the whole split flow once
+# against MODEL (dense) and once against this (recurrent) in the same process
+# pair, so a single CI job covers both cache families.
+RECURRENT_MODEL="${MESH_TWO_NODE_SPLIT_RECURRENT_MODEL:-}"
+RECURRENT_CTX_SIZE="${MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE:-4096}"
 REQUEST_SETTLE_SECONDS="${MESH_TWO_NODE_SPLIT_REQUEST_SETTLE_SECONDS:-1}"
 PREFIX_ATTEMPTS="${MESH_TWO_NODE_SPLIT_PREFIX_ATTEMPTS:-3}"
 EXPECTED_EXACT_PAYLOAD_KIND="${MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND:-}"
@@ -279,6 +287,10 @@ for i in $(seq 1 "$MAX_WAIT"); do
         echo "last checked endpoint: ${label:-unknown}" >&2
         echo "last peer count: ${PEERS:-unknown}" >&2
         echo "last split summary: ${READY_SUMMARY:-unknown}" >&2
+        echo "--- seed /api/runtime/stages at timeout ---" >&2
+        echo "$(stages_json "$SEED_CONSOLE_PORT")" >&2
+        echo "--- worker /api/runtime/stages at timeout ---" >&2
+        echo "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
         tail -160 "$SEED_LOG" >&2 || true
         tail -160 "$WORKER_LOG" >&2 || true
         exit 1
@@ -298,6 +310,8 @@ if [[ -z "$MODEL_ID" ]]; then
     echo "${DRIVER_LABEL:-selected driver} /v1/models did not return a model id" >&2
     exit 1
 fi
+MODEL_LABEL="dense"
+export MODEL_ID MODEL_LABEL
 
 PREFIX_PAYLOAD_ROOT="${WORK_DIR}/prefix-payloads"
 PREFIX_RESPONSE_ROOT="${WORK_DIR}/prefix-responses"
@@ -328,33 +342,52 @@ extensions = [
     "Second extension block makes the reusable prefix longer. " * 16,
     "Third extension block proves reuse keeps growing. " * 16,
 ]
+# Every length is sent twice in a row: X, X, X+E1, X+E1, X+E1+E2, X+E1+E2.
+# The first sight of each length proves reuse carries the established prefix
+# forward, and the identical re-send proves a repeated prompt is served from
+# cache instead of being recomputed.
+index = 0
 prompt = shared
-for index, extension in enumerate(extensions, start=1):
+for extension in extensions:
     prompt += extension
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "user": f"ci-split-prefix-growth-{nonce}",
-        "stream": False,
-        "max_tokens": 1,
-        "temperature": 0,
-    }
-    with (output / f"prompt-{index}.json").open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    for _ in range(2):
+        index += 1
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "user": f"ci-split-prefix-growth-{nonce}",
+            "stream": False,
+            "max_tokens": 1,
+            "temperature": 0,
+        }
+        with (output / f"prompt-{index}.json").open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
 PY
 }
 
+# Requests 1..6: odd indexes are first sights of each prompt length (growth
+# arms), even indexes are identical re-sends of the previous prompt (repeat
+# arms). Requests 1-2 share prompt X, 3-4 share X+E1, 5-6 share X+E1+E2.
+PREFIX_REQUEST_COUNT=6
+
 validate_prefix_responses() {
-    python3 - "$1" <<'PY'
+    python3 - "$1" "$PREFIX_REQUEST_COUNT" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 TRANSIENT_STATUS = 75
+# A repeated prompt is allowed to re-feed the final token for logits, so the
+# restore can legitimately report prompt_tokens - 1 rather than the full
+# prompt. Two tokens of slack keeps that off the failure path.
+REPEAT_TOKEN_SLACK = 2
 
 response_dir = Path(sys.argv[1])
+request_count = int(sys.argv[2])
+growth_indexes = list(range(1, request_count + 1, 2))
+repeat_pairs = [(index, index + 1) for index in range(1, request_count + 1, 2)]
 metrics = []
-for index in range(1, 4):
+for index in range(1, request_count + 1):
     with (response_dir / f"response-{index}.json").open(encoding="utf-8") as fh:
         body = json.load(fh)
     if body.get("object") != "chat.completion":
@@ -373,26 +406,52 @@ for index in range(1, 4):
 
 prompt_counts = [prompt for prompt, _ in metrics]
 cached_counts = [cached for _, cached in metrics]
-if not prompt_counts[0] < prompt_counts[1] < prompt_counts[2]:
+growth_prompts = [prompt_counts[index - 1] for index in growth_indexes]
+growth_cached = [cached_counts[index - 1] for index in growth_indexes]
+if prompt_counts[0] != prompt_counts[1] or any(
+    prompt_counts[pair[0] - 1] != prompt_counts[pair[1] - 1] for pair in repeat_pairs
+):
+    raise SystemExit(f"repeated prompts diverged between sends: {prompt_counts}")
+if not growth_prompts[0] < growth_prompts[1] < growth_prompts[2]:
     raise SystemExit(f"prompt token counts did not increase: {prompt_counts}")
 if cached_counts[0] != 0:
     raise SystemExit(f"cold prefix request unexpectedly restored tokens: {cached_counts}")
 # A completely cold attempt can arise while a stage lane is still releasing.
 # A partial follow-up miss is the regression under test and must fail directly,
 # not be hidden by a retry that starts from another cold prefix.
-if all(cached == 0 for cached in cached_counts):
+if all(cached == 0 for cached in cached_counts[1:]):
     print(
         f"split prefix reuse was empty on a follow-up request: {cached_counts}",
         file=sys.stderr,
     )
     raise SystemExit(TRANSIENT_STATUS)
-if not cached_counts[1] < cached_counts[2]:
+if not growth_cached[0] < growth_cached[1] < growth_cached[2]:
     raise SystemExit(f"split prefix reuse did not increase: {cached_counts}")
-if any(cached >= prompt for prompt, cached in metrics[1:]):
-    raise SystemExit(f"growing prompts must retain an uncached suffix: {metrics}")
+# Only growth arms need an uncached suffix; a repeat arm may legitimately
+# restore everything except the final re-fed token.
+for index in growth_indexes:
+    if cached_counts[index - 1] >= prompt_counts[index - 1]:
+        raise SystemExit(
+            f"growing prompts must retain an uncached suffix: {metrics}"
+        )
+# Each identical re-send must be a near-full restore: it must cover at least
+# everything its first sight restored (the new extension block is in the
+# restored region) and come from cache rather than a recompute.
+for first, repeat in repeat_pairs:
+    if cached_counts[repeat - 1] < prompt_counts[repeat - 1] - REPEAT_TOKEN_SLACK:
+        raise SystemExit(
+            "identical re-send was not served from cache: "
+            f"request {repeat} restored {cached_counts[repeat - 1]} of "
+            f"{prompt_counts[repeat - 1]} prompt tokens"
+        )
+    if cached_counts[repeat - 1] <= cached_counts[first - 1]:
+        raise SystemExit(
+            f"re-send {repeat} must restore at least the first-sight region of "
+            f"request {first}: {metrics}"
+        )
 
 print(
-    "Split prefix cache reuse increased: "
+    "Split prefix cache reuse grew and repeated prompts restored from cache: "
     + ", ".join(
         f"request {index}: prompt_tokens={prompt}, cached_tokens={cached}"
         for index, (prompt, cached) in enumerate(metrics, start=1)
@@ -435,7 +494,7 @@ for attempt in $(seq 1 "$PREFIX_ATTEMPTS"); do
     mkdir -p "$payload_dir" "$response_dir"
     write_prefix_payloads "$payload_dir" "attempt-${attempt}"
 
-    for index in 1 2 3; do
+    for index in $(seq 1 "$PREFIX_REQUEST_COUNT"); do
         curl -fsS --max-time 180 \
             "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
             -H 'content-type: application/json' \
@@ -468,4 +527,152 @@ fi
 
 assert_expected_exact_payload
 
-echo "Two-node split smoke passed"
+echo "Two-node split smoke passed for model leg: ${MODEL_LABEL:-default}"
+
+# Optional recurrent leg: rerun the identical flow against a second model in
+# the same process pair so one CI job proves both cache families. The phase
+# function restores MODEL/CTX_SIZE, restarts both nodes from scratch (fresh
+# token, fresh stage split), and reruns the prefix cache assertions.
+run_recurrent_leg() {
+    echo "=== Two-node split smoke: recurrent leg ==="
+    kill_tree "$WORKER_PID"
+    kill_tree "$SEED_PID"
+    : >"$SEED_LOG"
+    : >"$WORKER_LOG"
+
+    MODEL="$RECURRENT_MODEL"
+    CTX_SIZE="$RECURRENT_CTX_SIZE"
+    MODEL_LABEL="recurrent"
+    export MODEL CTX_SIZE
+
+    SEED_PID="$(start_node seed "" "$SEED_API_PORT" "$SEED_CONSOLE_PORT" "$SEED_BIND_PORT" "$SEED_LOG")"
+
+    TOKEN=""
+    for i in $(seq 1 "$MAX_WAIT"); do
+        if ! kill -0 "$SEED_PID" 2>/dev/null; then
+            echo "recurrent leg: seed exited unexpectedly" >&2
+            tail -160 "$SEED_LOG" >&2 || true
+            exit 1
+        fi
+        TOKEN="$(query_token "$(status_json "$SEED_CONSOLE_PORT")")"
+        if [[ -n "$TOKEN" ]]; then
+            echo "Seed produced invite token after ${i}s (recurrent leg)"
+            break
+        fi
+        if [[ "$i" -eq "$MAX_WAIT" ]]; then
+            echo "recurrent leg: timed out waiting for seed invite token" >&2
+            tail -160 "$SEED_LOG" >&2 || true
+            exit 1
+        fi
+        sleep 1
+    done
+
+    WORKER_PID="$(start_node worker "$TOKEN" "$WORKER_API_PORT" "$WORKER_CONSOLE_PORT" "$WORKER_BIND_PORT" "$WORKER_LOG")"
+
+    DRIVER_LABEL=""
+    DRIVER_API_PORT=""
+    for i in $(seq 1 "$MAX_WAIT"); do
+        if ! kill -0 "$SEED_PID" 2>/dev/null; then
+            echo "recurrent leg: seed exited unexpectedly" >&2
+            tail -160 "$SEED_LOG" >&2 || true
+            exit 1
+        fi
+        if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+            echo "recurrent leg: worker exited unexpectedly" >&2
+            tail -160 "$WORKER_LOG" >&2 || true
+            exit 1
+        fi
+
+        for endpoint in \
+            "seed:${SEED_API_PORT}:${SEED_CONSOLE_PORT}" \
+            "worker:${WORKER_API_PORT}:${WORKER_CONSOLE_PORT}"; do
+            IFS=: read -r label api_port console_port <<<"$endpoint"
+            PEERS="$(query_peer_count "$(status_json "$console_port")")"
+            if [[ "$PEERS" -lt 1 ]]; then
+                continue
+            fi
+            MODELS_JSON="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/v1/models" 2>/dev/null || true)"
+            READY_SUMMARY="$(query_split_ready "$(stages_json "$console_port")" "$MODELS_JSON" 2>/dev/null || true)"
+            if [[ "$READY_SUMMARY" == ready=true* ]]; then
+                DRIVER_LABEL="$label"
+                DRIVER_API_PORT="$api_port"
+                echo "Split topology ready after ${i}s on ${label} (recurrent leg): ${READY_SUMMARY}"
+                break 2
+            fi
+        done
+
+        if [[ "$i" -eq "$MAX_WAIT" ]]; then
+            echo "recurrent leg: timed out waiting for real split topology" >&2
+            echo "last checked endpoint: ${label:-unknown}" >&2
+            echo "last peer count: ${PEERS:-unknown}" >&2
+            echo "last split summary: ${READY_SUMMARY:-unknown}" >&2
+            echo "--- seed /api/runtime/stages at timeout (recurrent leg) ---" >&2
+            echo "$(stages_json "$SEED_CONSOLE_PORT")" >&2
+            echo "--- worker /api/runtime/stages at timeout (recurrent leg) ---" >&2
+            echo "$(stages_json "$WORKER_CONSOLE_PORT")" >&2
+            tail -160 "$SEED_LOG" >&2 || true
+            tail -160 "$WORKER_LOG" >&2 || true
+            exit 1
+        fi
+        sleep 1
+    done
+
+    if [[ -z "$DRIVER_API_PORT" ]]; then
+        echo "recurrent leg: no split driver API port was selected" >&2
+        exit 1
+    fi
+    MODEL_ID="$(
+        curl -fsS --max-time 5 "http://127.0.0.1:${DRIVER_API_PORT}/v1/models" |
+            python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", []); print(data[0].get("id", "") if data else "")'
+    )"
+    if [[ -z "$MODEL_ID" ]]; then
+        echo "${DRIVER_LABEL:-selected driver} /v1/models did not return a model id (recurrent leg)" >&2
+        exit 1
+    fi
+}
+
+if [[ -n "$RECURRENT_MODEL" ]]; then
+    run_recurrent_leg
+
+    PREFIX_PAYLOAD_ROOT="${WORK_DIR}/prefix-payloads-recurrent"
+    PREFIX_RESPONSE_ROOT="${WORK_DIR}/prefix-responses-recurrent"
+
+    prefix_validated=0
+    for attempt in $(seq 1 "$PREFIX_ATTEMPTS"); do
+        payload_dir="${PREFIX_PAYLOAD_ROOT}/attempt-${attempt}"
+        response_dir="${PREFIX_RESPONSE_ROOT}/attempt-${attempt}"
+        mkdir -p "$payload_dir" "$response_dir"
+        write_prefix_payloads "$payload_dir" "recurrent-attempt-${attempt}"
+
+        for index in $(seq 1 "$PREFIX_REQUEST_COUNT"); do
+            curl -fsS --max-time 180 \
+                "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
+                -H 'content-type: application/json' \
+                -d @"${payload_dir}/prompt-${index}.json" \
+                -o "${response_dir}/response-${index}.json"
+            sleep "$REQUEST_SETTLE_SECONDS"
+        done
+
+        set +e
+        validate_prefix_responses "$response_dir"
+        prefix_status=$?
+        set -e
+        if [[ "$prefix_status" -eq 0 ]]; then
+            prefix_validated=1
+            break
+        fi
+        if [[ "$prefix_status" -ne "$PREFIX_TRANSIENT_STATUS" ]]; then
+            exit "$prefix_status"
+        fi
+        echo "recurrent leg: prefix attempt ${attempt} of ${PREFIX_ATTEMPTS} saw no reuse; retrying from a cold prefix" >&2
+    done
+
+    if [[ "$prefix_validated" -ne 1 ]]; then
+        echo "recurrent leg: split prefix reuse never materialized across ${PREFIX_ATTEMPTS} attempts" >&2
+        exit 1
+    fi
+
+    assert_expected_exact_payload
+
+    echo "Two-node split smoke passed for model leg: recurrent"
+fi

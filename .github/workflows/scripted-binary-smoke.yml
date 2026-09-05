@@ -49,6 +49,21 @@ on:
         required: false
         default: ''
         type: string
+      kv_recurrent_model_url:
+        description: Optional second (recurrent) model the KV caching smoke downloads for its second leg.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_model_file:
+        description: Filename under ~/.models for the optional recurrent smoke model.
+        required: false
+        default: ''
+        type: string
+      kv_recurrent_context_size:
+        description: Context-size override passed to the recurrent leg of the KV caching smoke.
+        required: false
+        default: ''
+        type: string
       cache_key_prefix:
         required: false
         default: ''
@@ -67,6 +82,9 @@ on:
 env:
   MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
   MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.expected_exact_payload_kind }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_MODEL: ${{ inputs.kv_recurrent_model_url != '' && inputs.kv_recurrent_model_file != '' && format('{0}/.models/{1}', github.workspace, inputs.kv_recurrent_model_file) || '' }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE: ${{ inputs.kv_recurrent_context_size }}
+  MESH_TWO_NODE_SPLIT_RECURRENT_MODEL_FILE: ${{ inputs.kv_recurrent_model_file }}
 permissions:
   contents: read
   packages: read
@@ -113,3 +131,20 @@ jobs:
 
       - name: Run scripted smoke
         run: ${{ inputs.smoke_script }} "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ steps.model_inputs.outputs.model_file }}"
+
+      - name: Resolve recurrent smoke model for the KV caching leg
+        if: ${{ inputs.kv_recurrent_model_url != '' && inputs.kv_recurrent_model_file != '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.models
+          output="$HOME/.models/${{ inputs.kv_recurrent_model_file }}"
+          if [[ -s "$output" ]]; then
+            echo "recurrent model already present: $output"
+            exit 0
+          fi
+          curl -fsSL --retry 3 --retry-delay 10 --connect-timeout 30 \
+            --max-time 900 \
+            "${{ inputs.kv_recurrent_model_url }}" \
+            -o "$output"
+          test -s "$output"
+          echo "recurrent model staged: $output"
