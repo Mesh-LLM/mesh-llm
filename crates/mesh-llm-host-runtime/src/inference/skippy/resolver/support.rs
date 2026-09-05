@@ -33,7 +33,9 @@ pub(crate) fn effective_safety_margin_bytes(defaults: Option<&ModelConfigDefault
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.safety_margin_gb)
         .unwrap_or(BUILTIN_SAFETY_MARGIN_GB);
-    safety_margin_mib(safety_margin_gb) * 1024 * 1024
+    // The float-to-integer cast saturates on absurd margins; saturate the
+    // byte conversion the same way instead of overflowing.
+    safety_margin_mib(safety_margin_gb).saturating_mul(1024 * 1024)
 }
 
 pub(super) fn effective_flash_attention(cache_type_v: &str) -> FlashAttentionType {

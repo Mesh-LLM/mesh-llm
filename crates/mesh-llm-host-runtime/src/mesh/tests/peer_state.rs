@@ -1872,3 +1872,28 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
     apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
     assert_eq!(existing.memory, Some(refreshed));
 }
+
+#[test]
+fn peer_meaningfully_changed_detects_memory_updates() {
+    let peer_id = make_test_endpoint_id(13);
+    let mut old_peer = make_test_peer_info(peer_id);
+    let mut new_peer = old_peer.clone();
+
+    let advertised = crate::mesh::AdvertisedMemory {
+        total_bytes: 12_000_000_000,
+        reserved_bytes: 0,
+        configured_reserve_bytes: 2_000_000_000,
+        usable_bytes: 10_000_000_000,
+        system_ram_bytes: None,
+        ram_offload_bytes: 0,
+    };
+    old_peer.memory = Some(advertised);
+    new_peer.memory = Some(crate::mesh::AdvertisedMemory {
+        configured_reserve_bytes: 3_000_000_000,
+        usable_bytes: 9_000_000_000,
+        ..advertised
+    });
+
+    assert!(peer_meaningfully_changed(&old_peer, &new_peer));
+    assert!(!peer_meaningfully_changed(&old_peer, &old_peer.clone()));
+}

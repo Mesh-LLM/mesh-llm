@@ -870,9 +870,32 @@ fn malformed_memory_blocks_are_dropped_at_ingest() {
     let (_, ann) = proto_ann_to_local(&inverted).expect("proto_ann_to_local must succeed");
     assert_eq!(ann.memory, None, "more usable than total is dropped");
 
+    let unbalanced = announce(crate::proto::node::MemoryInfo {
+        total_bytes: Some(12_000_000_000),
+        reserved_bytes: Some(10_000_000_000),
+        configured_reserve_bytes: Some(10_000_000_000),
+        usable_bytes: Some(1_000_000_000),
+        ..Default::default()
+    });
+    let (_, ann) = proto_ann_to_local(&unbalanced).expect("proto_ann_to_local must succeed");
+    assert_eq!(
+        ann.memory, None,
+        "reserves and usable share that do not add up to the total are dropped"
+    );
+
+    let overflowing = announce(crate::proto::node::MemoryInfo {
+        total_bytes: Some(u64::MAX),
+        reserved_bytes: Some(u64::MAX),
+        configured_reserve_bytes: Some(u64::MAX),
+        usable_bytes: Some(u64::MAX),
+        ..Default::default()
+    });
+    let (_, ann) = proto_ann_to_local(&overflowing).expect("proto_ann_to_local must succeed");
+    assert_eq!(ann.memory, None, "a partition that overflows is dropped");
+
     let minimal = announce(crate::proto::node::MemoryInfo {
         total_bytes: Some(12_000_000_000),
-        usable_bytes: Some(9_500_000_000),
+        usable_bytes: Some(12_000_000_000),
         ..Default::default()
     });
     let (_, ann) = proto_ann_to_local(&minimal).expect("proto_ann_to_local must succeed");
@@ -882,10 +905,10 @@ fn malformed_memory_blocks_are_dropped_at_ingest() {
             total_bytes: 12_000_000_000,
             reserved_bytes: 0,
             configured_reserve_bytes: 0,
-            usable_bytes: 9_500_000_000,
+            usable_bytes: 12_000_000_000,
             system_ram_bytes: None,
             ram_offload_bytes: 0,
         }),
-        "the two-field minimum is accepted with zeroed reserves"
+        "absent reserves count as zero when the partition still adds up"
     );
 }

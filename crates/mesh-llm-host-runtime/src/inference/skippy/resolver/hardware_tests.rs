@@ -82,3 +82,17 @@ fn effective_safety_margin_bytes_mirrors_the_fit_margin_rounding() {
     };
     assert_eq!(effective_safety_margin_bytes(Some(&negative)), 0);
 }
+
+#[test]
+fn effective_safety_margin_bytes_saturates_on_absurd_margins() {
+    use crate::plugin::{HardwareConfig, ModelConfigDefaults};
+
+    let absurd = ModelConfigDefaults {
+        hardware: Some(HardwareConfig {
+            safety_margin_gb: Some(f64::MAX),
+            ..HardwareConfig::default()
+        }),
+        ..ModelConfigDefaults::default()
+    };
+    assert_eq!(effective_safety_margin_bytes(Some(&absurd)), u64::MAX);
+}
