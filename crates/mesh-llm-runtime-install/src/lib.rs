@@ -22,7 +22,10 @@ pub use cache::{
     native_runtime_cache, native_runtime_versions_match_current_sdk,
 };
 pub use install::install_native_runtime;
-pub use manifest::{default_manifest_url, default_release_manifest_url, load_release_manifest};
+pub use manifest::{
+    NativeRuntimeCatalogSources, default_manifest_url, default_release_manifest_url,
+    load_release_manifest,
+};
 pub use types::{
     CURRENT_MESH_VERSION, NATIVE_RUNTIME_CACHE_DIR_ENV, NATIVE_RUNTIME_MANIFEST_URL_ENV,
     NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgress,
@@ -40,14 +43,17 @@ pub(crate) use install::{
 };
 #[cfg(test)]
 pub(crate) use manifest::{
-    manifest_url, release_manifest_checksum_url, url_without_query,
-    verify_release_manifest_checksum,
+    load_release_manifest_with_sources, manifest_url, release_manifest_checksum_url,
+    url_without_query, verify_release_manifest_checksum,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_llm_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
+    use mesh_llm_native_runtime::{
+        CudaRuntimeRequirements, HostCudaProfile, NativeRuntimeBackend, NativeRuntimeBackendKind,
+        NativeRuntimePlatform,
+    };
     use sha2::Digest;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -477,7 +483,29 @@ mod tests {
     }
 
     #[test]
-    fn default_manifest_url_is_skipped_for_bundle_only_resolution() {
+    fn default_manifest_url_is_still_consulted_when_bundle_dirs_exist() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+
+        let options = NativeRuntimeManifestOptions {
+            mesh_version: "0.67.0".to_string(),
+            bundle_dirs: vec![PathBuf::from("runtime-bundle")],
+            allow_default_manifest_url: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            manifest_url(&options).as_deref(),
+            Some(
+                "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.67.0/native-runtimes.json"
+            )
+        );
+    }
+
+    #[test]
+    fn default_manifest_url_is_skipped_when_not_allowed() {
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -485,6 +513,7 @@ mod tests {
 
         let options = NativeRuntimeManifestOptions {
             bundle_dirs: vec![PathBuf::from("runtime-bundle")],
+            allow_default_manifest_url: false,
             ..Default::default()
         };
 
@@ -645,5 +674,351 @@ mod tests {
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
         }
+    }
+
+    /// Writes a runtime bundle directory for `artifact`: its manifest plus
+    /// placeholder library files.
+    fn write_bundle(dir: &Path, artifact: &NativeRuntimeArtifact) {
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        for library in &artifact.libraries {
+            std::fs::write(dir.join(library), b"bundled runtime").unwrap();
+        }
+        NativeRuntimeManifest {
+            runtime: artifact.clone(),
+        }
+        .write_to_dir(dir)
+        .unwrap();
+    }
+
+    /// The Windows CPU runtime as shipped next to the executable: bundled,
+    /// with no download URL.
+    fn windows_cpu_bundle_artifact() -> NativeRuntimeArtifact {
+        let mut artifact = artifact_with_sha(None);
+        artifact.id = "meshllm-native-runtime-windows-x86_64-cpu".to_string();
+        artifact.platform = NativeRuntimePlatform {
+            os: "windows".to_string(),
+            arch: "x86_64".to_string(),
+            target: Some("x86_64-pc-windows-msvc".to_string()),
+        };
+        artifact.libraries = vec!["lib/llama.dll".to_string()];
+        artifact.url = None;
+        artifact.sha256 = None;
+        artifact
+    }
+
+    /// The Windows CUDA 12 runtime as published in the release catalog:
+    /// download only.
+    fn windows_cuda_release_artifact() -> NativeRuntimeArtifact {
+        let mut artifact = artifact_with_sha(None);
+        artifact.id = "meshllm-native-runtime-windows-x86_64-cuda12".to_string();
+        artifact.platform = NativeRuntimePlatform {
+            os: "windows".to_string(),
+            arch: "x86_64".to_string(),
+            target: Some("x86_64-pc-windows-msvc".to_string()),
+        };
+        artifact.backend = NativeRuntimeBackend {
+            kind: NativeRuntimeBackendKind::Cuda,
+            cuda: Some(CudaRuntimeRequirements {
+                toolkit_major: 12,
+                min_driver: None,
+                gpu_arches: vec!["86".to_string(), "89".to_string()],
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        artifact.libraries = vec![
+            "lib/llama.dll".to_string(),
+            "lib/cudart64_12.dll".to_string(),
+            "lib/cublas64_12.dll".to_string(),
+            "lib/cublasLt64_12.dll".to_string(),
+        ];
+        artifact.url = Some("https://example.invalid/windows-cuda12.tar.gz".to_string());
+        artifact
+    }
+
+    /// Writes a release manifest listing `artifacts` under `dir` and returns
+    /// its path.
+    fn release_manifest_file(dir: &Path, artifacts: Vec<NativeRuntimeArtifact>) -> PathBuf {
+        let path = dir.join("native-runtimes.json");
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            skippy_abi: current_skippy_abi_version(),
+            artifacts,
+        };
+        std::fs::write(&path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        path
+    }
+
+    /// Runs the async catalog load to completion on a throwaway runtime.
+    fn block_on_load(
+        options: NativeRuntimeManifestOptions,
+    ) -> anyhow::Result<(NativeRuntimeReleaseManifest, NativeRuntimeCatalogSources)> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(load_release_manifest_with_sources(options))
+    }
+
+    #[test]
+    fn bundle_artifacts_are_merged_with_the_release_manifest() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("native-runtimes/cpu");
+        let mut bundled = windows_cpu_bundle_artifact();
+        bundled.mesh_version = Some("0.1.0-stale".to_string());
+        bundled.skippy_abi = "0.0.1".to_string();
+        write_bundle(&bundle, &bundled);
+        let manifest_path =
+            release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
+
+        let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            manifest_path: Some(manifest_path.clone()),
+            bundle_dirs: vec![bundle.clone()],
+            allow_default_manifest_url: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let ids: Vec<&str> = manifest.artifacts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "meshllm-native-runtime-windows-x86_64-cuda12",
+                "meshllm-native-runtime-windows-x86_64-cpu"
+            ]
+        );
+        // The release manifest describes the release; a stale bundle must not
+        // rewrite its version or ABI once a manifest was loaded.
+        assert_eq!(manifest.mesh_version, CURRENT_MESH_VERSION);
+        assert_eq!(manifest.skippy_abi, current_skippy_abi_version());
+        assert_eq!(
+            sources.manifest_path.as_deref(),
+            Some(manifest_path.as_path())
+        );
+        assert_eq!(sources.bundle_dirs, vec![bundle.canonicalize().unwrap()]);
+        assert!(sources.remote_error.is_none());
+    }
+
+    #[test]
+    fn bundle_only_load_takes_release_identity_from_the_bundle() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("native-runtimes/cpu");
+        let mut bundled = windows_cpu_bundle_artifact();
+        bundled.mesh_version = Some("0.66.0".to_string());
+        bundled.skippy_abi = "0.1.9".to_string();
+        write_bundle(&bundle, &bundled);
+
+        let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            bundle_dirs: vec![bundle],
+            allow_default_manifest_url: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(manifest.mesh_version, "0.66.0");
+        assert_eq!(manifest.skippy_abi, "0.1.9");
+        assert_eq!(manifest.artifacts.len(), 1);
+        assert!(sources.manifest_url.is_none());
+        assert!(sources.remote_error.is_none());
+    }
+
+    #[test]
+    fn remote_fetch_failure_falls_back_to_bundles() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("native-runtimes/cpu");
+        write_bundle(&bundle, &windows_cpu_bundle_artifact());
+
+        let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            manifest_url: Some("http://127.0.0.1:9/native-runtimes.json?token=secret".to_string()),
+            bundle_dirs: vec![bundle.clone()],
+            allow_default_manifest_url: true,
+            ..Default::default()
+        })
+        .expect("bundles must carry the load when the remote catalog is unreachable");
+
+        assert_eq!(manifest.artifacts.len(), 1);
+        assert_eq!(
+            manifest.artifacts[0].id,
+            "meshllm-native-runtime-windows-x86_64-cpu"
+        );
+        assert_eq!(
+            sources.manifest_url.as_deref(),
+            Some("http://127.0.0.1:9/native-runtimes.json")
+        );
+        let remote_error = sources.remote_error.expect("the fetch failure is recorded");
+        assert!(!remote_error.contains("token=secret"), "{remote_error}");
+        assert_eq!(sources.bundle_dirs, vec![bundle.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn remote_fetch_failure_without_bundles_is_an_error() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+
+        let err = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            manifest_url: Some("http://127.0.0.1:9/native-runtimes.json".to_string()),
+            bundle_dirs: Vec::new(),
+            allow_default_manifest_url: true,
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("native runtime"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn adjacent_windows_cpu_bundle_does_not_hide_a_remote_cuda_candidate() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("native-runtimes/cpu");
+        write_bundle(&bundle, &windows_cpu_bundle_artifact());
+        let manifest_path =
+            release_manifest_file(temp.path(), vec![windows_cuda_release_artifact()]);
+        let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            manifest_path: Some(manifest_path),
+            bundle_dirs: vec![bundle],
+            allow_default_manifest_url: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+        // A Windows host with a CUDA 13 driver and an Ada GPU, as seen from
+        // the official zip layout: bundled cpu runtime next to the binary,
+        // cuda12 runtime only in the release catalog.
+        let profile = HostRuntimeProfile {
+            os: "windows".to_string(),
+            arch: "x86_64".to_string(),
+            target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            available_flavors: std::collections::BTreeSet::from([
+                NativeRuntimeBackendKind::Cpu,
+                NativeRuntimeBackendKind::Cuda,
+            ]),
+            gpus: Vec::new(),
+            cuda: Some(HostCudaProfile {
+                toolkit_majors: std::collections::BTreeSet::new(),
+                driver_max_major: Some(13),
+                driver_version: None,
+                gpu_arches: std::collections::BTreeSet::from(["89".to_string()]),
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        let cache = native_runtime_cache(Some(&temp.path().join("cache"))).unwrap();
+        let resolver = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+            .with_skippy_abi_version(current_skippy_abi_version())
+            .with_bundle_dirs(sources.bundle_dirs);
+
+        let evaluated = resolver.evaluate(&RuntimeSelection::Recommended).unwrap();
+        let compatible: Vec<&str> = evaluated
+            .iter()
+            .filter(|candidate| candidate.compatible)
+            .map(|candidate| candidate.artifact.id.as_str())
+            .collect();
+        assert!(
+            compatible.contains(&"meshllm-native-runtime-windows-x86_64-cuda12"),
+            "the remote cuda runtime must stay visible next to the bundled cpu runtime: {evaluated:?}"
+        );
+        assert!(compatible.contains(&"meshllm-native-runtime-windows-x86_64-cpu"));
+
+        let resolution = resolver
+            .resolve(&RuntimeSelection::Backend {
+                kind: NativeRuntimeBackendKind::Cuda,
+                cuda_toolkit_major: None,
+            })
+            .unwrap();
+        assert_eq!(
+            resolution.selected.id,
+            "meshllm-native-runtime-windows-x86_64-cuda12"
+        );
+        assert!(
+            matches!(resolution.source, NativeRuntimeSource::Download { .. }),
+            "{:?}",
+            resolution.source
+        );
+    }
+
+    #[test]
+    fn a_runtime_that_is_both_bundled_and_published_is_listed_once_and_served_from_the_bundle() {
+        let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("native-runtimes/cpu");
+        let bundled = windows_cpu_bundle_artifact();
+        write_bundle(&bundle, &bundled);
+        // The release catalog publishes the same cpu runtime as a download.
+        let mut published = bundled.clone();
+        published.url = Some("https://example.invalid/windows-cpu.tar.gz".to_string());
+        published.sha256 = Some("b".repeat(64));
+        let manifest_path = release_manifest_file(
+            temp.path(),
+            vec![published, windows_cuda_release_artifact()],
+        );
+
+        let (manifest, sources) = block_on_load(NativeRuntimeManifestOptions {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            manifest_path: Some(manifest_path),
+            bundle_dirs: vec![bundle.clone()],
+            allow_default_manifest_url: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let cpu_entries = manifest
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.id == "meshllm-native-runtime-windows-x86_64-cpu")
+            .count();
+        assert_eq!(cpu_entries, 1, "{:?}", manifest.artifacts);
+
+        let profile = HostRuntimeProfile {
+            os: "windows".to_string(),
+            arch: "x86_64".to_string(),
+            target_triple: Some("x86_64-pc-windows-msvc".to_string()),
+            available_flavors: std::collections::BTreeSet::from([NativeRuntimeBackendKind::Cpu]),
+            gpus: Vec::new(),
+            cuda: None,
+            rocm: None,
+            vulkan: None,
+        };
+        let cache = native_runtime_cache(Some(&temp.path().join("cache"))).unwrap();
+        let resolution = NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache)
+            .with_skippy_abi_version(current_skippy_abi_version())
+            .with_bundle_dirs(sources.bundle_dirs)
+            .resolve(&RuntimeSelection::Id(
+                "meshllm-native-runtime-windows-x86_64-cpu".to_string(),
+            ))
+            .unwrap();
+        assert!(
+            matches!(resolution.source, NativeRuntimeSource::Bundle { ref path } if path == &bundle.canonicalize().unwrap()),
+            "the bundled copy must win over the download: {:?}",
+            resolution.source
+        );
     }
 }

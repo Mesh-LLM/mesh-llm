@@ -14,6 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+/// Installs the native runtime selected by `options`: loads the merged
+/// runtime catalog (release manifest plus bundle directories), resolves the
+/// best candidate for this host, then serves it in place from a bundle, from
+/// the cache, or through a verified download.
 pub async fn install_native_runtime(
     options: NativeRuntimeInstallOptions,
 ) -> Result<NativeRuntimeInstallOutcome> {
@@ -23,7 +27,10 @@ pub async fn install_native_runtime(
             manifest_path: options.manifest_path.clone(),
             manifest_url: options.manifest_url.clone(),
             bundle_dirs: options.bundle_dirs.clone(),
-            allow_default_manifest_url: true,
+            // Offline installs (`allow_download: false`) must not reach out
+            // for the default catalog either; bundles and the cache are the
+            // only sources then. Explicit manifest URLs are still honoured.
+            allow_default_manifest_url: options.allow_download,
         })
         .await?;
     if manifest.artifacts.is_empty() {
