@@ -596,6 +596,19 @@ class SccacheEvidenceTests(unittest.TestCase):
             "run: cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
             warmer,
         )
+        seed_recipe = (ROOT / "just" / "ci.just").read_text(encoding="utf-8")
+        recipe_match = re.search(
+            r"(?m)^ci-sccache-seed-build:\n(?P<body>(?:    .*\n)+)",
+            seed_recipe,
+        )
+        self.assertIsNotNone(recipe_match)
+        self.assertEqual(
+            [line.strip() for line in recipe_match.group("body").splitlines()],
+            [
+                "cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+                "cargo test --locked -p mesh-llm-cli --no-run",
+            ],
+        )
         restore = (
             ROOT / ".github" / "actions" / "restore-sccache-seed" / "action.yml"
         ).read_text(encoding="utf-8")
