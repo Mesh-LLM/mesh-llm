@@ -518,7 +518,10 @@ eligible PR jobs may temporarily use Depot's shared cross-branch
 namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
 untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test, host, and runtime jobs restore one bounded trusted sccache seed
-instead of per-row Cargo target archives. Depot selections cannot restore that
+instead of per-row Cargo target archives. The protected warmer's
+`just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph
+and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix. Depot
+selections cannot restore that
 seed through their cross-trust cache proxy. Its exact key fingerprints the
 warmer image and toolchain epoch, so mismatched native-runtime rows are cold and
 do not restore it. These four high-fanout families disable per-object GHA
