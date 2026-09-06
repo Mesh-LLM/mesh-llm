@@ -136,6 +136,14 @@ pub struct HardwareSurvey {
     pub gpu_reserved: Vec<Option<u64>>,
     /// Per-GPU facts in device-enumeration order.
     pub gpus: Vec<GpuFacts>,
+    /// Total system RAM in bytes when the platform reports it. Informational:
+    /// it feeds the itemized capacity announcement, never a budget.
+    pub system_ram_bytes: Option<u64>,
+    /// Portion of `vram_bytes` that system RAM backs rather than accelerator
+    /// memory: the RAM-offload credit on discrete-GPU hosts, the whole budget
+    /// on CPU-only hosts, zero on unified-memory hosts. Derived once in
+    /// `query` so every collector path reports it the same way.
+    pub ram_offload_bytes: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -206,6 +214,7 @@ fn apply_cpu_only_runtime_budget(
     }
     let system_ram = system_ram();
     if system_ram > 0 {
+        survey.system_ram_bytes = Some(system_ram);
         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
     }
 }
@@ -396,7 +405,11 @@ fn apply_gpu_probe_outcome_to_survey<E>(
             let reserved: u64 = survey.gpu_reserved.iter().flatten().copied().sum();
             survey.vram_bytes = vram.saturating_sub(reserved);
         } else {
-            let ram_offload = system_ram().saturating_sub(vram);
+            let system_ram = system_ram();
+            if system_ram > 0 {
+                survey.system_ram_bytes = Some(system_ram);
+            }
+            let ram_offload = system_ram.saturating_sub(vram);
             survey.vram_bytes = vram + (ram_offload as f64 * 0.90) as u64;
         }
     }
@@ -457,6 +470,9 @@ impl Collector for DefaultCollector {
         ))]
         {
             let system_ram = read_system_ram_bytes();
+            if system_ram > 0 {
+                survey.system_ram_bytes = Some(system_ram);
+            }
 
             if metrics.contains(&Metric::VramBytes) {
                 // Try NVIDIA (mesh.rs:284-316)
@@ -689,6 +705,9 @@ impl Collector for DefaultCollector {
         ))]
         {
             let system_ram = read_windows_total_ram_bytes().unwrap_or(0);
+            if system_ram > 0 {
+                survey.system_ram_bytes = Some(system_ram);
+            }
             let want_gpu_info =
                 metrics.contains(&Metric::GpuName) || metrics.contains(&Metric::GpuCount);
             let want_vram = metrics.contains(&Metric::VramBytes);
@@ -818,6 +837,7 @@ impl Collector for TegraCollector {
             })()
             .or_else(try_tegrastats_ram);
             if let Some(ram) = total_ram {
+                survey.system_ram_bytes = Some(ram);
                 survey.vram_bytes = (ram as f64 * 0.90) as u64;
                 survey.gpu_vram = vec![ram];
             }
@@ -1232,7 +1252,24 @@ pub fn query(metrics: &[Metric]) -> HardwareSurvey {
     if metrics.contains(&Metric::GpuFacts) && survey.gpus.is_empty() {
         hydrate_gpu_facts(&mut survey, metrics);
     }
+    survey.ram_offload_bytes = ram_offload_bytes(&survey);
     survey
+}
+
+/// Portion of `vram_bytes` that system RAM backs: whatever the budget carries
+/// beyond the enumerated accelerator memory. Unified-memory hosts budget from
+/// their working set, so they never carry a RAM credit, and a budget that
+/// trails the enumerated memory (reserved bytes subtracted) yields zero.
+fn ram_offload_bytes(survey: &HardwareSurvey) -> u64 {
+    if survey.is_soc {
+        return 0;
+    }
+    let device_vram: u64 = if survey.gpu_vram.is_empty() {
+        survey.gpus.iter().map(|gpu| gpu.vram_bytes).sum()
+    } else {
+        survey.gpu_vram.iter().sum()
+    };
+    survey.vram_bytes.saturating_sub(device_vram)
 }
 
 pub fn survey() -> HardwareSurvey {
