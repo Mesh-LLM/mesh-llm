@@ -383,6 +383,19 @@ class AgenticReplayTest(unittest.TestCase):
             },
         )
 
+    def test_captured_message_omits_null_optional_fields(self) -> None:
+        recorded = {
+            "role": "user",
+            "content": "task",
+            "tool_call_id": None,
+            "tool_calls_json": None,
+        }
+
+        self.assertEqual(
+            BENCH.openai_message(recorded),
+            {"role": "user", "content": "task"},
+        )
+
     def test_captured_tool_call_sizes_the_generated_output_budget(self) -> None:
         recorded = {
             "role": "assistant",
@@ -516,6 +529,7 @@ class AgenticReplayTest(unittest.TestCase):
         )
 
         self.assertEqual(args.concurrency, [1, 2, 4])
+        self.assertEqual(args.minimum_worker_waves, 2)
         self.assertEqual(args.passes, 1)
         self.assertEqual(args.replay_mode, "checkpoints")
         self.assertEqual(args.trajectories_per_framework, 4)
@@ -670,6 +684,13 @@ class AgenticReplayTest(unittest.TestCase):
             BENCH.validate_measured_cohort_capacity(
                 {"4": [{"session_id": str(index)} for index in range(7)]}, [4]
             )
+
+    def test_measured_cohort_can_explicitly_allow_one_worker_wave(self) -> None:
+        BENCH.validate_measured_cohort_capacity(
+            {"8": [{"session_id": str(index)} for index in range(8)]},
+            [8],
+            minimum_worker_waves=1,
+        )
 
     def test_required_frameworks_are_checked_in_every_measured_cohort(self) -> None:
         cohorts = {
@@ -1222,6 +1243,55 @@ class AgenticReplayTest(unittest.TestCase):
         self.assertEqual(plan["selection"]["warmup_unique_trajectory_count"], 12)
         self.assertEqual(plan["workload"]["measured_requests_per_arm_pass"], 36)
         self.assertEqual(plan["workload"]["measured_requests_total"], 144)
+
+    def test_plan_appends_external_arms_to_the_same_abba_order(self) -> None:
+        args = SimpleNamespace(
+            repo=REPO,
+            backend="metal",
+            model="model-uri",
+            passes=2,
+            source_dataset=["swe-smith-claude-3-7-sonnet"],
+            framework=["swe-agent", "mini-swe-agent", "openhands"],
+            trajectories_per_framework=4,
+            min_isl=8192,
+            max_isl=65536,
+            min_turns=5,
+            concurrency=[1, 2, 4],
+            max_output_tokens=2048,
+            warmup_turns=4,
+            replay_mode="checkpoints",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "engines.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "comparison": {"model": "model-uri"},
+                        "arms": [
+                            {
+                                "label": "vllm",
+                                "engine": "vllm",
+                                "executable": "vllm",
+                                "model": "org/model",
+                                "context_size": 65536,
+                                "max_concurrency": 4,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            engine_config = BENCH.load_engine_config(path)
+
+            plan = BENCH.benchmark_plan(args, self.specs(), engine_config)
+
+        self.assertEqual(
+            [item["label"] for item in plan["order"]],
+            ["rc8", "main", "vllm", "vllm", "main", "rc8"],
+        )
+        self.assertEqual(plan["workload"]["measured_requests_total"], 216)
+        self.assertIn("--max-num-seqs", plan["external_server_commands"][0])
 
 
 if __name__ == "__main__":
