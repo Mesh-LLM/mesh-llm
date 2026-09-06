@@ -97,18 +97,28 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         .base_tokens
         .checked_add(args.turns.saturating_mul(args.turn_tokens))
         .context("token budget overflow")?;
-    if u64::try_from(total_tokens)? > u64::from(args.runtime.ctx_size) {
-        bail!(
-            "prefix of {total_tokens} tokens exceeds --ctx-size {}; raise the context or lower --turns",
+    // The shared --ctx-size default (128) is far below this probe's own
+    // workload default (2048 + 4 x 512), so the documented invocation would
+    // always fail its own budget check. The context is an implementation
+    // detail of the measurement, not a workload parameter: size it to fit and
+    // say so, rather than requiring every caller to restate it.
+    let required_ctx = u32::try_from(total_tokens).context("token budget exceeds u32")?;
+    let ctx_size = if args.runtime.ctx_size < required_ctx {
+        eprintln!(
+            "kv_page_growth: raising --ctx-size {} to {required_ctx} to fit \
+             {total_tokens} prefix tokens",
             args.runtime.ctx_size
         );
-    }
+        required_ctx
+    } else {
+        args.runtime.ctx_size
+    };
 
     let config = RuntimeConfig {
         stage_index: 0,
         layer_start: 0,
         layer_end: args.runtime.layer_end,
-        ctx_size: args.runtime.ctx_size,
+        ctx_size,
         lane_count: 1,
         n_batch: args.runtime.n_batch,
         n_ubatch: args.runtime.n_ubatch,
@@ -337,6 +347,14 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         let rendered = serde_json::to_string_pretty(&report).context("render growth report")?;
         std::fs::write(path, rendered)
             .with_context(|| format!("write growth report {}", path.display()))?;
+    }
+    // The report is written first so a failing run is still diagnosable, but a
+    // failed gate must fail the command: certification automation reads the
+    // exit status, not the printed verdict.
+    if max_tier_amplification > 1.2 {
+        bail!(
+            "kv page growth gate failed: tier amplification {max_tier_amplification:.2} exceeds 1.20"
+        );
     }
     Ok(())
 }

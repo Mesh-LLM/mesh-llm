@@ -318,7 +318,11 @@ fn validate_kv_disk_config(config: &KvDiskTierConfig) -> Vec<ConfigDiagnostic> {
     }
     if let Some(directory) = config.directory.as_deref() {
         let rendered = directory.to_string_lossy();
-        let windows_absolute = rendered.as_bytes().get(1) == Some(&b':')
+        // A drive letter is absolute only where the host understands one. On
+        // Unix `C:\cache` is a relative path, and accepting it would put a
+        // durable cache under the process working directory.
+        let windows_absolute = cfg!(windows)
+            && rendered.as_bytes().get(1) == Some(&b':')
             && rendered
                 .as_bytes()
                 .get(2)

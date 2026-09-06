@@ -33,7 +33,7 @@ pub fn is_network_filesystem(path: &Path) -> Result<bool> {
     let name = filesystem_type_name(path)?;
     Ok(matches!(
         name.as_str(),
-        "nfs" | "smbfs" | "afpfs" | "webdav" | "ftp" | "cifs" | "fuse.sshfs"
+        "nfs" | "smbfs" | "afpfs" | "webdav" | "ftp" | "cifs" | "fuse" | "fuse.sshfs"
     ))
 }
 
@@ -59,7 +59,11 @@ pub fn filesystem_type_name(path: &Path) -> Result<String> {
         Ok(match stat.f_type {
             0x6969 => "nfs".to_string(),
             0xFF53_4D42 => "cifs".to_string(),
-            0x6558_9DFF => "fuse.sshfs".to_string(),
+            // FUSE_SUPER_MAGIC. statfs cannot name the subtype, so every FUSE
+            // mount reports as plain "fuse": sshfs and a local fuse filesystem
+            // are indistinguishable here. The tier refuses the whole class
+            // rather than guess, which is the conservative reading of §10.10.
+            0x6573_5546 => "fuse".to_string(),
             other => format!("0x{other:x}"),
         })
     }
@@ -120,6 +124,29 @@ pub fn refuse_symlink(path: &Path) -> Result<()> {
     }
 }
 
+/// Refuse a symlink anywhere in the portion of `path` below `root`.
+///
+/// The system prefix above the cache root is not ours to police: on macOS
+/// `/var` is itself a symlink to `/private/var`, so refusing every symlinked
+/// ancestor would reject the default temp and cache locations. What must hold
+/// is that nothing the store creates under its own resolved root redirects
+/// bytes outside it.
+pub fn refuse_symlinked_descendant(root: &Path, path: &Path) -> Result<()> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        bail!(
+            "{} is not inside the cache root {}",
+            path.display(),
+            root.display()
+        );
+    };
+    let mut walked = root.to_path_buf();
+    for component in relative.components() {
+        walked.push(component);
+        refuse_symlink(&walked)?;
+    }
+    Ok(())
+}
+
 fn c_path(path: &Path) -> Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::CString::new(path.as_os_str().as_bytes())
@@ -165,7 +192,8 @@ mod tests {
 
     #[test]
     fn touch_moves_modification_time_forward() {
-        let directory = std::env::temp_dir().join("skippy-fsinfo-touch");
+        let directory =
+            std::env::temp_dir().join(format!("skippy-fsinfo-touch-{}", std::process::id()));
         fs::create_dir_all(&directory).expect("create temp dir");
         let path = directory.join("entry");
         fs::write(&path, b"entry").expect("write entry");
@@ -185,7 +213,8 @@ mod tests {
 
     #[test]
     fn symlinks_are_refused() {
-        let directory = std::env::temp_dir().join("skippy-fsinfo-symlink");
+        let directory =
+            std::env::temp_dir().join(format!("skippy-fsinfo-symlink-{}", std::process::id()));
         fs::create_dir_all(&directory).expect("create temp dir");
         let target = directory.join("target");
         let link = directory.join("link");

@@ -321,12 +321,16 @@ fn map_legacy_lifecycle_unsupported(
 }
 
 fn map_kv_cache_unsupported(error: ControlPlaneClientError) -> ControlPlaneClientError {
+    const LEGACY_UNKNOWN_COMMAND_MESSAGE: &str =
+        "owner control request requires exactly one command variant";
     match error {
+        // Only a server that does not know the command at all. A supported
+        // server answers a malformed request with BadRequest, and reporting
+        // that as "unsupported" would be a false capability result.
         ControlPlaneClientError::Remote(mut remote)
-            if matches!(
-                remote.code,
-                OwnerControlErrorCode::BadRequest | OwnerControlErrorCode::UnknownCommand
-            ) =>
+            if remote.code == OwnerControlErrorCode::UnknownCommand
+                || (remote.code == OwnerControlErrorCode::BadRequest
+                    && remote.message == LEGACY_UNKNOWN_COMMAND_MESSAGE) =>
         {
             remote.code = OwnerControlErrorCode::ControlUnsupported;
             remote.message =

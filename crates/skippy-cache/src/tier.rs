@@ -245,9 +245,20 @@ impl L3Tier {
             ),
         };
 
-        let mut wire = Vec::with_capacity(kv.len() + recurrent.len());
-        wire.extend_from_slice(&kv);
-        wire.extend_from_slice(&recurrent);
+        // For full-state and recurrent-only exactly one component is populated,
+        // and KV states reach gigabytes: concatenating would peak at twice the
+        // payload for no benefit. Only a genuine composite needs the copy.
+        let (kv_bytes, recurrent_bytes) = (kv.len() as u64, recurrent.len() as u64);
+        let wire = if recurrent.is_empty() {
+            kv
+        } else if kv.is_empty() {
+            recurrent
+        } else {
+            let mut wire = Vec::with_capacity(kv.len() + recurrent.len());
+            wire.extend_from_slice(&kv);
+            wire.extend_from_slice(&recurrent);
+            wire
+        };
         let payload_digest = segment_digest(&wire);
 
         let mut manifest = HandoffManifest::new_for_model(
@@ -257,8 +268,8 @@ impl L3Tier {
         );
         manifest.total_bytes = wire.len() as u64;
         manifest.payload_digest = payload_digest.clone();
-        manifest.kv_bytes = kv.len() as u64;
-        manifest.recurrent_bytes = recurrent.len() as u64;
+        manifest.kv_bytes = kv_bytes;
+        manifest.recurrent_bytes = recurrent_bytes;
         manifest.kv_desc_json = kv_desc_json;
         manifest.token_count = token_count;
         // Cut on the payload's own geometry when the caller knows it, so a
@@ -488,6 +499,15 @@ impl L3Tier {
             "full-state" => ExactStatePayload::full_state(wire),
             "recurrent-only" => ExactStatePayload::recurrent_only(wire),
             "kv-recurrent" => {
+                // kv_bytes is an independent manifest field: a corrupt or
+                // truncated one must be a recorded miss, not a panic on a
+                // serving thread.
+                if kv_bytes > wire.len() {
+                    bail!(
+                        "L3 manifest claims {kv_bytes} kv bytes but the payload holds {}",
+                        wire.len()
+                    );
+                }
                 let recurrent = wire.split_off(kv_bytes);
                 ExactStatePayload::kv_recurrent(wire, recurrent)
             }

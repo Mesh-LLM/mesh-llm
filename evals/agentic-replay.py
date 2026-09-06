@@ -2993,6 +2993,7 @@ def run_l3_lifecycle(args: argparse.Namespace) -> Path:
             "requests": [low_request],
             "status_before": low_before,
             "status_after": low_after,
+            "activity_delta": activity_delta(low_before, low_after),
         }
         stop(state_dir)
 

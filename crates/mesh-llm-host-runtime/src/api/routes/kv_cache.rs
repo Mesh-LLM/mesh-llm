@@ -68,6 +68,23 @@ pub(crate) struct KvCacheOperationResult {
     pub(crate) freed_bytes: Option<u64>,
 }
 
+/// Trim and reject a blank model filter, matching `decode_operation` on the
+/// owner-control path so both entry points share one contract. An untrimmed
+/// identity would compare unequal against every stored manifest and report a
+/// successful prune that freed nothing.
+fn normalize_model_identity(identity: Option<String>) -> Result<Option<String>, String> {
+    match identity {
+        Some(identity) => {
+            let trimmed = identity.trim();
+            if trimmed.is_empty() {
+                return Err("model_identity must not be empty".to_string());
+            }
+            Ok(Some(trimmed.to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 pub(super) async fn handle_status(stream: &mut TcpStream) -> anyhow::Result<()> {
     if !ensure_loopback_control_caller(stream).await? {
         return Ok(());
@@ -90,12 +107,28 @@ pub(super) async fn handle_prune(stream: &mut TcpStream, body: &str) -> anyhow::
             Err(error) => return respond_error(stream, 400, &error.to_string()).await,
         }
     };
-    if node_kv_disk_manager().is_none() {
+    let Some(manager) = node_kv_disk_manager() else {
         return respond_error(stream, 409, "disk prompt cache is not active").await;
+    };
+    let model_identity = match normalize_model_identity(request.model_identity) {
+        Ok(identity) => identity,
+        Err(error) => return respond_error(stream, 400, &error).await,
+    };
+    // budget_bytes == 0 means "no cap", so the 85%-of-budget default target
+    // computes to 0 and a prune would remove every unpinned manifest. That is
+    // a clear, which the CLI gates behind explicit confirmation.
+    if request.target_bytes.is_none() && manager.limits().budget_bytes == 0 {
+        return respond_error(
+            stream,
+            400,
+            "prune requires target_bytes when the disk cache has no budget; \
+             use the clear endpoint to remove every entry",
+        )
+        .await;
     }
     match execute_operation(KvCacheOperation::Prune {
         target_bytes: request.target_bytes,
-        model_identity: request.model_identity,
+        model_identity,
     })
     .await
     {
@@ -119,11 +152,11 @@ pub(super) async fn handle_clear(stream: &mut TcpStream, body: &str) -> anyhow::
     if node_kv_disk_manager().is_none() {
         return respond_error(stream, 409, "disk prompt cache is not active").await;
     }
-    match execute_operation(KvCacheOperation::Clear {
-        model_identity: request.model_identity,
-    })
-    .await
-    {
+    let model_identity = match normalize_model_identity(request.model_identity) {
+        Ok(identity) => identity,
+        Err(error) => return respond_error(stream, 400, &error).await,
+    };
+    match execute_operation(KvCacheOperation::Clear { model_identity }).await {
         Ok(result) => respond_operation(stream, result).await,
         Err(error) => respond_error(stream, 500, &error.to_string()).await,
     }

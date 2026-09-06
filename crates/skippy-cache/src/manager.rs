@@ -153,6 +153,12 @@ impl L3CacheManager {
         let mut managers = ROOT_MANAGERS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // An entry whose strong count has reached zero is not necessarily gone:
+        // the owning thread decrements the count before dropping the inner
+        // value, and the store's root `flock` is only released by that drop.
+        let expiring_owner = managers
+            .get(&root)
+            .is_some_and(|manager| manager.strong_count() == 0);
         managers.retain(|_, manager| manager.strong_count() > 0);
         if let Some(inner) = managers.get(&root).and_then(Weak::upgrade) {
             if inner.store.limits() != limits {
@@ -164,7 +170,11 @@ impl L3CacheManager {
             return Ok(Self { inner });
         }
 
-        let store = Arc::new(HandoffSegmentStore::open_with_limits(&root, limits)?);
+        // Taking the root lock while the previous in-process owner is still
+        // unwinding would report the root as owned by another manager, which
+        // is a false answer: no other process holds it. Give that drop a
+        // bounded moment to finish rather than failing the caller.
+        let store = Arc::new(open_store_for_acquire(&root, limits, expiring_owner)?);
         let reconciliation = store.reconcile_startup()?;
         let inner = Arc::new(L3ManagerInner {
             store,
@@ -402,6 +412,35 @@ impl L3CacheManager {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Open the store, retrying briefly when the previous in-process owner for
+/// this root is still being dropped.
+///
+/// Only the handoff window is retried. A root genuinely held by another
+/// process fails with the same error it always did, one short delay later.
+fn open_store_for_acquire(
+    root: &Path,
+    limits: StoreLimits,
+    expiring_owner: bool,
+) -> Result<HandoffSegmentStore> {
+    const HANDOFF_ATTEMPTS: u32 = 20;
+    const HANDOFF_BACKOFF: std::time::Duration = std::time::Duration::from_millis(5);
+
+    let attempts = if expiring_owner { HANDOFF_ATTEMPTS } else { 1 };
+    let mut last = None;
+    for attempt in 0..attempts {
+        match HandoffSegmentStore::open_with_limits(root, limits) {
+            Ok(store) => return Ok(store),
+            Err(error) => {
+                last = Some(error);
+                if attempt + 1 < attempts {
+                    std::thread::sleep(HANDOFF_BACKOFF);
+                }
+            }
+        }
+    }
+    Err(last.expect("at least one attempt was made"))
 }
 
 fn canonical_cache_root(root: &Path) -> Result<PathBuf> {

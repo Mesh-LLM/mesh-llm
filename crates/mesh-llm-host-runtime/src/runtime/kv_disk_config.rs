@@ -451,6 +451,11 @@ fn is_absolute_on_supported_host(path: &Path) -> bool {
     if path.is_absolute() {
         return true;
     }
+    if !cfg!(windows) {
+        // `C:\cache` is a relative path on this host; treating it as absolute
+        // would create the cache root under the working directory.
+        return false;
+    }
     let rendered = path.to_string_lossy();
     rendered.as_bytes().get(1) == Some(&b':')
         && rendered
