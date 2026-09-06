@@ -3681,9 +3681,9 @@
       "macro_name": "println!"
     }
   ],
-  "crates/skippy-cache/src/l3.rs": [
+  "crates/skippy-cache/src/l3/tests.rs": [
     {
-      "line": 1847,
+      "line": 461,
       "macro_name": "println!"
     }
   ],
@@ -3711,11 +3711,11 @@
   ],
   "crates/skippy-correctness/src/runner/kv_page_growth.rs": [
     {
-      "line": 272,
+      "line": 276,
       "macro_name": "println!"
     },
     {
-      "line": 326,
+      "line": 331,
       "macro_name": "println!"
     }
   ],

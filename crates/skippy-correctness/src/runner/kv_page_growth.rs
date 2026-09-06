@@ -81,6 +81,9 @@ struct GrowthReport {
     max_tier_amplification: f64,
     /// True when every turn kept the previous payload byte-identical at offset 0.
     append_only: bool,
+    /// Context the probe actually ran with, raised from --ctx-size when that
+    /// was too small for the configured workload.
+    ctx_size: u32,
 }
 
 pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
@@ -100,19 +103,10 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
     // The shared --ctx-size default (128) is far below this probe's own
     // workload default (2048 + 4 x 512), so the documented invocation would
     // always fail its own budget check. The context is an implementation
-    // detail of the measurement, not a workload parameter: size it to fit and
-    // say so, rather than requiring every caller to restate it.
+    // detail of the measurement, not a workload parameter: size it to fit.
+    // The effective value is reported, so a raise is never silent.
     let required_ctx = u32::try_from(total_tokens).context("token budget exceeds u32")?;
-    let ctx_size = if args.runtime.ctx_size < required_ctx {
-        eprintln!(
-            "kv_page_growth: raising --ctx-size {} to {required_ctx} to fit \
-             {total_tokens} prefix tokens",
-            args.runtime.ctx_size
-        );
-        required_ctx
-    } else {
-        args.runtime.ctx_size
-    };
+    let ctx_size = args.runtime.ctx_size.max(required_ctx);
 
     let config = RuntimeConfig {
         stage_index: 0,
@@ -332,9 +326,11 @@ pub fn kv_page_growth(args: KvPageGrowthArgs) -> Result<()> {
         max_amplification,
         max_tier_amplification,
         append_only,
+        ctx_size,
     };
     println!(
-        "kv_page_growth append_only={append_only} fixed_amplification={max_amplification:.2} \
+        "kv_page_growth append_only={append_only} ctx_size={ctx_size} \
+         fixed_amplification={max_amplification:.2} \
          tier_amplification={max_tier_amplification:.2} gate=1.20 verdict={}",
         if max_tier_amplification <= 1.2 {
             "geometry cutting holds the gate"
