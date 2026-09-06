@@ -499,7 +499,26 @@ async fn route_missing_local_model(
 ) -> proxy::RouteDispatchOutcome {
     // Try remote mesh first.
     if let Some(mesh_targets) = remote_mesh_targets(ctx, model_name).await {
-        return proxy::route_model_request(
+        // This node is routing the exchange to a peer, not serving it --
+        // publish the same effective/terminal pair try_route_plugin_model
+        // already does for its own dispatch below, with `RemoteMesh` in
+        // place of `RawProxy`, so a plugin on the ROUTING node can observe
+        // this exchange too (previously it observed nothing at all for a
+        // routed exchange). No marker exists on this path yet -- a peer's
+        // `X-Capsule-Id` response header is not read back here -- so
+        // capsule_id/nonce stay absent, same as the plugin-served terminal
+        // event just below.
+        let exchange_id = uuid::Uuid::new_v4().to_string();
+        if let Some(plugin_manager) = ctx.plugin_manager {
+            plugin_manager
+                .publish(&OpenAiExchangeEnvelope::effective(
+                    exchange_id.clone(),
+                    OpenAiExchangeDispatchPath::RemoteMesh,
+                    model_name,
+                ))
+                .await;
+        }
+        let outcome = proxy::route_model_request(
             ctx.node.clone(),
             tcp_stream,
             &mesh_targets,
@@ -512,6 +531,19 @@ async fn route_missing_local_model(
             },
         )
         .await;
+        if let Some(plugin_manager) = ctx.plugin_manager {
+            plugin_manager
+                .publish(&OpenAiExchangeEnvelope::terminal(
+                    exchange_id,
+                    OpenAiExchangeDispatchPath::RemoteMesh,
+                    model_name,
+                    plugin_route_status(&outcome),
+                    None,
+                    None,
+                ))
+                .await;
+        }
+        return outcome;
     }
 
     // Check if the model is known locally but unavailable
