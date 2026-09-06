@@ -572,6 +572,10 @@ jobs enforce measured hit-rate floors only after an exact warm restore; a
 missing seed is explicitly cold and does not fail. The seed key fingerprints
 the warmer container image and toolchain epoch; runtime rows whose image or
 epoch differs from the warmer are explicitly cold and skip seed restoration.
+The warmer's `just ci-sccache-seed-build` recipe covers both the dominant
+`mesh-llm` Clippy graph and the isolated `mesh-llm-cli` test graph used by the
+Rust-test matrix; its `Justfile` and `just/**` inputs are part of the exact
+seed key.
 These four high-fanout job families also disable the per-object GHA backend on
 every provider. Small exact native
 caches have substantially better reuse-to-storage value. Cache hits are always
