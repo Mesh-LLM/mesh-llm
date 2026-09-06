@@ -137,6 +137,13 @@ impl KvStageIntegration {
         token_ids: &[i32],
     ) -> Option<PrefillKvIdentity> {
         let token_count = token_ids.len() as u64;
+        self.exact_shared_checkpoint_token_count(token_count)
+            .map(|checkpoint| {
+                self.prefill_identity(config, base, token_start, &token_ids[..checkpoint as usize])
+            })
+    }
+
+    pub(crate) fn exact_shared_checkpoint_token_count(&self, token_count: u64) -> Option<u64> {
         if token_count <= self.checkpoint_policy.min_tokens {
             return None;
         }
@@ -145,9 +152,18 @@ impl KvStageIntegration {
         let checkpoint = near_tail
             .saturating_sub(stride)
             .max(self.checkpoint_policy.min_tokens);
-        (checkpoint > 0 && checkpoint < token_count).then(|| {
-            self.prefill_identity(config, base, token_start, &token_ids[..checkpoint as usize])
-        })
+        (checkpoint > 0 && checkpoint < token_count).then_some(checkpoint)
+    }
+
+    pub(crate) fn exact_state_record_token_count_allowed(
+        &self,
+        prompt_token_count: u64,
+        candidate_token_count: u64,
+    ) -> bool {
+        match self.exact_shared_checkpoint_token_count(prompt_token_count) {
+            Some(checkpoint) => candidate_token_count == checkpoint,
+            None => candidate_token_count == prompt_token_count,
+        }
     }
 }
 
@@ -374,5 +390,26 @@ mod tests {
             kv.exact_shared_checkpoint_identity(&config, &test_base(), 0, &[1])
                 .is_none()
         );
+    }
+
+    #[test]
+    fn exact_state_record_prefers_shared_checkpoint_over_request_tail() {
+        let mut config = test_config();
+        config.kv_cache.as_mut().unwrap().payload = StageKvCachePayload::KvRecurrent;
+        config.kv_cache.as_mut().unwrap().min_tokens = 256;
+        config
+            .kv_cache
+            .as_mut()
+            .unwrap()
+            .shared_prefix_stride_tokens = 128;
+        let kv =
+            KvStageIntegration::from_config(&config, skippy_runtime::ModelStateKind::Recurrent)
+                .unwrap()
+                .expect("cache enabled");
+
+        assert!(kv.exact_state_record_token_count_allowed(970, 768));
+        assert!(!kv.exact_state_record_token_count_allowed(970, 969));
+        assert!(!kv.exact_state_record_token_count_allowed(970, 970));
+        assert!(kv.exact_state_record_token_count_allowed(200, 200));
     }
 }

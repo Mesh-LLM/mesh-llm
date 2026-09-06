@@ -150,10 +150,25 @@ The CLI and Rust SDK install API resolve manifests in this order:
 https://github.com/Mesh-LLM/mesh-llm/releases/download/v<mesh_version>/native-runtimes.json
 ```
 
-Bundled runtime directories are always appended to the candidate manifest. When
-only bundle directories are provided, the default release URL is not fetched.
-This lets packaged apps stay offline while the same code path can still inspect
-or install release artifacts for normal crates.io consumers.
+Bundled runtime directories are always appended to the candidate manifest, and
+they no longer suppress the release catalog: an adjacent bundle (the cpu runtime
+shipped next to the Windows binary, an app-embedded runtime) must not hide the
+downloadable GPU runtimes. The merged catalog follows these rules:
+
+- An explicit manifest path is required: a read failure is an error.
+- The default release URL is consulted only when downloads are allowed
+  (`allow_download`, the default). Packaged apps that must stay offline set
+  downloads to false and get the bundle-only behavior, without any network
+  access. Explicit and environment manifest URLs are always honoured.
+- If the remote fetch fails and bundle directories were discovered, the bundles
+  carry the load and the failure is recorded in the catalog sources
+  (`NativeRuntimeCatalogSources::remote_error`) instead of aborting. Without
+  bundles the fetch failure is an error, as before.
+- The loaded manifest's `mesh_version` and `skippy_abi` describe the release; a
+  bundle's values only stand in when no manifest could be loaded at all.
+- Candidates present in several sources are deduplicated by identity by the
+  resolver, which prefers a bundled copy, then the cache, then a download for
+  the same artifact.
 
 ## Upgrade And Pruning
 

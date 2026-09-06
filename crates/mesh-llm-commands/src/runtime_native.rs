@@ -2,7 +2,10 @@ mod formatters;
 mod setup_helpers;
 
 use anyhow::Result;
-use mesh_llm_native_runtime::{NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection};
+use mesh_llm_native_runtime::{
+    CandidateEvaluation, NativeRuntimeArtifact, NativeRuntimePruneMode,
+    NativeRuntimeReleaseManifest, NativeRuntimeResolver, RuntimeSelection,
+};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeBundleInstallPolicy, NativeRuntimeDownloadProgressCallback,
     NativeRuntimeInstallOptions, NativeRuntimeManifestOptions, discover_local_native_runtimes,
@@ -80,34 +83,55 @@ pub async fn run_native_runtime_list(
             resolver = resolver.with_skippy_abi_version(skippy_abi_version);
         }
         let evaluated = resolver.evaluate(&selection)?;
-        let rows = manifest
-            .artifacts
-            .iter()
-            .map(|artifact| {
-                let evaluation = evaluated
-                    .iter()
-                    .find(|candidate| candidate.artifact.id == artifact.id);
-                let supported = evaluation.is_some_and(|candidate| candidate.compatible);
-                AvailableRuntimeRow {
-                    id: artifact.id.clone(),
-                    mesh_version: artifact.mesh_version.clone(),
-                    skippy_abi: artifact.skippy_abi.clone(),
-                    backend: artifact.backend.kind.to_string(),
-                    os: artifact.platform.os.clone(),
-                    arch: artifact.platform.arch.clone(),
-                    supported,
-                    rejection_reasons: evaluation
-                        .map(|candidate| candidate.rejection_reasons.clone())
-                        .unwrap_or_default(),
-                    url: artifact.url.clone(),
-                }
-            })
-            .collect::<Vec<_>>();
+        let rows = available_runtime_rows(&manifest, &evaluated);
         return formatter.render_available(&rows);
     }
 
     let installed = discover_local_native_runtimes(bundle_dirs, &cache)?;
     formatter.render_installed(&installed, cache.root())
+}
+
+fn available_runtime_rows(
+    manifest: &NativeRuntimeReleaseManifest,
+    evaluated: &[CandidateEvaluation],
+) -> Vec<AvailableRuntimeRow> {
+    manifest
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            let evaluation = evaluated.iter().find(|candidate| {
+                runtime_artifact_identity(&candidate.artifact, &manifest.mesh_version)
+                    == runtime_artifact_identity(artifact, &manifest.mesh_version)
+            });
+            AvailableRuntimeRow {
+                id: artifact.id.clone(),
+                mesh_version: artifact.mesh_version.clone(),
+                skippy_abi: artifact.skippy_abi.clone(),
+                backend: artifact.backend.kind.to_string(),
+                os: artifact.platform.os.clone(),
+                arch: artifact.platform.arch.clone(),
+                supported: evaluation.is_some_and(|candidate| candidate.compatible),
+                rejection_reasons: evaluation
+                    .map(|candidate| candidate.rejection_reasons.clone())
+                    .unwrap_or_default(),
+                url: artifact.url.clone(),
+            }
+        })
+        .collect()
+}
+
+fn runtime_artifact_identity<'a>(
+    artifact: &'a NativeRuntimeArtifact,
+    manifest_mesh_version: &'a str,
+) -> (&'a str, &'a str, &'a str) {
+    (
+        artifact.id.as_str(),
+        artifact
+            .mesh_version
+            .as_deref()
+            .unwrap_or(manifest_mesh_version),
+        artifact.skippy_abi.as_str(),
+    )
 }
 
 pub async fn run_native_runtime_install(
@@ -411,9 +435,34 @@ fn native_runtime_doctor_readiness(
 mod tests {
     use super::*;
     use mesh_llm_native_runtime::{
-        NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimeCache, NativeRuntimeManifest,
-        NativeRuntimePlatform,
+        CandidateEvaluation, CandidateRejection, NativeRuntimeArtifact, NativeRuntimeBackend,
+        NativeRuntimeCache, NativeRuntimeManifest, NativeRuntimePlatform,
     };
+
+    fn available_runtime_artifact(
+        runtime_id: &str,
+        mesh_version: Option<&str>,
+        skippy_abi: &str,
+    ) -> NativeRuntimeArtifact {
+        NativeRuntimeArtifact {
+            id: runtime_id.to_string(),
+            mesh_version: mesh_version.map(ToString::to_string),
+            skippy_abi: skippy_abi.to_string(),
+            platform: NativeRuntimePlatform {
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
+                target: None,
+            },
+            backend: NativeRuntimeBackend::cpu(),
+            rank: 0,
+            libraries: vec!["lib/libllama.so".to_string()],
+            files: Default::default(),
+            tools: Default::default(),
+            url: None,
+            sha256: None,
+            signature: None,
+        }
+    }
 
     fn write_test_runtime(path: &Path, runtime_id: &str) {
         std::fs::create_dir_all(path.join("lib")).unwrap();
@@ -475,6 +524,44 @@ mod tests {
         assert!(readiness.healthy);
         assert_eq!(readiness.status, "ok");
         assert!(readiness.blockers.is_empty());
+    }
+
+    #[test]
+    fn available_runtime_rows_match_runtime_identity_not_id_only() {
+        let release_artifact = available_runtime_artifact("runtime", None, "0.1.44");
+        let bundled_artifact =
+            available_runtime_artifact("runtime", Some(CURRENT_MESH_VERSION), "0.1.49");
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: CURRENT_MESH_VERSION.to_string(),
+            skippy_abi: "0.1.44".to_string(),
+            artifacts: vec![release_artifact.clone(), bundled_artifact.clone()],
+        };
+        let mut evaluated_release_artifact = release_artifact;
+        evaluated_release_artifact.mesh_version = Some(CURRENT_MESH_VERSION.to_string());
+        let evaluated = vec![
+            CandidateEvaluation {
+                artifact: evaluated_release_artifact,
+                compatible: true,
+                rank: 0,
+                rejection_reasons: Vec::new(),
+            },
+            CandidateEvaluation {
+                artifact: bundled_artifact,
+                compatible: false,
+                rank: 0,
+                rejection_reasons: vec![CandidateRejection::SkippyAbiMismatch {
+                    expected: "0.1.44".to_string(),
+                    actual: "0.1.49".to_string(),
+                }],
+            },
+        ];
+
+        let rows = available_runtime_rows(&manifest, &evaluated);
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].supported);
+        assert!(!rows[1].supported);
+        assert_eq!(rows[1].rejection_reasons, evaluated[1].rejection_reasons);
     }
 
     #[test]

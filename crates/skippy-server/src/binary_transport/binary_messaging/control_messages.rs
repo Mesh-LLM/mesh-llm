@@ -7,7 +7,8 @@ use super::session_tracker::ConnectionSessionTracker;
 use super::summary::BinaryRequestSummary;
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::binary_kv::{
-    maybe_prefix_cache_control, maybe_record_binary_full_prefill, take_shared_prefill_tokens,
+    accumulate_shared_prefill_tokens, maybe_prefix_cache_control, maybe_record_binary_full_prefill,
+    take_shared_prefill_tokens,
 };
 use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::restore_prefill_decode::handle_binary_restore_prefill_decode_control;
@@ -378,6 +379,7 @@ pub(super) fn handle_prefix_cache_control(
     let scheduler_telemetry = telemetry.clone();
     let scheduler_session_key = session_key.to_string();
     let scheduler_message = message.clone();
+    let scheduler_token_ids = token_ids.clone();
     let local = iteration_scheduler
         .execute_runtime("binary-prefix-control", move |runtime| {
             Ok(maybe_prefix_cache_control(
@@ -387,11 +389,12 @@ pub(super) fn handle_prefix_cache_control(
                 &scheduler_telemetry,
                 &scheduler_session_key,
                 &scheduler_message,
-                &token_ids,
+                &scheduler_token_ids,
             ))
         })
         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))?;
     control_stats.merge(local.stats);
+    let mut chain_hit = local.hit;
     if local.hit
         && let Some(downstream) = downstream.as_mut()
     {
@@ -403,6 +406,7 @@ pub(super) fn handle_prefix_cache_control(
         }
         let downstream_missed =
             normalize_downstream_prefix_restore_reply(message.kind, &mut reply.stats);
+        chain_hit = !downstream_missed;
         control_stats.merge(reply.stats);
         if downstream_missed {
             let scheduler_session_key = session_key.to_string();
@@ -413,6 +417,19 @@ pub(super) fn handle_prefix_cache_control(
                     .map_err(|error| openai_frontend::OpenAiError::backend(format!("{error:#}")))
             });
         }
+    }
+    // The server frontend emits TryRestorePrefill for ordinary prefix restore.
+    // Keep ledger seeding scoped to that optimistic control message: the
+    // unconditional RestorePrefill path is also used by bench/correctness
+    // harnesses, which do not share this suffix-recording lifecycle.
+    if chain_hit
+        && message.kind == WireMessageKind::TryRestorePrefill
+        && let Some(cache) = kv
+    {
+        // Subsequent PrefillEmbd messages start at the restored boundary.
+        // Seed the accumulation ledger with the restored tokens so those
+        // suffix chunks can record the next shared exact-state checkpoint.
+        accumulate_shared_prefill_tokens(&cache.split_prefill_tokens, session_key, 0, &token_ids);
     }
     let mut attrs = binary_message_attrs(config, session_id, &message);
     attrs.insert("skippy.kv.control_hit".to_string(), json!(local.hit));

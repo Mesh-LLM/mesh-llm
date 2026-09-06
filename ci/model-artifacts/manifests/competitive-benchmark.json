@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "test-model-artifacts",
+  "suite": "competitive-benchmark",
+  "registry_sha256": "f947ec5858fea33688c7ef8f3aee39fb4c715f77340892f7602ec74d8d30c430",
+  "artifacts": [
+    {
+      "id": "family-llama",
+      "family": "llama",
+      "capability_tags": [
+        "dense",
+        "gguf",
+        "llama"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "competitive-benchmark"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "selector": "Q4_K_M",
+      "files": [
+        "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Llama-3.2-1B-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 807694464,
+          "blob_id": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83"
+        }
+      },
+      "model_ref": "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 807694464,
+      "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+      "url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "id": "family-falcon-h1",
+      "family": "falcon-h1",
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "recurrent"
+      ],
+      "suites": [
+        "llama-family-certification",
+        "skippy-ci-smoke",
+        "skippy-parity",
+        "competitive-benchmark",
+        "radix-cache"
+      ],
+      "cadences": [
+        "llama-bump",
+        "manual-full",
+        "nightly",
+        "manual"
+      ],
+      "repo": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF",
+      "revision": "0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a",
+      "selector": "Q4_K_M",
+      "files": [
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf": {
+          "size_bytes": 944786656,
+          "blob_id": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+        }
+      },
+      "model_ref": "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+      ],
+      "file": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 944786656,
+      "sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+      "url": "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "id": "deepseek2-q3-competitive",
+      "family": "deepseek2",
+      "capability_tags": [
+        "competitive",
+        "gguf",
+        "mla",
+        "moe"
+      ],
+      "suites": [
+        "competitive-benchmark"
+      ],
+      "cadences": [
+        "nightly",
+        "manual"
+      ],
+      "repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
+      "revision": "8f248fa2072348f77a8bc37754e470de1f61866e",
+      "selector": "Q3_K_M",
+      "files": [
+        "DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf"
+      ],
+      "file_integrity": {
+        "DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf": {
+          "size_bytes": 8126607104,
+          "blob_id": "30f78fce33d19c4bf68c410cd6504d424346dfbe846b4d3df5558e0be078a2a1"
+        }
+      },
+      "model_ref": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF:Q3_K_M",
+      "urls": [
+        "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf"
+      ],
+      "file": "DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf",
+      "size_bytes": 8126607104,
+      "sha256": "30f78fce33d19c4bf68c410cd6504d424346dfbe846b4d3df5558e0be078a2a1",
+      "url": "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/resolve/8f248fa2072348f77a8bc37754e470de1f61866e/DeepSeek-Coder-V2-Lite-Instruct-Q3_K_M.gguf",
+      "notes": "Capacity-matched competitive DeepSeek2 variant; the Q4 family fixture remains separate."
+    },
+    {
+      "id": "granite-h1-bf16-competitive",
+      "family": "granite-hybrid",
+      "capability_tags": [
+        "bf16",
+        "competitive",
+        "gguf",
+        "hybrid",
+        "recurrent"
+      ],
+      "suites": [
+        "competitive-benchmark"
+      ],
+      "cadences": [
+        "nightly",
+        "manual"
+      ],
+      "repo": "ibm-granite/granite-4.0-h-1b-GGUF",
+      "revision": "c2cb1972f511add21f3bae244990b8ff3a3ffb23",
+      "selector": "bf16",
+      "files": [
+        "granite-4.0-h-1b-bf16.gguf"
+      ],
+      "file_integrity": {
+        "granite-4.0-h-1b-bf16.gguf": {
+          "size_bytes": 2928332288,
+          "blob_id": "263ecc8dbe190d61b03639a3e71eec1ba6c70445e8488ce46cfe52d61786eb96"
+        }
+      },
+      "model_ref": "ibm-granite/granite-4.0-h-1b-GGUF:bf16",
+      "urls": [
+        "https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/c2cb1972f511add21f3bae244990b8ff3a3ffb23/granite-4.0-h-1b-bf16.gguf"
+      ],
+      "file": "granite-4.0-h-1b-bf16.gguf",
+      "size_bytes": 2928332288,
+      "sha256": "263ecc8dbe190d61b03639a3e71eec1ba6c70445e8488ce46cfe52d61786eb96",
+      "url": "https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/c2cb1972f511add21f3bae244990b8ff3a3ffb23/granite-4.0-h-1b-bf16.gguf",
+      "notes": "Competitive Granite hybrid BF16 fixture; distinct from the 350M Q4 family canary."
+    }
+  ]
+}

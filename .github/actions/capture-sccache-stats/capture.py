@@ -58,6 +58,8 @@ def assess_cache(
         classification, passed = "cold", True
     elif expectation == "opportunistic":
         classification, passed = "opportunistic", True
+    elif rate is None and minimum_hit_rate == 0:
+        classification, passed = "warm-pass", True
     elif rate is not None and rate >= minimum_hit_rate:
         classification, passed = "warm-pass", True
     else:

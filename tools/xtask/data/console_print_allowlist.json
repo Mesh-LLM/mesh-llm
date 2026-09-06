@@ -1155,47 +1155,47 @@
   ],
   "crates/mesh-llm-commands/src/runtime_native.rs": [
     {
-      "line": 65,
+      "line": 68,
       "macro_name": "eprintln!"
     },
     {
-      "line": 123,
+      "line": 147,
       "macro_name": "eprintln!"
     },
     {
-      "line": 126,
+      "line": 150,
       "macro_name": "eprintln!"
     },
     {
-      "line": 167,
+      "line": 191,
       "macro_name": "eprintln!"
     },
     {
-      "line": 168,
+      "line": 192,
       "macro_name": "eprintln!"
     },
     {
-      "line": 170,
+      "line": 194,
       "macro_name": "eprintln!"
     },
     {
-      "line": 173,
+      "line": 197,
       "macro_name": "eprintln!"
     },
     {
-      "line": 201,
+      "line": 225,
       "macro_name": "eprintln!"
     },
     {
-      "line": 237,
+      "line": 261,
       "macro_name": "eprint!"
     },
     {
-      "line": 241,
+      "line": 265,
       "macro_name": "eprint!"
     },
     {
-      "line": 249,
+      "line": 273,
       "macro_name": "eprintln!"
     }
   ],
@@ -2813,19 +2813,19 @@
   ],
   "crates/mesh-llm/src/lib.rs": [
     {
-      "line": 289,
+      "line": 302,
       "macro_name": "print!"
     },
     {
-      "line": 325,
+      "line": 384,
       "macro_name": "print!"
     },
     {
-      "line": 326,
+      "line": 385,
       "macro_name": "print!"
     },
     {
-      "line": 327,
+      "line": 386,
       "macro_name": "eprintln!"
     }
   ],
@@ -3295,47 +3295,47 @@
   ],
   "crates/model-hf/tests/hf_download.rs": [
     {
-      "line": 62,
+      "line": 143,
       "macro_name": "eprintln!"
     },
     {
-      "line": 92,
+      "line": 171,
       "macro_name": "eprintln!"
     },
     {
-      "line": 135,
+      "line": 216,
       "macro_name": "eprintln!"
     },
     {
-      "line": 160,
+      "line": 243,
       "macro_name": "eprintln!"
     },
     {
-      "line": 199,
+      "line": 282,
       "macro_name": "eprintln!"
     },
     {
-      "line": 260,
+      "line": 340,
       "macro_name": "eprintln!"
     },
     {
-      "line": 278,
+      "line": 359,
       "macro_name": "eprintln!"
     },
     {
-      "line": 303,
+      "line": 384,
       "macro_name": "eprintln!"
     },
     {
-      "line": 323,
+      "line": 405,
       "macro_name": "eprintln!"
     },
     {
-      "line": 341,
+      "line": 423,
       "macro_name": "eprintln!"
     },
     {
-      "line": 365,
+      "line": 445,
       "macro_name": "eprintln!"
     }
   ],

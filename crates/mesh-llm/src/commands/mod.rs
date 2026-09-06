@@ -23,6 +23,9 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
         return Ok(false);
     };
+    if matches!(cmd, Command::Serve | Command::Client) {
+        return Ok(false);
+    }
     let family = match cmd {
         Command::ExternalPlugin(args) => plugin_cli::external_cli_command_family(cli, args),
         _ => mesh_llm_commands::operational_logging::command_family(cmd),
@@ -53,6 +56,7 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
 
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
+        Command::Serve | Command::Client => Ok(()),
         Command::Models { command } => {
             dispatch_models_command(command).await?;
             Ok(())

@@ -797,6 +797,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Serve local models and join or publish a mesh.
+    Serve,
+    /// Run as a client-only mesh node with no local model required.
+    Client,
     /// Manage model storage, migration, and update checks.
     Models {
         #[command(subcommand)]
@@ -1909,5 +1913,19 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cli_help_documents_serve_and_client_commands() {
+        let mut help_bytes = Vec::new();
+        Cli::command()
+            .write_help(&mut help_bytes)
+            .expect("render help");
+        let help_text = String::from_utf8(help_bytes).expect("utf8 help");
+
+        assert!(help_text.contains("serve"));
+        assert!(help_text.contains("Serve local models and join or publish a mesh"));
+        assert!(help_text.contains("client"));
+        assert!(help_text.contains("Run as a client-only mesh node with no local model required"));
     }
 }
