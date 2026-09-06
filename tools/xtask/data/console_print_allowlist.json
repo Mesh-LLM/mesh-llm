@@ -629,23 +629,19 @@
   ],
   "crates/mesh-llm-commands/src/config.rs": [
     {
-      "line": 358,
+      "line": 360,
       "macro_name": "println!"
     },
     {
-      "line": 373,
+      "line": 375,
       "macro_name": "println!"
     },
     {
-      "line": 378,
+      "line": 380,
       "macro_name": "println!"
     },
     {
-      "line": 379,
-      "macro_name": "println!"
-    },
-    {
-      "line": 386,
+      "line": 381,
       "macro_name": "println!"
     },
     {
@@ -653,11 +649,15 @@
       "macro_name": "println!"
     },
     {
-      "line": 402,
+      "line": 390,
       "macro_name": "println!"
     },
     {
-      "line": 410,
+      "line": 404,
+      "macro_name": "println!"
+    },
+    {
+      "line": 412,
       "macro_name": "println!"
     }
   ],
@@ -697,7 +697,7 @@
   ],
   "crates/mesh-llm-commands/src/gpus/tune/benchmark/mod.rs": [
     {
-      "line": 90,
+      "line": 91,
       "macro_name": "eprintln!"
     }
   ],
@@ -719,7 +719,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 48,
+      "line": 56,
       "macro_name": "eprintln!"
     }
   ],
@@ -1117,23 +1117,7 @@
   ],
   "crates/mesh-llm-commands/src/runtime_native.rs": [
     {
-      "line": 65,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 123,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 126,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 167,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 168,
+      "line": 68,
       "macro_name": "eprintln!"
     },
     {
@@ -1145,19 +1129,35 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 201,
+      "line": 214,
       "macro_name": "eprintln!"
     },
     {
-      "line": 237,
+      "line": 215,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 217,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 220,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 248,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 284,
       "macro_name": "eprint!"
     },
     {
-      "line": 241,
+      "line": 288,
       "macro_name": "eprint!"
     },
     {
-      "line": 249,
+      "line": 296,
       "macro_name": "eprintln!"
     }
   ],
@@ -1589,7 +1589,7 @@
   ],
   "crates/mesh-llm-host-runtime/src/inference/skippy/resolver/native_mtp_tests.rs": [
     {
-      "line": 914,
+      "line": 917,
       "macro_name": "eprintln!"
     }
   ],
@@ -1880,6 +1880,16 @@
     },
     {
       "line": 226,
+      "macro_name": "eprintln!"
+    }
+  ],
+  "crates/mesh-llm-host-runtime/src/runtime/local_model_only.rs": [
+    {
+      "line": 456,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 466,
       "macro_name": "eprintln!"
     }
   ],
@@ -3205,7 +3215,7 @@
   ],
   "crates/mesh-native-serving-plugin-host/src/lib.rs": [
     {
-      "line": 603,
+      "line": 616,
       "macro_name": "eprintln!"
     }
   ],
@@ -4243,6 +4253,24 @@
       "macro_name": "eprintln!"
     }
   ],
+  "crates/skippy-runtime/tests/runtime_events_native.rs": [
+    {
+      "line": 45,
+      "macro_name": "println!"
+    },
+    {
+      "line": 52,
+      "macro_name": "println!"
+    },
+    {
+      "line": 66,
+      "macro_name": "println!"
+    },
+    {
+      "line": 73,
+      "macro_name": "println!"
+    }
+  ],
   "crates/skippy-server/examples/mtp_stage_bench.rs": [
     {
       "line": 218,
@@ -4251,27 +4279,27 @@
   ],
   "crates/skippy-server/src/binary_transport/binary_messaging.rs": [
     {
-      "line": 380,
+      "line": 386,
       "macro_name": "eprintln!"
     },
     {
-      "line": 390,
+      "line": 396,
       "macro_name": "println!"
     },
     {
-      "line": 425,
+      "line": 431,
       "macro_name": "eprintln!"
     },
     {
-      "line": 446,
+      "line": 452,
       "macro_name": "eprintln!"
     },
     {
-      "line": 454,
+      "line": 460,
       "macro_name": "eprintln!"
     },
     {
-      "line": 519,
+      "line": 525,
       "macro_name": "eprintln!"
     }
   ],
@@ -4359,11 +4387,11 @@
   ],
   "crates/skippy-server/src/frontend/generation/server.rs": [
     {
-      "line": 193,
+      "line": 198,
       "macro_name": "println!"
     },
     {
-      "line": 340,
+      "line": 347,
       "macro_name": "println!"
     }
   ],
@@ -4387,7 +4415,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 309,
+      "line": 310,
       "macro_name": "eprintln!"
     }
   ],
@@ -4405,11 +4433,7 @@
   ],
   "crates/skippy-server/src/runtime_state.rs": [
     {
-      "line": 764,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 856,
+      "line": 806,
       "macro_name": "eprintln!"
     },
     {
@@ -4417,15 +4441,19 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 935,
+      "line": 941,
       "macro_name": "eprintln!"
     },
     {
-      "line": 939,
+      "line": 979,
       "macro_name": "eprintln!"
     },
     {
-      "line": 944,
+      "line": 983,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 988,
       "macro_name": "eprintln!"
     }
   ]
