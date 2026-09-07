@@ -57,8 +57,9 @@ pub(crate) use kv_cache::KvCachePolicy;
 #[cfg(test)]
 pub(crate) use local_source::local_source_required_for_model;
 pub(crate) use local_source::{
-    apply_verified_local_source, effective_local_source_required, is_content_addressed_gguf_ref,
-    register_local_source_policy, unregister_local_source_policy, verify_registered_content_source,
+    apply_verified_local_source, effective_local_source_required, into_content_addressed_identity,
+    is_content_addressed_gguf_ref, register_local_source_policy, unregister_local_source_policy,
+    verify_registered_content_source,
 };
 pub use materialization::{
     configure_materialized_stage_cache, is_layer_package_ref, materialize_stage_config,
@@ -66,16 +67,20 @@ pub use materialization::{
     prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
     resolve_hf_package_to_local,
 };
-pub(crate) use package::direct_gguf_source_paths;
+#[cfg(test)]
+pub(crate) use package::synthetic_content_addressed_gguf_package;
 pub use package::{
-    SkippyPackageIdentity, identity_from_layer_package, synthetic_content_addressed_gguf_package,
+    SkippyPackageIdentity, identity_from_layer_package, identity_from_package_v2,
     synthetic_direct_gguf_package,
 };
+pub(crate) use package::{direct_gguf_source_paths, is_package_v2_ref};
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
     resolve_skippy_config_for_selector,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
+#[cfg(test)]
+pub(crate) use stage::test_stage_admission;
 pub(crate) use stage::{
     LayerRange, SourceModelKind, StageCancelPrepareRequest, StageControlCommand,
     StageControlHandle, StageControlRequest, StageControlResponse, StageCoordinatorClaim,
@@ -83,7 +88,7 @@ pub(crate) use stage::{
     StageLoadRuntimeSettings, StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState,
     StagePreparationStatus, StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse,
     StageRuntimeState, StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
-    spawn_stage_control_loop, stage_load_timeout,
+    StageTopologyStageDescriptor, spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
 pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
@@ -1295,6 +1300,8 @@ pub(crate) fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<St
         batch_max_tokens: options.batch_max_tokens,
         glm_dsa_policy: options.glm_dsa_policy,
         generation_signal_window: options.generation_signal_window,
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: skippy_protocol::StageActivationCodecPolicy::default(),
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         layer_start,

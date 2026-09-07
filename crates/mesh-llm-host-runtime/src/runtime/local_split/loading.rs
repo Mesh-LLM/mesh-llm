@@ -210,6 +210,7 @@ pub(super) async fn load_split_runtime_generation_inner(
                 spec.model_ref,
                 spec.package,
                 &spec.generation.stages,
+                None,
                 &ready_by_stage,
             ))
             .await;
@@ -249,6 +250,14 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await?
     };
     let first_downstream_stage_id = downstream.stage_id.clone();
+    let stage0_status_load = split_runtime_stage_load_request(
+        spec,
+        &settings,
+        settings.stage0,
+        Some(downstream.clone()),
+        &stage0_return_endpoint,
+        &ready_by_stage,
+    )?;
     let runtime_options = stage0_runtime_options(
         spec,
         &settings,
@@ -306,6 +315,14 @@ pub(super) async fn load_split_runtime_generation_inner(
             "input",
         )?,
     )?;
+    let mut stage0_status =
+        mesh::stage_status_from_load(&stage0_status_load, skippy::StageRuntimeState::Ready);
+    stage0_status.bind_addr = stage0_return_endpoint.clone();
+    stage0_status.output_activation_boundary = Some(stage0_output);
+    stage0_status.error = None;
+    spec.node
+        .record_stage_status(Some(spec.node.id()), stage0_status)
+        .await;
     let _ = emit_event(OutputEvent::ModelLoaded {
         model: model_ref,
         bytes: None,
@@ -325,6 +342,7 @@ pub(super) async fn load_split_runtime_generation_inner(
             spec.model_ref,
             spec.package,
             &spec.generation.stages,
+            Some(&stage0_return_endpoint),
             &ready_by_stage,
         ))
         .await;
@@ -372,7 +390,8 @@ async fn stage0_runtime_options(
             settings.stage0,
             Some(downstream.clone()),
             stage0_return_endpoint,
-        );
+            &HashMap::new(),
+        )?;
         let stage0_load = tokio::task::spawn_blocking(move || {
             let verified = skippy::apply_verified_local_source(&mut stage0_load)?;
             anyhow::ensure!(verified, "local-required stage 0 was not content-verified");
@@ -392,7 +411,7 @@ async fn stage0_runtime_options(
         stage_load_model_path(
             settings.load_mode.clone(),
             &spec.package.package_ref,
-            spec.model_path,
+            &spec.package.source_model_path,
         )
     });
     runtime_options.config.source_model_path = Some(effective_model_path.clone());
@@ -443,7 +462,8 @@ pub(super) async fn load_downstream_split_runtime_stages(
             stage,
             downstream.clone(),
             stage0_return_endpoint,
-        );
+            ready_by_stage,
+        )?;
         if load.local_source_required {
             let inventory = query_stage_inventory(spec.node, stage.node_id, &load)
                 .await
@@ -592,7 +612,9 @@ pub(super) fn stage_source_prepare_timeout(
     stage: &RuntimeSliceStagePlan,
     include_output: bool,
 ) -> Result<Duration> {
-    let assigned_bytes = if model_path.is_dir() {
+    let assigned_bytes = if skippy::is_layer_package_ref(&package.package_ref)
+        && !skippy::is_package_v2_ref(&package.package_ref)
+    {
         crate::models::artifact_transfer::required_stage_package_bytes(
             model_path,
             &package.package_ref,
@@ -633,14 +655,26 @@ pub(super) fn split_runtime_stage_load_request(
     stage: &RuntimeSliceStagePlan,
     downstream: Option<skippy::StagePeerDescriptor>,
     stage0_return_endpoint: &str,
-) -> skippy::StageLoadRequest {
+    ready_by_stage: &HashMap<String, skippy::StageStatusSnapshot>,
+) -> Result<skippy::StageLoadRequest> {
     let resolved_config = &settings.runtime_options.config;
     let upstream = if downstream.is_none() {
         split_runtime_stage_upstream(spec, stage0_return_endpoint)
     } else {
         None
     };
-    skippy::StageLoadRequest {
+    let admission = spec
+        .generation
+        .admissions
+        .get(&stage.stage_id)
+        .with_context(|| {
+            format!(
+                "stage {} is missing native admission evidence",
+                stage.stage_id
+            )
+        })?
+        .clone();
+    Ok(skippy::StageLoadRequest {
         topology_id: spec.generation.topology_id.clone(),
         run_id: spec.generation.run_id.clone(),
         model_id: spec.model_ref.to_string(),
@@ -652,11 +686,43 @@ pub(super) fn split_runtime_stage_load_request(
         stage_index: stage.stage_index,
         layer_start: stage.layer_start,
         layer_end: stage.layer_end,
+        admission,
+        participant_set_hash: split_participant_set_hash(&spec.generation.participants),
+        topology_hash: split_topology_hash(
+            &spec.generation.stages,
+            &spec.generation.admissions,
+            spec.generation.activation_codec,
+            spec.generation.activation_codec_policy,
+        ),
+        activation_codec: spec.generation.activation_codec,
+        activation_codec_policy: spec.generation.activation_codec_policy,
+        topology_stages: spec
+            .generation
+            .stages
+            .iter()
+            .map(|planned| skippy::StageTopologyStageDescriptor {
+                stage_id: planned.stage_id.clone(),
+                stage_index: planned.stage_index,
+                node_id: planned.node_id,
+                layer_start: planned.layer_start,
+                layer_end: planned.layer_end,
+                bind_addr: if planned.stage_id == stage.stage_id {
+                    "127.0.0.1:0".to_string()
+                } else if planned.stage_index == 0 {
+                    stage0_return_endpoint.to_string()
+                } else {
+                    ready_by_stage
+                        .get(&planned.stage_id)
+                        .map(|status| status.bind_addr.clone())
+                        .unwrap_or_else(|| "127.0.0.1:0".to_string())
+                },
+            })
+            .collect(),
         model_path: (!spec.local_source_required).then(|| {
             stage_load_model_path(
                 settings.load_mode.clone(),
                 &spec.package.package_ref,
-                spec.model_path,
+                &spec.package.source_model_path,
             )
         }),
         source_model_bytes: Some(spec.package.source_model_bytes),
@@ -697,6 +763,7 @@ pub(super) fn split_runtime_stage_load_request(
             kv_unified: resolved_config.kv_unified,
             swa_full: resolved_config.swa_full,
             cache_idle_slots: resolved_config.cache_idle_slots,
+            activation_codec_policy: resolved_config.activation_codec_policy,
         },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
         shutdown_generation: spec.generation.generation,
@@ -706,7 +773,7 @@ pub(super) fn split_runtime_stage_load_request(
         load_mode: settings.load_mode.clone(),
         upstream,
         downstream,
-    }
+    })
 }
 
 pub(super) fn split_runtime_stage_upstream(
@@ -818,7 +885,9 @@ pub(super) fn apply_split_generation_pinned_device(
 }
 
 pub(super) fn split_generation_load_mode(package: &skippy::SkippyPackageIdentity) -> LoadMode {
-    if skippy::is_layer_package_ref(&package.package_ref) {
+    if skippy::is_layer_package_ref(&package.package_ref)
+        && !skippy::is_package_v2_ref(&package.package_ref)
+    {
         LoadMode::LayerPackage
     } else {
         LoadMode::RuntimeSlice
@@ -1040,7 +1109,12 @@ pub(super) fn split_coordinator_claim(
         coordinator_id: coordinator_id.to_string(),
         coordinator_term: generation.coordinator_term,
         participant_set_hash: split_participant_set_hash(&generation.participants),
-        topology_hash: split_topology_hash(&generation.stages),
+        topology_hash: split_topology_hash(
+            &generation.stages,
+            &generation.admissions,
+            generation.activation_codec,
+            generation.activation_codec_policy,
+        ),
         lease_until_unix_ms: generation.lease_until_unix_ms,
     }
 }
@@ -1048,12 +1122,12 @@ pub(super) fn split_coordinator_claim(
 pub(super) fn stage_load_model_path(
     load_mode: LoadMode,
     package_ref: &str,
-    model_path: &Path,
+    source_model_path: &Path,
 ) -> String {
     match load_mode {
         LoadMode::LayerPackage => package_ref.to_string(),
         LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => {
-            model_path.to_string_lossy().to_string()
+            source_model_path.to_string_lossy().to_string()
         }
     }
 }
@@ -1195,6 +1269,7 @@ pub(super) fn split_stage_topology_instance(
     model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
     stages: &[RuntimeSliceStagePlan],
+    stage0_bind_addr: Option<&str>,
     ready_by_stage: &HashMap<String, skippy::StageStatusSnapshot>,
 ) -> mesh::StageTopologyInstance {
     mesh::StageTopologyInstance {
@@ -1215,6 +1290,13 @@ pub(super) fn split_stage_topology_instance(
                     bind_addr: ready_by_stage
                         .get(&stage.stage_id)
                         .map(|status| status.bind_addr.clone())
+                        .or_else(|| {
+                            if stage.stage_index == 0 {
+                                stage0_bind_addr.map(str::to_string)
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or_default(),
                 },
             })

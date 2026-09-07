@@ -23,6 +23,12 @@ fn test_stage_status(
         node_id: Some(node_id),
         layer_start: stage_index * 12,
         layer_end: (stage_index + 1) * 12,
+        admission: Some(crate::inference::skippy::test_stage_admission(
+            stage_index * 12,
+            (stage_index + 1) * 12,
+        )),
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
         state,
         bind_addr: bind_addr.to_string(),
         input_activation_boundary: None,
@@ -51,6 +57,29 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         stage_index: 1,
         layer_start: 12,
         layer_end: 24,
+        admission: crate::inference::skippy::test_stage_admission(12, 24),
+        participant_set_hash: "participants".to_string(),
+        topology_hash: "topology".to_string(),
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
+        topology_stages: vec![
+            crate::inference::skippy::StageTopologyStageDescriptor {
+                stage_id: "stage-0".to_string(),
+                stage_index: 0,
+                node_id: make_test_endpoint_id(0x60),
+                layer_start: 0,
+                layer_end: 12,
+                bind_addr: "127.0.0.1:9000".to_string(),
+            },
+            crate::inference::skippy::StageTopologyStageDescriptor {
+                stage_id: "stage-1".to_string(),
+                stage_index: 1,
+                node_id: make_test_endpoint_id(0x80),
+                layer_start: 12,
+                layer_end: 24,
+                bind_addr: "127.0.0.1:0".to_string(),
+            },
+        ],
         model_path: Some("/model.gguf".to_string()),
         source_model_bytes: Some(123_456_789),
         source_model_sha256: None,
@@ -88,6 +117,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             kv_unified: Some(true),
             swa_full: Some(false),
             cache_idle_slots: Some(5),
+            activation_codec_policy: Default::default(),
         },
         native_mtp_enabled: true,
         shutdown_generation: 7,
@@ -120,7 +150,7 @@ async fn stage_control_bundle_gate_rejects_legacy_peer() -> Result<()> {
     assert!(
         error
             .to_string()
-            .contains("does not advertise the required generation-7 control bundle"),
+            .contains("does not advertise the required generation-8 control bundle"),
         "unexpected error: {error:#}"
     );
 
@@ -149,6 +179,9 @@ fn test_preparation_status(
         stage_index: 1,
         layer_start: 12,
         layer_end: 24,
+        admission: Some(crate::inference::skippy::test_stage_admission(12, 24)),
+        activation_codec: skippy_protocol::StageActivationCodec::default(),
+        activation_codec_policy: Default::default(),
         state,
         bytes_done: Some(1024),
         bytes_total: Some(4096),
@@ -256,6 +289,10 @@ fn strict_local_load_uses_distinct_fail_closed_proto_command() {
     assert!(decoded.local_source_required);
     assert!(decoded.model_path.is_none());
     assert!(decoded.projector_path.is_none());
+    assert_eq!(
+        decoded.admission,
+        crate::inference::skippy::test_stage_admission(12, 24)
+    );
 }
 
 #[test]
