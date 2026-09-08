@@ -1260,6 +1260,7 @@ async fn node_hardware_input(
         gpu_compute_tflops_fp16: node_metric_csv(&node.gpu_compute_tflops_fp16).await,
         my_hostname: node.hostname.clone(),
         my_is_soc: node.is_soc,
+        memory: node.advertised_memory,
         my_vram_gb,
         model_size_gb: model_size_bytes as f64 / 1e9,
         first_joined_mesh_ts: node.first_joined_mesh_ts().await,
