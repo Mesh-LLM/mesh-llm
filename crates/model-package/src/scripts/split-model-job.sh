@@ -348,7 +348,10 @@ echo "  Temporary workspace: $TMPDIR"
 log_storage_snapshot "before write-package"
 # The package workspace must NOT sit on the container root filesystem: HF Jobs
 # evicts the pod once container-local ephemeral storage exceeds 50G, and a full
-# package plus shard scratch can far exceed that.
+# package plus shard scratch can far exceed that. Re-create the directory here:
+# on the bucket FUSE mount, empty directories are not backed by an object and
+# can disappear between the initial mkdir and this point.
+mkdir -p "$PACKAGE_DIR"
 ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
 PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
 if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" = "$PACKAGE_FS" ]; then
