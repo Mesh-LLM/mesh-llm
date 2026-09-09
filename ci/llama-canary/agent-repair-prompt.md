@@ -50,15 +50,18 @@ in those skills are hard requirements for this repair, not suggestions.
    `llama-canary/patch-queue-fix`. Commit the patch-queue changes with a
    `fix(llama): rebase patch queue onto upstream <short-sha>` message. You
    have no GitHub credentials: the deterministic wrapper that drives you
+   keeps the repair local while repair and certification are active, then
    commits any remaining work, pushes the branch, and creates/updates the
-   repair PR itself. The wrapper separately asks you to write the full PR
+   repair PR only at terminal success or failure. The wrapper separately asks
+   you to write the full PR
    description (key upstream changes, how the patch queue evolved, risks for
    reviewers) — when that turn arrives, write the finished Markdown to the
    file it names and touch nothing else. After the wrapper's own battery run
    passes, a separate review agent — not you — gets one fresh-context turn
    to review the certified repair and fix any dropped intent or rebase
    leftovers it finds; its changes land as their own `review(llama):`
-   commit, and the next canary re-certifies everything after the merge.
+   commit locally and must pass the complete battery again before the wrapper
+   publishes the branch and PR.
 
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`

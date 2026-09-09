@@ -393,8 +393,9 @@ jobs:
         id: repair_queue
         # Repair the patch queue with the opencode agent before failing the
         # run. The wrapper itself re-runs the battery and only succeeds when
-        # certification passes; it guarantees a repair PR regardless of
-        # outcome. Requires opencode + agent credentials and
+        # certification passes. It publishes or updates the repair PR only
+        # after reaching terminal success or failure. Requires opencode +
+        # agent credentials and
         # CANARY_REPAIR_TOKEN on the family-certify runner (see
         # ci/llama-canary/agent-repair-prompt.md).
         if: steps.prepare.outcome == 'failure'
@@ -404,9 +405,9 @@ jobs:
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_AGENT_MODEL || 'zai-coding-plan/glm-5.3-flash' }}
           CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
           # Post-green review: after a certified repair, a fresh-context
-          # agent turn reviews the repair PR content and may modify it
-          # (separate review(llama): commit; see
-          # scripts/llama-canary-agent-repair.sh). Opt out repo-wide by
+          # agent turn reviews the local candidate and may modify it. Any
+          # separate review(llama): commit is recertified before publication
+          # (see scripts/llama-canary-agent-repair.sh). Opt out repo-wide by
           # setting LLAMA_CANARY_AGENT_REVIEW=false.
           CANARY_AGENT_REVIEW: ${{ vars.LLAMA_CANARY_AGENT_REVIEW || 'true' }}
           # Untrusted dispatch values reach Bash only as environment

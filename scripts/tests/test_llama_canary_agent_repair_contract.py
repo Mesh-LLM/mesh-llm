@@ -19,9 +19,9 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
     The wrapper mediates between an untrusted model turn and repository-write
     credentials. These tests pin the invariants the review demanded: the
     agent never sees a GitHub token, the token never reaches the environment,
-    dispatch SHAs are validated as 40-hex before any use, battery-mode
-    evidence is reused instead of re-running the battery, and persistent
-    runner state is cleared at the start of every run.
+    repair PR publication is terminal, dispatch SHAs are validated as 40-hex
+    before any use, battery-mode evidence is reused instead of re-running the
+    battery, and persistent runner state is cleared at the start of every run.
     """
 
     def test_agent_turns_strip_github_tokens_from_environment(self) -> None:
@@ -47,7 +47,7 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         wrapper = REPAIR.read_text(encoding="utf-8")
         # The wrapper — never the agent — commits and pushes the certified tree.
         self.assertIn("publish_repair_branch", wrapper)
-        self.assertIn('CERTIFIED_SHA="$(git rev-parse HEAD)"', wrapper)
+        self.assertIn('CERTIFIED_SHA="$PUBLISHED_SHA"', wrapper)
         # Success requires the remote PR head to equal the certified commit.
         self.assertIn("verify_pr_head_is_certified", wrapper)
         # The PR must exist before apply_pr_body runs: on a first run the PR
@@ -56,13 +56,35 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         # (live: run 33163990453 — the agent's full analysis never showed).
         self.assertIn("ensure_pr >/dev/null\n  apply_pr_body", wrapper)
         self.assertIn("report_success", wrapper)
-        # The PR-body agent turn runs only before certification; after a green
-        # battery only the deterministic apply_pr_body may run.
+        # The PR-body agent turn runs locally before certification; its body is
+        # applied only in a terminal reporting path.
         self.assertIn("draft_pr_body", wrapper)
         self.assertIn("apply_pr_body", wrapper)
-        first_certify = wrapper.index("certification attempt")
-        self.assertLess(wrapper.index("draft_pr_body()"), first_certify)
+        main_flow = wrapper[wrapper.index('if [[ "$MODE" == "patch-queue" ]]', wrapper.index("repair_followup_prompt()")):]
+        self.assertLess(main_flow.index("draft_pr_body"), main_flow.index("certification attempt"))
         self.assertNotIn("write_pr_body", wrapper)
+
+    def test_repair_pr_is_published_only_from_terminal_paths(self) -> None:
+        wrapper = REPAIR.read_text(encoding="utf-8")
+        main_flow = wrapper[wrapper.index('if [[ "$MODE" == "patch-queue" ]]', wrapper.index("repair_followup_prompt()")):]
+
+        # Active repair/certification flow can draft local content but cannot
+        # push, create/update a PR, or comment directly. Every outcome funnels
+        # through terminal success/failure reporters.
+        self.assertNotIn("publish_work_in_progress", wrapper)
+        self.assertNotIn("publish_repair_branch", main_flow)
+        self.assertNotIn("ensure_pr", main_flow)
+        self.assertNotIn("apply_pr_body", main_flow)
+        self.assertNotIn("pr_comment", main_flow)
+        self.assertIn("report_success", main_flow)
+        self.assertIn("report_failure", main_flow)
+
+        report_success = wrapper[wrapper.index("report_success() {"):wrapper.index("report_failure() {")]
+        report_failure = wrapper[wrapper.index("report_failure() {"):wrapper.index("draft_pr_body() {")]
+        for reporter in (report_success, report_failure):
+            self.assertLess(reporter.index("publish_repair_branch"), reporter.index("ensure_pr"))
+            self.assertLess(reporter.index("ensure_pr"), reporter.index("apply_pr_body"))
+            self.assertLess(reporter.index("apply_pr_body"), reporter.index("\n  pr_comment"))
 
     def test_repair_branch_selects_the_certified_upstream_through_checked_in_pin(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
@@ -86,46 +108,54 @@ class LlamaCanaryAgentRepairContractTests(unittest.TestCase):
         self.assertIn('[[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]', wrapper)
         self.assertIn("  prepare_repair_target || return 1\n  # Battery-mode repairs", wrapper)
 
-        # Both entry modes establish the pinned target before the first
-        # publish_work_in_progress call can create or update the repair PR.
+        # Both entry modes establish the pinned target before terminal
+        # reporting can create or update the repair PR.
         mode_start = wrapper.index(
             'if [[ "$MODE" == "patch-queue" ]]',
-            wrapper.index("publish_work_in_progress()"),
+            wrapper.index("repair_followup_prompt()"),
         )
         mode_flow = wrapper[mode_start:]
         patch_queue_branch, battery_and_shared = mode_flow.split("\nelse\n", 1)
         battery_branch = battery_and_shared.split(
-            "\nfi\n\n# Publish the agent's repair work", 1
+            "\nfi\n\n# Draft locally before certification", 1
         )[0]
         for branch in (patch_queue_branch, battery_branch):
             self.assertLess(
                 branch.index("if ! prepare_repair_target; then"),
-                branch.index("\n    publish_work_in_progress\n"),
+                branch.index("\n    report_failure"),
             )
 
-    def test_post_green_review_may_modify_the_certified_repair(self) -> None:
+    def test_post_green_review_changes_are_recertified_before_publication(self) -> None:
         wrapper = REPAIR.read_text(encoding="utf-8")
         # Even a green, certified repair gets one fresh-context review turn:
         # the reviewer is told it did NOT author the repair, and it may fix
         # what parity certification cannot see (dropped patch intent, rebase
         # leftovers, ABI mirror drift). Its changes ride as a separate
-        # review(llama): commit pushed by the wrapper to the same branch.
+        # review(llama): local commit, which must pass the complete battery
+        # again before the branch and PR are published.
         self.assertIn("post_green_review_turn() {", wrapper)
-        self.assertIn("  apply_pr_body\n  post_green_review_turn\n", wrapper)
+        certify_reviewed = wrapper[wrapper.index("certify_reviewed_repair() {"):wrapper.index("repair_followup_prompt() {")]
+        self.assertIn("  run_battery || return 1\n  commit_repair_tree certified\n  post_green_review_turn || return 1", certify_reviewed)
+        self.assertIn('if [[ "$REVIEW_CHANGED" == "true" ]]; then', certify_reviewed)
+        self.assertIn("running final certification", certify_reviewed)
+        self.assertGreater(certify_reviewed.count("run_battery"), 1)
         self.assertIn("review(llama): agent review fixes at upstream", wrapper)
         # The review is opt-out and fail-open: a disabled or crashed review
         # never fails a green repair.
         self.assertIn('if [[ "${CANARY_AGENT_REVIEW:-true}" != "true" ]]', wrapper)
         self.assertIn("post-green agent review disabled", wrapper)
-        self.assertIn("continuing with the certified tree", wrapper)
-        # The success comment must report the review outcome honestly.
+        self.assertIn("inspecting any partial changes", wrapper)
+        # The success comment must report the review and recertification outcome honestly.
         self.assertIn("REVIEW_STATUS=", wrapper)
         self.assertIn("Post-green agent review made modifications", wrapper)
-        # The review runs BEFORE the PR-head verification, and the verified
-        # head is the last wrapper-published commit (certified, or the
-        # review head when the review modified the tree) — never a stale
-        # certified SHA that a review commit would strand behind.
-        self.assertIn('expected="${REVIEW_HEAD:-${CERTIFIED_SHA:?}}"', wrapper)
+        self.assertIn("final reviewed tree passed a second complete certification", wrapper)
+        # Review code itself must never publish; terminal success owns the only
+        # push and verifies the PR head equals the final certified bytes.
+        review = wrapper[wrapper.index("post_green_review_turn() {"):wrapper.index("certify_reviewed_repair() {")]
+        self.assertNotIn("git push", review)
+        self.assertNotIn("ensure_pr", review)
+        self.assertIn('"$remote_head" == "${CERTIFIED_SHA:?}"', wrapper)
+        self.assertNotIn("REVIEW_HEAD", wrapper)
         # The review report is run-scoped persistent-runner state.
         self.assertIn('rm -f "$ROOT/.deps/llama-canary-review-report.md"', wrapper)
 
