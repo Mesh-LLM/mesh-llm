@@ -169,7 +169,7 @@ impl KvStageIntegration {
         let worker_exact_state_record_worker_healthy = exact_state_record_worker_healthy.clone();
         let exact_state_record_worker_panics = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_exact_state_record_worker_panics = exact_state_record_worker_panics.clone();
-        std::thread::Builder::new()
+        let exact_state_record_task = std::thread::Builder::new()
             .name(format!("skippy-exact-cache-{}", config.stage_id))
             .spawn(move || {
                 while let Ok(pending) = exact_state_record_rx.recv() {
@@ -204,6 +204,10 @@ impl KvStageIntegration {
                     }
                 }
             })?;
+        let exact_state_record_worker = Arc::new(super::ExactStateRecordWorker::new(
+            exact_state_record_tx,
+            exact_state_record_task,
+        ));
         Ok(Some(Self {
             mode,
             payload,
@@ -222,7 +226,7 @@ impl KvStageIntegration {
             exact_blobs,
             exact_max_entries,
             exact_byte_limits,
-            exact_state_record_tx,
+            exact_state_record_worker,
             exact_state_records_queued,
             exact_state_records_dropped,
             exact_state_records_pending,

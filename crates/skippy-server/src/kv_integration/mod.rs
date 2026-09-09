@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize},
         mpsc::{SyncSender, TrySendError},
     },
+    thread::JoinHandle,
 };
 
 use anyhow::{Result, bail};
@@ -167,7 +168,7 @@ pub struct KvStageIntegration {
     pub(crate) exact_blobs: Arc<Mutex<CacheBlobStore>>,
     pub(crate) exact_max_entries: usize,
     pub(crate) exact_byte_limits: ExactStateByteLimits,
-    pub(crate) exact_state_record_tx: SyncSender<PendingExactStateRecord>,
+    pub(crate) exact_state_record_worker: Arc<ExactStateRecordWorker>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
@@ -225,6 +226,49 @@ pub(crate) struct PendingExactStateRecord {
     /// so requests arriving during the asynchronous re-warm prefill normally
     /// instead of duplicating the disk read.
     pub(crate) l3_fill_claim: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExactStateRecordWorker {
+    sender: Mutex<Option<SyncSender<PendingExactStateRecord>>>,
+    task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ExactStateRecordWorker {
+    pub(crate) fn new(sender: SyncSender<PendingExactStateRecord>, task: JoinHandle<()>) -> Self {
+        Self {
+            sender: Mutex::new(Some(sender)),
+            task: Mutex::new(Some(task)),
+        }
+    }
+
+    fn with_sender<T>(
+        &self,
+        use_sender: impl FnOnce(Option<&SyncSender<PendingExactStateRecord>>) -> T,
+    ) -> T {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use_sender(sender.as_ref())
+    }
+}
+
+impl Drop for ExactStateRecordWorker {
+    fn drop(&mut self) {
+        self.sender
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = self
+            .task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = task.join();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -596,17 +640,25 @@ impl KvStageIntegration {
         &self,
         pending: PendingExactStateRecord,
     ) -> ExactStateRecordAdmission {
-        enqueue_exact_state_record(
-            &self.exact_state_record_tx,
-            &self.inflight_records,
-            &self.exact_state_records_queued,
-            &self.exact_state_records_dropped,
-            &self.exact_state_records_pending,
-            &self.exact_state_record_queue_bytes,
-            EXACT_STATE_RECORD_QUEUE_BYTES,
-            &self.exact_state_record_worker_healthy,
-            pending,
-        )
+        self.exact_state_record_worker.with_sender(|sender| {
+            let Some(sender) = sender else {
+                self.finish_record(&pending.page_id);
+                self.exact_state_records_dropped
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return ExactStateRecordAdmission::WorkerStopped;
+            };
+            enqueue_exact_state_record(
+                sender,
+                &self.inflight_records,
+                &self.exact_state_records_queued,
+                &self.exact_state_records_dropped,
+                &self.exact_state_records_pending,
+                &self.exact_state_record_queue_bytes,
+                EXACT_STATE_RECORD_QUEUE_BYTES,
+                &self.exact_state_record_worker_healthy,
+                pending,
+            )
+        })
     }
 
     pub async fn hello(&self) -> Result<()> {
@@ -1013,8 +1065,8 @@ mod exact_state_record_queue_tests {
 
     use super::{
         BTreeSet, EXACT_STATE_RECORD_CAPACITY, ExactStateExtra, ExactStateRecordAdmission,
-        PendingExactStateRecord, enqueue_exact_state_record, has_exact_state_record_capacity,
-        run_exact_state_record_job,
+        ExactStateRecordWorker, PendingExactStateRecord, enqueue_exact_state_record,
+        has_exact_state_record_capacity, run_exact_state_record_job,
     };
 
     fn pending(page_id: &str) -> PendingExactStateRecord {
@@ -1036,6 +1088,24 @@ mod exact_state_record_queue_tests {
     }
 
     const CAP: u64 = 1024;
+
+    #[test]
+    fn final_worker_owner_drains_queued_records_before_drop_returns() {
+        let (sender, receiver) = sync_channel(2);
+        let completed = Arc::new(AtomicUsize::new(0));
+        let worker_completed = completed.clone();
+        let task = std::thread::spawn(move || {
+            while receiver.recv().is_ok() {
+                worker_completed.fetch_add(1, Ordering::Release);
+            }
+        });
+        let worker = Arc::new(ExactStateRecordWorker::new(sender, task));
+        worker.with_sender(|sender| sender.unwrap().send(pending("latest")).unwrap());
+
+        drop(worker);
+
+        assert_eq!(completed.load(Ordering::Acquire), 1);
+    }
 
     #[test]
     fn pending_capacity_signal_rejects_work_before_export() {
