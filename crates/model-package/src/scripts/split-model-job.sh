@@ -41,8 +41,10 @@ echo ""
 
 # Keep executable toolchains/build products on local ephemeral storage:
 # HF bucket mounts can be unsuitable for dynamic loader/toolchain execution.
-# Package artifacts are also written locally, uploaded one at a time, and
-# removed immediately so the job never accumulates a full 400GB+ package.
+# Package artifacts are written to the bucket workspace: container-local
+# ephemeral storage is capped (50G on HF Jobs) and the full package — the
+# artifacts that still await the final metadata-carrier pass plus the
+# per-artifact shard scratch — must be allowed to exceed it.
 JOB_WORK_ROOT="${JOB_WORK_ROOT:-/bucket/job-work}"
 SAFE_TARGET_REPO="$(printf '%s' "$TARGET_REPO" | tr -c '[:alnum:]._-' '_')"
 LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/meshllm-layer-job-${SAFE_TARGET_REPO}-$$}"
@@ -52,7 +54,7 @@ if [ -z "${JOB_WORK_DIR:-}" ]; then
 else
     CLEANUP_JOB_WORK_DIR="${CLEANUP_JOB_WORK_DIR:-false}"
 fi
-PACKAGE_DIR="${PACKAGE_DIR:-${LOCAL_WORK_DIR}/package}"
+PACKAGE_DIR="${PACKAGE_DIR:-${JOB_WORK_DIR}/package}"
 HF_HOME="${HF_HOME:-${JOB_WORK_DIR}/hf-home}"
 HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
@@ -344,10 +346,14 @@ echo "  Hugging Face cache: $HF_HUB_CACHE"
 echo "  Package workspace: $PACKAGE_DIR"
 echo "  Temporary workspace: $TMPDIR"
 log_storage_snapshot "before write-package"
+# The package workspace must NOT sit on the container root filesystem: HF Jobs
+# evicts the pod once container-local ephemeral storage exceeds 50G, and a full
+# package plus shard scratch can far exceed that.
 ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
 PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
 if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" = "$PACKAGE_FS" ]; then
-    echo "WARNING: package workspace is on the container root filesystem; very large splits may hit the HF Jobs 50G ephemeral storage limit." >&2
+    echo "ERROR: package workspace is on the container root filesystem, which is capped at 50G of ephemeral storage; refusing to continue (set PACKAGE_DIR to the bucket workspace)." >&2
+    exit 1
 fi
 if [ -n "${ESTIMATED_BUCKET_BYTES:-}" ]; then
     PACKAGE_AVAILABLE_BYTES="$(df -Pk "$PACKAGE_DIR" | awk 'NR==2 {printf "%.0f", $4 * 1024}')"
