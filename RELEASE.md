@@ -46,8 +46,9 @@ locally.
 - `MESH_AGENT_IMAGES_DISPATCH_TOKEN` configured as a fine-grained repository
   token or GitHub App token with Contents write access to
   `Mesh-LLM/mesh-packaging`, which is the permission required to create a
-  repository dispatch event. The legacy secret name is retained so existing
-  release environments do not require a coordinated secret rename.
+  repository dispatch event. The workflow checks this access without printing
+  the credential before it sends the event. The legacy secret name is retained
+  so existing release environments do not require a coordinated secret rename.
 
 ## Release Attestation Signing Keys
 
@@ -252,6 +253,13 @@ starts only after a stable GitHub release and its complete CPU/GPU archive set
 have published successfully. Prereleases never dispatch it. The upstream
 `docker.yml` workflow performs Dockerfile validation only and is not a
 distribution channel.
+
+If the downstream dispatch preflight fails, update the repository Actions secret
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN` with a fine-grained token or GitHub App token
+that has Contents write access to `Mesh-LLM/mesh-packaging`, then retry the
+failed dispatch job. A repository secret's presence does not prove that its
+credential can write the target repository. Do not put the token in workflow
+logs or command output.
 
 On non-prerelease tags, the release workflow also publishes the Rust SDK crate
 chain to crates.io in dependency order:

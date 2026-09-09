@@ -188,6 +188,13 @@ the final notes retain the RC changes and add any post-RC changes.
 The workflow-scoped token push does not fan out another main CI run; the release
 graph is the evidence for that version-only source commit.
 
+After a stable release with the full GPU matrix succeeds, the downstream
+`mesh-packaging` dispatch job first checks that its
+`MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository.
+That repository secret is external GitHub configuration. The checked-in
+workflow can report a missing or insufficient credential, but it cannot grant
+the token access or replace the secret.
+
 ```mermaid
 flowchart TD
     JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
