@@ -52,6 +52,7 @@ pub(super) struct PackedReadRequest<'a> {
     pub digest: &'a str,
     pub bytes: u64,
     pub location: &'a PackedSegmentLocation,
+    pub output_offset: u64,
 }
 
 #[derive(Debug)]
@@ -301,48 +302,130 @@ impl PackedSegmentStore {
         Ok(())
     }
 
-    /// Read requests in logical order while opening each physical pack once.
-    pub(super) fn read_many(
+    /// Append requests directly into their final payload ranges.
+    ///
+    /// Consecutive logical segments that are also consecutive in one pack are
+    /// issued as one read. Digest verification still happens per logical
+    /// segment, preserving the manifest contract without allocating one
+    /// temporary `Vec` for every segment and then copying it into the payload.
+    pub(super) fn append_many(
         &self,
         requests: &[PackedReadRequest<'_>],
-    ) -> Result<Vec<Vec<u8>>, PackedReadError> {
+        output: &mut Vec<u8>,
+    ) -> Result<(), PackedReadError> {
         let mut files = HashMap::<String, File>::new();
-        let mut output = Vec::with_capacity(requests.len());
-        for request in requests {
-            let result = (|| -> Result<Vec<u8>> {
-                let file = match files.entry(request.location.pack_digest.clone()) {
+        let mut first = 0usize;
+        while first < requests.len() {
+            let first_request = &requests[first];
+            let mut last = first + 1;
+            let mut physical_end = first_request
+                .location
+                .offset
+                .checked_add(first_request.bytes)
+                .context("packed read range overflows")
+                .map_err(|error| PackedReadError {
+                    pack_digest: first_request.location.pack_digest.clone(),
+                    error,
+                })?;
+            let mut output_end = first_request
+                .output_offset
+                .checked_add(first_request.bytes)
+                .context("packed output range overflows")
+                .map_err(|error| PackedReadError {
+                    pack_digest: first_request.location.pack_digest.clone(),
+                    error,
+                })?;
+            while let Some(next) = requests.get(last) {
+                if next.location.pack_digest != first_request.location.pack_digest
+                    || next.location.offset != physical_end
+                    || next.output_offset != output_end
+                {
+                    break;
+                }
+                physical_end =
+                    physical_end
+                        .checked_add(next.bytes)
+                        .ok_or_else(|| PackedReadError {
+                            pack_digest: first_request.location.pack_digest.clone(),
+                            error: anyhow::anyhow!("packed read range overflows"),
+                        })?;
+                output_end = output_end
+                    .checked_add(next.bytes)
+                    .ok_or_else(|| PackedReadError {
+                        pack_digest: first_request.location.pack_digest.clone(),
+                        error: anyhow::anyhow!("packed output range overflows"),
+                    })?;
+                last += 1;
+            }
+
+            let result = (|| -> Result<()> {
+                if usize::try_from(first_request.output_offset)
+                    .context("packed output offset exceeds usize")?
+                    != output.len()
+                {
+                    bail!("packed output range is not contiguous with the payload");
+                }
+                let file = match files.entry(first_request.location.pack_digest.clone()) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => {
-                        let file = File::open(self.pack_path(&request.location.pack_digest))
+                        let file = File::open(self.pack_path(&first_request.location.pack_digest))
                             .with_context(|| {
-                                format!("failed to open pack {}", request.location.pack_digest)
+                                format!(
+                                    "failed to open pack {}",
+                                    first_request.location.pack_digest
+                                )
                             })?;
                         entry.insert(file)
                     }
                 };
-                file.seek(SeekFrom::Start(request.location.offset))?;
-                let len = usize::try_from(request.bytes).context("segment exceeds usize")?;
-                let mut bytes = vec![0u8; len];
-                file.read_exact(&mut bytes)?;
-                if segment_digest(&bytes) != request.digest {
-                    bail!(
-                        "packed segment {} failed digest verification",
-                        request.digest
-                    );
+                let output_end =
+                    usize::try_from(output_end).context("packed output end exceeds usize")?;
+                file.seek(SeekFrom::Start(first_request.location.offset))?;
+                let run_bytes = output_end
+                    .checked_sub(output.len())
+                    .context("packed output range precedes payload")?;
+                let read = file
+                    .take(run_bytes as u64)
+                    .read_to_end(output)
+                    .context("failed to read packed payload range")?;
+                if read != run_bytes {
+                    bail!("packed payload range ended after {read} of {run_bytes} bytes");
                 }
-                Ok(bytes)
+
+                for request in &requests[first..last] {
+                    let start = usize::try_from(request.output_offset)
+                        .context("segment output offset exceeds usize")?;
+                    let end = usize::try_from(
+                        request
+                            .output_offset
+                            .checked_add(request.bytes)
+                            .context("segment output range overflows")?,
+                    )
+                    .context("segment output end exceeds usize")?;
+                    let bytes = output
+                        .get(start..end)
+                        .context("segment output range exceeds payload")?;
+                    if segment_digest(bytes) != request.digest {
+                        bail!(
+                            "packed segment {} failed digest verification",
+                            request.digest
+                        );
+                    }
+                }
+                Ok(())
             })();
             match result {
-                Ok(bytes) => output.push(bytes),
+                Ok(()) => {}
                 Err(error) => {
                     return Err(PackedReadError {
-                        pack_digest: request.location.pack_digest.clone(),
+                        pack_digest: first_request.location.pack_digest.clone(),
                         error,
                     });
                 }
             }
+            first = last;
         }
-        Ok(output)
+        Ok(())
     }
 
     pub(super) fn rebuild(
