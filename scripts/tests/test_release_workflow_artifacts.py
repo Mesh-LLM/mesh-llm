@@ -561,6 +561,30 @@ class ReleaseWorkflowArtifactTests(unittest.TestCase):
         self.assertIn("publish_release_assets: true", dispatch)
         self.assertIn("publish_npm: true", dispatch)
 
+    def test_packaging_dispatch_preflights_target_write_access(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        dispatch = job_block(
+            workflow,
+            "dispatch_packaging_release",
+            "publish_crates_preflight",
+        )
+
+        self.assertIn(
+            "GH_TOKEN: ${{ secrets.MESH_AGENT_IMAGES_DISPATCH_TOKEN }}",
+            dispatch,
+        )
+        self.assertIn("TARGET_REPOSITORY: Mesh-LLM/mesh-packaging", dispatch)
+        self.assertIn(
+            'target_permissions="$(gh api "repos/${TARGET_REPOSITORY}")"',
+            dispatch,
+        )
+        self.assertIn(".permissions.push // false", dispatch)
+        self.assertIn(
+            "MESH_AGENT_IMAGES_DISPATCH_TOKEN must grant Contents write access",
+            dispatch,
+        )
+        self.assertIn('"repos/${TARGET_REPOSITORY}/dispatches"', dispatch)
+
     def test_release_assets_and_manual_tags_are_immutable(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         publish = job_block(
