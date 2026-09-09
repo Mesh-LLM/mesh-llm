@@ -48,7 +48,12 @@ fn dir_file_bytes(dir: &Path) -> u64 {
         .map(|entries| {
             entries
                 .filter_map(|entry| entry.ok())
-                .filter_map(|entry| entry.metadata().ok())
+                // Follow symlinks: HuggingFace-style snapshot entries are
+                // symlinks into a blobs/ store, and DirEntry::metadata is
+                // lstat — it would report the link itself (is_file() false,
+                // len 0), zeroing the total. fs::metadata follows the link
+                // and reports the target file.
+                .filter_map(|entry| std::fs::metadata(entry.path()).ok())
                 .filter(|metadata| metadata.is_file())
                 .map(|metadata| metadata.len())
                 .sum()
@@ -87,6 +92,37 @@ mod tests {
         let total = total_model_bytes(&file);
         let _ = std::fs::remove_file(&file);
         assert_eq!(total, 2048);
+    }
+
+    #[test]
+    fn symlinked_snapshot_entries_report_target_bytes() {
+        // HuggingFace-style snapshot dirs symlink weight files into a blobs/
+        // store. DirEntry::metadata is lstat: it sees the link itself
+        // (is_file() false, len 0) and would total zero — worse than the
+        // directory-inode bug this replaced. The reader must follow links.
+        let root = std::env::temp_dir().join(format!(
+            "mesh-routing-total-bytes-symlink-{}",
+            std::process::id()
+        ));
+        let blobs = root.join("blobs");
+        let snapshot = root.join("snapshots").join("abc123");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(blobs.join("blob-weights"), vec![0u8; 8192]).unwrap();
+        std::fs::write(blobs.join("blob-config"), vec![0u8; 256]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            "../../blobs/blob-weights",
+            snapshot.join("model.safetensors"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../../blobs/blob-config", snapshot.join("config.json"))
+            .unwrap();
+        let total = total_model_bytes(&snapshot);
+        let _ = std::fs::remove_dir_all(&root);
+        #[cfg(unix)]
+        assert_eq!(total, 8192 + 256);
     }
 
     #[test]

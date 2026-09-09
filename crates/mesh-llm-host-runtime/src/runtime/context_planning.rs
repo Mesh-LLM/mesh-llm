@@ -436,9 +436,7 @@ fn planned_context_length_budget_driven(input: &RuntimeResourcePlanInput<'_>) ->
     if measured.context_length == 0 || measured.kv_bytes == 0 || measured.lane_count == 0 {
         return None;
     }
-    let Some(metadata) = input.metadata else {
-        return None;
-    };
+    let metadata = input.metadata?;
     let native_context = metadata.context_length;
     if native_context == 0 {
         return None;
@@ -887,7 +885,7 @@ mod tests {
         let tight = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
             parallel_override: None,
-            model_bytes: 1 * 1024 * 1024 * 1024,
+            model_bytes: 1024 * 1024 * 1024,
             vram_bytes: 6 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -905,7 +903,7 @@ mod tests {
         let tight_ladder = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
             parallel_override: None,
-            model_bytes: 1 * 1024 * 1024 * 1024,
+            model_bytes: 1024 * 1024 * 1024,
             vram_bytes: 6 * 1024 * 1024 * 1024,
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
@@ -1046,7 +1044,6 @@ mod tests {
         let measured = skippy_runtime::MeasuredNativeBuffers {
             compute_mib: Some(512.0),
             kv_mib: Some(2048.0),
-            lane_count: Some(4),
         };
         let reconciled = reconcile_memory_plan_with_measurements(&breakdown, Some(measured));
         assert_eq!(reconciled.measured_compute_bytes, Some(512 * 1024 * 1024));
