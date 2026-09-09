@@ -127,6 +127,15 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertLess(report.index("ensure_pr"), report.index("verify_pr_head"))
         self.assertIn('CERTIFIED_SHA="$PUBLISHED_SHA"', self.wrapper)
 
+    def test_terminal_pr_creation_errors_remain_visible(self) -> None:
+        ensure = self.wrapper[
+            self.wrapper.index("ensure_pr() {") : self.wrapper.index("verify_pr_head() {")
+        ]
+        self.assertIn("2> >(redact_token >&2)", ensure)
+        self.assertNotIn("--body-file \"$PR_BODY\" 2>/dev/null", ensure)
+        self.assertIn("could not create the terminal canary PR", ensure)
+        self.assertIn("creation returned no PR number", ensure)
+
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
         self.assertNotIn("export GH_TOKEN", self.wrapper)
         agent = self.wrapper[

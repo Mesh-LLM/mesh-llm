@@ -345,7 +345,7 @@ write_pr_body() {
 }
 
 ensure_pr() {
-  local outcome="$1" pr title
+  local outcome="$1" pr title created
   local -a create_args
   pr="$(current_pr)"
   if [[ -n "$pr" ]]; then
@@ -360,8 +360,16 @@ ensure_pr() {
     title="draft(llama): failed canary at ${UPSTREAM_SHA:0:10}"
     create_args=(--draft)
   fi
-  gh_repair gh pr create --base main --head "$BRANCH" "${create_args[@]}" \
-    --title "$title" --body-file "$PR_BODY" 2>/dev/null | grep -oE '[0-9]+$'
+  if ! created="$(gh_repair gh pr create --base main --head "$BRANCH" "${create_args[@]}" \
+      --title "$title" --body-file "$PR_BODY" 2> >(redact_token >&2))"; then
+    echo "ERROR: could not create the terminal canary PR for ${BRANCH}" >&2
+    return 1
+  fi
+  if ! pr="$(printf '%s\n' "$created" | grep -oE '[0-9]+$')"; then
+    echo "ERROR: terminal canary PR creation returned no PR number for ${BRANCH}" >&2
+    return 1
+  fi
+  printf '%s\n' "$pr"
 }
 
 verify_pr_head() {
