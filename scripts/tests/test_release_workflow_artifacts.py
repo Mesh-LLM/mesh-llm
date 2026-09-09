@@ -20,6 +20,13 @@ def job_block(workflow: str, job_name: str, next_job_name: str) -> str:
 
 
 class ReleaseWorkflowArtifactTests(unittest.TestCase):
+    def test_release_is_dispatch_only(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        header = workflow[: workflow.index("\njobs:\n")]
+
+        self.assertIn("  workflow_dispatch:\n", header)
+        self.assertNotIn("  push:\n", header)
+
     def test_release_ui_version_preparation_handles_container_ownership(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci-ui-artifact-slice.yml").read_text()
