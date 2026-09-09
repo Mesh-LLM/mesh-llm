@@ -1,256 +1,178 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# llama-upstream canary agent repair (issue #1434; wired into
-# llama-upstream-canary.yml for both patch-queue apply failures and family
-# battery failures).
+# Deterministic llama.cpp canary state machine for changed upstream pins.
 #
-# Usage: llama-canary-agent-repair.sh <mode> [upstream-sha]
-#   mode: patch-queue  - prepare-llama.sh failed to apply the patch queue
-#                        onto the new upstream; the agent rebases the queue.
-#   mode: battery      - the patch queue applied but the family battery
-#                        failed; the agent fixes the root cause.
-#   upstream-sha: 40-hex llama.cpp commit, preferentially passed via the
-#                  UPSTREAM_SHA_INPUT environment variable (callers must
-#                  never interpolate untrusted dispatch values into shell).
-#                  When omitted, resolves master via git ls-remote. "latest"
-#                  is also accepted. Battery-mode evidence: when the workflow
-#                  tees its battery log to $BATTERY_LOG, it is reused instead
-#                  of re-running the battery before the first repair turn.
+# Usage: llama-canary-agent-repair.sh [upstream-sha]
 #
-# Drives a non-interactive `opencode` agent (model:
-# zai-coding-plan/glm-5.3-flash by default) to repair, then the wrapper
-# itself re-runs the certification battery. If it fails, each failure gets
-# its own opencode repair turn (with the battery failure summary in the
-# prompt) followed by a recertify, up to CANARY_REPAIR_MAX_TURNS (default 2)
-# repair turns. The script only succeeds when the battery actually passes
-# on this runner.
-#
-# PR guarantee: whatever the outcome, the wrapper (not the agent) publishes
-# $BRANCH and creates or updates its repair PR only after the repair loop has
-# reached a terminal certified or failed result. The PR description is drafted
-# locally before certification (upstream changes, patch-queue evolution, risks)
-# with a deterministic fallback body. After a GREEN battery exactly one more
-# agent turn runs: a fresh-context review of the certified repair that may
-# modify the tree (dropped patch intent, rebase leftovers, ABI mirror drift).
-# Any review changes must pass the complete battery again before the terminal
-# branch/PR publication. The review turn is fail-open only when it leaves the
-# candidate tree unchanged.
-#
-# Credential split: the agent never sees a GitHub token — CANARY_REPAIR_TOKEN
-# is stripped from its environment, and only the deterministic wrapper
-# performs git pushes, PR creation, PR edits, and comments with the token
-# scoped to individual commands. The wrapper — never the agent — commits the
-# certified tree, pushes it, and verifies the repair PR head equals the
-# certified commit before reporting success.
-#
-# Credentials: pushes/PRs use $CANARY_REPAIR_TOKEN (fine-grained PAT with
-# Contents+PR write; the canary job itself stays contents: read). The agent
-# needs OPENCODE_API_KEY/NEMOTRON_API_KEY or an `opencode auth login`
-# profile on the runner.
+# The wrapper owns prepare -> build -> certify -> publish. An agent may repair
+# a failed phase, but it never decides whether a gate passed and never receives
+# repository-write credentials. Every agent edit sends the candidate back
+# through prepare and the complete build before another certification attempt.
+# The branch and PR appear once, after success or a bounded terminal failure.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-MODE="${1:?usage: llama-canary-agent-repair.sh <patch-queue|battery> [upstream-sha]}"
-case "$MODE" in
-  patch-queue | battery) ;;
-  *)
-    echo "unknown repair mode: $MODE (expected patch-queue or battery)" >&2
-    exit 1
-    ;;
-esac
-
-UPSTREAM_SHA="${2:-${UPSTREAM_SHA_INPUT:-latest}}"
+UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
 if [[ "$UPSTREAM_SHA" == "latest" || -z "$UPSTREAM_SHA" ]]; then
   UPSTREAM_SHA="$(git ls-remote https://github.com/ggml-org/llama.cpp.git master | awk '{print $1}')"
 fi
 if [[ ! "$UPSTREAM_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "refusing to repair against a non-40-hex upstream SHA: $UPSTREAM_SHA" >&2
+  echo "refusing to run the canary against a non-40-hex upstream SHA: $UPSTREAM_SHA" >&2
   exit 1
 fi
 
-OLD_SHA="$(tr -d '[:space:]' < "$ROOT/third_party/llama.cpp/upstream.txt")"
+cd "$ROOT"
+
+OLD_SHA="$(tr -d '[:space:]' < third_party/llama.cpp/upstream.txt)"
+PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
 AGENT_MODEL="${CANARY_AGENT_MODEL:-zai-coding-plan/glm-5.3-flash}"
 MAX_REPAIR_TURNS="${CANARY_REPAIR_MAX_TURNS:-2}"
-BRANCH="llama-canary/patch-queue-fix"
-BATTERY_LOG="$ROOT/.deps/llama-canary-repair-battery.log"
-PIN_FILE="$ROOT/third_party/llama.cpp/upstream.txt"
+REPAIR_BUDGET_SECONDS="${CANARY_REPAIR_BUDGET_SECONDS:-41400}"
+PUBLISH_RESERVE_SECONDS="${CANARY_PUBLISH_RESERVE_SECONDS:-1800}"
+RUN_ID="${GITHUB_RUN_ID:-manual-$(date +%s)}"
+RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
+RUN_KEY="${RUN_ID}-${RUN_ATTEMPT}"
+BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"
+STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}"
+TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"
+PREPARE_LOG="$STATE_DIR/prepare.log"
+BUILD_LOG="$STATE_DIR/build.log"
+CERTIFY_LOG="$STATE_DIR/certify.log"
+PR_BODY="$STATE_DIR/pr-body.md"
+FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
+PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
+STARTED_AT="$(date +%s)"
+DEADLINE_AT="$((STARTED_AT + REPAIR_BUDGET_SECONDS))"
+PUBLISHED_SHA=""
+CERTIFIED_SHA=""
+FAILED_PHASE=""
+PREPARE_REPAIR_TURNS=0
+BUILD_REPAIR_TURNS=0
+CERTIFY_REPAIR_TURNS=0
 
-mkdir -p "$ROOT/.deps"
-echo "$UPSTREAM_SHA" > "$ROOT/.deps/llama-canary-target-sha"
+if [[ ! "$MAX_REPAIR_TURNS" =~ ^[0-9]+$ ]]; then
+  echo "CANARY_REPAIR_MAX_TURNS must be a non-negative integer" >&2
+  exit 1
+fi
+if [[ ! "$REPAIR_BUDGET_SECONDS" =~ ^[0-9]+$ || ! "$PUBLISH_RESERVE_SECONDS" =~ ^[0-9]+$ ]] \
+    || (( REPAIR_BUDGET_SECONDS <= PUBLISH_RESERVE_SECONDS )); then
+  echo "the canary budget must be numeric and exceed the publication reserve" >&2
+  exit 1
+fi
+
+mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
+rm -f "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" "$PR_BODY"
+printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
   exit 1
 fi
-# Agent credentials: either an explicit API key env var, or an opencode CLI
-# that has been logged in on the runner (`opencode auth login`), which
-# `opencode run` picks up from its own auth store.
 if [[ -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
-  if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
+  if [[ ! -s "${HOME}/.local/share/opencode/auth.json" ]] \
+      && ! opencode auth list 2>/dev/null | grep -Eq '[1-9][0-9]* credentials'; then
     echo "no agent credentials: set OPENCODE_API_KEY/NEMOTRON_API_KEY or run 'opencode auth login' on the runner" >&2
     exit 1
   fi
 fi
-# The canary job itself is read-only; the repair branch push and PR need the
-# dedicated fine-grained token. The token is never exported into the process
-# environment — every GitHub mutation is routed through gh_repair(), which
-# scopes it to that single command — so agent turns (and anything they spawn)
-# never inherit repository-write credentials.
 if [[ -z "${CANARY_REPAIR_TOKEN:-}" ]]; then
-  echo "CANARY_REPAIR_TOKEN is not set; cannot push the repair branch or open the repair PR" >&2
+  echo "CANARY_REPAIR_TOKEN is not set; cannot publish the terminal canary PR" >&2
   exit 1
 fi
 
 gh_repair() {
-  # Deterministic GitHub mutations only. The write PAT is scoped to this one
-  # command; it is deliberately absent from the ambient environment.
   GH_TOKEN="$CANARY_REPAIR_TOKEN" "$@"
 }
 
 check_repair_token_permissions() {
-  # Preflight (issue #1434 follow-up): fail in seconds when the identity behind
-  # CANARY_REPAIR_TOKEN cannot actually write to this repository, instead of
-  # discovering it via a git 403 after hours of repair work (seen live: a
-  # fine-grained PAT whose account HAD repo write, but whose token lacked the
-  # Contents: write permission). The REST permissions object reflects the
-  # ACCOUNT's access, not the token's fine-grained scope, so reading
-  # .permissions is not sufficient — the check probes the actual capability by
-  # creating and deleting a temporary ref, which requires exactly the
-  # Contents: write permission a push needs. The token is used only in scoped
-  # single commands, never exported, and never echoed.
-  local login default_branch head_sha probe_ref
-  if ! login="$(gh_repair gh api user --jq .login 2>/dev/null)"; then
-    echo "preflight: CANARY_REPAIR_TOKEN does not authenticate (gh api user failed); check the secret value" >&2
+  local login default_branch head_sha probe_branch probe_ref
+  login="$(gh_repair gh api user --jq .login 2>/dev/null)" || {
+    echo "preflight: CANARY_REPAIR_TOKEN does not authenticate" >&2
     return 1
-  fi
+  }
   default_branch="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}" --jq .default_branch 2>/dev/null)"
-  if [[ -z "$default_branch" ]]; then
-    echo "preflight: could not read ${GITHUB_REPOSITORY} with the repair token; grant the PAT access to this repository" >&2
-    return 1
-  fi
   head_sha="$(gh_repair gh api "repos/${GITHUB_REPOSITORY:?}/branches/${default_branch}" --jq .commit.sha 2>/dev/null)"
-  if [[ -z "$head_sha" ]]; then
-    echo "preflight: could not resolve ${default_branch} on ${GITHUB_REPOSITORY} with the repair token" >&2
-    return 1
-  fi
-  probe_ref="refs/heads/canary-repair-token-preflight"
+  probe_branch="canary-repair-token-preflight-${RUN_KEY}"
+  probe_ref="refs/heads/${probe_branch}"
   if ! gh_repair gh api --method POST "repos/${GITHUB_REPOSITORY:?}/git/refs" \
       -f ref="$probe_ref" -f sha="$head_sha" >/dev/null 2>&1; then
-    echo "preflight: identity '${login}' cannot write refs on ${GITHUB_REPOSITORY}: the fine-grained PAT must include this repository with Contents: Read and write (account-level write is not enough). Edit the PAT's permissions or mint one with Contents: RW, then re-save CANARY_REPAIR_TOKEN." >&2
+    echo "preflight: identity '${login}' cannot write refs on ${GITHUB_REPOSITORY}; CANARY_REPAIR_TOKEN needs Contents: Read and write" >&2
     return 1
   fi
-  # The delete URL uses the branch name only (slashes percent-encoded); the
-  # refs/ prefix is part of the path, not the ref identifier.
   if ! gh_repair gh api --method DELETE \
-      "repos/${GITHUB_REPOSITORY:?}/git/refs/heads%2Fcanary-repair-token-preflight" >/dev/null 2>&1; then
-    echo "preflight: WARNING: write probe succeeded but the temporary ref ${probe_ref} could not be deleted; delete it manually" >&2
+      "repos/${GITHUB_REPOSITORY:?}/git/refs/heads%2F${probe_branch}" >/dev/null 2>&1; then
+    echo "preflight: WARNING: could not delete temporary ref ${probe_ref}" >&2
   fi
   echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
 }
 
-cd "$ROOT"
+repair_remote() {
+  echo "https://x-access-token:${CANARY_REPAIR_TOKEN}@github.com/${GITHUB_REPOSITORY:?}.git"
+}
 
-# Preflight the repair token before any repair work: a permission gap here
-# fails the run in seconds with the exact fix, instead of surfacing as a git
-# 403 after a potentially hours-long certified repair (seen live, run 33151501701).
+redact_token() {
+  sed "s/${CANARY_REPAIR_TOKEN}/***redacted***/g"
+}
+
+remaining_work_seconds() {
+  local remaining
+  remaining="$((DEADLINE_AT - $(date +%s) - PUBLISH_RESERVE_SECONDS))"
+  (( remaining > 0 )) || return 1
+  printf '%s\n' "$remaining"
+}
+
+run_bounded() {
+  local label="$1" seconds
+  shift
+  if ! seconds="$(remaining_work_seconds)"; then
+    echo "$label cannot start: internal canary deadline reached; publication reserve is active" >&2
+    return 124
+  fi
+  python3 scripts/run-command-with-timeout.py \
+    --seconds "$seconds" --label "$label" -- "$@"
+}
+
+run_logged() {
+  local label="$1" log="$2"
+  shift 2
+  run_bounded "$label" "$@" > >(tee -a "$log") 2>&1
+}
+
 check_repair_token_permissions
 
-# Run-scope the persistent-runner artifacts before anything else can fail and
-# leave a previous run's state behind. The PR-body file is always cleared. The
-# battery evidence log is cleared only in patch-queue mode: in battery mode it
-# holds THIS run's workflow battery output (teed by the workflow immediately
-# before invoking this script) and must survive to seed the first repair turn.
-if [[ "$MODE" == "patch-queue" ]]; then
-  rm -f "$BATTERY_LOG"
-fi
-rm -f "$ROOT/.deps/llama-canary-pr-body.md"
-rm -f "$ROOT/.deps/llama-canary-review-report.md"
-
-# Repair turns routinely build scratch worktrees under /tmp (e.g.
-# /tmp/llama-old-pin, /tmp/llama-repair). On this persistent runner those
-# directories and their registrations in .deps/llama.cpp/.git/worktrees
-# survive across runs, and a later `git worktree add` for the same path
-# fails ("missing but already registered" / stale admin files) — the agent
-# treats that as fatal and ends its turn early (live: run 33158798988
-# aborted at `rm -rf /tmp/llama-old-pin && git worktree add ...`). Prune
-# stale registrations and clear the known scratch paths up front.
+# Persistent runners retain nested llama.cpp worktree registrations and /tmp
+# checkouts. Remove only the known canary scratch state before agent turns.
 git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
 rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
 
 agent_turn() {
-  # Non-fatal: a crashed agent turn must not skip PR reporting. The model
-  # runs without any GitHub token: push/PR/comment mutations are wrapper-only.
-  # A heartbeat monitor prints elapsed time every 10 minutes so multi-hour
-  # repair turns show progress in the Actions log instead of looking stuck.
-  # It also reports the newest file modification under the llama.cpp worktree,
-  # so watchers can tell "agent is editing" from "turn is hung" without
-  # runner access.
-  local prompt="$1" started heartbeat_pid
+  local prompt="$1" started heartbeat_pid status
   started="$(date +%s)"
-  # Job control makes the heartbeat its own process group (portable on both
-  # the macOS family-certify runner and Linux CI); env -i keeps the monitor
-  # credential-free. GNU find's printf action and util-linux's session
-  # utility are not portable to macOS, hence the plain find and the
-  # set -m process group.
   set -m
-  # shellcheck disable=SC2016  # heartbeat script takes its inputs as $1/$2
+  # shellcheck disable=SC2016
   env -i PATH="$PATH" bash -c '
     ROOT="$1"
     started="$2"
     while sleep 600; do
-      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/.deps/llama-canary-target-sha" -print -quit 2>/dev/null || true)"
-      printf "heartbeat: agent turn running for %dm; recent worktree activity: %s\n" \
+      newest="$(find "$ROOT/.deps/llama.cpp" -type f -newer "$ROOT/third_party/llama.cpp/upstream.txt" -print -quit 2>/dev/null || true)"
+      printf "heartbeat: agent repair running for %dm; recent worktree activity: %s\n" \
         "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
     done
   ' heartbeat "$ROOT" "$started" &
   heartbeat_pid=$!
   set +m
-  # --auto: auto-approve opencode's permission prompts. The sandbox auto-
-  # REJECTS out-of-workspace writes (e.g. scratch dirs under /tmp) in non-
-  # interactive mode, and a rejection terminates the whole turn — every
-  # short-turn failure so far traces to this (live: run 33160131810 aborted
-  # on "external_directory (/tmp/opencode/*); auto-rejecting"). The agent
-  # runs with all GitHub tokens stripped and only the wrapper holds write
-  # credentials, so auto-approval inside this sandbox is safe.
-  env -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
-    opencode run --auto --model "$AGENT_MODEL" "$prompt" \
-    || echo "warning: opencode turn exited non-zero" >&2
+  set +e
+  run_bounded "agent repair turn" env \
+    -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
+    opencode run --auto --model "$AGENT_MODEL" "$prompt"
+  status=$?
+  set -e
   kill -- "-$heartbeat_pid" 2>/dev/null || kill "$heartbeat_pid" 2>/dev/null || true
   wait "$heartbeat_pid" 2>/dev/null || true
-}
-
-battery_summary() {
-  # Last 80 lines of the most recent battery evidence — either this run's
-  # workflow-teed log (battery mode) or the wrapper's own certification run —
-  # enough to name the failing family/split lanes without flooding the agent
-  # prompt.
-  local log="$1"
-  if [[ ! -s "$log" ]]; then
-    echo "(no battery output captured; see the canary run log)"
-    return 0
-  fi
-  tail -n 80 "$log"
-}
-
-current_pr() {
-  gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
-}
-
-# Repair remote: the write PAT is embedded in the push URL (never echoed) and
-# exists only for the lifetime of the single git push command.
-repair_remote() {
-  echo "https://x-access-token:${CANARY_REPAIR_TOKEN}@github.com/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY not set}.git"
-}
-
-redact_token() {
-  # Strip the repair token from anything that might reach the log.
-  sed "s/${CANARY_REPAIR_TOKEN}/***redacted***/g"
+  return "$status"
 }
 
 write_repair_pin() {
-  # Pin ownership is deterministic wrapper work, never agent work. The repair
-  # branch must select the same upstream that its queue and battery certify.
   scripts/update-llama-pin.sh "$UPSTREAM_SHA"
 }
 
@@ -258,424 +180,255 @@ verify_repair_pin() {
   local pin
   pin="$(tr -d '[:space:]' < "$PIN_FILE")"
   if [[ "$pin" != "$UPSTREAM_SHA" ]]; then
-    echo "repair pin does not select certified upstream $UPSTREAM_SHA (upstream.txt=$pin)" >&2
+    echo "candidate pin is $pin, expected $UPSTREAM_SHA" >&2
     return 1
   fi
 }
 
-prepare_repair_target() {
+run_prepare() {
   local prepared_upstream
-  write_repair_pin || return 1
-  verify_repair_pin || return 1
-  scripts/prepare-llama.sh pinned || return 1
+  : > "$PREPARE_LOG"
+  echo "state-machine phase: prepare" | tee -a "$PREPARE_LOG"
+  write_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
+  verify_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
+  run_logged "apply llama.cpp patch queue" "$PREPARE_LOG" \
+    scripts/prepare-llama.sh pinned || return 1
   prepared_upstream="$(tr -d '[:space:]' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"
   if [[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]; then
-    echo "pinned repair prepared upstream $prepared_upstream, expected $UPSTREAM_SHA" >&2
+    echo "prepared upstream is $prepared_upstream, expected $UPSTREAM_SHA" | tee -a "$PREPARE_LOG" >&2
     return 1
   fi
 }
 
-commit_repair_tree() {
-  # The wrapper — never the agent — owns the terminal branch commit. This may
-  # run before the post-green review so the reviewer sees a clean candidate;
-  # it remains local until publish_repair_branch is called at terminal status.
+run_full_build() {
+  local archive arches
+  : > "$BUILD_LOG"
+  echo "state-machine phase: build" | tee -a "$BUILD_LOG"
+  run_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
+    LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
+    arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    || return 1
+  archive="${LLAMA_STAGE_BUILD_DIR:?}/src/libllama.a"
+  arches="$(lipo -archs "$archive" 2>/dev/null || true)"
+  if [[ "$arches" != "arm64" ]]; then
+    echo "candidate native archive must be arm64, got: ${arches:-missing}" | tee -a "$BUILD_LOG" >&2
+    return 1
+  fi
+  run_logged "generated model-family patch check" "$BUILD_LOG" \
+    scripts/check-skippy-generated-family-patch.sh || return 1
+  run_logged "stage runtime crate build" "$BUILD_LOG" \
+    cargo build -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness \
+    || return 1
+  if [[ "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "0" \
+      && "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "false" ]]; then
+    run_logged "Skippy smoke tests" "$BUILD_LOG" scripts/skippy-ci-smoke.sh || return 1
+  fi
+}
+
+run_certification() {
+  : > "$CERTIFY_LOG"
+  echo "state-machine phase: certify" | tee -a "$CERTIFY_LOG"
+  run_logged "parity manifest validation" "$CERTIFY_LOG" \
+    python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp validate \
+    || return 1
+  run_logged "full family certification plan" "$CERTIFY_LOG" \
+    python3 scripts/plan-family-battery.py \
+      --manifest ci/llama-canary/family-certified.json \
+      --cadence llama-bump \
+      --shard-count 1 \
+      --check-cache \
+      --cache-root "${HF_CACHE:?}" \
+      --output "$PLAN_PATH" \
+    || return 1
+  if [[ "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "0" \
+      && "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "false" ]]; then
+    run_logged "live package-v2 matrix" "$CERTIFY_LOG" env \
+      FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+      SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}" \
+      SKIPPY_CANARY_LIVE_MATRIX_ROOT="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID" \
+      scripts/skippy-canary-live-matrix.sh --prepare || return 1
+  fi
+  run_logged "full supported-family certification" "$CERTIFY_LOG" env \
+    FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
+    scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
+}
+
+phase_log() {
+  case "$1" in
+    prepare) printf '%s\n' "$PREPARE_LOG" ;;
+    build) printf '%s\n' "$BUILD_LOG" ;;
+    certify) printf '%s\n' "$CERTIFY_LOG" ;;
+  esac
+}
+
+phase_turns() {
+  case "$1" in
+    prepare) printf '%s\n' "$PREPARE_REPAIR_TURNS" ;;
+    build) printf '%s\n' "$BUILD_REPAIR_TURNS" ;;
+    certify) printf '%s\n' "$CERTIFY_REPAIR_TURNS" ;;
+  esac
+}
+
+increment_phase_turns() {
+  case "$1" in
+    prepare) PREPARE_REPAIR_TURNS=$((PREPARE_REPAIR_TURNS + 1)) ;;
+    build) BUILD_REPAIR_TURNS=$((BUILD_REPAIR_TURNS + 1)) ;;
+    certify) CERTIFY_REPAIR_TURNS=$((CERTIFY_REPAIR_TURNS + 1)) ;;
+  esac
+}
+
+repair_prompt() {
+  local phase="$1" log turn
+  log="$(phase_log "$phase")"
+  turn="$(( $(phase_turns "$phase") + 1 ))"
+  printf 'The llama.cpp canary %s phase failed at upstream %s (repair turn %s of %s for this phase).
+
+Read ci/llama-canary/agent-repair-prompt.md and the repository instructions it names. That runbook describes the former two-mode workflow; this invocation is the single prepare -> build -> certify -> publish state machine. Reproduce this run with scripts/prepare-llama.sh using the target in .deps/llama-canary-target-sha. Ignore the old branch and publication instructions in that runbook: remain in the current checkout and leave final branch/PR work to the wrapper. Fix the root cause minimally. Do not weaken, skip, or narrow any gate. Use focused checks while repairing; the deterministic wrapper will restart at prepare, run the complete build, and run the full supported-family certification before it can publish success. Leave changes local. Do not push, open a PR, or use GitHub credentials.
+
+Failure evidence (tail):
+
+%s' "$phase" "$UPSTREAM_SHA" "$turn" "$MAX_REPAIR_TURNS" \
+    "$(tail -n 100 "$log" 2>/dev/null || echo '(no phase output captured)')"
+}
+
+current_pr() {
+  gh_repair gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || true
+}
+
+commit_terminal_tree() {
   local outcome="$1"
   git checkout -B "$BRANCH"
-  if [[ -n "$(git status --porcelain)" ]]; then
-    git add -A
+  git add -A
+  if ! git diff --cached --quiet; then
     if [[ "$outcome" == "certified" ]]; then
-      git commit -m "fix(llama): canary repair at upstream ${UPSTREAM_SHA:0:10}" \
-        -m "Automated llama.cpp canary repair (mode: ${MODE}). Certified by the family battery on the family-certify runner."
+      git commit -m "fix(llama): certify upstream ${UPSTREAM_SHA:0:10}" \
+        -m "Prepare, build, and run the full supported-family certification through the deterministic canary state machine."
     else
-      git commit -m "fix(llama): preserve failed canary repair at upstream ${UPSTREAM_SHA:0:10}" \
-        -m "Automated llama.cpp canary repair (mode: ${MODE}) reached a terminal failure after repair and verification. See the repair PR for the failing evidence."
+      git commit -m "fix(llama): preserve failed canary at ${UPSTREAM_SHA:0:10}" \
+        -m "Preserve the bounded terminal state from the ${FAILED_PHASE} phase for human diagnosis."
     fi
   fi
 }
 
-publish_repair_branch() {
-  # The only branch publication point. It runs after the repair/certification
-  # loop reaches terminal success or failure, records the exact published SHA,
-  # and marks it certified only for the successful outcome. Force-push is
-  # intentional: the agent rebases the patch queue, so non-fast-forward updates
-  # are normal on this wrapper-owned branch.
+publish_terminal_branch() {
   local outcome="$1"
-  commit_repair_tree "$outcome"
+  commit_terminal_tree "$outcome"
   PUBLISHED_SHA="$(git rev-parse HEAD)"
   if [[ "$outcome" == "certified" ]]; then
     CERTIFIED_SHA="$PUBLISHED_SHA"
   fi
-  # Push failures are almost always a token-identity permission gap (seen
-  # live: 403 "denied to i386" because the PAT account lacked repo write).
-  # Surface a precise, actionable message instead of a bare git error, and
-  # never leak the token in the hint.
-  if ! git push "$(repair_remote)" "+HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
-    echo "ERROR: could not push ${BRANCH}. If git reported 403/denied above, the identity behind CANARY_REPAIR_TOKEN lacks write access to ${GITHUB_REPOSITORY:?}: grant that account Contents+Pull requests write (or mint the PAT from an account that has it) and update the secret." >&2
+  if ! git push "$(repair_remote)" "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
+    echo "ERROR: could not push ${BRANCH}; the identity behind CANARY_REPAIR_TOKEN needs Contents and pull-request write access" >&2
     return 1
   fi
+}
+
+write_pr_body() {
+  local outcome="$1"
+  {
+    echo "Automated llama.cpp upstream canary for \`${UPSTREAM_SHA}\`."
+    echo
+    echo "- Previous pin: \`${OLD_SHA}\`"
+    echo "- Candidate pin: \`${UPSTREAM_SHA}\`"
+    echo "- Workflow run: \`${RUN_KEY}\`"
+    echo "- Terminal commit: \`${PUBLISHED_SHA}\`"
+    echo "- Repair turns: prepare=${PREPARE_REPAIR_TURNS}, build=${BUILD_REPAIR_TURNS}, certify=${CERTIFY_REPAIR_TURNS}"
+    echo
+    if [[ "$outcome" == "certified" ]]; then
+      echo "The wrapper applied the complete patch queue, completed the patched llama.cpp and Rust build gates, and passed the full supported-family certification on this exact commit."
+    else
+      echo "This draft preserves a bounded terminal failure in the **${FAILED_PHASE}** phase. It is not certified and is not eligible to merge until the failing gate is repaired and the complete state machine passes."
+    fi
+    echo
+    echo "State machine: \`prepare -> build -> certify -> publish\`. Agent turns may edit local files, while the wrapper owns every gate and all GitHub mutations."
+  } > "$PR_BODY"
 }
 
 ensure_pr() {
-  # Wrapper-owned PR guarantee: if no open PR exists on $BRANCH (the branch
-  # was just pushed by publish_repair_branch), create one. If the branch has
-  # no diff against the base (agent produced nothing), fall back to an issue
-  # so the outcome is still visible to humans.
-  local pr title body
+  local outcome="$1" pr title
+  local -a create_args
   pr="$(current_pr)"
   if [[ -n "$pr" ]]; then
+    gh_repair gh pr edit "$pr" --body-file "$PR_BODY" >/dev/null
     printf '%s\n' "$pr"
     return 0
   fi
-  title="fix(llama): rebase patch queue onto upstream ${UPSTREAM_SHA:0:10}"
-  body="Automated canary repair PR for the llama.cpp patch queue at upstream ${UPSTREAM_SHA}."
-  if ! git diff --quiet origin/main..."$BRANCH" 2>/dev/null; then
-    if pr="$(gh_repair gh pr create --head "$BRANCH" --title "$title" --body "$body" 2>/dev/null \
-             | grep -oE '[0-9]+$')"; then
-      printf '%s\n' "$pr"
-      return 0
-    fi
+  if [[ "$outcome" == "certified" ]]; then
+    title="fix(llama): certify upstream ${UPSTREAM_SHA:0:10}"
+    create_args=()
+  else
+    title="draft(llama): failed canary at ${UPSTREAM_SHA:0:10}"
+    create_args=(--draft)
   fi
-  gh_repair gh issue create --title "llama canary repair needs human assistance (upstream ${UPSTREAM_SHA:0:10})" \
-    --body "The canary repair loop could not open a PR on \`$BRANCH\` (branch missing or no diff). See the canary run log for the repair-loop outcome." \
-    | grep -oE '[0-9]+$' || true
-  return 0
+  gh_repair gh pr create --base main --head "$BRANCH" "${create_args[@]}" \
+    --title "$title" --body-file "$PR_BODY" 2>/dev/null | grep -oE '[0-9]+$'
 }
 
-verify_pr_head_is_certified() {
-  # The PR must carry exactly the final reviewed bytes that passed the battery.
-  local pr remote_head attempt
+verify_pr_head() {
+  local expected="$1" pr remote_head attempt
   pr="$(current_pr)"
-  if [[ -z "$pr" ]]; then
-    echo "no repair PR to verify" >&2
-    return 1
-  fi
-  remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
+  [[ -n "$pr" ]] || { echo "terminal canary PR was not created" >&2; return 1; }
   for attempt in 1 2 3; do
-    if [[ "$remote_head" == "${CERTIFIED_SHA:?}" ]]; then
-      return 0
-    fi
-    sleep "$attempt"
     remote_head="$(gh_repair gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
+    [[ "$remote_head" == "$expected" ]] && return 0
+    sleep "$attempt"
   done
-  echo "repair PR #${pr} head (${remote_head:-none}) does not match the final certified commit ${CERTIFIED_SHA}" >&2
+  echo "canary PR #${pr} head (${remote_head:-none}) does not match published commit ${expected}" >&2
   return 1
 }
 
-pr_comment() {
-  # Post a status comment on the repair PR; never fails the loop.
-  local body="$1" resource
-  resource="$(current_pr)"
-  [[ -n "$resource" ]] || resource="$(ensure_pr)"
-  [[ -n "$resource" ]] || return 0
-  # ensure_pr returns an issue number when no PR exists; use the right command.
-  if gh_repair gh pr view "$resource" >/dev/null 2>&1; then
-    gh_repair gh pr comment "$resource" --body "$body" >/dev/null 2>&1 || true
+report_terminal() {
+  local outcome="$1" pr comment
+  publish_terminal_branch "$outcome"
+  write_pr_body "$outcome"
+  pr="$(ensure_pr "$outcome")"
+  verify_pr_head "$PUBLISHED_SHA"
+  if [[ "$outcome" == "certified" ]]; then
+    comment="**Certified terminal state.** The exact PR head \`${CERTIFIED_SHA}\` passed prepare, the complete build, and the full supported-family certification."
   else
-    gh_repair gh issue comment "$resource" --body "$body" >/dev/null 2>&1 || true
+    comment="**Uncertified terminal state.** The internal deadline or repair-turn limit stopped the \`${FAILED_PHASE}\` phase. This draft preserves the final attempted bytes and must not merge until the complete state machine passes."
   fi
+  gh_repair gh pr comment "$pr" --body "$comment" >/dev/null 2>&1 || true
+  echo "terminal canary PR #${pr}: ${outcome}; branch=${BRANCH}; head=${PUBLISHED_SHA}"
 }
 
-report_success() {
-  # Terminal green closeout. Repair, review, and any required recertification
-  # have completed before this function performs the first branch/PR mutation.
-  publish_repair_branch certified
-  # Ensure the PR exists BEFORE applying the body: on a first run no PR
-  # exists yet, ensure_pr creates it (with the generic body), and the agent's
-  # pre-certification draft is then applied on top (live: run 33163990453
-  # pushed a certified branch and opened the PR via pr_comment's ensure_pr
-  # AFTER apply_pr_body had already no-op'd, so the PR kept the generic body
-  # and the agent's 103-line analysis was never shown).
-  ensure_pr >/dev/null
-  apply_pr_body
-  # The literal backticks around the certified SHA are Markdown, not command
-  # substitution.
-  # shellcheck disable=SC2016
-  pr_comment "$(printf '**Family battery passed** after the agent repair at upstream %s.\nAll certification lanes green on the family-certify runner; certified commit: `%s`.%s%s' \
-    "$UPSTREAM_SHA" "${CERTIFIED_SHA:?}" "${REVIEW_STATUS:-}" "${REVIEW_REPORT_TAIL:-}")"
-  verify_pr_head_is_certified
-}
-
-report_failure() {
-  # Terminal red closeout. Preserve the final attempted repair and its evidence
-  # only after all repair/verification work for this outcome has stopped.
-  local body="$1"
-  publish_repair_branch failed || echo "warning: could not publish failed repair branch" >&2
-  ensure_pr >/dev/null
-  apply_pr_body
-  pr_comment "$body"
-}
-
-draft_pr_body() {
-  # One agent turn drafts the pending repair PR description BEFORE
-  # certification: key upstream changes between the old pin and the repair
-  # target, how the patch queue evolved, risks, and validation. Runs strictly
-  # before any battery attempt it describes; a failed or empty turn falls back
-  # to the deterministic body in apply_pr_body.
-  local body_file
-  body_file="$ROOT/.deps/llama-canary-pr-body.md"
-  agent_turn "$(printf 'Write the description for the pending llama.cpp canary repair PR.\nAnalyze the llama.cpp changes between %s (old pinned upstream) and %s\n(repair target), summarize the key upstream changes, explain how the patch\nqueue in third_party/llama.cpp/patches/ evolved in this repair (per patch:\nwhat conflicted and how it was resolved), and identify risks for reviewers\n(including any ABI impact and any lane that is newly failing or excluded).\nWrite the finished Markdown description to %s using your file tools. Do not\nedit any other file. Note: you have no GitHub credentials; the wrapper keeps\nthe repair local until terminal certification or failure, then owns all pushes\nand PR updates.' \
-    "${OLD_SHA:0:10}" "${UPSTREAM_SHA:0:10}" "$body_file")"
-}
-
-apply_pr_body() {
-  # Publish the PR description from the pre-certification agent draft (or the
-  # deterministic fallback). No agent involvement: this may run after a green
-  # battery, so it must be token-only and deterministic.
-  local pr body_file
-  pr="$(current_pr)"
-  [[ -n "$pr" ]] || return 0
-  body_file="$ROOT/.deps/llama-canary-pr-body.md"
-  if [[ ! -s "$body_file" ]]; then
-    {
-      echo "Automated canary repair at upstream ${UPSTREAM_SHA}."
-      echo
-      echo "- Old pinned upstream: ${OLD_SHA}"
-      echo "- Repair target upstream: ${UPSTREAM_SHA}"
-      echo "- Mode: ${MODE}"
-      echo
-      echo "The agent-written upstream/queue analysis was unavailable; reviewers"
-      echo "should diff the patch queue against main directly."
-    } > "$body_file"
-  fi
-  gh_repair gh pr edit "$pr" --body-file "$body_file" >/dev/null 2>&1 || true
-}
-
-run_battery() {
-  # Runs the certification battery; prints the summary line and returns the
-  # battery exit code. The build runs under `arch -arm64` mirroring the
-  # workflow's own build step: the family-certify job runs under Rosetta, and
-  # a plain build-llama.sh rebuild would reconfigure for x86_64, leaving
-  # arm64 Rust objects unable to link against x86_64 native archives (seen
-  # live in run 33140672269). An arm64 sanity check follows the build so a
-  # misconfigured toolchain fails loudly instead of as symbol errors.
-  prepare_repair_target || return 1
-  # Battery-mode repairs still prove the complete pinned live matrix. New
-  # conventional model builders are handled by the source rewriter and the
-  # single generated family patch; the repair loop no longer selects one
-  # missing boundary-registration family or grows the model manifest.
-  if [[ "$MODE" == "battery" ]]; then
-    if ! python3 scripts/skippy-llama-parity.py --llama-src .deps/llama.cpp \
-        validate >>"$BATTERY_LOG" 2>&1; then
-      tail -n 2 "$BATTERY_LOG"
-      echo "parity manifest validation failed; repair cannot certify" >&2
-      return 1
-    fi
-    export SKIPPY_CANARY_LIVE_MATRIX_BACKEND="${SKIPPY_CANARY_LIVE_MATRIX_BACKEND:-metal}"
-    if ! arch -arm64 scripts/skippy-canary-live-matrix.sh --prepare \
-        >>"$BATTERY_LOG" 2>&1; then
-      tail -n 2 "$BATTERY_LOG"
-      echo "live package-v2 matrix failed; repair cannot certify" >&2
-      return 1
-    fi
-  fi
-  LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
-    arch -arm64 scripts/build-llama.sh \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 || return 1
-  local archive
-  archive="${LLAMA_STAGE_BUILD_DIR:-}/src/libllama.a"
-  if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" && -f "$archive" ]] \
-     && [[ "$(lipo -archs "$archive" 2>/dev/null)" != "arm64" ]]; then
-    echo "refusing to certify: native archive is not arm64: $(lipo -archs "$archive" 2>/dev/null)" >&2
-    return 1
-  fi
-  if ! scripts/check-skippy-generated-family-patch.sh >>"$BATTERY_LOG" 2>&1; then
-    tail -n 5 "$BATTERY_LOG"
-    echo "generated model-family patch is stale or invalid; repair cannot certify" >&2
-    return 1
-  fi
-  if scripts/skippy-family-battery.sh >"$BATTERY_LOG" 2>&1; then
-    tail -n 2 "$BATTERY_LOG"
-    return 0
-  fi
-  tail -n 2 "$BATTERY_LOG"
-  return 1
-}
-
-post_green_review_turn() {
-  # Fresh-context review after a green battery (the change review asked for:
-  # even a certified repair PR gets an agent review that may modify it).
-  # Parity certification cannot see a rebase that silently drops a patch's
-  # intent (e.g. a conflict resolution that yields parity but deletes an
-  # upstream feature we had deliberately stopped deleting), so one review
-  # turn runs on a locally committed, certified candidate. It is explicitly
-  # told it did NOT author the repair. It may modify the tree — fix dropped intent,
-  # rebase leftovers, stale patch metadata, Rust ABI mirror drift — and its
-  # changes become a separate local `review(llama):` commit. The caller runs
-  # the complete battery again when the candidate changes, and only then may
-  # publish the branch and PR. A crashed or disabled review is fail-open only
-  # when the candidate tree remains unchanged.
-  local review_base
-  REVIEW_CHANGED=false
-  rm -f "$ROOT/.deps/llama-canary-review-report.md"
-  if [[ "${CANARY_AGENT_REVIEW:-true}" != "true" ]]; then
-    echo "post-green agent review disabled (CANARY_AGENT_REVIEW != true); skipping"
-    REVIEW_STATUS=" Post-green agent review skipped (disabled via CANARY_AGENT_REVIEW)."
-    return 0
-  fi
-  echo "post-green agent review turn (fresh context)..."
-  review_base="$(git rev-parse HEAD)"
-  agent_turn "$(printf 'You are a DIFFERENT agent reviewing a completed llama.cpp canary repair — you did NOT write it. Everything below is already certified green by the family battery, so do not re-run it.
-
-Read the repair PR branch (HEAD of this checkout, branch %s): the patch queue in third_party/llama.cpp/patches/ and the commits since main, plus ci/llama-canary/agent-repair-prompt.md and the repo skills it names for patch-ownership boundaries. The repair rebased the queue onto upstream %s.
-
-Review the repair, not the upstream code. Certification parity cannot see semantic losses, so check:
-1. Dropped intent: does any conflict resolution or regenerated patch silently stop doing what the old patch did (a deliberately-kept upstream feature accidentally deleted, a guard or accounting change quietly dropped)?
-2. Rebase leftovers: conflict markers, duplicate patch fragments, hunks that now apply as no-ops, stale patch descriptions.
-3. Patch hygiene: series ordering, patch subjects/bodies still matching content, no accidental upstream-code deletion (per the skills, patches must not delete upstream behavior we are not chartered to delete).
-4. ABI mirrors: if any patch changed the stage ABI, did the Rust mirrors in crates/ track it (version + PREPARE_SCHEMA bumped together)?
-5. Weakened lanes: any manifest, policy, or battery change that certifies less than before?
-
-If (and only if) you find a real defect, fix it minimally in the patch queue (or its Rust ABI mirror) and commit locally with message "review(llama): <what and why>". Never weaken a certification lane. The wrapper will run the complete certification battery again before it publishes any review changes.
-
-Write your review findings (verification steps, defects found, fixes made or recommended) to %s using your file tools. Then stop. You have no GitHub credentials — the wrapper owns all pushes and PR updates.' \
-    "$BRANCH" "$UPSTREAM_SHA" "$ROOT/.deps/llama-canary-review-report.md")" \
-    || echo "warning: post-green review turn exited non-zero; inspecting any partial changes" >&2
-  # A review turn may edit the worktree, but it never owns the selected
-  # upstream. Restore and verify the pin before deciding whether the candidate
-  # changed. Even an agent crash with partial edits triggers recertification.
-  write_repair_pin || return 1
-  verify_repair_pin || return 1
-  if [[ "$(git rev-parse HEAD)" != "$review_base" || -n "$(git status --porcelain)" ]]; then
-    if [[ -n "$(git status --porcelain)" ]]; then
-      git add -A
-      if ! git diff --cached --quiet; then
-        git commit -m "review(llama): agent review fixes at upstream ${UPSTREAM_SHA:0:10}" \
-          -m "Modifications from the post-certification agent review of the canary repair (see the repair PR comment for the review report)."
+phase="prepare"
+while true; do
+  phase_status=0
+  case "$phase" in
+    prepare)
+      run_prepare || phase_status=$?
+      [[ "$phase_status" -ne 0 ]] || { phase="build"; continue; }
+      ;;
+    build)
+      run_full_build || phase_status=$?
+      [[ "$phase_status" -ne 0 ]] || { phase="certify"; continue; }
+      ;;
+    certify)
+      run_certification || phase_status=$?
+      if [[ "$phase_status" -eq 0 ]]; then
+        report_terminal certified
+        exit 0
       fi
-    fi
-    echo "post-green review made changes; final candidate must be recertified"
-    REVIEW_CHANGED=true
-    REVIEW_STATUS=" Post-green agent review made modifications, and the final reviewed tree passed a second complete certification before publication."
-  else
-    echo "post-green review found nothing to change; certified tree unchanged"
-    REVIEW_STATUS=" Post-green agent review found nothing to change; the certified tree stands."
-  fi
-  if [[ -s "$ROOT/.deps/llama-canary-review-report.md" ]]; then
-    # shellcheck disable=SC2016  # fenced backticks are intentional Markdown
-    REVIEW_REPORT_TAIL="$(printf '\n\n<details><summary>Post-green agent review report (tail)</summary>\n\n```\n%s\n```\n\n</details>' \
-      "$(tail -n 20 "$ROOT/.deps/llama-canary-review-report.md")")"
-  else
-    echo "post-green review produced no report" >&2
-    REVIEW_REPORT_TAIL=""
-    if [[ "$REVIEW_CHANGED" == "false" ]]; then
-      REVIEW_STATUS=" Post-green agent review ran but produced no report; the certified tree is unchanged."
-    fi
-  fi
-}
+      ;;
+  esac
 
-certify_reviewed_repair() {
-  # Certify the repaired candidate, run the semantic review locally, and bind
-  # success to a second complete battery whenever that review changes bytes.
-  REVIEW_STATUS=""
-  REVIEW_REPORT_TAIL=""
-  run_battery || return 1
-  commit_repair_tree certified
-  post_green_review_turn || return 1
-  if [[ "$REVIEW_CHANGED" == "true" ]]; then
-    echo "post-green review changed the candidate; running final certification..."
-    run_battery || return 1
-  fi
-  return 0
-}
-
-repair_followup_prompt() {
-  # Shared prompt for every repair turn. In battery mode turn 1 this is
-  # seeded directly from the workflow's teed failure evidence (no battery
-  # re-run first); later turns carry the wrapper's own certification output.
-  # The agent has no GitHub credentials; the wrapper keeps all work local until
-  # terminal success or failure, then commits, pushes, and updates the PR.
-  printf 'The family certification battery failed after the patch-queue repair
-at upstream %s (attempt %s of %s). You are working in this repository checkout.
-
-Read ci/llama-canary/agent-repair-prompt.md and the repo skills it names, then
-fix the root cause — do not weaken a failing lane. If a model is genuinely
-broken by upstream, fix our patches or flag it in the PR body. The failing
-battery output (tail):
-
-%s
-
-Re-run scripts/skippy-family-battery.sh --skip-build yourself to confirm your
-fix, and leave your work in the working tree or on local commits — the wrapper
-will publish the branch and repair PR only after terminal certification or failure.' \
-    "$UPSTREAM_SHA" "$1" "$MAX_REPAIR_TURNS" "$(battery_summary "$BATTERY_LOG")"
-}
-
-if [[ "$MODE" == "patch-queue" ]]; then
-  agent_turn "$(printf 'The canary failed to apply the llama.cpp patch queue at upstream %s.
-Read ci/llama-canary/agent-repair-prompt.md in this repo and follow it exactly.
-Commit your work locally when done. You have no GitHub credentials — the
-wrapper that invoked you keeps the repair local until terminal success or
-failure, then owns all pushes and PR updates. The pending branch is %s.' \
-    "$UPSTREAM_SHA" "$BRANCH")"
-
-  echo "agent repair turn finished; verifying queue applies..."
-  if ! prepare_repair_target; then
-    report_failure "$(printf '**Repair stuck — needs human assistance.** The patch queue still does not apply through the checked-in pin at upstream %s after the agent repair turn (see the canary run log for the failing patch). The terminal agent work is preserved on this branch.' \
-      "$UPSTREAM_SHA")"
+  FAILED_PHASE="$phase"
+  if ! remaining_work_seconds >/dev/null; then
+    echo "internal canary deadline reached after ${phase} failure; reserving time for terminal publication" >&2
+    report_terminal failed
     exit 1
   fi
-else
-  # battery mode: the queue already applies and the workflow's own battery
-  # step just failed on this runner. Its evidence log (teed to
-  # $BATTERY_LOG by the workflow) seeds the first repair turn, so no build
-  # or battery run is repeated before the agent gets the failure output.
-  if ! prepare_repair_target; then
-    report_failure "$(printf '**Repair stuck — needs human assistance.** The battery-mode repair no longer applies through the checked-in pin at upstream %s. The terminal agent work is preserved on this branch.' \
-      "$UPSTREAM_SHA")"
+  if (( $(phase_turns "$phase") >= MAX_REPAIR_TURNS )); then
+    echo "${phase} exhausted ${MAX_REPAIR_TURNS} repair turns" >&2
+    report_terminal failed
     exit 1
   fi
-  if [[ ! -s "$BATTERY_LOG" ]]; then
-    echo "battery mode: no workflow battery evidence at $BATTERY_LOG; running one diagnostic battery attempt..." >&2
-    run_battery || true
-  else
-    echo "battery mode: reusing workflow battery evidence from $BATTERY_LOG"
-  fi
-fi
 
-# Draft locally before certification. No branch or PR mutation occurs until a
-# terminal success or failure path calls report_success or report_failure.
-draft_pr_body
-
-# Certify → repair → recertify loop. The wrapper — not the agent — decides
-# when certification passes, so a lane failure can never be talked past.
-# In battery mode the workflow's own battery step already failed on this
-# runner (or the diagnostic attempt above did): iteration 1 is the repair
-# turn seeded from that evidence, never another full build+battery run
-# before the agent gets a chance to fix anything.
-attempt=0
-while (( attempt < MAX_REPAIR_TURNS )); do
-  attempt=$((attempt + 1))
-  if [[ "$MODE" == "battery" && "$attempt" -eq 1 ]]; then
-    echo "battery mode: repair turn 1 seeded from the workflow battery failure evidence"
-  else
-    echo "certification attempt $attempt..."
-    if certify_reviewed_repair; then
-      echo "family battery and post-green review certification passed; repair complete"
-      report_success
-      exit 0
-    fi
-  fi
-  echo "family battery failed on repair turn $attempt; handing failures to the agent"
-  agent_turn "$(repair_followup_prompt "$attempt")"
-  echo "agent repair turn $attempt finished; verifying queue applies..."
-  if ! prepare_repair_target; then
-    report_failure "$(printf '**Repair stuck — needs human assistance.** The patch queue regressed or still does not apply through the checked-in pin at upstream %s after repair turn %s/%s. The terminal agent work is preserved on this branch; see the canary run log for the failing patch.' \
-      "$UPSTREAM_SHA" "$attempt" "$MAX_REPAIR_TURNS")"
-    exit 1
-  fi
+  prompt="$(repair_prompt "$phase")"
+  increment_phase_turns "$phase"
+  agent_turn "$prompt" || echo "warning: agent repair turn exited non-zero; wrapper will retry the gates" >&2
+  # Any agent edit may affect the selected pin or patch queue. Restore the
+  # deterministic pin and restart at the first invalidated gate.
+  phase="prepare"
 done
-
-echo "final certification attempt..."
-if certify_reviewed_repair; then
-  echo "family battery and post-green review certification passed; repair complete"
-  report_success
-  exit 0
-fi
-
-# The final status comment embeds a fenced battery tail; the literal
-# backticks are intentional Markdown, not command substitution.
-# shellcheck disable=SC2016
-report_failure "$(printf '**Repair stuck — needs human assistance.** The family battery is still failing after %s agent repair turns at upstream %s. The terminal agent work is preserved on this branch; the failing battery output (tail):\n\n```\n%s\n```' \
-  "$MAX_REPAIR_TURNS" "$UPSTREAM_SHA" "$(battery_summary "$BATTERY_LOG")")"
-echo "family battery still failing after $MAX_REPAIR_TURNS agent repair turns" >&2
-exit 1
