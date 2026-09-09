@@ -11,6 +11,13 @@
 //! QUIC stream under the `skippy-kv/1` ALPN (`skippy_protocol::KV_ALPN_V1`)
 //! bridged to a local socket, the same pattern the stage transport uses;
 //! the harness drives it over plain TCP.
+//!
+//! **The server side has no authentication**: any process that can reach
+//! the port can enumerate and drain the store. Digest verification protects
+//! the *client* from a malicious peer, not this server from disclosure.
+//! Plain-TCP serving is for the lab harness on trusted networks only — do
+//! not wire it to a mesh-reachable listener; mesh exposure goes through the
+//! `skippy-kv/1` iroh ALPN with mesh-membership auth.
 
 use std::{
     io::{BufReader, BufWriter, Read, Write},
