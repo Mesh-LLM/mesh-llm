@@ -246,7 +246,7 @@ import time
 path = Path(os.environ["SKIPPY_PACKAGE_ARTIFACT_PATH"])
 relative = os.environ["SKIPPY_PACKAGE_ARTIFACT_RELATIVE_PATH"]
 target_repo = os.environ["TARGET_REPO"]
-max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "4"))
+max_attempts = int(os.environ.get("ARTIFACT_UPLOAD_ATTEMPTS", "8"))
 
 api = HfApi(token=os.environ["HF_TOKEN"])
 last_error = None
@@ -265,7 +265,7 @@ for attempt in range(1, max_attempts + 1):
         last_error = err
         if attempt == max_attempts:
             break
-        delay = min(60, 5 * attempt)
+        delay = min(300, 10 * 2 ** (attempt - 1))
         print(
             f"  Upload failed for {relative} on attempt {attempt}/{max_attempts}: {err}. "
             f"Retrying in {delay}s...",
