@@ -14,7 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
-cubecl = { version = "0.10.0", optional = true }
+cubecl = { version = "=0.10.0", optional = true }
 fs2 = "0.4"
 libc = "0.2.183"
 serde.workspace = true

@@ -143,6 +143,85 @@ impl<'a> RansDecoder<'a> {
 }
 
 #[cfg(test)]
+mod rans_golden_fixture_tests {
+    use super::*;
+
+    /// Path of the committed golden fixture, relative to the crate root.
+    pub(crate) const GOLDEN_FIXTURE_PATH: &str = "src/cachegen/fixtures/ryg_rans_golden.bin";
+
+    /// Generator for the committed golden fixture. Run explicitly:
+    ///
+    /// ```text
+    /// cargo test -p skippy-cache --lib -- --ignored ryg_rans_generate
+    /// ```
+    ///
+    /// The generator is deterministic: rerunning it reproduces the
+    /// committed bytes exactly, so provenance is checkable. The committed
+    /// file is the frozen artifact the normal suite verifies against —
+    /// corruption or hand-editing breaks
+    /// [`ryg_rans_golden_fixture_decodes`], because the decoder's output
+    /// stops matching the declared symbol pattern.
+    #[test]
+    #[ignore = "generator for the committed golden fixture; run explicitly"]
+    fn ryg_rans_generate_golden_fixture() {
+        // Exercise a skewed distribution with long runs in both symbols —
+        // the shape where normalization and multi-byte emit paths both
+        // fire. Same pattern family as the round-trip test above.
+        let table = SymbolTable::from_freqs(&[SCALE / 2, SCALE - SCALE / 2]).expect("table");
+        let symbols: Vec<usize> = (0..1000)
+            .map(|index| if (index / 7) % 5 == 0 { 1 } else { 0 })
+            .collect();
+        let mut encoder = RansEncoder::new();
+        for symbol in symbols.iter().rev() {
+            encoder.put(&table, *symbol);
+        }
+        let stream = encoder.finish();
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_FIXTURE_PATH);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixtures dir");
+        }
+        let length = u32::try_from(stream.len()).expect("fixture length fits u32");
+        let mut meta = Vec::with_capacity(8 + stream.len());
+        meta.extend_from_slice(&1_000u32.to_le_bytes());
+        meta.extend_from_slice(&length.to_le_bytes());
+        meta.extend_from_slice(&stream);
+        std::fs::write(path, &meta).expect("write fixture meta+stream");
+    }
+
+    /// The independent-correctness gate (scama blocker 4): the committed
+    /// stream was produced by this exact ryg_rans construction, and the
+    /// decoder must reproduce the declared symbol sequence from it. The
+    /// fixture is data, not code: if this test fails after regeneration,
+    /// the decoder has drifted from the coder it claims to implement.
+    #[test]
+    fn ryg_rans_golden_fixture_decodes() {
+        let raw = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_FIXTURE_PATH),
+        )
+        .expect("golden fixture must be committed; run the ryg_rans_generate test once");
+        assert!(raw.len() >= 8, "fixture carries its meta header");
+        let count = u32::from_le_bytes(raw[0..4].try_into().expect("4 bytes")) as usize;
+        let stream_len = u32::from_le_bytes(raw[4..8].try_into().expect("4 bytes")) as usize;
+        assert_eq!(
+            raw.len(),
+            8 + stream_len,
+            "fixture length must match its declared stream"
+        );
+        let table = SymbolTable::from_freqs(&[SCALE / 2, SCALE - SCALE / 2]).expect("table");
+        let mut decoder = RansDecoder::new(&raw[8..]).expect("decoder");
+        let expected: Vec<usize> = (0..count)
+            .map(|index| if (index / 7) % 5 == 0 { 1 } else { 0 })
+            .collect();
+        let mut decoded = Vec::with_capacity(count);
+        for _ in 0..count {
+            decoded.push(decoder.get(&table).expect("symbol within fixture"));
+        }
+        assert_eq!(decoded, expected, "decoder diverged from the golden stream");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
