@@ -284,7 +284,7 @@ Other top-level directories:
 - `docs/plugins/` — Plugin architecture docs and plans.
 - `docs/specs/` — Focused behavior specs for individual features.
 - `.agents/agents/release-validation.md` — Canonical Markdown definition for the selectable release-validation specialist; it uses the canonical release-validation skill in `.agents/skills/`.
-- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, Skippy internals, patch queues, and benchmarks.
+- `.agents/skills/` — Canonical repo-local agent skills, including per-platform deploy, mesh operations, release validation, release notes, Skippy internals, patch queues, and benchmarks.
 - `sdk/` — SDK packaging for Node, Swift, Kotlin.
 - `fly/` — Fly.io deployment (console + API client apps).
 - `tools/relay-fly-legacy/` — Archived self-hosted iroh relay reference; production uses services.iroh.computer.
@@ -559,6 +559,8 @@ you want quiet output, use `--log-format json` and parse what you need.
 ## Pre-Commit Checklist
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
+
+Commit subjects must follow Conventional Commits v1.0.0; install the hook with `just hooks-install` and validate a range with `just check-commits`. The type decides which release-notes section the change lands in, and the PR title becomes the squash-merge subject, so give the PR a conventional title too. See `.agents/skills/release-notes/SKILL.md`.
 
 ### Minimum validation by change type
 

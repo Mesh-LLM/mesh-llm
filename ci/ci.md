@@ -186,6 +186,21 @@ the final notes retain the RC changes and add any post-RC changes.
 The workflow-scoped token push does not fan out another main CI run; the release
 graph is the evidence for that version-only source commit.
 
+After a stable release publishes, the `release_notes` job regroups the
+GitHub-generated body into Keep a Changelog sections. A deterministic pass
+classifies each entry from the Conventional Commits type on the canonical
+squash-merge commit between the comparison base and the tag; an optional agent
+review pass then reclassifies what commit metadata could not place. Both passes
+render through the same validator, which refuses a plan that does not cover the
+published body exactly, and the job re-verifies the live body after editing.
+Every agent failure mode -- absent CLI, missing credentials, failed probe,
+exhausted quota, blown budget, or an invalid plan -- keeps the deterministic
+notes and leaves the job green. `RELEASE_NOTES_AGENT_MODEL` is unset, so the
+pipeline is deterministic-only until a runner provides the agent CLI and
+credentials. Prereleases are skipped because RC notes are regenerated for the
+final release. Work products upload as `release-notes-<tag>` evidence for 90
+days.
+
 After a stable release with the full GPU matrix succeeds, the downstream
 `mesh-packaging` dispatch job first checks that its
 `MESH_AGENT_IMAGES_DISPATCH_TOKEN` credential can write the target repository.

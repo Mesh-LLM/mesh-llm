@@ -193,6 +193,67 @@ or `SKIPPY_LLAMA_BUILD_DIR` pointing at one), which this section does not cover.
 The Rust MSVC toolchain needs the Visual Studio Build Tools with the
 "Desktop development with C++" workload installed.
 
+## Commit messages
+
+Commit subjects follow [Conventional Commits
+v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```
+<type>(<optional scope>)<optional !>: <description>
+```
+
+Install the hook that enforces it:
+
+```bash
+just hooks-install          # sets core.hooksPath to .githooks
+just check-commits          # validates origin/main..HEAD
+```
+
+Valid types are `feat`, `fix`, `perf`, `security`, `revert`, `refactor`,
+`style`, `test`, `build`, `deps`, `ci`, `chore`, and `docs`. This is not
+bookkeeping: the release-notes job classifies each release entry from these
+subjects, so the type decides which section a change appears under. `feat`
+lands in Added, `fix` in Fixed, `perf` in Changed, `security` in Security, and
+the tooling types collapse into a folded Internal section. A subject that is
+not conventional cannot be classified and lands in "Other changes".
+
+Two overrides exist. `BREAKING CHANGE: <what>` in the body (or `!` after the
+type) moves a `feat` to Changed. `Release-Notes: <Section>` in the body wins
+outright — reach for it when the type cannot express the change, above all for
+a fix that closes a security exposure and belongs in Security rather than
+Fixed.
+
+Because the repository squash-merges, the PR title becomes the commit subject
+on `main`. Give the PR the conventional title, not just the branch commits.
+
+See [`.agents/skills/release-notes/SKILL.md`](.agents/skills/release-notes/SKILL.md)
+for the full pipeline.
+
+### Attribution trailers
+
+Agent, bot, and relay attribution trailers are not kept in this history. The
+hook rejects a commit whose trailers name an agent or bot, use an agent
+attribution address such as `noreply@anthropic.com`, sit at a relay identity
+domain such as `meshllm.communities.buzz.xyz`, or belong to a `[bot]` account:
+
+```
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>          # rejected
+Co-authored-by: scama <a1860575018c46@meshllm.communities.buzz.xyz>  # rejected
+Co-authored-by: coderabbitai[bot] <...@users.noreply.github.com>     # rejected
+Co-authored-by: Real Person <real@example.com>                  # kept
+```
+
+Trailers naming a human contributor are untouched. Extend the lists in
+`scripts/check-conventional-commit.py` when a new agent identity shows up.
+
+Keeping them out of branch commits is what matters, because GitHub composes a
+squash-merge body from the branch commit messages and carries their trailers
+into `main`. The repository-side controls for that are
+`squash_merge_commit_message` and a `commit_message_pattern` rule on the `main`
+ruleset; see the CI notes in
+[`.agents/skills/manage-ci/references/current-inventory.md`](.agents/skills/manage-ci/references/current-inventory.md).
+
+
 ## CI / GitHub Actions
 
 For the current PR and main topology, read [`ci/ci.md`](ci/ci.md), the

@@ -21,7 +21,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, and a preflighted downstream `mesh-packaging` dispatch |
+| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, post-publish release-notes regrouping, and a preflighted downstream `mesh-packaging` dispatch |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -124,6 +124,29 @@ for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable
 baseline.
+
+The `release_notes` job runs after a successful stable publish with
+`contents: write` and regroups that published body into Keep a Changelog
+sections through `scripts/release-notes-generate.sh`. The deterministic
+classifier maps Conventional Commits types from the canonical commit range; the
+optional agent review pass runs only when `RELEASE_NOTES_AGENT_MODEL` is set,
+the agent CLI is installed, credentials exist, and a bounded liveness probe
+succeeds. The agent turn runs with `GH_TOKEN` and `GITHUB_TOKEN` stripped and
+never publishes. Any agent failure keeps the deterministic notes without
+failing the job. Evidence uploads as `release-notes-<tag>` for 90 days.
+
+Merge settings observed on 2026-09-10: `allow_merge_commit=false`,
+`allow_rebase_merge=true`, `allow_squash_merge=true`,
+`squash_merge_commit_title=COMMIT_OR_PR_TITLE`, and
+`squash_merge_commit_message=COMMIT_MESSAGES`. The `COMMIT_MESSAGES` setting
+composes the squash body from the branch commit messages, which is how agent
+and bot `Co-authored-by:` trailers reach `main` even when the PR title is
+clean. `.githooks/commit-msg` rejects those trailers locally;
+`squash_merge_commit_message=PR_BODY` plus a negated `commit_message_pattern`
+rule on the active `main` ruleset (id 20090642, which currently carries
+`deletion`, `non_fast_forward`, `required_linear_history`,
+`required_status_checks`, and `pull_request`) is the repository-side
+enforcement. Neither repository setting has been changed.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
