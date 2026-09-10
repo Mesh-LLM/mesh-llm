@@ -19,9 +19,13 @@ the mesh (`PeerAnnouncement.vram_bytes`, reported by `/api/status` as
 `doctor split` (`aggregate_capacity_bytes`), and model-target advice sum. Any
 surface that presents a node or mesh total (the dashboard `Mesh Capacity` tile, the
 peer table `VRAM` column, the chat header) must use that advertised figure so
-the console, the CLI, and the API agree. Summing rated classes across GPUs is
-display-only and overstates schedulable capacity (see #1656 for the itemized
-total / reserved / usable breakdown that will replace the single value).
+the console, the CLI, and the API agree. Client-role nodes advertise capacity
+but never serve, and the scheduler excludes them from the aggregate, so totals
+exclude them as well. Summing rated classes across GPUs is display-only and
+overstates schedulable capacity; the UI helpers fall back to allocatable, then
+rated, inventory only for legacy payloads that carry no advertised value, never
+as the primary source of a total (see #1656 for the itemized total / reserved /
+usable breakdown that will replace the single value).
 
 ![Dashboard showing Mesh Capacity 115.4 GB from the advertised capacity](assets/vram-dashboard-advertised.png)
 

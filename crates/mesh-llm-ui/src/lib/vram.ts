@@ -89,6 +89,8 @@ export type VramNodeInput = {
   vram_gb?: number | null
   my_vram_gb?: number | null
   gpus?: VramGpuInput[] | null
+  /** Client-role nodes consume capacity but never serve, so they contribute nothing to mesh totals. */
+  client?: boolean
 }
 
 export type VramMeshInput = VramNodeInput & {
@@ -116,10 +118,12 @@ export function nodeRatedVramGB(node: VramNodeInput): number | null {
  * Capacity the node advertises to the mesh, in decimal GB. This is the figure
  * `/api/status` reports as `my_vram_gb` / `vram_gb` and the one the scheduler and
  * `doctor split` sum, so aggregates built from it agree with the API and CLI.
- * Falls back to per-GPU allocatable bytes, then to the rated class, for payloads
- * that predate the announced value.
+ * Falls back to per-GPU allocatable bytes, then to the rated class, only for
+ * legacy payloads that carry no announced value. Client-role nodes yield null:
+ * the scheduler excludes them from aggregate capacity, so the console must too.
  */
 export function nodeAdvertisedVramGB(node: VramNodeInput): number | null {
+  if (node.client) return null
   return (
     finitePositive(node.vram_gb) ??
     finitePositive(node.my_vram_gb) ??
@@ -132,4 +136,36 @@ export function nodeAdvertisedVramGB(node: VramNodeInput): number | null {
 export function meshAdvertisedVramGB(mesh: VramMeshInput): number {
   const local = nodeAdvertisedVramGB(mesh) ?? 0
   return (mesh.peers ?? []).reduce((sum, peer) => sum + (nodeAdvertisedVramGB(peer) ?? 0), local)
+}
+
+/** Minimal shape of `/api/status` needed to build mesh capacity totals. */
+export type VramStatusLike = {
+  my_vram_gb?: number | null
+  gpus?: VramGpuInput[] | null
+  is_client?: boolean
+  node_state?: string
+  peers?: Array<VramNodeInput & { state?: string; role?: string }> | null
+}
+
+function isClientPeer(peer: { state?: string; role?: string }): boolean {
+  return peer.state === 'client' || peer.role === 'Client'
+}
+
+/**
+ * Builds the capacity input for a status payload, marking the local node and
+ * any peer in the client role so they are left out of mesh totals. Both the
+ * dashboard and the chat header go through this so they agree by construction.
+ */
+export function meshCapacityInputFromStatus(status: VramStatusLike): VramMeshInput {
+  return {
+    vram_gb: status.my_vram_gb,
+    gpus: status.gpus,
+    client: status.is_client === true || status.node_state === 'client',
+    peers: (status.peers ?? []).map((peer) => ({
+      vram_gb: peer.vram_gb,
+      my_vram_gb: peer.my_vram_gb,
+      gpus: peer.gpus,
+      client: isClientPeer(peer)
+    }))
+  }
 }

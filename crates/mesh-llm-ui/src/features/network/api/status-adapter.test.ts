@@ -223,6 +223,36 @@ describe('adaptStatusToDashboard', () => {
     expect(dashboard.peerSummary.capacity).toBe('159 GB')
   })
 
+  it('excludes client-role nodes from Mesh Capacity even when they advertise VRAM', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      my_vram_gb: 115.4,
+      peers: [
+        { id: 'host-peer', role: 'Host', state: 'serving', models: [], vram_gb: 44, hostname: 'host-peer' },
+        { id: 'client-peer', role: 'Client', state: 'client', models: [], vram_gb: 24, hostname: 'client-peer' }
+      ]
+    })
+
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '159.4', unit: 'GB' })
+    )
+    expect(dashboard.peers.find((peer) => peer.id === 'client-peer')).toEqual(expect.objectContaining({ vramGB: 0 }))
+  })
+
+  it('suppresses local capacity in Mesh Capacity when this node is a client', () => {
+    const dashboard = adaptStatusToDashboard({
+      ...PUBLIC_STATUS_PAYLOAD,
+      node_state: 'client',
+      my_vram_gb: 115.4,
+      peers: [{ id: 'host-peer', role: 'Host', state: 'serving', models: [], vram_gb: 44, hostname: 'host-peer' }]
+    })
+
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
+      expect.objectContaining({ value: '44.0', unit: 'GB' })
+    )
+    expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 0 }))
+  })
+
   it('falls back to allocatable GPU inventory, then rated class, when a node advertises no capacity', () => {
     const dashboard = adaptStatusToDashboard({
       ...PUBLIC_STATUS_PAYLOAD,

@@ -1,7 +1,7 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
-import { meshAdvertisedVramGB, nodeAdvertisedVramGB } from '@/lib/vram'
+import { meshAdvertisedVramGB, meshCapacityInputFromStatus, nodeAdvertisedVramGB } from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -119,15 +119,14 @@ function finiteMetric(value: number | undefined): number {
 // so the dashboard agrees with `/api/status`, `doctor split`, and the scheduler.
 // Per-GPU labels elsewhere keep the rated class (see docs/specs/vram-accounting.md).
 function peerVramGb(peer: PeerInfo): number {
-  return finiteMetric(nodeAdvertisedVramGB(peer) ?? undefined)
+  return finiteMetric(
+    nodeAdvertisedVramGB({ ...peer, client: peer.state === 'client' || peer.role === 'Client' }) ?? undefined
+  )
 }
 
 function selfVramGb(payload: StatusPayload): number {
-  return finiteMetric(nodeAdvertisedVramGB({ vram_gb: payload.my_vram_gb, gpus: payload.gpus }) ?? undefined)
-}
-
-function meshVramInput(payload: StatusPayload) {
-  return { vram_gb: payload.my_vram_gb, gpus: payload.gpus, peers: payload.peers }
+  const { peers: _peers, ...self } = meshCapacityInputFromStatus(payload)
+  return finiteMetric(nodeAdvertisedVramGB(self) ?? undefined)
 }
 
 function resolveInflightRequests(payload: StatusPayload): number {
@@ -228,7 +227,7 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
   ])
   const remoteServingModelNames = normalizeModelList(payload.peers.flatMap(resolveHostedModels))
   const activeModelNames = normalizeModelList([...localServingModelNames, ...remoteServingModelNames])
-  const totalMeshVram = meshAdvertisedVramGB(meshVramInput(payload))
+  const totalMeshVram = meshAdvertisedVramGB(meshCapacityInputFromStatus(payload))
   const peerCount = payload.peers.length
   const inflightRequests = resolveInflightRequests(payload)
   const owner = resolveOwner(payload.owner) ?? 'Unsigned'

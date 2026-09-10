@@ -8,6 +8,7 @@ import {
   gpuReservedVramGB,
   gpuSystemReportedVramGB,
   meshAdvertisedVramGB,
+  meshCapacityInputFromStatus,
   nodeAdvertisedVramGB,
   nodeRatedVramGB,
   ratedVramGBFromBytes
@@ -80,5 +81,32 @@ describe('VRAM accounting utilities', () => {
     }
 
     expect(meshAdvertisedVramGB(mesh)).toBeCloseTo(159.478, 3)
+  })
+
+  it('leaves client-role nodes out of mesh totals even when they advertise capacity', () => {
+    expect(nodeAdvertisedVramGB({ vram_gb: 24, client: true })).toBeNull()
+
+    const input = meshCapacityInputFromStatus({
+      my_vram_gb: 115.4,
+      node_state: 'serving',
+      peers: [
+        { vram_gb: 44, state: 'serving', role: 'Host' },
+        { vram_gb: 24, state: 'client', role: 'Client' },
+        { vram_gb: 16, state: 'serving', role: 'Client' }
+      ]
+    })
+
+    expect(meshAdvertisedVramGB(input)).toBeCloseTo(159.4, 6)
+  })
+
+  it('suppresses the local node capacity when this node is a client', () => {
+    expect(
+      meshAdvertisedVramGB(
+        meshCapacityInputFromStatus({ my_vram_gb: 115.4, is_client: true, peers: [{ vram_gb: 44 }] })
+      )
+    ).toBe(44)
+    expect(
+      meshAdvertisedVramGB(meshCapacityInputFromStatus({ my_vram_gb: 115.4, node_state: 'client', peers: [] }))
+    ).toBe(0)
   })
 })

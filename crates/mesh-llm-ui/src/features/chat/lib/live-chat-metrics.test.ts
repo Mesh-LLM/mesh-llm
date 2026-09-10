@@ -55,4 +55,33 @@ describe('liveChatActionMetrics', () => {
       { id: 'vram', icon: 'hard-drive', label: '24.0 GB' }
     ])
   })
+
+  it('counts client nodes but excludes their capacity, like the scheduler does', () => {
+    const metrics = liveChatActionMetrics(
+      status({
+        my_vram_gb: 115.4,
+        peers: [
+          { id: 'host', role: 'Host', state: 'serving', models: [], vram_gb: 44 },
+          { id: 'laptop', role: 'Client', state: 'client', models: [], vram_gb: 24 }
+        ]
+      })
+    )
+
+    expect(metrics).toEqual([
+      { id: 'nodes', icon: 'cpu', label: '3 nodes' },
+      { id: 'vram', icon: 'hard-drive', label: '159.4 GB' }
+    ])
+  })
+
+  it('suppresses local capacity when this node is a client', () => {
+    const metrics = liveChatActionMetrics(
+      status({
+        node_state: 'client',
+        my_vram_gb: 115.4,
+        peers: [{ id: 'host', role: 'Host', state: 'serving', models: [], vram_gb: 44 }]
+      })
+    )
+
+    expect(metrics[1]).toEqual({ id: 'vram', icon: 'hard-drive', label: '44.0 GB' })
+  })
 })
