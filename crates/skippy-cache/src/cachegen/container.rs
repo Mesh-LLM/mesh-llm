@@ -39,6 +39,13 @@ const FIXED_HEADER_LEN: usize = 24;
 const HISTOGRAM_LEN: usize = TOKEN_COUNT * 4;
 /// Total bytes before the rANS stream.
 const HEADER_LEN: usize = FIXED_HEADER_LEN + HISTOGRAM_LEN;
+/// Hard format ceiling on the tile one container may declare, in values.
+/// Bounds `rows * dims` and the decoded allocation (`count * 2` bytes)
+/// before any capacity is reserved. Far above any real KV segment tile
+/// (the measured 4096x128 shape is 524,288 values), far below the
+/// unbounded product a hostile `rows`/`dims` pair can claim; raising it
+/// is a format-version decision, not a per-parse judgment call.
+pub const MAX_DECODED_VALUES: usize = 1 << 30;
 
 /// The per-segment identity a CacheGen segment carries: lossy, calibrated.
 pub fn segment_identity(decoded_len: u64, calibration_digest: String) -> SegmentCodecIdentity {
@@ -128,12 +135,15 @@ pub fn encode_f16_segment(raw_segment: &[u8], dims: usize) -> Result<Vec<u8>> {
 /// and has exactly the declared decoded length.
 pub fn decode_f16_segment(payload: &[u8]) -> Result<Vec<u8>> {
     let (header, histogram, stream) = parse_container(payload)?;
-    let freqs = reference::histogram_to_freqs(&histogram, header.rows * header.dims)?;
+    let count = header.count;
+    let freqs = reference::histogram_to_freqs(&histogram, count)?;
     let table = SymbolTable::from_freqs(&freqs).expect("histogram_to_freqs yields a valid table");
 
     let mut decoder = RansDecoder::new(stream)
         .ok_or_else(|| anyhow!("cachegen stream shorter than its initial state"))?;
-    let count = header.rows * header.dims;
+    // The reservation uses the parse-validated count (checked product,
+    // under the format ceiling), so a hostile header cannot inflate it;
+    // the decoded byte size is computed with checked math as well.
     let mut symbols = Vec::with_capacity(count);
     for _ in 0..count {
         let symbol = decoder
@@ -143,19 +153,29 @@ pub fn decode_f16_segment(payload: &[u8]) -> Result<Vec<u8>> {
     }
     reference::delta_decode(&mut symbols, header.dims)?;
     let values = reference::dequantize(&header.calibration, &symbols);
-    let mut out = Vec::with_capacity(count * 2);
+    let decoded_bytes = decoded_byte_len(count)?;
+    let mut out = Vec::with_capacity(decoded_bytes);
     for value in values {
         out.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
     }
     Ok(out)
 }
 
+/// Checked byte length of a decoded tile: `values * 2` (little-endian
+/// f16), computed without trusting the caller-provided count.
+fn decoded_byte_len(count: usize) -> Result<usize> {
+    count
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("cachegen decoded size exceeds the address space"))
+}
+
 /// Value count a container decodes to (`rows * dims`), for capability
 /// negotiation against a segment's declared decoded length before any
-/// decode work happens.
+/// decode work happens. The count is the parse-validated, bounded
+/// product — never an unchecked multiply of header fields.
 pub fn decoded_value_count(payload: &[u8]) -> Result<usize> {
     let (header, _, _) = parse_container(payload)?;
-    Ok(header.rows * header.dims)
+    Ok(header.count)
 }
 
 /// Calibration and tile shape from a container's header, without touching
@@ -168,7 +188,9 @@ pub fn container_calibration(payload: &[u8]) -> Result<(Calibration, usize)> {
 
 struct ContainerHeader {
     dims: usize,
-    rows: usize,
+    /// Parse-validated `rows * dims`: checked product, under
+    /// [`MAX_DECODED_VALUES`], and equal to the histogram total.
+    count: usize,
     calibration: Calibration,
 }
 
@@ -189,6 +211,31 @@ fn parse_container(payload: &[u8]) -> Result<(ContainerHeader, Vec<u32>, &[u8])>
     let stream_len = u32::from_le_bytes(payload[18..22].try_into().expect("4 bytes")) as usize;
     if dims == 0 || rows == 0 {
         bail!("cachegen container declares an empty tile");
+    }
+    // The declared tile must be a real shape, not a hostile product: the
+    // checked count bounds the decoded-size math below, and the format
+    // ceiling bounds it further. Without these, a 92-byte payload could
+    // claim billions of decoded values and drive the allocation at decode
+    // time.
+    let count = rows
+        .checked_mul(dims)
+        .ok_or_else(|| anyhow!("cachegen tile shape overflows the address space"))?;
+    if count > MAX_DECODED_VALUES {
+        bail!(
+            "cachegen tile declares {count} values, above the format ceiling of {MAX_DECODED_VALUES}"
+        );
+    }
+    // Calibration crosses the trust boundary as raw f32 bits; it must be
+    // a usable affine map before anything derives from it. NaN/inf poison
+    // every dequantized value, and a negative scale inverts the quantizer
+    // ring. scale == 0 stays legal: it is the flat-tile encoding.
+    let min = f32::from_bits(min_bits);
+    let scale = f32::from_bits(scale_bits);
+    if !min.is_finite() || !scale.is_finite() {
+        bail!("cachegen calibration carries a non-finite value");
+    }
+    if scale < 0.0 {
+        bail!("cachegen calibration scale is negative");
     }
     let histogram: Vec<u32> = payload[FIXED_HEADER_LEN..HEADER_LEN]
         .as_chunks::<4>()
@@ -216,7 +263,7 @@ fn parse_container(payload: &[u8]) -> Result<(ContainerHeader, Vec<u32>, &[u8])>
     Ok((
         ContainerHeader {
             dims,
-            rows,
+            count,
             calibration: Calibration {
                 min_bits,
                 scale_bits,
@@ -337,6 +384,84 @@ mod tests {
             crate::l3::CODEC_RAW,
             "must stay out of the raw namespace"
         );
+    }
+
+    /// scama re-review blocker 1, reproduced exactly: a NaN calibration
+    /// minimum, a negative scale, and a 92-byte container claiming
+    /// billions of decoded values must all be refused at the boundary —
+    /// `container_calibration` and `decoded_value_count` are capability
+    /// probes, so they must reject, not just `decode_f16_segment`.
+    #[test]
+    fn hostile_calibration_and_shapes_are_refused_at_the_boundary() {
+        let dims = 16usize;
+        let raw = smooth_tile(4, dims, 5);
+        let encoded = encode_f16_segment(&raw, dims).expect("encode");
+
+        let mutate = |position: usize, bytes: [u8; 4]| {
+            let mut payload = encoded.clone();
+            payload[position..position + 4].copy_from_slice(&bytes);
+            payload
+        };
+        // Header layout: min at 10, scale at 14.
+        let nan_min = mutate(10, f32::NAN.to_bits().to_le_bytes());
+        let inf_min = mutate(10, f32::INFINITY.to_bits().to_le_bytes());
+        let nan_scale = mutate(14, f32::NAN.to_bits().to_le_bytes());
+        let negative_scale = mutate(14, (-1.0f32).to_bits().to_le_bytes());
+        for (name, hostile) in [
+            ("NaN min", &nan_min),
+            ("inf min", &inf_min),
+            ("NaN scale", &nan_scale),
+            ("negative scale", &negative_scale),
+        ] {
+            assert!(
+                container_calibration(hostile).is_err(),
+                "{name} must be refused by container_calibration"
+            );
+            assert!(
+                decoded_value_count(hostile).is_err(),
+                "{name} must be refused by decoded_value_count"
+            );
+            assert!(
+                decode_f16_segment(hostile).is_err(),
+                "{name} must be refused by decode_f16_segment"
+            );
+        }
+
+        // dims=16, rows=u32::MAX, every histogram entry u32::MAX, a
+        // 4-byte stream: the exact shape that used to decode as
+        // 68,719,476,720 values.
+        let mut bomb = vec![0u8; HEADER_LEN + 4];
+        bomb[0..4].copy_from_slice(&MAGIC);
+        bomb[4..6].copy_from_slice(&(dims as u16).to_le_bytes());
+        bomb[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
+        bomb[18..22].copy_from_slice(&4u32.to_le_bytes());
+        for entry in bomb[FIXED_HEADER_LEN..HEADER_LEN].chunks_exact_mut(4) {
+            entry.copy_from_slice(&u32::MAX.to_le_bytes());
+        }
+        assert!(decoded_value_count(&bomb).is_err());
+        assert!(decode_f16_segment(&bomb).is_err());
+        // And a merely huge-but-well-formed total still exceeds the
+        // format ceiling even when the histogram would have to lie to
+        // support it.
+        let mut huge = encoded.clone();
+        huge[6..10].copy_from_slice(&(MAX_DECODED_VALUES as u32).to_le_bytes());
+        assert!(decoded_value_count(&huge).is_err());
+    }
+
+    /// The flat tile (scale == 0) is a legal encoding and must stay one
+    /// after calibration validation.
+    #[test]
+    fn flat_tile_calibration_remains_legal() {
+        let values = vec![0.5f32; 4 * 8];
+        let mut raw = Vec::new();
+        for value in &values {
+            raw.extend_from_slice(&f32_to_f16_bits(*value).to_le_bytes());
+        }
+        let encoded = encode_f16_segment(&raw, 8).expect("encode flat tile");
+        let (calibration, _) = container_calibration(&encoded).expect("flat calibration");
+        assert_eq!(calibration.scale_bits, 0.0f32.to_bits());
+        let decoded = decode_f16_segment(&encoded).expect("decode flat tile");
+        assert_eq!(decoded.len(), raw.len());
     }
 
     #[test]
