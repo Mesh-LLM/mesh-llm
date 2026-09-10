@@ -255,7 +255,8 @@ impl BenefitPolicy {
         self.ghosts.len()
     }
 
-    /// Current observation clock (test/diagnostic access).
+    /// Current observation clock (test-only access).
+    #[cfg(test)]
     pub fn clock_debug(&self) -> u64 {
         self.clock
     }

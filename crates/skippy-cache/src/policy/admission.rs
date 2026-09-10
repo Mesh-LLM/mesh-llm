@@ -252,7 +252,7 @@ pub(crate) fn choose_victims(
             if freed >= bytes_to_free {
                 break;
             }
-            if selected.contains(key) || policy.entries.get(key).is_none() {
+            if selected.contains(key) || !policy.entries.contains_key(key) {
                 continue; // dedup: probation-first and scored paths overlap
             }
             let evictable = waive_grace || policy.entries.get(key).is_some_and(|e| !in_grace(e));
