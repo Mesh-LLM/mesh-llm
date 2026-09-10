@@ -337,12 +337,16 @@ fn dispatch_kind_request(
     }
 }
 
-/// Regression (CodeRabbit + ndizazzo P1, PR #1671 round 2): mesh routing
-/// headers must be enforced before MoA dispatch, not just inside
-/// `route_request`'s model-bearing branch -- MoA runs first and never
-/// consults them.
+/// Regression (CodeRabbit, PR #1671 round 2 follow-up): `model: "mesh"` must
+/// NOT be flagged here -- whether the routing headers can be honored depends
+/// on whether `try_handle_moa` actually convenes a committee, which this
+/// pure, side-effect-free function cannot know. Rejecting eagerly here (the
+/// old behavior) blocked requests that MoA was about to degrade to a
+/// concrete model and route with the headers honored. See
+/// `moa_gateway::mesh_routing_tests` for the two outcomes this now defers
+/// to (`try_handle_moa` rejects only when a committee actually convenes).
 #[test]
-fn mesh_routing_unsupported_dispatch_kind_flags_moa_dispatch() {
+fn mesh_routing_unsupported_dispatch_kind_does_not_flag_moa_dispatch() {
     let request =
         dispatch_kind_request(Some(moa::VIRTUAL_MODEL_NAME), proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
@@ -356,7 +360,7 @@ fn mesh_routing_unsupported_dispatch_kind_flags_moa_dispatch() {
             &decision,
             decision.effective_model.as_deref()
         ),
-        Some("multi-agent orchestration")
+        None
     );
 }
 
@@ -1067,6 +1071,7 @@ fn test_remote_peer(seed: u8, model: &str) -> mesh::PeerInfo {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,

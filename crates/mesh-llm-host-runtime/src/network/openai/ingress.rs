@@ -897,6 +897,21 @@ fn parse_mesh_routing_headers(
     Ok((target, excluded))
 }
 
+/// Whether `request` carries a non-trivial `x-mesh-target`/`x-mesh-exclude`
+/// ask. Malformed headers are already rejected with 400 wherever this
+/// request is validated before reaching MoA, so a parse failure here (which
+/// should not happen at this point) is treated as "no ask" rather than
+/// re-rejecting. Shared by both MoA call sites (`try_handle_moa_intercept`
+/// and the passive mesh-request path in `transport.rs`) so "does this
+/// request want routing headers honored" is answered the same way in both
+/// places.
+pub(crate) fn mesh_routing_headers_requested(request: &proxy::BufferedHttpRequest) -> bool {
+    matches!(
+        parse_mesh_routing_headers(request),
+        Ok((target, excluded)) if target.is_some() || !excluded.is_empty()
+    )
+}
+
 /// Whether `x-mesh-target`/`x-mesh-exclude` must force this request away from
 /// local candidates: an exclude naming this node, or a target naming some
 /// other peer. A target naming this node is not forcing -- it is allowed to
@@ -1276,17 +1291,24 @@ fn pipeline_route_model<'a>(
 /// dispatching into one of them rather than silently ignoring the headers.
 /// `None` means the request will reach `route_request`'s ordinary
 /// model-bearing path, where the headers are enforced against real
-/// candidates. Mirrors the same checks `try_handle_moa_intercept` and
-/// `try_pipeline_route` make, evaluated one step earlier and side-effect
-/// free.
+/// candidates. Mirrors the same checks `try_pipeline_route` makes, evaluated
+/// one step earlier and side-effect free.
+///
+/// `model: "mesh"` is deliberately NOT covered here: whether MoA can honor
+/// these headers depends on whether committee routing actually convenes for
+/// this request, which is not known until `try_handle_moa_intercept` calls
+/// into `moa_gateway::try_handle_moa` -- that function degrades `model:
+/// "mesh"` to a single concrete model when no committee can be formed, and a
+/// degraded request can and should honor the headers downstream. Rejecting
+/// here, before MoA ever runs, would reject requests MoA was about to make
+/// routable. See `moa_gateway::try_handle_moa`'s `mesh_routing_requested`
+/// parameter for where that rejection now lives.
 fn mesh_routing_unsupported_dispatch_kind(
     request: &proxy::BufferedHttpRequest,
     decision: &AutoRouteDecision,
     routing_model: Option<&str>,
 ) -> Option<&'static str> {
-    if decision.effective_model.as_deref() == Some(moa::VIRTUAL_MODEL_NAME) {
-        Some("multi-agent orchestration")
-    } else if pipeline_route_model(request, decision, routing_model).is_some() {
+    if pipeline_route_model(request, decision, routing_model).is_some() {
         Some("pipeline")
     } else if decision.effective_model.is_none() {
         Some("no model specified")
@@ -1297,19 +1319,23 @@ fn mesh_routing_unsupported_dispatch_kind(
 
 /// Enforce `x-mesh-target`/`x-mesh-exclude` before ANY dispatch decision is
 /// made -- not just the ordinary model-bearing path inside `route_request`.
-/// MoA (`model: "mesh"`), pipeline, and the model-less fallback all run
-/// before `route_request` ever parses the headers, so a malformed header on
-/// one of those paths used to reach whatever status that dispatch kind
-/// happens to fail with instead of 400, and a *valid* header was silently
-/// ignored rather than being honored or explicitly rejected (CodeRabbit +
-/// ndizazzo P1, PR #1671 round 2 -- "where are these headers enforced" is
-/// answered once, here, rather than once per dispatch kind). Returns the
-/// stream to continue dispatch when the headers are absent or compatible
-/// with where this request is headed; returns the terminal outcome (already
-/// written to the stream) otherwise. `route_request` re-parses the same
-/// immutable request headers for its own model-bearing enforcement; that
-/// second parse is cheap and keeps this function from having to thread the
-/// parsed values through.
+/// Pipeline and the model-less fallback both run before `route_request` ever
+/// parses the headers, so a malformed header on one of those paths used to
+/// reach whatever status that dispatch kind happens to fail with instead of
+/// 400, and a *valid* header was silently ignored rather than being honored
+/// or explicitly rejected (CodeRabbit + ndizazzo P1, PR #1671 round 2 --
+/// "where are these headers enforced" is answered once, here, rather than
+/// once per dispatch kind). Returns the stream to continue dispatch when the
+/// headers are absent or compatible with where this request is headed;
+/// returns the terminal outcome (already written to the stream) otherwise.
+/// `route_request` re-parses the same immutable request headers for its own
+/// model-bearing enforcement; that second parse is cheap and keeps this
+/// function from having to thread the parsed values through.
+///
+/// Malformed-header validation (400, via `parse_mesh_routing_headers` below)
+/// still runs unconditionally here, ahead of MoA -- only the *unsupported
+/// dispatch kind* rejection (409) excludes `model: "mesh"`; see
+/// `mesh_routing_unsupported_dispatch_kind`.
 async fn enforce_mesh_routing_headers_before_dispatch(
     tcp_stream: ClientStream,
     request: &proxy::BufferedHttpRequest,
@@ -1330,17 +1356,6 @@ async fn enforce_mesh_routing_headers_before_dispatch(
         return Ok(tcp_stream);
     }
     match mesh_routing_unsupported_dispatch_kind(request, decision, routing_model) {
-        Some("multi-agent orchestration") => Err(response_outcome(
-            409,
-            proxy::send_409_observed(
-                tcp_stream,
-                "x-mesh-target/x-mesh-exclude are not honored when the requested model is \
-                 \"mesh\" (multi-agent orchestration); if the fleet degraded to a specific \
-                 model, retry with that model name and the routing header",
-                route_observer,
-            )
-            .await,
-        )),
         Some(kind) => Err(response_outcome(
             409,
             proxy::send_409_observed(
@@ -1414,6 +1429,11 @@ async fn try_handle_moa_intercept(
     if decision.effective_model.as_deref() != Some(moa::VIRTUAL_MODEL_NAME) {
         return MoaInterceptResult::NotMoa(tcp_stream);
     }
+    // Whether the caller asked `x-mesh-target`/`x-mesh-exclude` to be
+    // honored. `try_handle_moa` rejects with 409 only if it decides to
+    // actually convene a committee -- a degrade to a single concrete model
+    // continues and the headers are honored downstream by `route_request`.
+    let mesh_routing_requested = mesh_routing_headers_requested(request);
     // `try_handle_moa` self-gates on the model name and consumes the
     // stream when it accepts. The outer gate above guarantees the gate
     // matches, so the inner call always returns `None` here — the stream
@@ -1426,10 +1446,11 @@ async fn try_handle_moa_intercept(
         tcp_stream,
         request,
         decision.effective_model.as_deref(),
-        super::moa_gateway::MoaRoutingContext {
+        crate::network::openai::moa_gateway::MoaRoutingContext {
             targets: Some(ctx.route.targets),
             required_tokens: decision.required_tokens,
             affinity: ctx.route.affinity,
+            mesh_routing_requested,
         },
         route_observer,
     )

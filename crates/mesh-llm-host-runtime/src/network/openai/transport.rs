@@ -431,15 +431,18 @@ async fn route_mesh_moa_or_passthrough(
     let moa_model_name = request.model_name.clone();
     let moa_required_tokens = request_context_budget(request);
     let adapter = request.response_adapter;
+    let mesh_routing_requested =
+        crate::network::openai::ingress::mesh_routing_headers_requested(request);
     let result = match crate::network::openai::moa_gateway::try_handle_moa(
         node,
         tcp_stream,
         request,
         moa_model_name.as_deref(),
-        super::moa_gateway::MoaRoutingContext {
+        crate::network::openai::moa_gateway::MoaRoutingContext {
             targets: None, // passive path has no local targets table
             required_tokens: moa_required_tokens,
             affinity,
+            mesh_routing_requested,
         },
         route_observer,
     )
