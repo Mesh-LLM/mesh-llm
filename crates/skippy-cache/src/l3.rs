@@ -56,6 +56,53 @@ const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// the layout bumps this and makes older entries misses, never migrations.
 pub const MANIFEST_VERSION: u32 = 2;
 
+/// Identity of the only implemented payload codec: raw, uncompressed exact
+/// state. Its bytes are the segments verbatim.
+pub const CODEC_RAW: &str = "raw";
+/// Version of the raw codec's on-disk representation. Bumped only if the raw
+/// byte layout itself changes; an unknown version is rejected, never migrated.
+pub const CODEC_RAW_VERSION: u32 = 1;
+
+/// The codec used to encode a payload's segment bytes, stamped into the
+/// manifest so representations are explicit and negotiable.
+///
+/// Only [`CODEC_RAW`] is implemented today. The identity is recorded so future
+/// lossless or compressed codecs are namespaced rather than guessed, and so an
+/// older build refuses a payload it cannot decode instead of returning
+/// corrupt state. Backward compatibility is preserved by [`Default`]: a
+/// manifest written before codec identity existed carries no `codec` field and
+/// deserializes as raw, which is exactly what those bytes are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadCodec {
+    /// Codec name, e.g. `raw`.
+    pub name: String,
+    /// On-disk representation version within `name`.
+    pub version: u32,
+}
+
+impl PayloadCodec {
+    /// The raw, uncompressed codec every current payload uses.
+    pub fn raw() -> Self {
+        Self {
+            name: CODEC_RAW.to_string(),
+            version: CODEC_RAW_VERSION,
+        }
+    }
+
+    /// Whether this build can assemble a payload encoded with this codec.
+    /// Only the exact raw name and version are supported; any other name or a
+    /// future raw version is unknown and must be refused before assembly.
+    pub fn is_supported(&self) -> bool {
+        self.name == CODEC_RAW && self.version == CODEC_RAW_VERSION
+    }
+}
+
+impl Default for PayloadCodec {
+    fn default() -> Self {
+        Self::raw()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandoffSegmentRef {
     pub index: u32,
@@ -78,6 +125,10 @@ pub struct HandoffManifest {
     /// identity a loader must match before importing this state.
     pub state_identity: String,
     pub payload_kind: String,
+    /// Codec identity of the segment payload bytes. A manifest written before
+    /// codec identity existed has no `codec` field and is read as raw.
+    #[serde(default)]
+    pub codec: PayloadCodec,
     pub total_bytes: u64,
     /// BLAKE3 of the assembled payload; also the manifest's key.
     pub payload_digest: String,
@@ -111,6 +162,7 @@ impl HandoffManifest {
             model_identity,
             state_identity,
             payload_kind,
+            codec: PayloadCodec::raw(),
             total_bytes: 0,
             payload_digest: String::new(),
             segments: Vec::new(),
@@ -1009,6 +1061,7 @@ impl HandoffSegmentStore {
         if manifest.payload_digest.is_empty() {
             bail!("manifest has no payload digest");
         }
+        reject_unsupported_codec(manifest)?;
         let mut expected_offset = 0u64;
         let locations = manifest
             .segments
@@ -1144,6 +1197,7 @@ impl HandoffSegmentStore {
     /// Assemble the full payload for a manifest, verifying every segment
     /// digest, the tiling, and the whole-payload digest.
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
+        reject_unsupported_codec(manifest)?;
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
         let mut payload_hasher = blake3::Hasher::new();
@@ -1630,6 +1684,24 @@ impl HandoffSegmentStore {
         freed = freed.saturating_add(self.packed.remove_orphan_packs(&referenced, &held)?);
         Ok(freed)
     }
+}
+
+/// Refuse a manifest whose payload codec this build cannot decode, before any
+/// segment is read or reassembled. Keeps unknown codecs from being committed
+/// (nothing unassemblable is ever persisted) and from being assembled (an
+/// unknown codec is a miss, never a silent misinterpretation of the bytes).
+fn reject_unsupported_codec(manifest: &HandoffManifest) -> Result<()> {
+    if !manifest.codec.is_supported() {
+        bail!(
+            "manifest {} uses unsupported codec {}/{}; this build assembles only {}/{}",
+            manifest.payload_digest,
+            manifest.codec.name,
+            manifest.codec.version,
+            CODEC_RAW,
+            CODEC_RAW_VERSION
+        );
+    }
+    Ok(())
 }
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
