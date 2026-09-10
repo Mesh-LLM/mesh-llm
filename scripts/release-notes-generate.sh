@@ -174,8 +174,11 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" && "${RELEASE_NOTES_APPROVED:-}" != "true" ]]; then
-  echo "release-notes: refusing to edit a published release from a manual run" >&2
+# Editing a published release always requires an explicit approval signal.
+# There is no implicit "any CI context is trusted" bypass: the release job
+# declares RELEASE_NOTES_APPROVED in its own reviewable definition.
+if [[ "${RELEASE_NOTES_APPROVED:-}" != "true" ]]; then
+  echo "release-notes: refusing to edit a published release without approval" >&2
   echo "release-notes: preview with DRY_RUN=true, or publish with RELEASE_NOTES_APPROVED=true" >&2
   exit 1
 fi

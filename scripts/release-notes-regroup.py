@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import date
 
 # A plan may be written by an agent that has read PR subjects, so every piece
 # of plan-authored text that reaches the published body is constrained here.
@@ -117,9 +118,12 @@ def validate_metadata(plan):
     version = plan.get("version")
     if version is not None and not VERSION_RE.match(str(version)):
         problems.append(f"version is not a plain version string: {version!r}")
-    date = plan.get("date")
-    if date is not None and not DATE_RE.match(str(date)):
-        problems.append(f"date is not YYYY-MM-DD: {date!r}")
+    plan_date = plan.get("date")
+    if plan_date is not None:
+        try:
+            date.fromisoformat(str(plan_date))
+        except (TypeError, ValueError):
+            problems.append(f"date is not a real YYYY-MM-DD date: {plan_date!r}")
 
     def check_title(label, value):
         if not isinstance(value, str) or not TITLE_RE.match(value):
@@ -224,7 +228,7 @@ def main():
 
     if args.list:
         for pr in order:
-            subject = entries[pr][2:].split(" by @")[0]
+            subject = entries[pr][2:].rsplit(" by @", 1)[0]
             print(f"{pr}\t{subject}")
         print(f"\n{len(order)} entries", file=sys.stderr)
         return

@@ -1874,6 +1874,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_NOTES_BASE: ${{ needs.metadata.outputs.release_notes_base }}
+          # Explicit, reviewable approval for this job to edit the release it
+          # just published. The script grants no implicit CI bypass.
+          RELEASE_NOTES_APPROVED: "true"
           # Unset until a runner provides the agent CLI and credentials; the
           # deterministic pass publishes on its own until then.
           AGENT_MODEL: ${{ vars.RELEASE_NOTES_AGENT_MODEL }}

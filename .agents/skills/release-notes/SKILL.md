@@ -106,24 +106,32 @@ deterministic-only until a runner provides the CLI and credentials.
 ## Running It By Hand
 
 The job does this automatically for stable releases. Run it yourself to
-reformat an older release or to recover from a bad edit:
+reformat an older release or to recover from a bad edit. Run every command
+from the repository root, and let the script own its work directory:
 
 ```bash
-RELEASE_TAG=v0.76.0 RELEASE_NOTES_BASE=v0.75.1 DRY_RUN=true \
-  scripts/release-notes-generate.sh
+export RELEASE_TAG=v0.76.0            # the release to reformat
+export RELEASE_NOTES_BASE=v0.75.1     # its stable comparison base
+DRY_RUN=true scripts/release-notes-generate.sh
 ```
 
 `DRY_RUN=true` renders and gates without touching the release. Publishing from
 a manual run additionally needs `RELEASE_NOTES_APPROVED=true`, so a hand run
-cannot edit a published release by accident; the release job sets no such
-variable because `GITHUB_ACTIONS` already marks it automated. The work directory keeps `body.backup.md`; restore with
-`gh release edit <tag> --notes-file body.backup.md`.
+cannot edit a published release by accident; the release job sets that variable
+explicitly in its own definition. The work directory it prints keeps
+`body.backup.md`; restore with
+`gh release edit "$RELEASE_TAG" --notes-file <workdir>/body.backup.md`.
 
-To hand-classify instead, list the entries, write a plan, and render:
+To hand-classify instead, keep the scratch files outside the repository but
+keep running the scripts from the repository root:
 
 ```bash
-python3 scripts/release-notes-regroup.py --body body.md --list
-python3 scripts/release-notes-regroup.py --body body.md --plan plan.json --out new.md
+WORK="$(mktemp -d)"
+gh release view "$RELEASE_TAG" --json body -q .body > "$WORK/body.md"
+python3 scripts/release-notes-regroup.py --body "$WORK/body.md" --list
+# write "$WORK/plan.json", then:
+python3 scripts/release-notes-regroup.py \
+  --body "$WORK/body.md" --plan "$WORK/plan.json" --out "$WORK/new.md"
 ```
 
 The plan assigns every PR number to a section:
@@ -146,15 +154,17 @@ The plan assigns every PR number to a section:
 }
 ```
 
-A section takes either a flat `prs` list or `groups`. Section order follows
-Keep a Changelog, then `Other changes`, then `Internal`. Omit empty sections.
+A section takes either a flat `prs` list or `groups`. Section titles are a
+closed set, and headings, version and date are validated before anything is
+rendered. Section order follows Keep a Changelog, then `Other changes`, then
+`Internal`. Omit empty sections.
 
 Always prove no pull request was dropped, duplicated, or invented. Entry lines
 are not byte-identical after prefix stripping, so compare the PR set:
 
 ```bash
-diff <(grep -o 'pull/[0-9]*' body.backup.md | sort) \
-     <(grep -o 'pull/[0-9]*' new.md | sort) \
+diff <(grep -o 'pull/[0-9]*' "$WORK/body.md" | sort) \
+     <(grep -o 'pull/[0-9]*' "$WORK/new.md" | sort) \
   && echo "identical pull-request sets"
 ```
 

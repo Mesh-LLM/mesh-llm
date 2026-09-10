@@ -577,13 +577,26 @@ class PublishGuardTest(unittest.TestCase):
     def setUpClass(cls):
         cls.script = GENERATE.read_text(encoding="utf-8")
 
-    def test_manual_runs_require_explicit_approval(self):
-        self.assertIn('"${GITHUB_ACTIONS:-}" != "true"', self.script)
+    def test_publishing_always_requires_explicit_approval(self):
         self.assertIn('"${RELEASE_NOTES_APPROVED:-}" != "true"', self.script)
         self.assertLess(
             self.script.index("RELEASE_NOTES_APPROVED"),
             self.script.index("gh release edit"),
         )
+
+    def test_no_implicit_ci_bypass(self):
+        # Any Actions context used to count as approval; a dispatch could then
+        # edit a published release without an explicit signal.
+        self.assertNotIn("GITHUB_ACTIONS", self.script)
+
+    def test_the_release_job_declares_its_own_approval(self):
+        workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = next(
+            s
+            for s in workflow["jobs"]["release_notes"]["steps"]
+            if s.get("id") == "regroup"
+        )
+        self.assertEqual(str(step["env"]["RELEASE_NOTES_APPROVED"]).lower(), "true")
 
     def test_agent_plan_renders_with_deterministic_metadata(self):
         self.assertIn("--metadata-from", self.script)
@@ -682,6 +695,61 @@ class LocalHookActivationTest(unittest.TestCase):
 
     def test_agents_are_told_to_install_the_hook(self):
         self.assertIn("just hooks-install", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+
+
+class EntryParsingEdgeCaseTest(unittest.TestCase):
+    def test_list_splits_on_the_last_credit_delimiter(self):
+        # A PR title may legitimately contain " by @".
+        entry = (
+            "* Document search by @mention support by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1"
+        )
+        directory = Path(tempfile.mkdtemp())
+        body = directory / "body.md"
+        body.write_text("## What's Changed\n" + entry + "\n", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(body), "--list"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Document search by @mention support", result.stdout)
+
+    def test_render_keeps_a_title_containing_the_delimiter_intact(self):
+        entry = (
+            "* Document search by @mention support by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1"
+        )
+        self.assertEqual(REGROUP.render_entry(entry), entry)
+
+
+class CalendarDateTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.body = self.dir / "body.md"
+        self.body.write_text(BODY, encoding="utf-8")
+
+    def check(self, value):
+        plan = self.dir / "plan.json"
+        plan.write_text(
+            json.dumps({"date": value, "sections": [{"title": "Added", "prs": [1, 2, 3]}]}),
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(self.body), "--plan", str(plan), "--check"],
+            capture_output=True, text=True,
+        )
+
+    def test_rejects_a_date_that_cannot_exist(self):
+        for value in ("2026-99-99", "2026-02-30", "2026-13-01"):
+            with self.subTest(date=value):
+                result = self.check(value)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("not a real YYYY-MM-DD date", result.stderr)
+
+    def test_accepts_a_real_date(self):
+        self.assertEqual(self.check("2026-09-10").returncode, 0)
 
 
 if __name__ == "__main__":
