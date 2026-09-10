@@ -56,8 +56,10 @@ FORBIDDEN_STARTUP_OPTIONS = (
     "--ctx-size",
     "--generation-concurrency",
     "--generation-queue-capacity",
+    "--host",
     "--max-vram",
     "--parallel",
+    "--port",
 )
 
 # Deterministic manifest vocabulary. The conversation simulates a long-running
@@ -136,7 +138,11 @@ def build_manifest(turns: int, turn_target_tokens: int, system_tokens: int) -> d
             f"{' '.join(rng.words(6))} constraint in one sentence and list the "
             f"{' '.join(rng.words(4))} next step."
         )
-        turn_specs.append({"context": body, "request": request})
+        response = (
+            f"Turn {index + 1} answer: preserve the {' '.join(rng.words(5))} "
+            f"constraint. Next step: verify {' '.join(rng.words(4))}."
+        )
+        turn_specs.append({"context": body, "request": request, "response": response})
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -331,8 +337,8 @@ def stream_request(
                 first_token_at = time.monotonic()
         if first_token_at is None:
             return {"request_id": request_id, "error": "stream completed without content tokens"}
-        if not saw_done and completion_tokens == 0:
-            return {"request_id": request_id, "error": "stream completed without completion-token usage"}
+        if not saw_done:
+            return {"request_id": request_id, "error": "stream ended without terminal [DONE] marker"}
         ended = time.monotonic()
         return {
             "request_id": request_id,
@@ -377,11 +383,17 @@ def hardware_fingerprint() -> dict[str, Any]:
                     ["sysctl", "-n", "hw.model"], capture_output=True, text=True, check=True
                 ).stdout.strip()
             )
-        except subprocess.CalledProcessError:
+        except (OSError, subprocess.CalledProcessError):
             pass
         try:
-            fingerprint["physical_memory_bytes"] = os.sysconf("HW_PHYSMEM")
-        except (ValueError, OSError):
+            memory = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            fingerprint["physical_memory_bytes"] = int(memory.stdout.strip())
+        except (OSError, subprocess.CalledProcessError, ValueError):
             fingerprint["physical_memory_bytes"] = None
         fingerprint["cpu_core_count"] = os.cpu_count()
     else:
@@ -413,6 +425,7 @@ def binary_provenance(binary: Path) -> dict[str, Any]:
         provenance["source_sha"] = commit.stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         provenance["git_describe"] = "unknown"
+        provenance["source_sha"] = "unknown"
     return provenance
 
 
@@ -441,7 +454,7 @@ def summarize_cohort(name: str, rows: Sequence[dict[str, Any]]) -> dict[str, Any
         "requests": len(rows),
         "failed": len(failed),
         "ttft_p50_seconds": percentile(ttft, 0.50),
-        "ttft_p95_seconds": percentile(ttft, 0.95),
+        "ttft_p95_seconds": percentile(ttft, 0.95) if len(ttft) > 1 else None,
         "total_seconds_mean": statistics.fmean(row["total_seconds"] for row in successful) if successful else None,
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached_tokens,
@@ -467,13 +480,18 @@ def run_arm(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"binary not found: {binary}")
     if not model_path.exists():
         raise FileNotFoundError(f"model not found: {model_path}")
+    if args.turns < 1:
+        raise ValueError("turns must be at least 1")
+    if args.restore_repeats < 1:
+        raise ValueError("restore-repeats must be at least 1")
 
     manifest = build_manifest(args.turns, args.turn_target_tokens, args.system_tokens)
     manifest_sha = stable_hash(manifest)
     conversation: list[dict[str, Any]] = [{"role": "system", "content": manifest["system"]}]
     for spec in manifest["turns"]:
         conversation.append({"role": "user", "content": f"{spec['context']}\n\n{spec['request']}"})
-        conversation.append({"role": "assistant", "content": spec["request"]})
+        conversation.append({"role": "assistant", "content": spec["response"]})
+    frozen_prompt = messages_through(conversation, args.turns - 1)
 
     state_dir = (output / "server-state").resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -486,18 +504,11 @@ def run_arm(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         with requests_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
-    def replay_frozen(cohort: str, repeats: Optional[int] = None) -> None:
-        connection = http.client.HTTPConnection(DEFAULT_HOST, DEFAULT_PORT, timeout=5)
-        try:
-            connection.request("GET", "/v1/models")
-            document = json.loads(connection.getresponse().read())
-            model_id = (document.get("data") or [{}])[0].get("id", "default")
-        finally:
-            connection.close()
+    def replay_frozen(cohort: str, model_id: str, repeats: Optional[int] = None) -> None:
         for repeat in range(args.restore_repeats if repeats is None else repeats):
             result = stream_request(
                 f"{cohort}-{repeat + 1}",
-                conversation,
+                frozen_prompt,
                 model_id,
                 args.max_output_tokens,
                 args.request_timeout,
@@ -554,7 +565,7 @@ def run_arm(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         process, _ = start_server(
             binary, str(model_path), args.serve_extra_args, state_dir, output / "logs" / "restore.log"
         )
-        wait_for_model(args.ready_timeout, process)
+        model_id = wait_for_model(args.ready_timeout, process)
         restart_gap_seconds = time.monotonic() - stopped_at
         provenance["restart"] = {
             "method": "SIGINT to the serving process group, then fresh start on the same state directory",
@@ -563,11 +574,8 @@ def run_arm(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         # Cohort: restore — the FIRST post-restart replay alone is the
         # first-request-after-restart measurement; later replays warm from the
         # resident cache and are recorded under the warm cohort instead.
-        replay_frozen("restore", repeats=1)
-        replay_frozen("warm", repeats=max(args.restore_repeats - 1, 0))
-
-        # Cohort: warm — repeat replays without restart.
-        replay_frozen("warm")
+        replay_frozen("restore", model_id, repeats=1)
+        replay_frozen("warm", model_id, repeats=max(args.restore_repeats - 1, 0))
     finally:
         if process is not None:
             try:
@@ -623,7 +631,12 @@ def main() -> int:
     parser.add_argument("--turns", type=int, default=4)
     parser.add_argument("--turn-target-tokens", type=int, default=4750)
     parser.add_argument("--system-tokens", type=int, default=500)
-    parser.add_argument("--restore-repeats", type=int, default=3)
+    parser.add_argument(
+        "--restore-repeats",
+        type=int,
+        default=3,
+        help="total post-restart requests: one restore followed by warm repeats",
+    )
     parser.add_argument("--max-output-tokens", type=int, default=256)
     parser.add_argument("--request-timeout", type=float, default=900.0)
     parser.add_argument("--ready-timeout", type=float, default=900.0)
