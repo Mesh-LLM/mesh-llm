@@ -650,3 +650,165 @@ fn unreferenced_segments_are_collected() {
     assert_eq!(freed, 12);
     assert!(store.assemble(&manifest).is_ok());
 }
+
+#[test]
+fn manifest_stamps_explicit_raw_codec_and_round_trips() {
+    let root = temp_root("codec-raw-roundtrip");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..50_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+    assert_eq!(manifest.codec, PayloadCodec::raw());
+
+    // The codec identity is written explicitly, not inferred at read time.
+    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+        .expect("read manifest json");
+    let value: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse manifest json");
+    assert_eq!(value["codec"]["name"], CODEC_RAW);
+    assert_eq!(value["codec"]["version"], CODEC_RAW_VERSION);
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert_eq!(loaded.codec, PayloadCodec::raw());
+    assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn legacy_manifest_without_codec_field_reads_and_assembles_as_raw() {
+    let root = temp_root("codec-legacy-read");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..40_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // Rewrite the on-disk manifest as an older build wrote it: no codec field.
+    let path = store.manifest_path(&manifest.payload_digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    value
+        .as_object_mut()
+        .expect("manifest object")
+        .remove("codec");
+    assert!(value.get("codec").is_none(), "legacy manifest has no codec");
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize legacy"))
+        .expect("write legacy manifest");
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load legacy manifest");
+    assert_eq!(
+        loaded.codec,
+        PayloadCodec::raw(),
+        "a manifest without a codec field is the legacy raw format"
+    );
+    assert_eq!(store.assemble(&loaded).expect("assemble legacy"), payload);
+}
+
+#[test]
+fn unknown_codec_is_refused_at_commit_and_leaves_no_manifest() {
+    let root = temp_root("codec-unknown-commit");
+    let store = store(&root, 0);
+    let payload = vec![7u8; 8192];
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    manifest.codec = PayloadCodec {
+        name: "zstd".to_string(),
+        version: 1,
+    };
+
+    let error = store
+        .commit(&manifest)
+        .expect_err("unknown codec must not commit");
+    assert!(
+        error.to_string().contains("codec"),
+        "commit error should name the codec: {error}"
+    );
+    drop(held);
+
+    // Fallback contract: nothing unassemblable was persisted, so a later
+    // restore is a clean miss rather than a broken entry.
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "no manifest should exist after a refused unknown-codec commit"
+    );
+}
+
+#[test]
+fn unknown_codec_is_rejected_before_assembly() {
+    let root = temp_root("codec-unknown-assemble");
+    let store = store(&root, 0);
+    let payload = vec![3u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    loaded.codec = PayloadCodec {
+        name: "lz4".to_string(),
+        version: 1,
+    };
+    let error = store
+        .assemble(&loaded)
+        .expect_err("unknown codec must not assemble");
+    assert!(
+        error.to_string().contains("codec"),
+        "assemble error should name the codec: {error}"
+    );
+}
+
+#[test]
+fn unknown_raw_codec_version_is_rejected_at_commit_and_assembly() {
+    let root = temp_root("codec-unknown-version");
+    let store = store(&root, 0);
+    let payload = vec![5u8; 8192];
+
+    // Writer side: a future raw version is refused, never migrated.
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    manifest.codec = PayloadCodec {
+        name: CODEC_RAW.to_string(),
+        version: CODEC_RAW_VERSION + 1,
+    };
+    assert!(
+        store.commit(&manifest).is_err(),
+        "a future raw codec version must not commit"
+    );
+    drop(held);
+
+    // Reader side: a valid raw entry re-tagged to a future version is refused.
+    let good = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&good.payload_digest)
+        .expect("load manifest");
+    loaded.codec.version = CODEC_RAW_VERSION + 1;
+    assert!(
+        store.assemble(&loaded).is_err(),
+        "a future raw codec version must not assemble"
+    );
+}
+
+#[test]
+fn codec_gate_does_not_mask_payload_corruption() {
+    let root = temp_root("codec-corruption");
+    let store = store(&root, 0);
+    let payload = vec![1u8; 8192];
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+
+    // Supported codec, but the underlying bytes are tampered: the codec check
+    // passes and digest verification still catches the corruption.
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert!(loaded.codec.is_supported());
+    let pack = fs::read_dir(root.join(PACK_DIR))
+        .expect("read packs")
+        .next()
+        .expect("one pack")
+        .expect("pack entry")
+        .path();
+    let mut bytes = fs::read(&pack).expect("read pack");
+    bytes[0] ^= 0xFF;
+    fs::write(&pack, &bytes).expect("corrupt pack");
+
+    assert!(
+        store.assemble(&loaded).is_err(),
+        "corruption under a supported codec must still fail"
+    );
+}
