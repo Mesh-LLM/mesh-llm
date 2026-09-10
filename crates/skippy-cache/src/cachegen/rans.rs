@@ -190,10 +190,12 @@ mod rans_golden_fixture_tests {
     }
 
     /// The independent-correctness gate (scama blocker 4): the committed
-    /// stream was produced by this exact ryg_rans construction, and the
-    /// decoder must reproduce the declared symbol sequence from it. The
-    /// fixture is data, not code: if this test fails after regeneration,
-    /// the decoder has drifted from the coder it claims to implement.
+    /// 129-byte stream was produced by canonical upstream `ryg_rans`
+    /// (`rans_byte.h`, upstream commit `c9d162d996fd600315af9ae8eb89d832
+    /// 576cb32d`, independently reproduced in C by scama; stream-only
+    /// SHA-256 `7887612d9c251e19cfa54558718d3388dd7a5b5dfd7f8d0f419681ea
+    /// ddc62a32`), and the decoder must reproduce the declared symbol
+    /// sequence from it.
     #[test]
     fn ryg_rans_golden_fixture_decodes() {
         let raw = std::fs::read(
@@ -218,6 +220,41 @@ mod rans_golden_fixture_tests {
             decoded.push(decoder.get(&table).expect("symbol within fixture"));
         }
         assert_eq!(decoded, expected, "decoder diverged from the golden stream");
+    }
+
+    /// The encoder half of the golden gate (scama re-review blocker 2):
+    /// the frozen 129-byte fixture came from canonical upstream
+    /// `ryg_rans` (`c9d162d9`, independently reproduced in C by scama;
+    /// stream-only SHA-256 `7887612d…ddc62a32`), so this test pins the
+    /// Rust encoder's byte output against those bytes. Unlike the
+    /// `--ignored` generator — which runs the same encoder under test
+    /// and cannot detect drift — this is a normal test and fails the
+    /// moment `RansEncoder` stops producing the canonical stream.
+    #[test]
+    fn ryg_rans_golden_fixture_pins_the_encoder() {
+        let raw = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_FIXTURE_PATH),
+        )
+        .expect("golden fixture must be committed; run the ryg_rans_generate test once");
+        let count = u32::from_le_bytes(raw[0..4].try_into().expect("4 bytes")) as usize;
+        let stream_len = u32::from_le_bytes(raw[4..8].try_into().expect("4 bytes")) as usize;
+        let frozen_stream = &raw[8..8 + stream_len];
+
+        // The pinned inputs: same symbols, same CDF as the fixture's
+        // provenance (50/50 split CDF, run-heavy pattern).
+        let table = SymbolTable::from_freqs(&[SCALE / 2, SCALE - SCALE / 2]).expect("table");
+        let symbols: Vec<usize> = (0..count)
+            .map(|index| if (index / 7) % 5 == 0 { 1 } else { 0 })
+            .collect();
+        let mut encoder = RansEncoder::new();
+        for symbol in symbols.iter().rev() {
+            encoder.put(&table, *symbol);
+        }
+        assert_eq!(
+            encoder.finish(),
+            frozen_stream,
+            "encoder drift: Rust stream no longer matches canonical ryg_rans bytes"
+        );
     }
 }
 

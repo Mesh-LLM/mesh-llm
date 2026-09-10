@@ -161,16 +161,27 @@ fn run_backend<R: Runtime>(
         .collect();
     let calibration = reference::calibrate(&values).map_err(|error| error.to_string())?;
 
-    // Device buffers: one H2D upload of the f16-decoded f32 tile, one
-    // symbols buffer, one rebuilt-values buffer.
+    // Timed H2D: the honest copy path is every byte the kernel work needs
+    // (the f32 tile plus the 8-byte calibration vector), measured to
+    // completion.
+    let h2d_start = std::time::Instant::now();
     let values_handle = client.create_from_slice(f32::as_bytes(&values));
-    let symbols_handle = client.empty(count * core::mem::size_of::<u32>());
-    let rebuilt_handle = client.empty(count * core::mem::size_of::<f32>());
     let calib_handle = client.create_from_slice(f32::as_bytes(&[
         f32::from_bits(calibration.min_bits),
         f32::from_bits(calibration.scale_bits),
     ]));
-    let peak_temporary_bytes = (symbols_handle.size() + rebuilt_handle.size()) as u64;
+    synchronize::<R>(&client);
+    let h2d_us = h2d_start.elapsed().as_micros();
+    let h2d_bytes = values.len() * core::mem::size_of::<f32>() + 2 * core::mem::size_of::<f32>();
+    // Working-set allocations (outputs) are not timed; they are part of
+    // the live peak, not the transfer.
+    let symbols_handle = client.empty(count * core::mem::size_of::<u32>());
+    let rebuilt_handle = client.empty(count * core::mem::size_of::<f32>());
+    // Actual live allocation peak while the kernels run: every buffer the
+    // harness holds at once — inputs (tile + calibration) and both
+    // outputs. Reported rather than derived, per the review.
+    let peak_temporary_bytes =
+        values_handle.size() + calib_handle.size() + symbols_handle.size() + rebuilt_handle.size();
     if calibration.scale_bits == 0.0f32.to_bits() {
         return Err(
             "flat tile (scale == 0): not exercised by the spike; the CPU reference covers it"
@@ -192,15 +203,6 @@ fn run_backend<R: Runtime>(
     };
     let encode_timing = timed_stage::<R>(&client, iterations, encode);
 
-    let symbols_bytes = client
-        .read_one(symbols_handle.clone())
-        .map_err(|error| error.to_string())?;
-    let device_symbols_u32 = u32::from_bytes(&symbols_bytes);
-    // Range-check before the narrowing cast: `as u8` would silently alias
-    // an out-of-alphabet u32 (e.g. 256 -> 0) into a false parity pass.
-    let all_in_alphabet = device_symbols_u32.iter().all(|&symbol| symbol < 16);
-    let device_symbols: Vec<u8> = device_symbols_u32.iter().map(|&s| s as u8).collect();
-
     let decode = || unsafe {
         undelta_dequantize_columns::launch::<R>(
             &client,
@@ -215,12 +217,22 @@ fn run_backend<R: Runtime>(
     };
     let decode_timing = timed_stage::<R>(&client, iterations, decode);
 
+    // Timed D2H: both returns measured to completion, like the uploads.
+    let d2h_start = std::time::Instant::now();
+    let symbols_bytes = client
+        .read_one(symbols_handle.clone())
+        .map_err(|error| error.to_string())?;
     let rebuilt_bytes = client
         .read_one(rebuilt_handle.clone())
         .map_err(|error| error.to_string())?;
-    let rebuilt = f32::from_bytes(&rebuilt_bytes);
-
-    // Encoded-size ratio: CPU rANS over the device-produced symbols.
+    synchronize::<R>(&client);
+    let d2h_us = d2h_start.elapsed().as_micros();
+    let d2h_bytes = symbols_bytes.len() + rebuilt_bytes.len();
+    let device_symbols_u32 = u32::from_bytes(&symbols_bytes);
+    // Range-check before the narrowing cast: `as u8` would silently alias
+    // an out-of-alphabet u32 (e.g. 256 -> 0) into a false parity pass.
+    let all_in_alphabet = device_symbols_u32.iter().all(|&symbol| symbol < 16);
+    let device_symbols: Vec<u8> = device_symbols_u32.iter().map(|&s| s as u8).collect();
     let mut histogram = vec![0u32; reference::TOKEN_COUNT];
     for &symbol in &device_symbols {
         histogram[usize::from(symbol)] += 1;
@@ -236,6 +248,7 @@ fn run_backend<R: Runtime>(
     let stream = encoder.finish();
     let ratio = stream.len() as f64 / tile.len() as f64;
 
+    let rebuilt = f32::from_bytes(&rebuilt_bytes);
     let symbols_match = all_in_alphabet && device_symbols == expected_symbols;
     // Exact bitwise comparison: dequantized values are `symbol * scale +
     // min` where symbol is a small integer and scale/min are identical f32
@@ -266,10 +279,8 @@ fn run_backend<R: Runtime>(
         decode_timing.warm_dispatch_us,
     );
     println!(
-        "copies: H2D {} bytes (f32 tile), D2H {} bytes (symbols + rebuilt) | peak temporary device memory {} bytes",
-        count * core::mem::size_of::<f32>(),
-        symbols_bytes.len() + rebuilt_bytes.len(),
-        peak_temporary_bytes,
+        "copies: H2D {} bytes in {} us (f32 tile + 8 B calibration, to completion) | D2H {} bytes in {} us (symbols + rebuilt) | live device buffer peak {} bytes (tile + calibration + both outputs)",
+        h2d_bytes, h2d_us, d2h_bytes, d2h_us, peak_temporary_bytes,
     );
     println!(
         "encoded-size ratio: rANS {} bytes / raw {} bytes = {:.3}",

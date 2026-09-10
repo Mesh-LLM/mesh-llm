@@ -8,8 +8,8 @@ contract, CPU+Metal parity, six measurements, stop rule).
 
 | Backend | CubeCL runtime | Status | Evidence |
 |---|---|---|---|
-| CPU (reference) | `cubecl/cpu` | **Real, verified** | Spike parity pass on this machine |
-| Metal (Apple GPU) | `cubecl/wgpu` | **Real, verified** | Spike parity pass on M2 Max (wgpu Metal adapter) |
+| CPU (reference) | `cubecl/cpu` | **Quantize+delta kernel spike verified** — full CacheGen backend/container path unimplemented; rANS stays CPU | Spike parity pass on this machine |
+| Metal (Apple GPU) | `cubecl/wgpu` | **Quantize+delta kernel spike verified** — full CacheGen backend/container path unimplemented; rANS stays CPU | Spike parity pass on M2 Max (wgpu Metal adapter) |
 | CUDA (NVIDIA) | `cubecl/cuda` | **Not implemented** — compile-only gate where a toolchain exists | No CUDA hardware in the fleet lane; no runtime claim is made |
 | HIP/ROCm (AMD) | `cubecl/hip` | **Not implemented** — compile-only gate where a toolchain exists | No AMD hardware in the fleet lane; no runtime claim is made |
 
@@ -19,35 +19,37 @@ kernel lowers; they say nothing about the hardware.
 
 ## The six spike measurements (2026-09-11 re-run, M2 Max, 4096x128 tile,
 ## 524,288 f16 values = 1,048,576 raw bytes, release build, synchronized
-## stages, bitwise equality)
+## stages, bitwise equality, transfers timed)
 
 Every timed stage ends with `client.sync()` inside the timer: the
-numbers cover real completion, not launch enqueue. Cold JIT is the
-first synchronized launch of the kernel specialization in the process
-(cubecl 0.10.0 has no on-disk kernel cache on this path — the only one,
-SPIR-V, is Vulkan-only and not enabled — so per-process first launch is
-the true cold path for both backends). Equality is exact `==` on
-symbols and f32 bits, with mismatch counts printed.
+numbers cover real completion, not launch enqueue. H2D and D2H are
+measured to completion as well. Cold JIT is the first synchronized
+launch of the kernel specialization in the process (cubecl 0.10.0 has
+no on-disk kernel cache on this path — the only one, SPIR-V, is
+Vulkan-only and not enabled — so per-process first launch is the true
+cold path for both backends). Equality is exact `==` on symbols and f32
+bits, with mismatch counts printed.
 
 | Metric | cubecl-cpu | wgpu (Metal) |
 |---|---|---|
-| Cold JIT/compile (quantize+delta; undelta+dequantize) | ~38 ms / ~13 ms | ~8 ms / ~4 ms |
-| Warm dispatch, synchronized (avg per launch) | ~580 us / ~570 us | ~4,600 us / ~3,100-4,600 us |
-| Host->device bytes | 2,097,152 (f32 tile) | 2,097,152 (f32 tile) |
-| Device->host bytes | 4,194,304 (u32 symbols + f32 rebuilt) | 4,194,304 |
-| Peak temporary device memory | 4,194,304 | 4,194,304 |
+| Cold JIT/compile (quantize+delta; undelta+dequantize) | ~38-42 ms / ~13 ms | ~8-9 ms / ~4 ms |
+| Warm dispatch, synchronized (avg per launch) | ~570-640 us | ~3.3-4.6 ms |
+| H2D bytes (f32 tile + 8 B calibration), timed | 2,097,160 in ~12-18 ms | 2,097,160 in ~0.9-1.4 ms |
+| D2H bytes (u32 symbols + f32 rebuilt), timed | 4,194,304 in ~36-44 us | 4,194,304 in ~3.0-4.1 ms |
+| Live device buffer peak (tile + calibration + both outputs) | 6,291,464 | 6,291,712 |
 | Encoded-size ratio (rANS over device symbols / raw) | **0.075 (13.3x)** | **0.075 (13.3x)** |
 | Output equality vs CPU reference (bitwise) | symbols + values exact, 0/524,288 mismatches | symbols + values exact, 0/524,288 mismatches |
 
-Warm-dispatch convergence was checked across iteration counts
-(5/50/200/500): CPU holds ~0.56-0.68 ms throughout; Metal drifts down
-from ~4.6 ms toward ~3.1 ms at 500 iterations, so the table records the
-short-run number and flags the drift. These replace the 2026-09-10
-enqueue-only measurements (5/4 us), which timed launch submission only
-— the completion wait, paid by `read_one`, landed after the timer.
-Correctness claims are unchanged: both backends were already
-symbol-exact, and the values are now proven bit-equal rather than
-within 1e-6.
+The live peak is what the harness actually holds while kernels run
+(2,097,152-byte tile + 8-byte calibration + 2,097,152-byte symbol
+buffer + 2,097,152-byte rebuilt buffer); Metal's allocator rounds its
+copies slightly differently, hence the 248-byte difference. Warm-dispatch
+convergence was checked across iteration counts (5/50/200/500). These
+numbers replace both the 2026-09-10 enqueue-only measurements (5/4 us)
+and the 2026-09-11 first re-run's output-only peak: the completion wait
+and the input buffers are now inside the reported figures. Correctness
+claims are unchanged: both backends were already symbol-exact, and the
+values are proven bit-equal rather than within 1e-6.
 
 Caveats, stated rather than buried: warm dispatch at 4096x128 is now
 dominated by the synchronization round-trip plus launch overhead, not
