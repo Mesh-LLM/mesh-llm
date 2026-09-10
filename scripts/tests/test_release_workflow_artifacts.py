@@ -21,11 +21,13 @@ def job_block(workflow: str, job_name: str, next_job_name: str) -> str:
 
 class ReleaseWorkflowArtifactTests(unittest.TestCase):
     def test_release_is_dispatch_only(self) -> None:
-        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-        header = workflow[: workflow.index("\njobs:\n")]
+        document = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+        # YAML 1.1 resolves an unquoted `on` key to the boolean True.
+        triggers = document.get("on", document.get(True))
 
-        self.assertIn("  workflow_dispatch:\n", header)
-        self.assertNotIn("  push:\n", header)
+        self.assertIsInstance(triggers, dict)
+        self.assertIn("workflow_dispatch", triggers)
+        self.assertNotIn("push", triggers)
 
     def test_release_ui_version_preparation_handles_container_ownership(self) -> None:
         workflow = yaml.safe_load(

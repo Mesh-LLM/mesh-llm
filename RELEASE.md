@@ -151,9 +151,11 @@ just release-build-cuda
 just release-bundle-cuda v0.X.Y
 ```
 
-Before manually cutting a tag that should be consumable through SwiftPM,
-prepare the Swift binary target manifest on macOS and commit the resulting
-`Package.swift` change:
+Before dispatching a release that should be consumable through SwiftPM,
+prepare the Swift binary target manifest on macOS and land the resulting
+`Package.swift` change on `main`. This is local preparation only; it publishes
+nothing, and the release itself is still cut by dispatching the Release
+workflow, which creates the tag:
 
 ```bash
 scripts/prepare-swift-package-release.sh v0.X.Y
