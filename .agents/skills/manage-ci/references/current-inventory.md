@@ -21,7 +21,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | release tags, dispatch | Canonical version synchronization, release-only signing, assets, publication, and a preflighted downstream `mesh-packaging` dispatch |
+| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, and a preflighted downstream `mesh-packaging` dispatch |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -118,10 +118,8 @@ For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
 tracked version surface changes, and fast-forwards `main` before any release
 build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. A tag-push release is read-only with respect to `main` and is
-accepted only when the tag is already reachable from `main` and applying the
-same version script produces no tracked diff. Canary dispatches never update
-`main` or publish. The publish job creates only the release-specific tag commit
+same workflow. Canary dispatches never update `main` or publish. The publish job
+creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable

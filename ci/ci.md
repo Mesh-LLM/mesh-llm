@@ -152,10 +152,8 @@ Release efficiency TODOs:
 surface. On a non-canary `release.yml` dispatch, the metadata job applies that
 script, creates a linear release-source commit when needed, and fast-forwards
 `main` before the build graph begins. `just release` only performs local
-preflight, dispatches that workflow, and waits for its result. A tag push must
-already be reachable from `main` and version-complete; the metadata job applies
-the same script and rejects any tracked diff. Canary dispatches do not mutate
-`main` or publish.
+preflight, dispatches that workflow, and waits for its result. Canary dispatches
+do not mutate `main` or publish.
 
 Release calls the existing UI producer once with the immutable source SHA and
 release tag. It prepares that version, builds the TypeScript console in release
@@ -199,24 +197,17 @@ the token access or replace the secret.
 flowchart TD
     JUST["just release VERSION<br/>preflight + dispatch + wait"] --> DISPATCH["Release workflow dispatch"]
     UI["GitHub Actions UI"] --> DISPATCH
-    TAG["Pre-versioned v* tag push"] --> VERIFY["Verify tag is on main history<br/>and already version-complete"]
     DISPATCH --> META["Resolve version and highest prior stable notes tag"]
-    VERIFY --> META
-    META --> PATH{"Release path"}
+    META --> PATH{"Canary?"}
     PATH -- "canary dispatch" --> CANARY["Use dispatch SHA<br/>do not update main"]
     PATH -- "non-canary dispatch" --> BUMP["Run release-version.sh"]
     BUMP --> VERSION_COMMIT["Commit tracked version surface<br/>fast-forward main"]
-    PATH -- "tag push" --> TAG_SOURCE["Use validated tag source"]
     CANARY --> BUILD["Build, compose, and smoke artifact matrix"]
     VERSION_COMMIT --> BUILD
-    TAG_SOURCE --> BUILD
     BUILD --> PUBLISHABLE{"Canary?"}
     PUBLISHABLE -- "yes" --> CANARY_DONE["Stop without tag or publication"]
-    PUBLISHABLE -- "no" --> TAG_PATH{"Entry path"}
-    TAG_PATH -- "dispatch" --> PREPARE_TAG["Add generated SDK resources<br/>create and push immutable tag"]
-    TAG_PATH -- "tag push" --> EXISTING_TAG["Use existing immutable tag"]
+    PUBLISHABLE -- "no" --> PREPARE_TAG["Add generated SDK resources<br/>create and push immutable tag"]
     PREPARE_TAG --> RELEASE["Publish GitHub release<br/>notes compare from prior stable tag"]
-    EXISTING_TAG --> RELEASE
     RELEASE --> KIND{"Prerelease?"}
     KIND -- "yes" --> RC_DONE["Stop after GitHub prerelease"]
     KIND -- "no" --> DOWNSTREAM["Publish crates and dispatch<br/>packages, images, and npm"]
