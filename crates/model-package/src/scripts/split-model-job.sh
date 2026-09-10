@@ -41,10 +41,10 @@ echo ""
 
 # Keep executable toolchains/build products on local ephemeral storage:
 # HF bucket mounts can be unsuitable for dynamic loader/toolchain execution.
-# Package artifacts are written to the bucket workspace: container-local
-# ephemeral storage is capped (50G on HF Jobs) and the full package — the
-# artifacts that still await the final metadata-carrier pass plus the
-# per-artifact shard scratch — must be allowed to exceed it.
+# Package artifacts are also written to the local work dir: the per-artifact
+# upload+delete interleave keeps peak usage at one artifact plus its shard
+# scratch, which fits the 50G ephemeral cap — and the upload hook re-reading
+# artifacts through the writable /bucket FUSE mount surfaces I/O errors.
 JOB_WORK_ROOT="${JOB_WORK_ROOT:-/bucket/job-work}"
 SAFE_TARGET_REPO="$(printf '%s' "$TARGET_REPO" | tr -c '[:alnum:]._-' '_')"
 LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/meshllm-layer-job-${SAFE_TARGET_REPO}-$$}"
@@ -54,10 +54,15 @@ if [ -z "${JOB_WORK_DIR:-}" ]; then
 else
     CLEANUP_JOB_WORK_DIR="${CLEANUP_JOB_WORK_DIR:-false}"
 fi
-PACKAGE_DIR="${PACKAGE_DIR:-${JOB_WORK_DIR}/package}"
+PACKAGE_DIR="${PACKAGE_DIR:-${LOCAL_WORK_DIR}/package}"
 HF_HOME="${HF_HOME:-${JOB_WORK_DIR}/hf-home}"
 HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
-HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
+# The Xet chunk cache must live on the container's local SSD: on network
+# filesystems it performs poorly and surfaces I/O errors (the July convert
+# wrapper learned this; the same os error 5 killed three split jobs through
+# the /bucket FUSE mount on 2026-09-10).
+HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}"
+PACKAGE_DIR_ALLOW_BUCKET="${PACKAGE_DIR_ALLOW_BUCKET:-}"
 JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 BUILD_DIR="${BUILD_DIR:-${LOCAL_WORK_DIR}/build}"
 TOOL_DIR="${TOOL_DIR:-${LOCAL_WORK_DIR}/tools}"
@@ -363,23 +368,34 @@ echo "  Hugging Face cache: $HF_HUB_CACHE"
 echo "  Package workspace: $PACKAGE_DIR"
 echo "  Temporary workspace: $TMPDIR"
 log_storage_snapshot "before write-package"
-# The package workspace must NOT sit on the container root filesystem: HF Jobs
-# evicts the pod once container-local ephemeral storage exceeds 50G, and a full
-# package plus shard scratch can far exceed that. Re-create the directory here:
-# on the bucket FUSE mount, empty directories are not backed by an object and
-# can disappear between the initial mkdir and this point.
+# The package workspace must live on the container's local SSD. Two reasons:
+# (1) HF Jobs evicts the pod once container-local ephemeral storage exceeds
+#     50G, and writes through the /bucket FUSE mount count against that same
+#     budget ~1:1, so staging on /bucket never avoided the wall — only the
+#     per-artifact upload+delete interleave does; (2) the artifact upload hook
+#     re-reads each artifact through the writable FUSE mount, which surfaces
+#     I/O errors (os error 5) mid-upload. Re-create the directory here: empty
+#     directories on the bucket FUSE mount are not backed by an object and can
+#     disappear between the initial mkdir and this point.
 mkdir -p "$PACKAGE_DIR"
-ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
-PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
-if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" = "$PACKAGE_FS" ]; then
-    echo "ERROR: package workspace is on the container root filesystem, which is capped at 50G of ephemeral storage; refusing to continue (set PACKAGE_DIR to the bucket workspace)." >&2
-    exit 1
+if [ -n "$PACKAGE_DIR_ALLOW_BUCKET" ]; then
+    echo "  NOTE: PACKAGE_DIR placement override active; /bucket EIO risk accepted." >&2
+else
+    ROOT_FS="$(df -P / | awk 'NR==2 {print $1}')"
+    PACKAGE_FS="$(df -P "$PACKAGE_DIR" | awk 'NR==2 {print $1}')"
+    if [ -n "$ROOT_FS" ] && [ "$ROOT_FS" != "$PACKAGE_FS" ]; then
+        echo "ERROR: package workspace $PACKAGE_DIR is not on the container root filesystem. The /bucket FUSE mount counts writes against the same 50G ephemeral cap AND surfaces upload I/O errors; refusing to continue (unset PACKAGE_DIR_ALLOW_BUCKET to require local staging)." >&2
+        exit 1
+    fi
 fi
 if [ -n "${ESTIMATED_BUCKET_BYTES:-}" ]; then
-    PACKAGE_AVAILABLE_BYTES="$(df -Pk "$PACKAGE_DIR" | awk 'NR==2 {printf "%.0f", $4 * 1024}')"
+    # This estimate covers the HF-cache fallback (full source under
+    # HF_HUB_CACHE, which lives on /bucket). The local package workspace only
+    # needs one artifact plus its shard scratch at a time.
+    PACKAGE_AVAILABLE_BYTES="$(df -Pk /bucket | awk 'NR==2 {printf "%.0f", $4 * 1024}')"
     if [ -n "$PACKAGE_AVAILABLE_BYTES" ] && [ "$PACKAGE_AVAILABLE_BYTES" -gt 0 ] && \
         [ "$PACKAGE_AVAILABLE_BYTES" -lt "$ESTIMATED_BUCKET_BYTES" ]; then
-        echo "WARNING: package workspace has $(format_bytes "$PACKAGE_AVAILABLE_BYTES") available, below estimated need $(format_bytes "$ESTIMATED_BUCKET_BYTES")." >&2
+        echo "WARNING: /bucket has $(format_bytes "$PACKAGE_AVAILABLE_BYTES") available for the source-cache fallback, below estimated need $(format_bytes "$ESTIMATED_BUCKET_BYTES")." >&2
     fi
 fi
 echo "  Starting write-package at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
