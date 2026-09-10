@@ -462,3 +462,45 @@ fn upload_hook_can_delete_verified_copies_without_losing_inventory() {
     );
     assert!(source.exists());
 }
+
+#[test]
+fn hook_verification_treats_deleted_artifact_as_unchanged() {
+    use skippy_package_format::Artifact;
+
+    fn artifact_for(path: &std::path::Path) -> Artifact {
+        Artifact {
+            id: "artifact".to_string(),
+            path: path.display().to_string(),
+            byte_size: std::fs::metadata(path).unwrap().len(),
+            sha256: crate::hash::file_sha256(path).unwrap(),
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let present = temp.path().join("present.gguf");
+    let mutated = temp.path().join("mutated.gguf");
+    let gone = temp.path().join("gone.gguf");
+    fs::write(&present, b"payload").unwrap();
+    fs::write(&mutated, b"payload").unwrap();
+    fs::write(&gone, b"payload").unwrap();
+
+    let hook = ArtifactHook {
+        command: Some(temp.path().join("upload.sh")),
+    };
+
+    // Unchanged on disk -> unchanged.
+    let record = artifact_for(&present);
+    super::verify_hook_result(&record, &present, &hook).unwrap();
+
+    // Mutated after the hook -> rejected (content differs from the record).
+    fs::write(&mutated, b"tampered").unwrap();
+    let record = artifact_for(&gone);
+    let mut tampered_record = record.clone();
+    tampered_record.path = mutated.display().to_string();
+    assert!(super::verify_hook_result(&tampered_record, &mutated, &hook).is_err());
+
+    // Deleted by the hook (a FUSE attr cache can still report it present via
+    // path.exists()) -> opening it fails ENOENT, which must read as unchanged.
+    fs::remove_file(&gone).unwrap();
+    super::verify_hook_result(&record, &gone, &hook).unwrap();
+}

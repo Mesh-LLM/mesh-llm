@@ -175,7 +175,7 @@ pub(crate) fn write_package(
         )?;
         if artifact_hook.command.is_some() && out_dir.join(&artifact.path).exists() {
             ensure!(
-                file_sha256(&out_dir.join(&artifact.path))? == artifact.sha256,
+                artifact_unchanged_on_disk(&artifact, &out_dir.join(&artifact.path))?,
                 "projector changed after artifact hook"
             );
         }
@@ -554,13 +554,40 @@ fn ensure_not_source_file(source: &ModelSource, path: &Path) -> Result<()> {
 fn verify_hook_result(artifact: &Artifact, path: &Path, hook: &ArtifactHook) -> Result<()> {
     if hook.command.is_some() && path.exists() {
         ensure!(
-            fs::metadata(path)?.len() == artifact.byte_size
-                && file_sha256(path)? == artifact.sha256,
+            artifact_unchanged_on_disk(artifact, path)?,
             "artifact {:?} changed after artifact hook",
             artifact.id
         );
     }
     Ok(())
+}
+
+/// Whether the on-disk artifact still matches its record.
+///
+/// An upload hook removing the artifact is the expected outcome, and a FUSE
+/// bucket mount can keep reporting a freshly unlinked file as present via a
+/// stale attr cache — so a file that can no longer be opened counts as
+/// unchanged rather than corrupted. Only a file that opens but differs (the
+/// hook mutated it) fails.
+fn artifact_unchanged_on_disk(artifact: &Artifact, path: &Path) -> Result<bool> {
+    let probe =
+        || -> Result<bool> {
+            Ok(fs::metadata(path)?.len() == artifact.byte_size
+                && file_sha256(path)? == artifact.sha256)
+        };
+    match probe() {
+        Ok(same) => Ok(same),
+        Err(err) if is_not_found(&err) => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 fn copy_artifact(source: &Path, output: &Path, resume: bool) -> Result<()> {
