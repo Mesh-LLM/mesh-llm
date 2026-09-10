@@ -716,3 +716,45 @@ fn cap_victim_selection_reproduces_reported_counterexample() {
         victims
     );
 }
+
+#[test]
+fn conflict_on_a_later_segment_leaves_state_untouched() {
+    // Admit segment 1 at size 100, then offer a new key whose later segment
+    // conflicts: [(2,100),(1,200)]. The reject must leave the ledger without
+    // segment 2, no entry for the rejected key, and any matching ghost intact.
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
+
+    // Seed a ghost for the key that will be rejected so ghost survival is
+    // observable.
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(9);
+    assert!(policy.ghost(9).is_some());
+
+    let decision = policy.consider_admission(
+        9,
+        1 << 20,
+        vec![(2u64, 100), (1u64, 200)],
+        cost(400.0, 100.0),
+    );
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert!(
+        decision
+            .reasons
+            .contains(&"segment-size-conflict".to_string())
+    );
+    // No entry for the rejected key; the ghost survived the reject.
+    assert!(policy.entry(9).is_none());
+    assert!(
+        policy.ghost(9).is_some(),
+        "rejected re-offer must not lose the ghost"
+    );
+    // Segment 2 was never registered.
+    assert!(policy.segments.segment_record(2).is_none());
+    // Segment 1 still has exactly one reference (the original entry).
+    let record = policy.segments.segment_record(1).expect("segment 1 intact");
+    assert_eq!(record.references, vec![1u64]);
+    assert_eq!(record.size, 100);
+    // Class charge unchanged: the original entry's shared 100 bytes only.
+    assert_eq!(policy.probation_bytes(), 100);
+}
