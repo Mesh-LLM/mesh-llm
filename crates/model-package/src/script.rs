@@ -175,6 +175,7 @@ mod tests {
             EMBEDDED_SCRIPT
                 .contains(r#"HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}""#)
         );
+        assert!(EMBEDDED_SCRIPT.contains(r#"HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/"#));
         assert!(

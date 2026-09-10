@@ -62,6 +62,12 @@ HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 # wrapper learned this; the same os error 5 killed three split jobs through
 # the /bucket FUSE mount on 2026-09-10).
 HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}"
+# Route uploads through the classic HTTP path instead of Xet-CAS: HF Jobs
+# containers hit sustained I/O errors (os error 5) on the Xet channel that
+# do not reproduce outside the cluster, and per-layer GGUF artifacts do not
+# benefit from chunk deduplication anyway. Set HF_HUB_DISABLE_XET=0 to
+# restore the Xet uploader.
+HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 PACKAGE_DIR_ALLOW_BUCKET="${PACKAGE_DIR_ALLOW_BUCKET:-}"
 JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 BUILD_DIR="${BUILD_DIR:-${LOCAL_WORK_DIR}/build}"
@@ -78,7 +84,7 @@ BUILD_TMP_DIR="${BUILD_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}"
 TMPDIR="$BUILD_TMP_DIR"
 TEMP="$BUILD_TMP_DIR"
 TMP="$BUILD_TMP_DIR"
-export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE VENV_DIR ARTIFACT_UPLOAD_SCRIPT
+export JOB_WORK_DIR PACKAGE_DIR HF_HOME HF_HUB_CACHE HF_XET_CACHE HF_HUB_DISABLE_XET VENV_DIR ARTIFACT_UPLOAD_SCRIPT
 export TMPDIR TEMP TMP CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR XDG_CACHE_HOME PIP_CACHE_DIR
 
 cleanup_job_work_dir() {
