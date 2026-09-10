@@ -1076,4 +1076,59 @@ mod tests {
         assert_eq!(restorable_tokens, 300);
         assert!(footprint >= 1024);
     }
+
+    /// Rewrite the on-disk codec identity of a committed manifest, simulating a
+    /// future/remote entry this build cannot decode. The manifest layout is
+    /// `<root>/manifests/<digest>.json`.
+    fn corrupt_manifest_codec(store: &HandoffSegmentStore, digest: &str, name: &str, version: u32) {
+        let path = store
+            .root()
+            .join("manifests")
+            .join(format!("{digest}.json"));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read manifest"))
+                .expect("parse manifest");
+        value["codec"] = serde_json::json!({ "name": name, "version": version });
+        std::fs::write(&path, serde_json::to_vec(&value).expect("serialize"))
+            .expect("write manifest");
+    }
+
+    #[test]
+    fn locate_longest_skips_unsupported_codec_and_falls_back_to_shorter() {
+        let tier = tier("codec-locate-fallback", "blake3:codec");
+        let short = ExactStatePayload::full_state(vec![1u8; 4096]);
+        let long = ExactStatePayload::full_state(vec![2u8; 8192]);
+        tier.spill("ns", &tokens(3), &short, None, None)
+            .expect("spill short");
+        tier.spill("ns", &tokens(6), &long, None, None)
+            .expect("spill long");
+
+        // The longer prefix is the natural longest match before tampering.
+        let long_loc = tier
+            .locate_longest("ns", &tokens(6), 8)
+            .expect("locate")
+            .expect("long entry present");
+        assert_eq!(long_loc.token_count, 6);
+
+        // Make only the longer entry's codec unsupported on disk.
+        corrupt_manifest_codec(tier.store(), &long_loc.manifest_key, "zstd", 1);
+
+        // locate_longest must skip the unsupported longer prefix (pruning its
+        // link) and fall back to the shorter supported one, not error or stop.
+        let fell_back = tier
+            .locate_longest("ns", &tokens(6), 8)
+            .expect("locate after tamper")
+            .expect("shorter entry still serves");
+        assert_eq!(
+            fell_back.token_count, 3,
+            "fell back to the supported shorter prefix"
+        );
+
+        // The bad longer link was pruned, so the shorter prefix is the answer.
+        let again = tier
+            .locate_longest("ns", &tokens(6), 8)
+            .expect("locate again")
+            .expect("shorter entry still serves");
+        assert_eq!(again.token_count, 3);
+    }
 }

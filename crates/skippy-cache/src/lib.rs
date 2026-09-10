@@ -18,9 +18,9 @@ pub use identity::{
 };
 pub use l3::{
     CODEC_RAW, CODEC_RAW_VERSION, GeometryBlock, GeometryKind, HandoffManifest, HandoffSegmentRef,
-    HandoffSegmentStore, MANIFEST_VERSION, ManifestPin, PayloadCodec, PayloadGeometry, Reservation,
-    SegmentHold, SegmentPut, StoreLimits, StoreReconciliation, StoreUsage, StoredSegment,
-    WriteRefusal, segment_digest,
+    HandoffSegmentStore, LEGACY_MANIFEST_VERSION, MANIFEST_VERSION, ManifestPin, PayloadCodec,
+    PayloadGeometry, Reservation, SegmentHold, SegmentPut, StoreLimits, StoreReconciliation,
+    StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
 pub use manager::{
     L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3InventoryEntry,
