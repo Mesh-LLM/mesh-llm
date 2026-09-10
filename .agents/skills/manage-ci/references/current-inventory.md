@@ -21,7 +21,7 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 | `main_windows.yml` (`Main · Windows`) | push to `main` | Exhaustive main planning plus the same-commit reusable Windows lane |
 | `ci.yml` | `workflow_call` only | Temporary inert shim for the former main ingress filename; pending protected-main runner-contract update; no push trigger or dispatch |
 | `ci-control.yml` (`CI · Manual Full`) | dispatch on default branch | Explicit operator-only full plan, bounded lane dispatch and correlated diagnostic checks |
-| `release.yml` | release tags, dispatch | Canonical version synchronization, release-only signing, assets and publication |
+| `release.yml` | dispatch on the default branch | Canonical version synchronization, release-only signing, assets, publication, and a preflighted downstream `mesh-packaging` dispatch |
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
@@ -30,22 +30,6 @@ Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
 Other scheduled, deployment, Docker, package, canary and cache-warming
 workflows are independent of required PR readiness.
-`nightly-competitive-benchmark.yml` is an opt-in daily or explicit manual
-trusted-main benchmark on the persistent Linux `white` runner. Placement uses
-the fixed `[self-hosted, Linux, X64, cuda]` label set and then fails closed
-unless `RUNNER_NAME` is exactly `white`. It has read-only permissions, never
-accepts a ref or runner label, installs no tools, consumes pre-baked inputs
-selected by `MESH_NIGHTLY_COMPETITIVE_*` repository variables, and retains
-complete or partial benchmark/report evidence for 30 days. The pre-baked
-Hugging Face CLI is selected explicitly by
-`MESH_NIGHTLY_COMPETITIVE_HF_CLI`; it is required only when history is enabled.
-The workflow captures stable GPU/driver identity plus observed clocks and
-temperature.
-When `MESH_PERFORMANCE_HISTORY_ENABLED=1`, it requires the dataset repo
-variable and write-token secret, downloads prior immutable JSONL shards,
-verifies the checked-in schema, emits an exact-cohort regression report, and
-appends one source/run-addressed shard. Thresholds and promotion remain
-report-only reviewed decisions.
 `nightly-stability.yml` calls the fixed GitHub-hosted
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
@@ -68,12 +52,9 @@ shard, and requires every shard that carries `*.block_count` and
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-selected-family shard while retaining the plan as evidence. On a changed llama.cpp pin,
-the canary diffs the actual old and new upstream revisions inside the prepared llama.cpp
-checkout. A change limited to model implementation files named by the generated-family
-map selects their certified families plus fixed architecture sentinels. Any shared
-upstream source, unmapped model source, or unavailable diff fails closed to the full
-bump battery; non-bump runs retain their cadence-owned cohort. The runner's `.env` exports
+selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
+always run the complete `llama-bump` family cohort; non-bump runs retain their
+cadence-owned cohort. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
@@ -100,40 +81,45 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. On a
-patch-apply failure it hands the queue to a non-interactive `opencode` agent
-(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
-via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
-`third_party/llama.cpp/patches`, runs the supported-families certification
-battery (`scripts/skippy-family-battery.sh`), and opens or reuses the repair PR
-on `llama-canary/patch-queue-fix`. The deterministic wrapper writes the sole
-upstream selector, `third_party/llama.cpp/upstream.txt`, to the resolved repair
-target, prepares through the checked-in `pinned`
-selector, and verifies the prepared-upstream stamp before any repair branch is
-published or certified. The same repair loop also runs when the queue applies
-but a certification lane fails (`battery` mode). After each agent turn the
-repair script itself runs the battery and, on failure, loops certify -> agent fix ->
-recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
-succeeds when the wrapper's own battery run passes. Every outcome (battery
-green, queue still broken, battery exhausted) posts a status comment on the
-repair PR — creating the PR (or a fallback issue) itself if the agent did
-not — and an agent turn writes the PR description (key upstream changes,
-patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
-PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
-the canary job itself remains `contents: read`. Any repair outcome keeps the
-canary run red: the certified fix must be merged from the repair PR before
-trusted main can certify. The upstream pin commit to
-`main` is gated on the battery passing and writes the sole upstream pin from
-the validated SHA.
+ceiling is 12 hours. A changed pin runs one deterministic wrapper-owned state
+machine: `prepare -> build -> certify -> publish`. The wrapper writes the sole
+upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through the
+checked-in `pinned` selector, verifies the prepared-upstream stamp, completes
+the patched llama.cpp/native-test and Rust build gates, and then runs the full
+supported-family certification. A failed phase is handed to a non-interactive
+`opencode` agent (`CANARY_AGENT_MODEL`, default
+`zai-coding-plan/glm-5.3-flash`, overridable through
+`LLAMA_CANARY_AGENT_MODEL`). The agent may run focused diagnostics and edit the
+local tree, but the wrapper restarts at prepare, reruns the complete build, and
+remains the sole authority for certification. Each phase permits
+`CANARY_REPAIR_MAX_TURNS` (default 2). The wrapper has a 690-minute internal
+work deadline inside the 720-minute Actions step and reserves 30 minutes for
+terminal publication. It publishes once to the unique
+`llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
+state opens a normal PR bound to the exact green commit; a turn- or time-bounded
+failure opens a draft PR preserving the last attempted bytes. The PR body
+includes a deterministic upstream diffstat and commit summary even though the
+unchanged-pin workflow summary path is skipped. Scheduled runs query open
+`llama-canary/repair-*` PR bodies before starting the state machine and skip an
+exact candidate SHA already under review. No agent turn runs after green, and
+changed pins are never pushed directly to `main`. Repair pushes and PR
+operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT; Git
+receives it through a run-scoped askpass helper instead of a credential-bearing
+URL, and stderr redaction uses literal replacement. The wrapper validates the
+native build directory, HF cache, repository identity, and repair token before
+the first phase. The canary job itself remains `contents: read`; the dedicated
+repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
+`llama-canary-changed-pin-*` artifact namespace. Every
+changed-pin outcome keeps the canary run red until a certified PR is reviewed
+and merged. Unchanged scheduled and forced certifications stay read-only and
+never invoke the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
 tracked version surface changes, and fast-forwards `main` before any release
 build starts. `just release` is a preflight and synchronous dispatcher for that
-same workflow. A tag-push release is read-only with respect to `main` and is
-accepted only when the tag is already reachable from `main` and applying the
-same version script produces no tracked diff. Canary dispatches never update
-`main` or publish. The publish job creates only the release-specific tag commit
+same workflow. Canary dispatches never update `main` or publish. The publish job
+creates only the release-specific tag commit
 for generated Swift/SDK resources and enables GitHub-generated release notes.
 The comparison base is the highest stable `vMAJOR.MINOR.PATCH` tag below the
 target; prerelease tags are excluded so RC and final notes use the same stable

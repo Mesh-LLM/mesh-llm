@@ -308,6 +308,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn identity_rejects_user_supplied_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("model-target.gguf");
+        let link = dir.path().join("model.gguf");
+        write_test_metadata_gguf(&target, 4096);
+        symlink(&target, &link).unwrap();
+
+        let error = synthetic_content_addressed_gguf_package("logical/model", &link)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("non-symlink file"));
+        assert!(error.contains("model.gguf"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn split_rejects_symlinked_secondary_shard() {
         use std::os::unix::fs::symlink;
 
