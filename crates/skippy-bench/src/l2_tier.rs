@@ -181,15 +181,16 @@ pub fn l2_tier(args: L2TierArgs) -> Result<()> {
             .context("bench L3 fill missed")?;
         let l3_ns = start.elapsed().as_nanos();
 
-        // Handle-only lookup, reported separately.
+        // Timed through the same boundary as the L3 arm, starting before
+        // the lookup: the L3 timer covers index probe + assembly +
+        // verification, so the L2 timer covers lookup + handle assembly +
+        // materialization — both arms measure "nothing to usable bytes".
+        // The handle-only lookup time (this same `get`, inner timer) is
+        // reported separately as `l2_handle_lookup_ns`.
+        let start = Instant::now();
         let handle_start = Instant::now();
         let hit = l2.get(&cache_key);
         let l2_handle_ns = handle_start.elapsed().as_nanos();
-
-        // Timed through the same usable-bytes boundary as the L3 arm: the
-        // L3 timer covers disk assembly + verification, so the L2 timer
-        // covers handle lookup + assembly + materialization.
-        let start = Instant::now();
         let l2_payload = hit.as_ref().map(|hit| hit.to_payload());
         let (l2_bytes, _) = l2_payload
             .as_ref()

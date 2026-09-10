@@ -3651,6 +3651,12 @@
       "macro_name": "println!"
     }
   ],
+  "crates/skippy-bench/src/l2_tier.rs": [
+    {
+      "line": 254,
+      "macro_name": "println!"
+    }
+  ],
   "crates/skippy-bench/src/local_single.rs": [
     {
       "line": 196,
@@ -3677,11 +3683,11 @@
   ],
   "crates/skippy-bench/src/main.rs": [
     {
-      "line": 34,
+      "line": 35,
       "macro_name": "eprintln!"
     },
     {
-      "line": 42,
+      "line": 43,
       "macro_name": "eprintln!"
     }
   ],

@@ -319,6 +319,13 @@ pub enum L2InsertRefusal {
     OverBudget {
         payload_bytes: u64,
     },
+    /// Admission would push the pool past the budget with the incoming
+    /// entry's handles pinned: even evicting every other entry could not
+    /// free the excess, so the transaction was rolled back untouched.
+    ProtectedOvercommit {
+        pool_bytes: u64,
+        budget_bytes: u64,
+    },
     MalformedDigest,
     /// Admission hashing found the wire's BLAKE3 different from the digest
     /// the payload claims (the L3 manifest key).
@@ -353,6 +360,15 @@ impl L2InsertRefusal {
             Self::OverBudget { payload_bytes } => format!(
                 "payload of {payload_bytes} distinct bytes exceeds the entire L2 budget; \
                  caching it would evict everything else"
+            ),
+            Self::ProtectedOvercommit {
+                pool_bytes,
+                budget_bytes,
+            } => format!(
+                "admission would leave the pool at {pool_bytes} bytes against a \
+                 {budget_bytes}-byte budget even after evicting every unpinned entry: \
+                 the admission's own (shared or pinned) segments are not evictable, \
+                 so it was rolled back"
             ),
             Self::MalformedDigest => {
                 "payload digest is not a 64-hex-character blake3 string".to_string()
@@ -412,6 +428,50 @@ struct L2Inner {
     /// Distinct segment bytes in the pool — the real RAM footprint.
     bytes: u64,
     clock: u64,
+}
+
+/// Undo log for one admission transaction. Every pool/map mutation an
+/// admission performs — reserving new handles, overwriting a digest with
+/// new content, releasing orphaned handles, removing the replaced entry,
+/// and the entries eviction removes — is recorded here so a refused
+/// admission (protected overcommit) can restore the tier exactly. Charges
+/// are not journaled: every exit path recomputes them from the live map.
+#[derive(Default)]
+struct AdmitJournal {
+    reserved: Vec<String>,
+    /// Previous `Arc` handles overwritten by this admission's same-digest
+    /// new-content installs, restored on rollback.
+    overwrites: Vec<(String, SegmentHandle)>,
+    /// Pool bytes that left with the overwritten handles.
+    overwritten_bytes: u64,
+    /// Released-orphan handles: `(digest, handle)` pairs to reinstall on
+    /// rollback.
+    released_orphans: Vec<(String, SegmentHandle)>,
+    removed_entries: Vec<(String, L2Entry)>,
+    reserved_bytes: u64,
+    released_bytes: u64,
+}
+
+impl AdmitJournal {
+    fn rollback(self, inner: &mut L2Inner) {
+        for (digest, handle) in self.overwrites {
+            inner.segments.insert(digest, handle);
+        }
+        for digest in &self.reserved {
+            inner.segments.remove(digest);
+        }
+        for (digest, handle) in self.released_orphans {
+            inner.segments.insert(digest, handle);
+        }
+        for (key, entry) in self.removed_entries {
+            inner.map.insert(key, entry);
+        }
+        inner.bytes = inner
+            .bytes
+            .saturating_add(self.released_bytes)
+            .saturating_add(self.overwritten_bytes)
+            .saturating_sub(self.reserved_bytes);
+    }
 }
 
 /// Counters kept outside the map lock so `stats()` never blocks hits.
@@ -657,53 +717,115 @@ impl L2Tier {
                 payload_bytes: new_bytes,
             });
         }
-        // Reserve the new handles in the pool before releasing anything,
-        // so a digest re-used with new content is unambiguous from here on
-        // and the incoming entry's bytes cannot be dropped mid-transaction.
-        for (digest, handle) in &new_segments {
-            inner.bytes = inner.bytes.saturating_add(handle.bytes.len() as u64);
-            inner.segments.insert(digest.clone(), handle.clone());
-        }
-        let protected: Vec<String> = new_segments
+        // Admission is all-or-nothing. Every mutation from here is
+        // journaled (`AdmitJournal`, module-level); if eviction cannot
+        // bring the final pool footprint under budget (the incoming
+        // entry's own handles are pinned, so an admission sharing bytes
+        // with its victim can exceed what eviction frees), the journal is
+        // rolled back and the admission is refused without touching the
+        // tier.
+        let mut journal = AdmitJournal {
+            reserved: Vec::new(),
+            overwrites: Vec::new(),
+            overwritten_bytes: 0,
+            released_orphans: Vec::new(),
+            removed_entries: Vec::new(),
+            reserved_bytes: 0,
+            released_bytes: 0,
+        };
+        let protected_set: Vec<String> = new_segments
             .iter()
             .map(|(digest, _)| digest.clone())
             .chain(shared.iter().cloned())
             .collect();
+        // Reserve the new handles in the pool before releasing anything,
+        // so a digest re-used with new content is unambiguous from here on
+        // and the incoming entry's bytes cannot be dropped mid-transaction.
+        for (digest, handle) in &new_segments {
+            let handle_len = handle.bytes.len() as u64;
+            inner.bytes = inner.bytes.saturating_add(handle_len);
+            journal.reserved_bytes = journal.reserved_bytes.saturating_add(handle_len);
+            if let Some(previous) = inner.segments.insert(digest.clone(), handle.clone()) {
+                // Same digest text re-used with new content: only possible
+                // when replacing the same key, which still holds the old
+                // handle. The previous bytes leave the pool now (net
+                // reserved delta is `new − old`); journal them so rollback
+                // restores the original count.
+                let previous_len = previous.bytes.len() as u64;
+                inner.bytes = inner.bytes.saturating_sub(previous_len);
+                journal.overwritten_bytes = journal.overwritten_bytes.saturating_add(previous_len);
+                journal.overwrites.push((digest.clone(), previous));
+            } else {
+                journal.reserved.push(digest.clone());
+            }
+        }
         // One entry per cache key: a re-admit at the same coordinates is a
         // replacement (fresher state for the same prefix), not a duplicate.
         // The old entry's segments survive release where the incoming
-        // layout shares them (`protected`), so identical-wire re-admits
-        // never delete their own handles.
+        // layout shares them (`protected_set`), so identical-wire re-admits
+        // never delete their own handles. Released orphan handles are
+        // journaled so rollback reinstates them, and segments that stay
+        // are transfer-charged to their surviving owners before the new
+        // entry lands.
         if let Some(existing) = inner.map.remove(&cache_key) {
-            self.release_entry_segments(&mut inner, &existing, &protected);
+            let digests = existing.payload.segment_digests();
+            Self::recompute_all_charges(&mut inner);
+            for digest in digests {
+                if protected_set.iter().any(|p| p == digest) {
+                    continue;
+                }
+                let still_referenced = inner
+                    .map
+                    .values()
+                    .any(|other| other.payload.segment_digests().contains(&digest));
+                if still_referenced {
+                    continue;
+                }
+                if let Some(handle) = inner.segments.remove(digest) {
+                    let released = handle.bytes.len() as u64;
+                    inner.bytes = inner.bytes.saturating_sub(released);
+                    journal.released_bytes = journal.released_bytes.saturating_add(released);
+                    journal.released_orphans.push((digest.to_string(), handle));
+                }
+            }
+            journal.removed_entries.push((cache_key.clone(), existing));
         }
         // Evict to make room: the reservation already counts toward
         // `inner.bytes`, so the pool (including this admission's distinct
         // bytes) must fit the whole budget. Shared handles are pinned and
         // can keep a victim from freeing — those retained bytes transfer
         // to this entry's charge below.
-        let evictions = self.evict_to_limit(&mut inner, self.budget_bytes, &cache_key, &protected);
-        // A victim that shared segments with this admission freed nothing:
-        // those bytes are now exclusively this entry's, so the charge must
-        // include them. (The pool may then sit above budget by exactly the
-        // pinned bytes the victim could not release — bounded by this
-        // entry's own wire.)
-        let mut charge_bytes = new_bytes;
-        for digest in &shared {
-            let still_shared = inner
-                .map
-                .values()
-                .any(|other| other.payload.segment_digests().contains(&digest.as_str()));
-            if !still_shared {
-                charge_bytes = charge_bytes.saturating_add(
-                    inner
-                        .segments
-                        .get(digest)
-                        .map(|handle| handle.bytes.len() as u64)
-                        .unwrap_or(0),
-                );
-            }
+        let evictions = self.evict_to_limit(
+            &mut inner,
+            self.budget_bytes,
+            &cache_key,
+            &protected_set,
+            &mut journal,
+        );
+        // The hard byte cap: if eviction could not free the excess even by
+        // evicting every non-pinned entry, the admission is refused and
+        // rolled back — the tier never sits over budget after `admit`.
+        if inner.bytes > self.budget_bytes {
+            let pool_bytes = inner.bytes;
+            let rolled_back_evictions = evictions.len() as u64;
+            journal.rollback(&mut inner);
+            // Charges were recomputed during eviction; restore them to
+            // match the rolled-back state.
+            Self::recompute_all_charges(&mut inner);
+            self.stats
+                .evictions
+                .fetch_sub(rolled_back_evictions, Ordering::Relaxed);
+            let over = pool_bytes.saturating_sub(self.budget_bytes);
+            self.stats.refused_bytes.fetch_add(over, Ordering::Relaxed);
+            return Err(L2InsertRefusal::ProtectedOvercommit {
+                pool_bytes,
+                budget_bytes: self.budget_bytes,
+            });
         }
+        // The entry lands with a zero charge; the deterministic recompute
+        // below assigns it exactly the pooled segments it owns (segments
+        // whose lowest-key live reference it is) and refreshes every other
+        // entry's charge, so the sum of charges always equals the pool.
         inner.clock = inner.clock.wrapping_add(1);
         let last_used = inner.clock;
         self.stats
@@ -717,10 +839,13 @@ impl L2Tier {
                 payload_digest,
                 origin,
                 last_used,
-                charge_bytes,
+                charge_bytes: 0,
                 payload_bytes,
             },
         );
+        // Assign every pooled segment exactly once to its lowest-key live
+        // reference — the inserted entry included.
+        Self::recompute_all_charges(&mut inner);
         self.stats.inserts.fetch_add(1, Ordering::Relaxed);
         Ok(evictions)
     }
@@ -758,6 +883,7 @@ impl L2Tier {
             // and its surviving handles; recency stays untouched.
             let removed = inner.map.remove(cache_key);
             if let Some(entry) = removed {
+                Self::recompute_all_charges(&mut inner);
                 self.release_entry_segments(&mut inner, &entry, &[]);
             }
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
@@ -808,17 +934,39 @@ impl L2Tier {
     pub fn remove(&self, cache_key: &str) -> Option<L2Eviction> {
         let mut inner = self.inner.lock().expect("L2 map poisoned");
         let removed = inner.map.remove(cache_key)?;
+        // Retained bytes come from the pool's actual references: segments
+        // of this entry that other entries still reference after the
+        // removal stay in the pool. Charged bytes are never transferred
+        // between entries — a survivor's charge already excludes shared
+        // segments — so this cannot drift the survivors' accounting below
+        // the physical pool they own.
+        let mut retained = 0u64;
+        for digest in removed.payload.segment_digests() {
+            let referenced_elsewhere = inner
+                .map
+                .values()
+                .any(|other| other.payload.segment_digests().contains(&digest));
+            if referenced_elsewhere {
+                retained = retained.saturating_add(
+                    inner
+                        .segments
+                        .get(digest)
+                        .map(|handle| handle.bytes.len() as u64)
+                        .unwrap_or(0),
+                );
+            }
+        }
+        // Segments that stay are now physically owned by the survivors:
+        // recompute charges from the live map (the removed entry is
+        // already out of it).
+        Self::recompute_all_charges(&mut inner);
         let before = inner.bytes;
         self.release_entry_segments(&mut inner, &removed, &[]);
         let freed = before.saturating_sub(inner.bytes);
         Some(L2Eviction {
             cache_key: cache_key.to_string(),
             freed_bytes: freed,
-            retained_bytes: removed
-                .payload
-                .byte_len()
-                .saturating_sub(freed)
-                .min(removed.payload_bytes),
+            retained_bytes: retained,
         })
     }
 
@@ -874,6 +1022,34 @@ impl L2Tier {
         }
     }
 
+    /// Recompute every entry's charge from the live map: each pooled
+    /// segment is assigned exactly once, to its lowest-cache-key live
+    /// reference, and each entry's `charge_bytes` is the sum of the
+    /// segments it owns. The sum of all charges therefore always equals
+    /// the physical pool bytes — after admission, eviction, removal,
+    /// corruption cleanup, and rollback alike. Deterministic: identical
+    /// map states produce identical ownership.
+    fn recompute_all_charges(inner: &mut L2Inner) {
+        let mut ownership: HashMap<String, u64> = HashMap::new();
+        for digest in inner.segments.keys() {
+            let Some(bytes) = inner.segments.get(digest).map(|h| h.bytes.len() as u64) else {
+                continue;
+            };
+            let owner = inner
+                .map
+                .iter()
+                .filter(|(_, entry)| entry.payload.segment_digests().contains(&digest.as_str()))
+                .map(|(key, _)| key.clone())
+                .min();
+            if let Some(owner) = owner {
+                *ownership.entry(owner).or_insert(0) += bytes;
+            }
+        }
+        for (key, entry) in inner.map.iter_mut() {
+            entry.charge_bytes = ownership.get(key).copied().unwrap_or(0);
+        }
+    }
+
     /// Drop an entry's segments from the pool, decrementing the pool byte
     /// total. Segments still referenced by another live entry, or pinned by
     /// an in-flight admission (`protected`), stay. Zero-byte segments are
@@ -902,13 +1078,15 @@ impl L2Tier {
     /// Shared segments are released only with their last referencing
     /// entry; handles pinned by the in-flight admission (`protected`) are
     /// never released; a victim that frees nothing is still counted as an
-    /// eviction.
+    /// eviction. Every mutation is recorded in `journal` so a refused
+    /// admission can roll the evictions back exactly.
     fn evict_to_limit(
         &self,
         inner: &mut L2Inner,
         limit: u64,
         protect_key: &str,
         protected: &[String],
+        journal: &mut AdmitJournal,
     ) -> Vec<L2Eviction> {
         let mut evictions = Vec::new();
         while inner.bytes > limit {
@@ -925,14 +1103,56 @@ impl L2Tier {
             let Some(removed) = inner.map.remove(&victim) else {
                 break;
             };
+            // Retained bytes from actual pool references, computed before
+            // release: segments of the victim that survivors still
+            // reference, or that the in-flight admission pins (its entry
+            // is not in the map yet, but it will own them).
+            let mut retained = 0u64;
+            for digest in removed.payload.segment_digests() {
+                let referenced_elsewhere = inner
+                    .map
+                    .values()
+                    .any(|other| other.payload.segment_digests().contains(&digest))
+                    || protected.iter().any(|p| p == digest);
+                if referenced_elsewhere {
+                    retained = retained.saturating_add(
+                        inner
+                            .segments
+                            .get(digest)
+                            .map(|handle| handle.bytes.len() as u64)
+                            .unwrap_or(0),
+                    );
+                }
+            }
             let before = inner.bytes;
-            self.release_entry_segments(inner, &removed, protected);
+            // Charges are recomputed from the live map (journaled state
+            // is restored exactly; ownership follows the lowest key).
+            Self::recompute_all_charges(inner);
+            for digest in removed.payload.segment_digests() {
+                if protected.iter().any(|p| p == digest) {
+                    continue;
+                }
+                let still_referenced = inner
+                    .map
+                    .values()
+                    .any(|other| other.payload.segment_digests().contains(&digest));
+                if still_referenced {
+                    continue;
+                }
+                if let Some(handle) = inner.segments.remove(digest) {
+                    let released = handle.bytes.len() as u64;
+                    inner.bytes = inner.bytes.saturating_sub(released);
+                    journal.released_bytes = journal.released_bytes.saturating_add(released);
+                    journal.released_orphans.push((digest.to_string(), handle));
+                }
+            }
             let freed = before.saturating_sub(inner.bytes);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+            journal.removed_entries.push((victim.clone(), removed));
             evictions.push(L2Eviction {
                 cache_key: victim,
                 freed_bytes: freed,
-                retained_bytes: removed.payload_bytes.saturating_sub(freed),
+                retained_bytes: retained,
             });
         }
         evictions
@@ -1669,43 +1889,83 @@ mod tests {
     #[test]
     fn eviction_cannot_release_segments_the_incoming_entry_shares() {
         // Pressure case: the incoming entry shares its would-be victim's
-        // segments. The victim is not protected by the cache-key filter
-        // (different key) and is not yet replaced in the map, so eviction
-        // could drop the shared handles before the new entry lands.
+        // prefix segments. The victim is not protected by the cache-key
+        // filter (different key) and is not yet replaced in the map, so
+        // eviction could drop the shared handles before the new entry
+        // lands. The 64-byte budget equals the old entry's footprint, so
+        // the 16-byte tail reservation forces eviction mid-admission:
+        // only the victim's *exclusive* tail X frees (16 bytes), the
+        // shared prefix is pinned by the admission and survives
+        // byte-exact, and the pool lands exactly at budget with the new
+        // entry's segments. Layout: old = [S0 S1 S2 X], grown =
+        // [S0 S1 S2 T] with T different content from X.
         let segment_len = 16u64;
         let total = segment_len * 4;
-        // Budget forces eviction: the reserved pool (64 bytes) exceeds it
-        // by one byte until the old entry releases its exclusive segment.
-        let tier = L2Tier::new(total - 1);
+        let tier = L2Tier::new(total);
         let (w, _) = wire(total as usize, 30);
         let short_len = segment_len * 3;
 
         let old = key("ns", &[1]);
         tier.admit(
             old.clone(),
-            3,
-            segment_digest(&w[..short_len as usize]),
-            &w[..short_len as usize],
-            manifest_shaped_mirror(&w[..short_len as usize], segment_len),
+            4,
+            segment_digest(&w),
+            &w,
+            manifest_shaped_mirror(&w, segment_len),
             L2Origin::FromL3,
         )
         .expect("old entry admitted");
 
-        // New key whose wire extends the old entry's segments; the budget
-        // forces eviction of the old entry during this admission.
+        // The grown entry swaps the old tail for a different one.
+        let tail: Vec<u8> = (0..segment_len as usize)
+            .map(|i| (200usize + i) % 251)
+            .map(|v| v as u8)
+            .collect();
+        let mut grown_wire = w[..short_len as usize].to_vec();
+        grown_wire.extend_from_slice(&tail);
+        let grown_digest = segment_digest(&grown_wire);
+        let grown_segments = vec![
+            (segment_digest(&w[..segment_len as usize]), 0..segment_len),
+            (
+                segment_digest(&w[segment_len as usize..segment_len as usize * 2]),
+                segment_len..segment_len * 2,
+            ),
+            (
+                segment_digest(&w[segment_len as usize * 2..short_len as usize]),
+                segment_len * 2..short_len,
+            ),
+            (segment_digest(&tail), short_len..total),
+        ];
+        let grown_mirror = ExactStatePayloadMirror::FullState {
+            layout: L2Layout {
+                payload_kind: ExactStatePayloadKind::FullState,
+                total_bytes: total,
+                kv_bytes: total,
+                recurrent_bytes: 0,
+                segments: grown_segments,
+            },
+        };
         let grown = key("ns", &[2]);
         let evictions = tier
             .admit(
                 grown.clone(),
                 4,
-                segment_digest(&w[..total as usize]),
-                &w[..total as usize],
-                manifest_shaped_mirror(&w, segment_len),
+                grown_digest.clone(),
+                &grown_wire,
+                grown_mirror,
                 L2Origin::FromL3,
             )
             .expect("admission must succeed by evicting the old entry");
         assert_eq!(evictions.len(), 1, "old entry is the victim");
         assert_eq!(evictions[0].cache_key, old);
+        assert_eq!(
+            evictions[0].freed_bytes, segment_len,
+            "only the victim's exclusive tail frees; the pinned prefix stays"
+        );
+        assert_eq!(
+            evictions[0].retained_bytes, short_len,
+            "the shared prefix is retained by the incoming entry"
+        );
 
         // The shared prefix segments must have survived the eviction.
         let hit = tier.get(&grown).expect("grown entry hits");
@@ -1713,14 +1973,342 @@ mod tests {
         let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
         assert_eq!(
             bytes.as_ref(),
-            &w[..total as usize],
+            &grown_wire[..],
             "shared segments must survive the admission that evicted their old owner"
         );
         let stats = tier.stats();
         assert_eq!(stats.entries, 1);
         assert_eq!(stats.segments, 4);
-        assert_eq!(stats.bytes, total);
+        assert_eq!(
+            stats.bytes, total,
+            "the pool is exactly the admitted entry's distinct bytes"
+        );
+        assert!(
+            stats.bytes <= budget_from(&tier),
+            "the hard byte cap holds after a sharing admission"
+        );
         assert!(tier.peek(&old).is_none(), "old entry was evicted");
+    }
+
+    /// The budget the tier was built with (test-only mirror of the
+    /// constructor argument).
+    fn budget_from(tier: &L2Tier) -> u64 {
+        tier.stats().budget_bytes
+    }
+
+    #[test]
+    fn admission_reusing_protected_bytes_cannot_exceed_the_budget() {
+        // 100-byte budget: X (60 bytes) is live, the incoming X+Y (120
+        // bytes) shares X's segment. `new_bytes` is only Y's 60, X is
+        // pinned (shared), so eviction cannot free the excess: the
+        // admission must be refused and rolled back, never inserted at
+        // 120 bytes over a 100-byte budget.
+        let tier = L2Tier::new(100);
+        let k1 = key("ns", &[1]);
+        let k2 = key("ns", &[2]);
+        let (x, _) = wire(60, 1);
+        tier.admit(
+            k1.clone(),
+            1,
+            segment_digest(&x),
+            &x,
+            single_segment_mirror(&x),
+            L2Origin::FromL3,
+        )
+        .expect("X admitted");
+        let (y, _) = wire(60, 2);
+        let mut xy = x.clone();
+        xy.extend_from_slice(&y);
+        let xy_digest = segment_digest(&xy);
+        let mirror = ExactStatePayloadMirror::FullState {
+            layout: L2Layout {
+                payload_kind: ExactStatePayloadKind::FullState,
+                total_bytes: 120,
+                kv_bytes: 120,
+                recurrent_bytes: 0,
+                segments: vec![(segment_digest(&x), 0..60), (segment_digest(&y), 60..120)],
+            },
+        };
+        let err = tier
+            .admit(k2.clone(), 2, xy_digest, &xy, mirror, L2Origin::Direct)
+            .expect_err("protected overcommit must be refused");
+        assert_eq!(
+            err,
+            L2InsertRefusal::ProtectedOvercommit {
+                pool_bytes: 120,
+                budget_bytes: 100,
+            },
+            "the pool could only reach the budget by evicting the pinned X"
+        );
+        // The tier is exactly as it was before the refused admission.
+        let stats = tier.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.bytes, 60);
+        assert_eq!(stats.segments, 1);
+        assert_eq!(stats.inserts, 1, "the refusal must not count an insert");
+        assert_eq!(
+            stats.evictions, 0,
+            "rolled-back evictions must not be counted"
+        );
+        assert!(tier.peek(&k1).is_some(), "X survived the refusal");
+        assert!(tier.peek(&k2).is_none(), "the incoming entry was refused");
+        // X still serves its exact bytes.
+        let hit = tier.get(&k1).expect("X hit");
+        let payload = hit.to_payload();
+        let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
+        assert_eq!(bytes.as_ref(), &x[..]);
+    }
+
+    #[test]
+    fn eviction_moves_shared_bytes_into_the_survivors_charge() {
+        // The short entry owns A,B; the long entry shares A,B and owns C.
+        // The long entry is charged only C. When the short entry is
+        // evicted, the pooled bytes do not change — so the survivor's
+        // charge must grow to the full pool, never drift below it.
+        let segment_len = 16u64;
+        let total = segment_len * 3;
+        let tier = L2Tier::new(1 << 20);
+        let short = key("ns", &[1]);
+        let long = key("ns", &[2]);
+        let (w, digest) = wire(total as usize, 70);
+        let short_len = segment_len * 2;
+        tier.admit(
+            short.clone(),
+            2,
+            segment_digest(&w[..short_len as usize]),
+            &w[..short_len as usize],
+            manifest_shaped_mirror(&w[..short_len as usize], segment_len),
+            L2Origin::FromL3,
+        )
+        .expect("short admitted");
+        tier.admit(
+            long.clone(),
+            3,
+            digest,
+            &w,
+            manifest_shaped_mirror(&w, segment_len),
+            L2Origin::FromL3,
+        )
+        .expect("long admitted");
+        assert_eq!(
+            tier.peek(&long).expect("long peeked").distinct_bytes,
+            total,
+            "before the eviction the long entry owns the shared pool outright \
+             (lowest-key owner), so its charge covers the full physical pool"
+        );
+        let removed = tier.remove(&short).expect("short present");
+        assert_eq!(
+            removed.freed_bytes, 0,
+            "every short-entry segment stays in the pool under the long entry"
+        );
+        assert_eq!(
+            removed.retained_bytes, short_len,
+            "retained bytes come from actual pool references"
+        );
+        let stats = tier.stats();
+        assert_eq!(stats.bytes, total);
+        assert_eq!(
+            tier.peek(&long).expect("long peeked").distinct_bytes,
+            total,
+            "the survivor's charge must cover the physical pool it now owns"
+        );
+        // Aggregate invariant: the sum of all charges equals the pool.
+        let sum_of_charges = tier.peek(&long).expect("long").distinct_bytes;
+        assert_eq!(sum_of_charges, stats.bytes);
+    }
+
+    #[test]
+    fn repeated_same_digest_segments_report_retained_bytes_from_the_pool() {
+        // One 16-byte segment laid out twice: the pool holds 16 bytes, the
+        // logical wire is 32. Removing the only entry frees 16 and retains
+        // nothing — `logical − freed` would have overstated retention.
+        let tier = L2Tier::new(1 << 20);
+        let k = key("ns", &[3]);
+        let (seg, _) = wire(16, 80);
+        let wire_bytes: Vec<u8> = [seg.clone(), seg.clone()].concat();
+        let digest = segment_digest(&wire_bytes);
+        let mirror = ExactStatePayloadMirror::FullState {
+            layout: L2Layout {
+                payload_kind: ExactStatePayloadKind::FullState,
+                total_bytes: 32,
+                kv_bytes: 32,
+                recurrent_bytes: 0,
+                segments: vec![
+                    (segment_digest(&seg), 0..16),
+                    (segment_digest(&seg), 16..32),
+                ],
+            },
+        };
+        tier.admit(k.clone(), 2, digest, &wire_bytes, mirror, L2Origin::FromL3)
+            .expect("admitted");
+        let stats = tier.stats();
+        assert_eq!(stats.bytes, 16, "the pool holds the segment once");
+        assert_eq!(
+            tier.peek(&k).expect("peeked").distinct_bytes,
+            16,
+            "the charge is the distinct pool bytes, not the logical wire"
+        );
+        let removed = tier.remove(&k).expect("present");
+        assert_eq!(removed.freed_bytes, 16);
+        assert_eq!(removed.retained_bytes, 0, "an emptied pool retains nothing");
+        assert_eq!(tier.stats().bytes, 0);
+        assert_eq!(tier.stats().segments, 0);
+    }
+
+    #[test]
+    fn removing_a_zero_charge_sharer_never_inflates_survivor_charges() {
+        // A, B, C all share segment X; only the lowest-key entry is ever
+        // charged for X. Removing the other sharers — whatever their key
+        // order — must leave the survivor's charge at exactly X's size,
+        // never 2x or 3x the physical pool.
+        let tier = L2Tier::new(1 << 20);
+        let ka = key("ns", &[1]);
+        let kb = key("ns", &[2]);
+        let kc = key("ns", &[3]);
+        let (x, dx) = wire(64, 90);
+        for k in [&ka, &kb, &kc] {
+            tier.admit(
+                k.clone(),
+                1,
+                dx.clone(),
+                &x,
+                single_segment_mirror(&x),
+                L2Origin::FromL3,
+            )
+            .expect("admitted");
+        }
+        // After each removal, no surviving charge may exceed the pool.
+        let assert_charges_bounded = |tier: &L2Tier| {
+            let stats = tier.stats();
+            for k in [ka.clone(), kb.clone(), kc.clone()] {
+                if let Some(peeked) = tier.peek(&k) {
+                    assert!(
+                        peeked.distinct_bytes <= stats.bytes,
+                        "no charge may exceed the physical pool"
+                    );
+                }
+            }
+            stats
+        };
+        // Remove the two zero-charge sharers in both orders.
+        tier.remove(&kb).expect("B removed");
+        let stats = assert_charges_bounded(&tier);
+        assert_eq!(stats.bytes, 64);
+        tier.remove(&kc).expect("C removed");
+        let stats = assert_charges_bounded(&tier);
+        assert_eq!(stats.bytes, 64);
+        // The remaining A owns X exactly once.
+        assert_eq!(
+            tier.peek(&ka).expect("A peeked").distinct_bytes,
+            64,
+            "A's charge is X once, never the double- or triple-counted sum"
+        );
+        assert_eq!(tier.stats().bytes, 64);
+    }
+
+    #[test]
+    fn two_sharers_charge_moves_deterministically_to_the_lowest_key() {
+        let tier = L2Tier::new(1 << 20);
+        let ka = key("ns", &[10]);
+        let kb = key("ns", &[11]);
+        let (x, dx) = wire(48, 91);
+        for k in [&ka, &kb] {
+            tier.admit(
+                k.clone(),
+                1,
+                dx.clone(),
+                &x,
+                single_segment_mirror(&x),
+                L2Origin::FromL3,
+            )
+            .expect("admitted");
+        }
+        // Exactly one of the two is charged (the lowest key), the other
+        // carries zero.
+        let charged_a = tier.peek(&ka).expect("A").distinct_bytes;
+        let charged_b = tier.peek(&kb).expect("B").distinct_bytes;
+        assert_eq!(
+            charged_a + charged_b,
+            48,
+            "the sum of charges equals the physical pool"
+        );
+        assert!(charged_a == 48 || charged_b == 48, "one owns X");
+        assert!(charged_a == 0 || charged_b == 0, "the other pays nothing");
+        // Remove whichever one that is not the owner: the charge sum is
+        // unchanged.
+        let (owner, zero) = if charged_a == 48 {
+            (ka.clone(), kb.clone())
+        } else {
+            (kb.clone(), ka.clone())
+        };
+        tier.remove(&zero).expect("zero-charge sharer removed");
+        assert_eq!(tier.stats().bytes, 48);
+        assert_eq!(
+            tier.peek(&owner).expect("owner peeked").distinct_bytes,
+            48,
+            "the owner's charge is unchanged by a zero-charge removal"
+        );
+    }
+
+    #[test]
+    fn repeated_digest_with_survivor_reports_retained_once() {
+        // The removed entry references X twice in its layout; a survivor
+        // references X once. The pool retains X exactly once, so
+        // `retained_bytes` must be size(X) — never the double count the
+        // raw layout iteration would produce.
+        let tier = L2Tier::new(1 << 20);
+        let k_removed = key("ns", &[20]);
+        let k_survivor = key("ns", &[21]);
+        let (x, _) = wire(32, 95);
+        let x_digest = segment_digest(&x);
+
+        // Survivor: single-segment mirror over X.
+        tier.admit(
+            k_survivor.clone(),
+            1,
+            x_digest.clone(),
+            &x,
+            single_segment_mirror(&x),
+            L2Origin::FromL3,
+        )
+        .expect("survivor admitted");
+
+        // Removed entry: X laid out twice (X X).
+        let wire_bytes: Vec<u8> = [x.clone(), x.clone()].concat();
+        let digest = segment_digest(&wire_bytes);
+        let mirror = ExactStatePayloadMirror::FullState {
+            layout: L2Layout {
+                payload_kind: ExactStatePayloadKind::FullState,
+                total_bytes: 64,
+                kv_bytes: 64,
+                recurrent_bytes: 0,
+                segments: vec![(x_digest.clone(), 0..32), (x_digest, 32..64)],
+            },
+        };
+        tier.admit(
+            k_removed.clone(),
+            2,
+            digest,
+            &wire_bytes,
+            mirror,
+            L2Origin::FromL3,
+        )
+        .expect("removed entry admitted");
+        let stats = tier.stats();
+        assert_eq!(stats.bytes, 32, "the pool holds X once");
+
+        let removed = tier.remove(&k_removed).expect("removed entry present");
+        assert_eq!(
+            removed.retained_bytes, 32,
+            "retained is size(X) once, not the twice-referenced 64"
+        );
+        assert_eq!(removed.freed_bytes, 0, "the survivor keeps X");
+        assert_eq!(tier.stats().bytes, 32);
+        assert_eq!(tier.stats().segments, 1);
+        let hit = tier.get(&k_survivor).expect("survivor intact");
+        let payload = hit.to_payload();
+        let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
+        assert_eq!(bytes.as_ref(), &x[..]);
     }
 
     #[test]
