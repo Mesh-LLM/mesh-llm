@@ -342,18 +342,9 @@ impl BenefitPolicy {
     /// Offer a new candidate for admission. `exclusive_bytes` are bytes only
     /// this entry would reference; `shared` lists `(segment, size)` segments
     /// it would join (size is ignored if the segment is already registered).
+    /// `pinned` is the caller's active pin/hold set: pinned entries are
+    /// never selected for probation cap repair (#1650).
     pub fn consider_admission(
-        &mut self,
-        key: EntryKey,
-        exclusive_bytes: u64,
-        shared: Vec<(SegmentId, u64)>,
-        cost: CostSample,
-    ) -> AdmissionDecision {
-        self.consider_admission_excluding(key, exclusive_bytes, shared, cost, &[])
-    }
-
-    /// Admission with an explicit pinned/hold set excluded from cap repair.
-    pub fn consider_admission_excluding(
         &mut self,
         key: EntryKey,
         exclusive_bytes: u64,
@@ -389,7 +380,7 @@ impl BenefitPolicy {
             // Hard probation cap is part of admission: the decision carries
             // the cap-repair plan (pins excluded). Selection only — committed
             // removal stays with `remove` so victims become ghosts.
-            decision.probation_cap_repair = self.select_probation_cap_victims_excluding(pinned);
+            decision.probation_cap_repair = self.select_probation_cap_victims(pinned);
         }
         decision
     }
@@ -487,13 +478,7 @@ impl BenefitPolicy {
     /// Pinned entries are never selected (#1650: preserve active
     /// pins/holds). If pins make the cap temporarily unsatisfiable, the
     /// result reports the shortfall instead of selecting a pin.
-    pub fn select_probation_cap_victims(&self) -> CapRepair {
-        self.select_probation_cap_victims_excluding(&[])
-    }
-
-    /// Cap selection with an explicit pinned/hold set excluded from both
-    /// the zero-hit and fallback candidate classes.
-    pub fn select_probation_cap_victims_excluding(&self, pinned: &[EntryKey]) -> CapRepair {
+    pub fn select_probation_cap_victims(&self, pinned: &[EntryKey]) -> CapRepair {
         let cap = self.config.probation_byte_budget;
         if self.probation_bytes() <= cap {
             return CapRepair::satisfied();
@@ -574,13 +559,15 @@ impl BenefitPolicy {
         result
     }
 
-    /// Compatibility wrapper for callers that want cap enforcement applied
-    /// immediately: selects victims (see `select_probation_cap_victims`)
-    /// and commits their removals through `remove`, so they become ghosts.
+    /// Test-only convenience: cap enforcement with an empty pin set for the
+    /// comparison harness/traces, which model unpinned workloads. Store
+    /// callers holding pins must call `select_probation_cap_victims` with
+    /// their pin set and commit via `remove`.
+    #[cfg(test)]
     pub fn enforce_probation_cap(&mut self) -> Vec<EntryKey> {
-        let victims = self.select_probation_cap_victims().victims().to_vec();
+        let victims = self.select_probation_cap_victims(&[]).victims().to_vec();
         for key in victims.iter().copied() {
-            let _ = self.remove(key);
+            let _ = self.remove(key, &[]);
         }
         victims
     }
@@ -590,17 +577,9 @@ impl BenefitPolicy {
     /// recognized as a value signal. Removing an admitted co-reference can
     /// raise survivors' shares over the probation cap, so the removal
     /// response carries the cap-repair plan; commit its victims through
-    /// further `remove` calls. Pins are never selected.
-    pub fn remove(&mut self, key: EntryKey) -> Option<RemovalOutcome> {
-        self.remove_excluding(key, &[])
-    }
-
-    /// Removal with an explicit pinned/hold set excluded from cap repair.
-    pub fn remove_excluding(
-        &mut self,
-        key: EntryKey,
-        pinned: &[EntryKey],
-    ) -> Option<RemovalOutcome> {
+    /// further `remove` calls. `pinned` is the caller's active pin/hold
+    /// set: pins are never selected (#1650).
+    pub fn remove(&mut self, key: EntryKey, pinned: &[EntryKey]) -> Option<RemovalOutcome> {
         let entry = self.entries.remove(&key)?;
         self.segments.release(&entry.segments, key);
         self.insert_ghost(
@@ -612,7 +591,7 @@ impl BenefitPolicy {
                 last_observation: self.clock,
             },
         );
-        let cap_repair = self.select_probation_cap_victims_excluding(pinned);
+        let cap_repair = self.select_probation_cap_victims(pinned);
         Some(RemovalOutcome {
             entry,
             probation_cap_repair: cap_repair,
@@ -624,7 +603,7 @@ impl BenefitPolicy {
     /// use `remove` so the hard probation cap cannot be bypassed.
     #[cfg(test)]
     pub fn remove_without_cap_repair(&mut self, key: EntryKey) -> Option<PolicyEntry> {
-        let outcome = self.remove(key)?;
+        let outcome = self.remove(key, &[])?;
         Some(outcome.entry)
     }
 }

@@ -15,7 +15,7 @@ fn cost(cold: f64, restore: f64) -> CostSample {
 #[test]
 fn rejects_entries_with_no_net_benefit() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    let decision = policy.consider_admission(1, 1 << 20, vec![], cost(100.0, 150.0));
+    let decision = policy.consider_admission(1, 1 << 20, vec![], cost(100.0, 150.0), &[]);
     assert_eq!(decision.kind, AdmissionDecisionKind::Reject);
     assert!(policy.is_empty());
 }
@@ -23,7 +23,7 @@ fn rejects_entries_with_no_net_benefit() {
 #[test]
 fn new_entries_start_in_probation_and_promote_on_second_hit() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 120.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 120.0), &[]);
     assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Probation);
 
     assert!(policy.record_hit(1, cost(400.0, 120.0)).is_none()); // first hit
@@ -35,7 +35,7 @@ fn new_entries_start_in_probation_and_promote_on_second_hit() {
 #[test]
 fn score_divides_by_exclusive_bytes() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 2 << 20, vec![], cost(300.0, 100.0));
+    policy.consider_admission(1, 2 << 20, vec![], cost(300.0, 100.0), &[]);
     policy.record_hit(1, cost(300.0, 100.0));
     policy.record_hit(1, cost(300.0, 100.0));
     let score = policy.score(1).unwrap();
@@ -49,9 +49,9 @@ fn score_divides_by_exclusive_bytes() {
 fn shared_segments_get_fractional_credit_in_score() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
     let seg = (7u64, 3 << 20);
-    policy.consider_admission(1, 0, vec![seg], cost(400.0, 100.0));
-    policy.consider_admission(2, 0, vec![seg], cost(400.0, 100.0));
-    policy.consider_admission(3, 0, vec![seg], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![seg], cost(400.0, 100.0), &[]);
+    policy.consider_admission(2, 0, vec![seg], cost(400.0, 100.0), &[]);
+    policy.consider_admission(3, 0, vec![seg], cost(400.0, 100.0), &[]);
     // Each entry charges 1MiB of the shared 3MiB segment.
     assert_eq!(policy.segments.total_bytes(), 3 << 20);
     for key in [1u64, 2, 3] {
@@ -68,8 +68,8 @@ fn eviction_picks_lowest_score_deterministically() {
         ..PolicyConfig::default()
     });
     // Same value, different footprint: smaller footprint -> higher score.
-    policy.consider_admission(1, 8 << 20, vec![], cost(400.0, 100.0));
-    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 8 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     for key in [1u64, 2] {
         policy.record_hit(key, cost(400.0, 100.0));
         policy.record_hit(key, cost(400.0, 100.0));
@@ -85,8 +85,8 @@ fn pinned_entries_are_not_victims() {
         grace_observations: 0,
         ..PolicyConfig::default()
     });
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     let victims = policy.choose_victims(1 << 20, &[2]);
     assert_eq!(victims.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![1]);
 }
@@ -94,7 +94,7 @@ fn pinned_entries_are_not_victims() {
 #[test]
 fn decay_shrinks_stale_reuse_probability() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     for _ in 0..10 {
         policy.record_hit(1, cost(400.0, 100.0));
     }
@@ -124,12 +124,13 @@ fn policy_decisions_are_deterministic_across_runs() {
                     access.exclusive_bytes,
                     vec![],
                     cost(access.cold_prefill_cost, access.restore_cost),
+                    &[],
                 );
             }
             for (key, verdict) in policy.choose_victims(1 << 30, &[]) {
                 if verdict == EvictionVerdict::Evict {
                     evictions.push(key);
-                    policy.remove(key);
+                    policy.remove(key, &[]);
                 }
             }
         }
@@ -168,12 +169,13 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
                 access.exclusive_bytes,
                 vec![],
                 cost(access.cold_prefill_cost, access.restore_cost),
+                &[],
             );
             policy_written += access.exclusive_bytes;
             // Hard probation cap is enforced as part of admission: commit the
             // selected victims.
             for key in decision.probation_cap_repair.victims().iter().copied() {
-                policy.remove(key);
+                policy.remove(key, &[]);
             }
         }
         let mut used: u64 = policy.entries.values().map(|e| e.exclusive_bytes).sum();
@@ -184,7 +186,7 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
             }
             for (key, verdict) in victims {
                 if verdict == EvictionVerdict::Evict {
-                    policy.remove(key);
+                    policy.remove(key, &[]);
                 }
             }
             used = policy.entries.values().map(|e| e.exclusive_bytes).sum();
@@ -272,6 +274,7 @@ fn invalid_costs_and_config_are_rejected_not_panicked() {
             cold_prefill_cost: nan,
             restore_cost: 10.0,
         },
+        &[],
     );
     assert!(policy.score(1).is_none()); // NaN never enters the ordering
     assert!(
@@ -311,7 +314,7 @@ fn choose_victims_never_returns_a_duplicate_key() {
         ..PolicyConfig::default()
     });
     for key in 1..=8u64 {
-        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     }
     let victims = policy.choose_victims(u64::MAX, &[]);
     let keys: Vec<u64> = victims.iter().map(|(k, _)| *k).collect();
@@ -332,9 +335,9 @@ fn victim_selection_counts_marginal_physical_bytes_of_shared_segments() {
         ..PolicyConfig::default()
     });
     let seg = (1u64, 3 << 20);
-    policy.consider_admission(1, 0, vec![seg], cost(400.0, 100.0));
-    policy.consider_admission(2, 0, vec![seg], cost(400.0, 100.0));
-    policy.consider_admission(3, 0, vec![seg], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![seg], cost(400.0, 100.0), &[]);
+    policy.consider_admission(2, 0, vec![seg], cost(400.0, 100.0), &[]);
+    policy.consider_admission(3, 0, vec![seg], cost(400.0, 100.0), &[]);
     for key in [1u64, 2, 3] {
         policy.record_hit(key, cost(400.0, 100.0));
         policy.record_hit(key, cost(400.0, 100.0));
@@ -358,11 +361,11 @@ fn probation_byte_cap_is_enforced_over_grace() {
         ..PolicyConfig::default()
     });
     for key in 1..=10u64 {
-        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     }
     assert!(policy.probation_bytes() > 2 << 20);
     for key in policy.enforce_probation_cap() {
-        policy.remove(key);
+        policy.remove(key, &[]);
     }
     assert!(
         policy.probation_bytes() <= 2 << 20,
@@ -381,10 +384,10 @@ fn recurrence_after_eviction_is_a_value_signal() {
         grace_observations: 0,
         ..PolicyConfig::default()
     });
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert!(policy.record_hit(1, cost(400.0, 100.0)).is_none()); // first hit
-    policy.remove(1); // evicted before the second hit
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(1, &[]); // evicted before the second hit
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert_eq!(
         policy.entry(1).unwrap().state,
         PolicyEntryState::Admitted,
@@ -405,11 +408,12 @@ fn invalid_cost_samples_never_mutate_entry_state() {
             cold_prefill_cost: nan,
             restore_cost: 10.0,
         },
+        &[],
     );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert!(policy.is_empty());
     // A valid admission followed by an invalid hit must not poison state.
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     let before = policy.entry(1).unwrap().clone();
     assert!(
         policy
@@ -440,9 +444,10 @@ fn probation_cap_counts_shared_charge_and_is_enforced_by_admission() {
     });
     let mut victims = Vec::new();
     for key in 1..=6u64 {
-        let decision = policy.consider_admission(key, 0, vec![(1u64, 3 << 20)], cost(400.0, 100.0));
+        let decision =
+            policy.consider_admission(key, 0, vec![(1u64, 3 << 20)], cost(400.0, 100.0), &[]);
         for v in decision.probation_cap_repair.victims().iter().copied() {
-            policy.remove(v);
+            policy.remove(v, &[]);
             victims.push(v);
         }
     }
@@ -464,10 +469,10 @@ fn ghosts_are_bounded_by_count_and_age() {
         ..PolicyConfig::default()
     });
     for key in 0..64u64 {
-        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0), &[]);
         for (_, verdict) in policy.choose_victims(u64::MAX, &[]) {
             if verdict == EvictionVerdict::Evict {
-                policy.remove(key);
+                policy.remove(key, &[]);
                 break;
             }
         }
@@ -485,13 +490,13 @@ fn ghosts_are_bounded_by_count_and_age() {
         grace_observations: 0,
         ..PolicyConfig::default()
     });
-    policy.consider_admission(99, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(99);
+    policy.consider_admission(99, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(99, &[]);
     assert!(policy.ghost(99).is_some());
     for i in 0..50u64 {
         // Unique keys: an already-resident key is rejected before the clock
         // advances, so age must be driven by fresh observations.
-        policy.consider_admission(1000 + i, 1 << 20, vec![], cost(400.0, 100.0));
+        policy.consider_admission(1000 + i, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     }
     assert!(
         policy.ghost(99).is_none(),
@@ -509,15 +514,15 @@ fn probation_cap_selection_is_not_committed_removal() {
         ..PolicyConfig::default()
     });
     for key in 1..=4u64 {
-        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     }
-    let victims = policy.select_probation_cap_victims().victims().to_vec();
+    let victims = policy.select_probation_cap_victims(&[]).victims().to_vec();
     assert!(!victims.is_empty());
     assert_eq!(policy.len(), 4, "selection must not remove entries");
-    let decision = policy.consider_admission(5, 1 << 20, vec![], cost(400.0, 100.0));
+    let decision = policy.consider_admission(5, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert!(!decision.probation_cap_repair.victims().is_empty());
     for key in decision.probation_cap_repair.victims() {
-        policy.remove(*key);
+        policy.remove(*key, &[]);
     }
     // Committed removals become ghosts (bounded).
     assert!(policy.ghost_count() > 0);
@@ -532,8 +537,8 @@ fn invalid_observation_leaves_clock_and_ghosts_untouched() {
         ..PolicyConfig::default()
     });
     // Seed one ghost.
-    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(9);
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(9, &[]);
     assert!(policy.ghost(9).is_some());
 
     // Invalid admission: clock must not advance, ghost must survive
@@ -547,13 +552,14 @@ fn invalid_observation_leaves_clock_and_ghosts_untouched() {
             cold_prefill_cost: nan,
             restore_cost: 10.0,
         },
+        &[],
     );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert_eq!(policy.clock_debug(), before_clock);
     assert!(policy.ghost(9).is_some());
 
     // Invalid hit: same invariants.
-    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     let before_clock = policy.clock_debug();
     assert!(
         policy
@@ -575,7 +581,7 @@ fn many_reference_small_segment_still_charges_probation_bytes() {
     // truncation would charge 0; the class total must still be 4.
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
     for key in 1..=9u64 {
-        policy.consider_admission(key, 0, vec![(1u64, 4)], cost(400.0, 100.0));
+        policy.consider_admission(key, 0, vec![(1u64, 4)], cost(400.0, 100.0), &[]);
     }
     assert!(
         policy.probation_bytes() >= 4,
@@ -587,23 +593,23 @@ fn many_reference_small_segment_still_charges_probation_bytes() {
         probation_byte_budget: 0,
         ..PolicyConfig::default()
     });
-    let decision = policy.consider_admission(1, 0, vec![(1u64, 4)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(1, 0, vec![(1u64, 4)], cost(400.0, 100.0), &[]);
     assert!(!decision.probation_cap_repair.victims().is_empty());
 }
 
 #[test]
 fn ghost_promoted_recurrence_returns_admit_persist() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert!(policy.record_hit(1, cost(400.0, 100.0)).is_none()); // hits = 1
-    policy.remove(1);
-    let decision = policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(1, &[]);
+    let decision = policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert_eq!(decision.kind, AdmissionDecisionKind::AdmitPersist);
     assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Admitted);
     // Non-promoted recurrence stays AdmitProbation/Probation.
-    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(2);
-    let decision = policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(2, &[]);
+    let decision = policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     assert_eq!(decision.kind, AdmissionDecisionKind::AdmitProbation);
     assert_eq!(policy.entry(2).unwrap().state, PolicyEntryState::Probation);
 }
@@ -621,8 +627,8 @@ fn zero_ghost_capacity_is_a_real_zero_bound() {
         }
         .is_valid()
     );
-    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(1);
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(1, &[]);
     assert_eq!(policy.ghost_count(), 0, "zero capacity must retain nothing");
 }
 
@@ -639,9 +645,9 @@ fn cap_victim_selection_covers_recomputed_shared_shares() {
     // segment (3 MiB share each → class charge 3*(1+3) = 12 MiB > 9 MiB).
     for key in 1..=3u64 {
         let decision =
-            policy.consider_admission(key, 1 << 20, vec![(7u64, 9 << 20)], cost(400.0, 100.0));
+            policy.consider_admission(key, 1 << 20, vec![(7u64, 9 << 20)], cost(400.0, 100.0), &[]);
         for v in decision.probation_cap_repair.victims().iter().copied() {
-            policy.remove(v);
+            policy.remove(v, &[]);
         }
     }
     assert!(
@@ -656,8 +662,13 @@ fn cap_victim_selection_covers_recomputed_shared_shares() {
 #[test]
 fn duplicate_segment_references_are_rejected() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    let decision =
-        policy.consider_admission(1, 0, vec![(42u64, 100), (42u64, 100)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(
+        1,
+        0,
+        vec![(42u64, 100), (42u64, 100)],
+        cost(400.0, 100.0),
+        &[],
+    );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert!(
         decision
@@ -667,8 +678,8 @@ fn duplicate_segment_references_are_rejected() {
     assert!(policy.is_empty());
     // Conflicting size for a known segment is also rejected.
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 0, vec![(42u64, 100)], cost(400.0, 100.0));
-    let decision = policy.consider_admission(2, 0, vec![(42u64, 200)], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![(42u64, 100)], cost(400.0, 100.0), &[]);
+    let decision = policy.consider_admission(2, 0, vec![(42u64, 200)], cost(400.0, 100.0), &[]);
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert!(
         decision
@@ -676,7 +687,7 @@ fn duplicate_segment_references_are_rejected() {
             .contains(&"segment-size-conflict".to_string())
     );
     // Same size for a known segment is fine.
-    let decision = policy.consider_admission(3, 0, vec![(42u64, 100)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(3, 0, vec![(42u64, 100)], cost(400.0, 100.0), &[]);
     assert_eq!(decision.verdict, AdmissionVerdict::Admit);
     // One 100-byte segment: class charge is exactly 100.
     assert_eq!(policy.probation_bytes(), 100);
@@ -699,19 +710,19 @@ fn cap_victim_selection_reproduces_reported_counterexample() {
     // state with cap victims disabled (huge probation budget), then swap
     // in the real cap and select.
     for key in 1..=3u64 {
-        policy.consider_admission(key, 1 << 20, vec![(7u64, 8 << 20)], cost(400.0, 100.0));
+        policy.consider_admission(key, 1 << 20, vec![(7u64, 8 << 20)], cost(400.0, 100.0), &[]);
     }
     let before = policy.probation_bytes();
     assert!(before > 9 << 20, "before {}", before);
     // Now select against the real cap by constructing the over-cap state
     // through the public API: reset the budget by direct selection.
     let victims = policy
-        .with_probation_budget(9 << 20, |p| p.select_probation_cap_victims())
+        .with_probation_budget(9 << 20, |p| p.select_probation_cap_victims(&[]))
         .victims()
         .to_vec();
     assert!(!victims.is_empty());
     for key in &victims {
-        policy.remove(*key);
+        policy.remove(*key, &[]);
     }
     let after = policy.probation_bytes();
     assert!(
@@ -728,12 +739,12 @@ fn conflict_on_a_later_segment_leaves_state_untouched() {
     // conflicts: [(2,100),(1,200)]. The reject must leave the ledger without
     // segment 2, no entry for the rejected key, and any matching ghost intact.
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0), &[]);
 
     // Seed a ghost for the key that will be rejected so ghost survival is
     // observable.
-    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(9);
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(9, &[]);
     assert!(policy.ghost(9).is_some());
 
     let decision = policy.consider_admission(
@@ -741,6 +752,7 @@ fn conflict_on_a_later_segment_leaves_state_untouched() {
         1 << 20,
         vec![(2u64, 100), (1u64, 200)],
         cost(400.0, 100.0),
+        &[],
     );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert!(
@@ -778,12 +790,17 @@ fn structural_rejects_leave_clock_and_zero_horizon_ghosts_untouched() {
 
     // Duplicate segment IDs.
     let mut policy = mk();
-    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(9);
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(9, &[]);
     assert!(policy.ghost(9).is_some());
     let clock = policy.clock_debug();
-    let decision =
-        policy.consider_admission(1, 0, vec![(42u64, 100), (42u64, 100)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(
+        1,
+        0,
+        vec![(42u64, 100), (42u64, 100)],
+        cost(400.0, 100.0),
+        &[],
+    );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert_eq!(
         policy.clock_debug(),
@@ -797,9 +814,9 @@ fn structural_rejects_leave_clock_and_zero_horizon_ghosts_untouched() {
 
     // Size conflict on a later segment.
     let mut policy = mk();
-    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
-    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
-    policy.remove(9);
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0), &[]);
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.remove(9, &[]);
     assert!(policy.ghost(9).is_some());
     let clock = policy.clock_debug();
     let decision = policy.consider_admission(
@@ -807,6 +824,7 @@ fn structural_rejects_leave_clock_and_zero_horizon_ghosts_untouched() {
         1 << 20,
         vec![(2u64, 100), (1u64, 200)],
         cost(400.0, 100.0),
+        &[],
     );
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert_eq!(
@@ -823,10 +841,10 @@ fn structural_rejects_leave_clock_and_zero_horizon_ghosts_untouched() {
 #[test]
 fn already_resident_key_rejection_leaves_no_stale_references() {
     let mut policy = BenefitPolicy::new(PolicyConfig::default());
-    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0), &[]);
     // Re-admitting a resident key is rejected and must not swap the entry's
     // segment list or leak old ledger references.
-    let decision = policy.consider_admission(1, 0, vec![(2u64, 50)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(1, 0, vec![(2u64, 50)], cost(400.0, 100.0), &[]);
     assert_eq!(decision.verdict, AdmissionVerdict::Reject);
     assert!(
         decision
@@ -854,10 +872,11 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
         ..PolicyConfig::default()
     });
     // Build A as ghost-promoted: admit, one hit, evict (ghost), recur.
-    policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0), &[]);
     policy.record_hit(1, cost(400.0, 100.0));
     policy.remove_without_cap_repair(1);
-    let decision = policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    let decision =
+        policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0), &[]);
     assert_eq!(decision.kind, AdmissionDecisionKind::AdmitPersist);
     for v in decision.probation_cap_repair.victims().iter().copied() {
         policy.remove_without_cap_repair(v);
@@ -865,7 +884,8 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
     assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Admitted);
 
     // P shares S: half-share = 0.75 MiB fits the 1 MiB cap.
-    let decision = policy.consider_admission(2, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    let decision =
+        policy.consider_admission(2, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0), &[]);
     assert_eq!(decision.verdict, AdmissionVerdict::Admit);
     for v in decision.probation_cap_repair.victims().iter().copied() {
         policy.remove_without_cap_repair(v);
@@ -880,7 +900,7 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
     );
 
     // Remove the admitted co-reference: P's charge rises to all of S.
-    let outcome = policy.remove(1).expect("A removed");
+    let outcome = policy.remove(1, &[]).expect("A removed");
     assert!(
         !outcome.probation_cap_repair.victims().is_empty(),
         "removal must carry cap victims for the risen share"
@@ -905,15 +925,14 @@ fn cap_repair_prefers_unpinned_over_older_pinned_probationer() {
         ..PolicyConfig::default()
     });
     for key in 1..=2u64 {
-        let decision =
-            policy.consider_admission_excluding(key, 1 << 20, vec![], cost(400.0, 100.0), &[1]);
+        let decision = policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0), &[1]);
         // Do not commit yet: build the over-cap state first.
         assert!(
             !decision.probation_cap_repair.victims().contains(&1),
             "admission never selects a pin"
         );
     }
-    let repair = policy.select_probation_cap_victims_excluding(&[1]);
+    let repair = policy.select_probation_cap_victims(&[1]);
     assert!(
         !repair.victims().contains(&1),
         "pinned key selected as victim: {:?}",
@@ -922,7 +941,7 @@ fn cap_repair_prefers_unpinned_over_older_pinned_probationer() {
     assert!(repair.victims().contains(&2));
     assert!(!repair.is_deferred());
     for v in repair.victims().iter().copied() {
-        policy.remove_excluding(v, &[1]);
+        policy.remove(v, &[1]);
     }
     assert!(policy.probation_bytes() <= 1 << 20);
     assert!(policy.entries.contains_key(&1), "pin must survive repair");
@@ -937,7 +956,7 @@ fn all_pinned_cap_is_deferred_with_shortfall_never_a_pin() {
     let pinned = [1u64, 2];
     for (n, key) in pinned.iter().enumerate() {
         let decision =
-            policy.consider_admission_excluding(*key, 1 << 20, vec![], cost(400.0, 100.0), &pinned);
+            policy.consider_admission(*key, 1 << 20, vec![], cost(400.0, 100.0), &pinned);
         let repair = &decision.probation_cap_repair;
         assert!(
             repair.victims().is_empty(),
@@ -961,14 +980,12 @@ fn all_pinned_cap_is_deferred_with_shortfall_never_a_pin() {
     // The removal path honors pins identically: a caller-forced removal of
     // the pinned key 1 leaves key 2 at exactly the cap — satisfied, no pin
     // selected.
-    let outcome = policy
-        .remove_excluding(1, &pinned)
-        .expect("entry 1 removed");
+    let outcome = policy.remove(1, &pinned).expect("entry 1 removed");
     assert!(!outcome.probation_cap_repair.is_deferred());
     assert!(outcome.probation_cap_repair.victims().is_empty());
     assert!(policy.entries.contains_key(&2));
     // Once the pin releases, repair becomes satisfiable again (key 2 is
     // selectable again).
-    let repair = policy.select_probation_cap_victims_excluding(&[]);
+    let repair = policy.select_probation_cap_victims(&[]);
     assert!(!repair.is_deferred());
 }
