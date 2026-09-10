@@ -41,6 +41,7 @@ struct Args {
     republish: bool,
     confirm: bool,
     dry_run: bool,
+    exclude_repos: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -368,6 +369,7 @@ impl Args {
             republish: false,
             confirm: false,
             dry_run: true,
+            exclude_repos: Vec::new(),
         };
 
         let mut iter = std::env::args().skip(1);
@@ -416,6 +418,12 @@ impl Args {
                 }
                 "--catalog-direct" => args.catalog_direct = true,
                 "--no-catalog-direct" => args.catalog_direct = false,
+                "--exclude-repo" => {
+                    let value = next_value(&mut iter, &flag)?;
+                    if !value.is_empty() && !args.exclude_repos.contains(&value) {
+                        args.exclude_repos.push(value);
+                    }
+                }
                 "--republish" => args.republish = true,
                 "--confirm" => {
                     args.confirm = true;
@@ -480,7 +488,8 @@ fn print_help() {
            --job-poll-seconds N\n\
            --split-candidate-vram-gib GiB\n\
            --no-catalog-direct\n\
-           --republish (re-queue even if published/catalogued; replaces the existing package in place)"
+           --republish (re-queue even if published/catalogued; replaces the existing package in place)\n\
+           --exclude-repo org/repo (skip a quarantined source repo; repeatable)"
     );
 }
 
@@ -688,6 +697,17 @@ async fn build_candidate(
     model: RankedModel,
     args: &Args,
 ) -> Result<Option<Candidate>> {
+    if args
+        .exclude_repos
+        .iter()
+        .any(|excluded| excluded.eq_ignore_ascii_case(&model.repo_id))
+    {
+        eprintln!(
+            "skip {}: excluded by --exclude-repo (quarantined)",
+            model.repo_id
+        );
+        return Ok(None);
+    }
     let Some(source_info) = model_repo_info(client, &model.repo_id).await? else {
         eprintln!("skip {}: source repo no longer exists", model.repo_id);
         return Ok(None);
