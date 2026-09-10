@@ -1,12 +1,8 @@
 name: Agentic Replay (micstudio)
 
-# Coding-agent replay benchmark on the pinned micstudio runner.
-#
-# Scheduled runs and manual dispatches from main execute trusted main and
-# publish results to the HF dataset repo. Manual dispatches from any other
-# branch run that branch, gate against history, and print the numbers to the
-# run summary without writing to the dataset. The dataset repo is public, so
-# branch-controlled code never needs — or sees — a write-capable HF token.
+# Coding-agent replay benchmark on the pinned micstudio runner. Scheduled runs
+# and manual dispatches execute trusted main; caller-selected branch content
+# never reaches the persistent runner.
 on:
   schedule:
     - cron: "23 14 * * *"
@@ -16,10 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Branch dispatches get a per-ref group so they can never queue-block the
-  # nightly schedule; scheduled and main dispatches stay serialized in the
-  # shared group (this workflow is the only consumer of micstudio).
-  group: agentic-replay-nightly-${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && format('branch-{0}', github.ref) || 'default' }}
+  group: agentic-replay-nightly
   cancel-in-progress: false
 
 env:
@@ -28,12 +21,13 @@ env:
 
 jobs:
   replay:
-    if: github.repository == 'Mesh-LLM/mesh-llm'
+    if: >-
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.ref == 'refs/heads/main'
     runs-on: [self-hosted, X64, macOS, family-certify, agentic-replay]
     timeout-minutes: 720
     steps:
-      - name: Resolve run context
-        id: meta
+      - name: Verify trusted replay context
         shell: bash
         run: |
           set -euo pipefail
@@ -41,13 +35,6 @@ jobs:
             echo "agentic replay requires the micstudio runner; got '$RUNNER_NAME'" >&2
             exit 1
           fi
-          # Label for this run's cells; branch names may contain '/'.
-          label=$(printf '%s' "$GITHUB_REF_NAME" | tr -C 'a-zA-Z0-9._-' '-')
-          {
-            echo "is_main=$([[ "$GITHUB_REF_NAME" == main ]] && echo true || echo false)"
-            echo "replay_ref=$GITHUB_REF_NAME"
-            echo "label=$label"
-          } >> "$GITHUB_OUTPUT"
           # micstudio exports its pre-warmed HF cache as HF_CACHE; the hf CLI
           # needs the standard HF_HOME/HF_HUB_CACHE names. These are process
           # environment, not step outputs — write them to GITHUB_ENV so the
@@ -59,7 +46,7 @@ jobs:
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ steps.meta.outputs.replay_ref }}
+          ref: main
           persist-credentials: false
 
       - name: Download and verify pinned inputs
@@ -158,8 +145,6 @@ jobs:
           PY
 
       - name: Replay each pinned model
-        env:
-          LABEL: ${{ steps.meta.outputs.label }}
         run: |
           set -euo pipefail
           # Replay shape comes from the matrix (like the repair re-run) so the
@@ -175,7 +160,7 @@ jobs:
           for family in $(python3 -c "import json;print(' '.join(m['family'] for m in json.load(open('$MATRIX_FILE'))['models']))"); do
             model_uri=$(python3 -c "import json;m=[m for m in json.load(open('$MATRIX_FILE'))['models'] if m['family']=='$family'][0];print(m['repo']+'@'+m['revision']+'/'+m['file'])")
             if ! python3 evals/agentic-replay.py run \
-                --ref "${LABEL}=HEAD" \
+                --ref main=HEAD \
                 --model "$model_uri" \
                 --backend metal \
                 --trajectories-per-framework "$TPFS" \
@@ -192,15 +177,12 @@ jobs:
       - name: Summarize and gate against history
         id: history
         if: ${{ !cancelled() }}
-        env:
-          LABEL: ${{ steps.meta.outputs.label }}
-          IS_MAIN: ${{ steps.meta.outputs.is_main }}
         run: |
           set -euo pipefail
           OUTPUT_DIR="$RUNNER_TEMP/agentic-replay-artifacts"
           HISTORY_LOCAL="$RUNNER_TEMP/agentic-replay-history"
-          # The dataset repo is public: history downloads are anonymous, so
-          # no HF token is exposed to branch-controlled code in this step.
+          # The dataset repo is public, so history downloads are anonymous and
+          # the write-capable token remains confined to the publish step.
           # Replay parameters via a plain file: process substitution breaks on
           # this runner's bash/Python combination (/dev/fd is not passable).
           python3 -c "import json;print(json.dumps(json.load(open('$MATRIX_FILE'))['replay']))" \
@@ -257,7 +239,7 @@ jobs:
           args=(
             --matrix "$MATRIX_FILE"
             --replay-dir "$OUTPUT_DIR"
-            --label "$LABEL"
+            --label main
             --hardware "$OUTPUT_DIR/hardware.json"
             --source-sha "$(git rev-parse HEAD)"
             --replay "$RUNNER_TEMP/agentic-replay-params.json"
@@ -275,14 +257,10 @@ jobs:
             --latest "$OUTPUT_DIR/summary/history.jsonl" \
             --output "$OUTPUT_DIR/card.md"
           cat "$OUTPUT_DIR/card.md" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$IS_MAIN" != "true" ]]; then
-            echo "branch run — latest numbers vs history are in the step summary above; dataset not written"
-            exit 0
-          fi
           exit "$gate_rc"
 
       - name: Publish run shard and card (main only)
-        if: ${{ !cancelled() && steps.history.outcome == 'success' && steps.meta.outputs.is_main == 'true' }}
+        if: ${{ !cancelled() && steps.history.outcome == 'success' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -297,7 +275,7 @@ jobs:
             --commit-message "card refresh $RUN_DATE"
 
       - name: Open repair PR on regression (opencode loop)
-        if: failure() && steps.meta.outputs.is_main == 'true'
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
           # Same location the summarize step downloaded the baseline to.

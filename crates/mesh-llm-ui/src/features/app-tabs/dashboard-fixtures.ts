@@ -28,7 +28,7 @@ export const STATUS_METRICS: StatusMetric[] = [
   {
     id: 'mesh-vram',
     icon: metricIcon(HardDrive),
-    label: 'Mesh VRAM',
+    label: 'Mesh Capacity',
     value: '160.5',
     unit: 'GB',
     meta: '57% free',
