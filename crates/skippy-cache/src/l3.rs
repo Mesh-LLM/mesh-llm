@@ -54,7 +54,16 @@ const ROOT_LOCK_FILE: &str = ".owner.lock";
 const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// On-disk format version stamped into every manifest. A released change to
 /// the layout bumps this and makes older entries misses, never migrations.
-pub const MANIFEST_VERSION: u32 = 2;
+///
+/// Version 3 requires an explicit [`PayloadCodec`]; a manifest at this version
+/// with the codec field removed is rejected rather than silently read as raw.
+pub const MANIFEST_VERSION: u32 = 3;
+
+/// The pre-codec-identity manifest format. These entries predate codec
+/// identity, are always raw by construction, and are decoded as raw through
+/// the explicit legacy path in [`decode_manifest`]. New manifests are never
+/// written at this version.
+pub const LEGACY_MANIFEST_VERSION: u32 = 2;
 
 /// Identity of the only implemented payload codec: raw, uncompressed exact
 /// state. Its bytes are the segments verbatim.
@@ -68,10 +77,12 @@ pub const CODEC_RAW_VERSION: u32 = 1;
 ///
 /// Only [`CODEC_RAW`] is implemented today. The identity is recorded so future
 /// lossless or compressed codecs are namespaced rather than guessed, and so an
-/// older build refuses a payload it cannot decode instead of returning
-/// corrupt state. Backward compatibility is preserved by [`Default`]: a
-/// manifest written before codec identity existed carries no `codec` field and
-/// deserializes as raw, which is exactly what those bytes are.
+/// older build refuses a payload it cannot decode instead of returning corrupt
+/// state. Backward compatibility is handled by the manifest version, not a
+/// serde default: a current-version manifest must stamp its codec explicitly
+/// (so the field cannot be stripped to force a raw reinterpretation), while a
+/// [`LEGACY_MANIFEST_VERSION`] manifest predates codec identity and is
+/// normalized to raw on decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PayloadCodec {
     /// Codec name, e.g. `raw`.
@@ -125,10 +136,13 @@ pub struct HandoffManifest {
     /// identity a loader must match before importing this state.
     pub state_identity: String,
     pub payload_kind: String,
-    /// Codec identity of the segment payload bytes. A manifest written before
-    /// codec identity existed has no `codec` field and is read as raw.
+    /// Codec identity of the segment payload bytes. Always present on a decoded
+    /// manifest: a current-version manifest must carry it explicitly, and a
+    /// [`LEGACY_MANIFEST_VERSION`] manifest is normalized to raw on decode. The
+    /// field is optional only so a version-3 manifest with the codec stripped
+    /// is detectable and rejected rather than silently defaulted to raw.
     #[serde(default)]
-    pub codec: PayloadCodec,
+    pub codec: Option<PayloadCodec>,
     pub total_bytes: u64,
     /// BLAKE3 of the assembled payload; also the manifest's key.
     pub payload_digest: String,
@@ -162,7 +176,7 @@ impl HandoffManifest {
             model_identity,
             state_identity,
             payload_kind,
-            codec: PayloadCodec::raw(),
+            codec: Some(PayloadCodec::raw()),
             total_bytes: 0,
             payload_digest: String::new(),
             segments: Vec::new(),
@@ -1689,29 +1703,63 @@ impl HandoffSegmentStore {
 /// Refuse a manifest whose payload codec this build cannot decode, before any
 /// segment is read or reassembled. Keeps unknown codecs from being committed
 /// (nothing unassemblable is ever persisted) and from being assembled (an
-/// unknown codec is a miss, never a silent misinterpretation of the bytes).
+/// unknown codec is a miss, never a silent misinterpretation of the bytes). A
+/// missing identity is treated as unsupported, not defaulted to raw.
 fn reject_unsupported_codec(manifest: &HandoffManifest) -> Result<()> {
-    if !manifest.codec.is_supported() {
-        bail!(
+    match manifest.codec.as_ref() {
+        Some(codec) if codec.is_supported() => Ok(()),
+        Some(codec) => bail!(
             "manifest {} uses unsupported codec {}/{}; this build assembles only {}/{}",
             manifest.payload_digest,
-            manifest.codec.name,
-            manifest.codec.version,
+            codec.name,
+            codec.version,
             CODEC_RAW,
             CODEC_RAW_VERSION
-        );
+        ),
+        None => bail!(
+            "manifest {} has no codec identity; this build requires an explicit codec",
+            manifest.payload_digest
+        ),
     }
-    Ok(())
 }
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
-    let manifest: HandoffManifest = serde_json::from_slice(bytes).context("malformed manifest")?;
-    if manifest.version != MANIFEST_VERSION {
-        bail!(
-            "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
-            manifest.version
-        );
+    let mut manifest: HandoffManifest =
+        serde_json::from_slice(bytes).context("malformed manifest")?;
+    match manifest.version {
+        MANIFEST_VERSION => {
+            // The current format must stamp its codec explicitly. A missing
+            // field here means it was stripped to force a raw reinterpretation
+            // of possibly non-raw bytes — reject, never default to raw.
+            if manifest.codec.is_none() {
+                bail!(
+                    "manifest {payload_digest} at version {MANIFEST_VERSION} is missing its required codec identity"
+                );
+            }
+        }
+        LEGACY_MANIFEST_VERSION => {
+            // Pre-codec-identity manifests are raw by construction. Accept an
+            // absent codec (normalize to raw) or an explicit raw codec; a
+            // legacy manifest cannot legitimately name a non-raw codec.
+            match manifest.codec {
+                None => manifest.codec = Some(PayloadCodec::raw()),
+                Some(ref codec) if *codec == PayloadCodec::raw() => {}
+                Some(ref codec) => bail!(
+                    "legacy manifest {payload_digest} declares non-raw codec {}/{}",
+                    codec.name,
+                    codec.version
+                ),
+            }
+        }
+        other => bail!(
+            "manifest {payload_digest} has version {other} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}"
+        ),
     }
+    // Central capability gate: no load entry point returns a manifest whose
+    // codec this build cannot decode. Startup reconciliation quarantines it,
+    // manifest_for_prefix prunes the link and falls back to a shorter prefix,
+    // and a direct load fails.
+    reject_unsupported_codec(&manifest)?;
     if manifest.payload_digest != payload_digest {
         bail!(
             "manifest key {payload_digest} disagrees with payload digest {}",
