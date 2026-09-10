@@ -190,7 +190,10 @@ reviewing a plan by hand or as the agent pass:
 
 Every entry the deterministic pass cannot classify is a commit that did not
 follow Conventional Commits. `scripts/hooks/commit-msg` rejects those locally
-(`just hooks-install`), and `just check-commits` validates a range. Because the
+(`just hooks-install`), `just check-commits` validates a range, and the
+`Check commit convention` step in the Quality lane enforces the pull request
+title in CI, which is the part that binds contributors who never install the
+hook. Because the
 repository squash-merges, the PR title becomes the commit subject, so the PR
 title is what has to be conventional.
 

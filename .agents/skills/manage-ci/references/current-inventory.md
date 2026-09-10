@@ -141,7 +141,17 @@ Merge settings observed on 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_message=COMMIT_MESSAGES`. The `COMMIT_MESSAGES` setting
 composes the squash body from the branch commit messages, which is how agent
 and bot `Co-authored-by:` trailers reach `main` even when the PR title is
-clean. `scripts/hooks/commit-msg` rejects those trailers locally.
+clean. `scripts/hooks/commit-msg` rejects those trailers locally, and the
+`Check commit convention` step in `quality_contracts`
+(`ci-quality-slice.yml`) enforces them in CI: it validates the pull request
+title against Conventional Commits, because the squash subject comes from the
+title, and scans every branch commit message plus the pull request body for
+denied attribution trailers, because the squash body aggregates them. It runs
+only for `pull_request` events and reaches the script through environment
+variables so pull-request-authored text is never interpolated into the shell.
+Adding it as a step rather than a job keeps `ci/slices.yml` untouched; that
+catalog is protected-compared like `ci/ownership.yml`, so editing it would fail
+planning on the very pull request that changed it.
 
 The active `main` ruleset (id 20090642) carries `deletion`,
 `non_fast_forward`, `required_linear_history`, `required_status_checks`, and

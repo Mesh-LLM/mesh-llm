@@ -589,5 +589,66 @@ class PublishGuardTest(unittest.TestCase):
         self.assertIn("--metadata-from", self.script)
 
 
+class CommitConventionEnforcementTest(unittest.TestCase):
+    """The hook is opt-in per clone, so CI is what actually enforces this."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.slice = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / "ci-quality-slice.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.step = next(
+            s
+            for s in cls.slice["jobs"]["quality_contracts"]["steps"]
+            if s.get("name") == "Check commit convention"
+        )
+
+    def test_runs_in_an_unconditional_quality_job(self):
+        job = self.slice["jobs"]["quality_contracts"]
+        # No `if:` on the job means every PR reaches this step.
+        self.assertNotIn("if", job)
+
+    def test_only_runs_for_pull_requests(self):
+        self.assertIn("pull_request", self.step["if"])
+
+    def test_validates_the_pr_title_because_squash_uses_it_as_the_subject(self):
+        self.assertEqual(self.step["env"]["PR_TITLE"], "${{ github.event.pull_request.title }}")
+        self.assertIn("--message \"$PR_TITLE\"", self.step["run"])
+
+    def test_validates_branch_commit_trailers(self):
+        self.assertIn("--trailers-only", self.step["run"])
+        self.assertIn("/commits", self.step["run"])
+
+    def test_untrusted_text_is_never_interpolated_into_the_shell(self):
+        # PR-authored text reaches the script through the environment only.
+        self.assertNotIn("${{ github.event.pull_request.title }}", self.step["run"])
+        self.assertNotIn("${{ github.event.pull_request.body }}", self.step["run"])
+
+    def test_trailers_only_mode_ignores_subject_format(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("Some messy WIP subject\n\nCo-authored-by: Real <real@example.com>\n")
+            clean = handle.name
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--trailers-only", clean],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_trailers_only_mode_still_rejects_a_denied_trailer(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("Some messy WIP subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+            dirty = handle.name
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--trailers-only", dirty],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("agent attribution address", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

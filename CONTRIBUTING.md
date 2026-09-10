@@ -226,6 +226,13 @@ Fixed.
 Because the repository squash-merges, the PR title becomes the commit subject
 on `main`. Give the PR the conventional title, not just the branch commits.
 
+The hook is opt-in per clone, so CI is what actually enforces this. The Quality
+lane rejects a pull request whose title is not conventional, and rejects any
+branch commit carrying a denied attribution trailer, because the squash body
+aggregates those messages. Branch commit *subjects* are not judged in CI --
+messy work-in-progress subjects are fine, since only the title survives the
+squash.
+
 See [`.agents/skills/release-notes/SKILL.md`](.agents/skills/release-notes/SKILL.md)
 for the full pipeline.
 

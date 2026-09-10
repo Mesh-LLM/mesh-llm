@@ -182,6 +182,11 @@ def main():
     source.add_argument("file", nargs="?", help="path to a commit message file")
     source.add_argument("--message", help="validate this subject directly")
     source.add_argument("--range", help="validate every commit in a git range")
+    parser.add_argument(
+        "--trailers-only",
+        action="store_true",
+        help="check only attribution trailers, not subject format",
+    )
     args = parser.parse_args()
 
     if args.range:
@@ -196,7 +201,9 @@ def main():
             lines = [line for line in record.strip("\n").splitlines() if line.strip()]
             if not lines:
                 continue
-            problems = check_subject(lines[0]) + check_trailers(lines[1:])
+            problems = check_trailers(lines) if args.trailers_only else (
+                check_subject(lines[0]) + check_trailers(lines[1:])
+            )
             if problems:
                 report(lines[0], problems)
                 failed = True
@@ -213,7 +220,9 @@ def main():
             ]
     subject = lines[0] if lines else ""
 
-    problems = check_subject(subject) + check_trailers(lines[1:])
+    problems = check_trailers(lines) if args.trailers_only else (
+        check_subject(subject) + check_trailers(lines[1:])
+    )
     if problems:
         report(subject, problems)
         return 1
