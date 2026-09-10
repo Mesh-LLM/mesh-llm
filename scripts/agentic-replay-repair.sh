@@ -71,6 +71,7 @@ Co-authored-by: opencode <opencode@meshllm.invalid>"
       --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
   done
   REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
+  trap 'rm -f "$REPLAY_PARAMS_FILE"' EXIT
   # Process substitution breaks on micstudio (/dev/fd is not passable to the
   # child); write the replay parameters to a plain file instead.
   python3 -c "import json;print(json.dumps(json.load(open('ci/agentic-replay-nightly/matrix.json'))['replay']))" \
