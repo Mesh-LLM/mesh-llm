@@ -1102,6 +1102,211 @@ mod dynamic {
                 }
             );
         }
+
+        // Ported from the duplicate PR branch (jian yang's
+        // jy/native-runtime-flavor-selection): end-to-end startup coverage that
+        // the flavor request survives the full resolver, not just
+        // `from_config`. Regression for the white.local scenario where
+        // `--llama-flavor vulkan` loaded the CUDA runtime because startup
+        // never consulted the flavor.
+        #[tokio::test]
+        async fn vulkan_flavor_loads_vulkan_runtime_over_higher_ranked_cuda() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let release_version = crate::RELEASE_VERSION.to_string();
+            let vulkan_id = "meshllm-native-runtime-test-vulkan";
+            let cuda_id = "meshllm-native-runtime-test-cuda";
+            let vulkan_dir = cache.runtime_dir(&release_version, vulkan_id);
+            let cuda_dir = cache.runtime_dir(&release_version, cuda_id);
+            write_runtime_with_backend(&vulkan_dir, Some(&release_version), vulkan_id, |backend| {
+                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+            });
+            write_runtime_with_backend(&cuda_dir, Some(&release_version), cuda_id, |backend| {
+                backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
+                backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                    toolkit_major: 12,
+                    min_driver: None,
+                    gpu_arches: Vec::new(),
+                });
+            });
+
+            let startup_selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig::default(),
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should resolve");
+
+            let install_calls = Arc::new(Mutex::new(0_usize));
+            let runtime = try_load_installed_native_runtime_with(
+                || false,
+                || Ok(cache.clone()),
+                vulkan_capable_profile,
+                test_install_options,
+                {
+                    let install_calls = Arc::clone(&install_calls);
+                    move |_| {
+                        let install_calls = Arc::clone(&install_calls);
+                        async move {
+                            *install_calls.lock().unwrap() += 1;
+                            anyhow::bail!("selection must resolve from the cache")
+                        }
+                    }
+                },
+                startup_selection,
+                |libraries| {
+                    let _ = libraries;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap()
+            .expect("expected the Vulkan runtime to load");
+
+            assert_eq!(runtime.native_runtime_id, vulkan_id);
+            assert_eq!(
+                runtime.libraries,
+                vec![vulkan_dir.join(test_library_rel_path())]
+            );
+            assert_eq!(*install_calls.lock().unwrap(), 0);
+        }
+
+        #[test]
+        fn recommended_selection_still_prefers_cuda_over_vulkan() {
+            // Guards the premise of the regression above: the recommended
+            // ranking selects CUDA (650) over Vulkan (350), which is exactly
+            // why an ignored flavor loaded CUDA on white.local. If this
+            // ranking ever changes, revisit the regression's expectations.
+            let profile = vulkan_capable_profile();
+            let recommended = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+                &[
+                    candidate_with_backend("meshllm-native-runtime-test-vulkan", {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend
+                    }),
+                    candidate_with_backend("meshllm-native-runtime-test-cuda", {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda;
+                        backend.cuda = Some(mesh_llm_native_runtime::CudaRuntimeRequirements {
+                            toolkit_major: 12,
+                            min_driver: None,
+                            gpu_arches: Vec::new(),
+                        });
+                        backend
+                    }),
+                ],
+                &profile,
+                crate::RELEASE_VERSION,
+                None,
+                &RuntimeSelection::Recommended,
+            )
+            .expect("recommended selection");
+            let vulkan = mesh_llm_native_runtime::select_native_runtime_from_artifacts(
+                &[candidate_with_backend(
+                    "meshllm-native-runtime-test-vulkan",
+                    {
+                        let mut backend = NativeRuntimeBackend::cpu();
+                        backend.kind = mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan;
+                        backend
+                    },
+                )],
+                &profile,
+                crate::RELEASE_VERSION,
+                None,
+                &RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                },
+            )
+            .expect("vulkan selection");
+
+            assert_eq!(
+                recommended.artifact.id, "meshllm-native-runtime-test-cuda",
+                "recommended ranking must still prefer CUDA"
+            );
+            assert_eq!(
+                vulkan.artifact.id, "meshllm-native-runtime-test-vulkan",
+                "explicit backend selection must choose Vulkan"
+            );
+        }
+
+        fn vulkan_capable_profile() -> HostRuntimeProfile {
+            let mut profile = HostRuntimeProfile::current_without_gpu_probe();
+            profile
+                .available_flavors
+                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda);
+            profile
+                .available_flavors
+                .insert(mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan);
+            profile.cuda = Some(mesh_llm_native_runtime::HostCudaProfile {
+                toolkit_majors: std::collections::BTreeSet::from([12]),
+                driver_max_major: Some(12),
+                driver_version: None,
+                gpu_arches: std::collections::BTreeSet::from(["sm_90".to_string()]),
+            });
+            profile.vulkan = Some(mesh_llm_native_runtime::HostVulkanProfile::default());
+            profile
+        }
+
+        fn write_runtime_with_backend(
+            dir: &Path,
+            version: Option<&str>,
+            id: &str,
+            edit: impl FnOnce(&mut NativeRuntimeBackend),
+        ) {
+            let library_rel_path = test_library_rel_path();
+            fs::create_dir_all(dir.join(library_rel_path.parent().unwrap())).unwrap();
+            fs::write(dir.join(&library_rel_path), b"native runtime").unwrap();
+            let mut backend = NativeRuntimeBackend::cpu();
+            edit(&mut backend);
+            let manifest = NativeRuntimeManifest {
+                runtime: NativeRuntimeArtifact {
+                    id: id.to_string(),
+                    mesh_version: version.map(ToString::to_string),
+                    // Match the ABI the flavor-derived startup selection
+                    // requests so the fixture is loadable in this build.
+                    skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
+                    platform: NativeRuntimePlatform {
+                        os: std::env::consts::OS.to_string(),
+                        arch: std::env::consts::ARCH.to_string(),
+                        target: None,
+                    },
+                    backend,
+                    rank: 0,
+                    libraries: vec![library_rel_path.to_string_lossy().to_string()],
+                    files: Default::default(),
+                    tools: Default::default(),
+                    url: None,
+                    sha256: None,
+                    signature: None,
+                },
+            };
+            manifest.write_to_dir(dir).unwrap();
+        }
+
+        fn candidate_with_backend(
+            id: &str,
+            backend: NativeRuntimeBackend,
+        ) -> mesh_llm_native_runtime::NativeRuntimeArtifact {
+            mesh_llm_native_runtime::NativeRuntimeArtifact {
+                id: id.to_string(),
+                mesh_version: Some(crate::RELEASE_VERSION.to_string()),
+                skippy_abi: crate::system::native_runtime_install::current_skippy_abi_version(),
+                platform: NativeRuntimePlatform {
+                    os: std::env::consts::OS.to_string(),
+                    arch: std::env::consts::ARCH.to_string(),
+                    target: None,
+                },
+                backend,
+                rank: 0,
+                libraries: vec![test_library_rel_path().to_string_lossy().to_string()],
+                files: Default::default(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            }
+        }
     }
 }
 
