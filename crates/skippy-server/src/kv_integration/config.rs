@@ -120,13 +120,8 @@ impl KvStageIntegration {
             }
         });
         let l3 = l3_manager
-            .map(|manager| {
-                l3_tier_for_manager(
-                    config,
-                    durable_payload.expect("enabled cache has a durable payload"),
-                    manager,
-                )
-            })
+            .zip(durable_payload)
+            .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
             .transpose()?;
         // FullState is architecture-neutral: the native runtime serializes the
         // complete session state for both dense and recurrent model families.
@@ -1348,6 +1343,11 @@ mod tests {
             Some(StagePrefixCachePayload::KvRecurrent)
         );
         assert!(kv.l3.is_some());
+
+        let mut invalid = kv;
+        invalid.payload = StagePrefixCachePayload::Disabled;
+        invalid.durable_payload = Some(StagePrefixCachePayload::ResidentKv);
+        assert_eq!(invalid.exact_state_payload(), None);
     }
 
     #[test]
