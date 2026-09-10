@@ -338,7 +338,7 @@ mod tests {
         let mut manifest =
             HandoffManifest::new("blake3:test-identity".to_string(), "full-state".into());
         for (index, chunk) in payload.chunks(1024).enumerate() {
-            let (digest, _) = store.put_segment(chunk).expect("put");
+            let digest = store.put_segment(chunk).expect("put").digest;
             manifest.segments.push(HandoffSegmentRef {
                 index: index as u32,
                 offset: (index * 1024) as u64,

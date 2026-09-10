@@ -2,6 +2,7 @@ pub mod config;
 pub mod fsinfo;
 pub mod identity;
 pub mod l3;
+pub mod l3_remote;
 pub mod manager;
 pub mod payload;
 pub mod radix;
@@ -21,6 +22,7 @@ pub use l3::{
     MANIFEST_VERSION, ManifestPin, PayloadGeometry, Reservation, SegmentHold, SegmentPut,
     StoreLimits, StoreReconciliation, StoreUsage, StoredSegment, WriteRefusal, segment_digest,
 };
+pub use l3_remote::{FetchStats, KvFetchClient, serve_connection, serve_store};
 pub use manager::{
     L3ActivitySnapshot, L3CacheManager, L3EffectiveState, L3EffectiveStatus, L3InventoryEntry,
     L3StateReason, L3StateTransition,

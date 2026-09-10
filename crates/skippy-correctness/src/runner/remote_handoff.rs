@@ -254,9 +254,16 @@ fn artifact_sha256_cached(path: &std::path::Path) -> Option<String> {
         }
         let mut file = std::fs::File::open(path).ok()?;
         let mut hasher = sha2::Sha256::new();
-        std::io::copy(&mut file, &mut hasher).ok()?;
         use sha2::Digest as _;
-        Some(format!("{:x}", hasher.finalize()))
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).ok()?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Some(hex::encode(hasher.finalize()))
     })();
     cache
         .lock()
@@ -369,16 +376,36 @@ fn open_full_model(args: &RemoteHandoffArgs, lane_count: u32) -> Result<StageMod
         n_gpu_layers: args.runtime.n_gpu_layers,
         mmap: None,
         mlock: false,
+        repack: false,
+        op_offload: None,
+        no_host_buffer: false,
+        check_tensors: false,
+        direct_io: false,
+        main_gpu: None,
+        split_mode: skippy_runtime::SplitMode::Auto,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.runtime.stage_load_mode),
         projector_path: None,
+        projector_use_gpu: None,
+        media_marker: None,
+        image_min_tokens: None,
+        image_max_tokens: None,
+        batch_max_tokens: None,
+        glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         include_embeddings: true,
         include_output: true,
         mtp_source: MtpSource::Disabled,
         filter_tensors_on_load: false,
+        resident_tensor_names: Vec::new(),
+        checkpoint_quantization: skippy_runtime::CheckpointQuantization::Preserve,
+        checkpoint_imatrix: None,
+        checkpoint_imatrix_sha256: None,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,
         flash_attn_type: runtime_flash_attn(args.runtime.flash_attn),
+        kv_offload: None,
+        kv_unified: None,
+        swa_full: None,
     };
     StageModel::open(&resolution.path, &runtime_config)
         .context("failed to open remote handoff model")
@@ -568,9 +595,10 @@ fn run_sender(args: RemoteHandoffArgs) -> Result<()> {
     let mut segment_refs = Vec::new();
     if let Some(store) = &store {
         for (index, chunk) in wire_bytes.chunks(segment_bytes).enumerate() {
-            let (digest, _) = store
+            let digest = store
                 .put_segment(chunk)
-                .context("sender segment spill failed")?;
+                .context("sender segment spill failed")?
+                .digest;
             segment_refs.push(HandoffSegmentRef {
                 index: index as u32,
                 offset: (index * segment_bytes) as u64,
@@ -1126,9 +1154,10 @@ fn handle_receiver_connection(
                 stage.imported_tokens += page.token_count;
                 if let Some(store) = store {
                     let put_started = Instant::now();
-                    let (digest, _) = store
+                    let digest = store
                         .put_segment(&body)
-                        .context("receiver page write-behind failed")?;
+                        .context("receiver page write-behind failed")?
+                        .digest;
                     store_ms += elapsed_ms(put_started);
                     segment_refs.push(HandoffSegmentRef {
                         index: page.index as u32,
@@ -1159,9 +1188,10 @@ fn handle_receiver_connection(
                 stage.hasher.update(&body);
                 if let Some(store) = store {
                     let put_started = Instant::now();
-                    let (digest, _) = store
+                    let digest = store
                         .put_segment(&body)
-                        .context("receiver recurrent write-behind failed")?;
+                        .context("receiver recurrent write-behind failed")?
+                        .digest;
                     store_ms += elapsed_ms(put_started);
                     segment_refs.push(HandoffSegmentRef {
                         index: segments_seen as u32,
@@ -1200,9 +1230,10 @@ fn handle_receiver_connection(
                 match store {
                     Some(store) => {
                         let put_started = Instant::now();
-                        let (digest, _) = store
+                        let digest = store
                             .put_segment(&body)
-                            .context("receiver segment write-behind failed")?;
+                            .context("receiver segment write-behind failed")?
+                            .digest;
                         store_ms += elapsed_ms(put_started);
                         if digest != segment.blake3 {
                             bail!("segment {} failed digest verification", segment.index);
