@@ -1054,6 +1054,7 @@ async fn delete_queue_failure_marker(client: &HFClient, candidate: &Candidate) -
     {
         Ok(_) => Ok(()),
         Err(HFError::Http { context }) if context.status.as_u16() == 404 => Ok(()),
+        Err(HFError::RepoNotFound { .. }) => Ok(()),
         Err(err) => Err(err)
             .with_context(|| format!("delete queue failure marker from {}", candidate.target_repo)),
     }
