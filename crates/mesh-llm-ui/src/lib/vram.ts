@@ -147,7 +147,14 @@ export type VramStatusLike = {
   peers?: Array<VramNodeInput & { node_state?: string; state?: string; role?: string }> | null
 }
 
-/** Mirrors the dashboard adapter's role resolution: any of the three fields can mark a client. */
+/**
+ * Capacity rule for peers: any of the three fields can mark a client. This is
+ * intentionally separate from the dashboard's `resolvePeerRole`, which is a
+ * display rule that returns `host` before it looks at state. Keep the two apart;
+ * rows and totals must both call this one so they cannot disagree. The live API
+ * emits `state` and `role` on peers; `node_state` is honoured only because the
+ * UI's `PeerInfo` type and the adapter's state resolution already accept it.
+ */
 export function isClientPeer(peer: { node_state?: string; state?: string; role?: string }): boolean {
   return peer.node_state === 'client' || peer.state === 'client' || peer.role?.toLowerCase() === 'client'
 }
