@@ -187,8 +187,11 @@ pub struct BenefitPolicy {
 
 impl BenefitPolicy {
     /// Insert a ghost, evicting the oldest ghost when the count bound is
-    /// exceeded, and dropping ghosts past their age bound.
+    /// exceeded. `ghost_capacity = 0` disables ghost retention entirely.
     fn insert_ghost(&mut self, key: EntryKey, stats: GhostStats) {
+        if self.config.ghost_capacity == 0 {
+            return;
+        }
         while self.ghosts.len() >= self.config.ghost_capacity {
             let oldest = self
                 .ghosts
@@ -252,6 +255,11 @@ impl BenefitPolicy {
         self.ghosts.len()
     }
 
+    /// Current observation clock (test/diagnostic access).
+    pub fn clock_debug(&self) -> u64 {
+        self.clock
+    }
+
     pub fn entry(&self, key: EntryKey) -> Option<&PolicyEntry> {
         self.entries.get(&key)
     }
@@ -274,6 +282,11 @@ impl BenefitPolicy {
         shared: Vec<(SegmentId, u64)>,
         cost: CostSample,
     ) -> AdmissionDecision {
+        // Validate before any mutation: an invalid observation must not
+        // advance the clock (aging grace) or expire ghosts.
+        if !cost.is_valid() {
+            return AdmissionDecision::rejected_invalid_cost();
+        }
         self.clock += 1;
         self.expire_ghosts();
         let mut decision = admission::consider(self, key, exclusive_bytes, shared, cost);
@@ -288,6 +301,10 @@ impl BenefitPolicy {
 
     /// Record a restore hit on an admitted entry; may promote out of probation.
     pub fn record_hit(&mut self, key: EntryKey, cost: CostSample) -> Option<AdmissionDecision> {
+        // Validate before any mutation (including the clock).
+        if !cost.is_valid() {
+            return None;
+        }
         self.clock += 1;
         admission::record_hit(self, key, cost)
     }
@@ -349,16 +366,20 @@ impl BenefitPolicy {
     }
 
     /// Bytes charged to the probation class: exclusive bytes plus the
-    /// fractional shared-segment credit per entry, so probation entries
-    /// backed entirely by shared segments cannot grow without bound.
+    /// fractional shared-segment credit. Shares are summed exactly (f64)
+    /// across all probation entries before a single rounding, so a small
+    /// segment shared by many references still charges its physical bytes
+    /// in aggregate — per-entry truncation cannot zero it out.
     pub fn probation_bytes(&self) -> u64 {
-        self.entries
-            .iter()
-            .filter(|(_, e)| e.state == PolicyEntryState::Probation)
-            .map(|(k, e)| {
-                e.exclusive_bytes + self.segments.fractional_bytes(*k, &e.segments) as u64
-            })
-            .sum()
+        let mut exact = 0.0f64;
+        for (k, e) in &self.entries {
+            if e.state == PolicyEntryState::Probation {
+                exact += e.exclusive_bytes as f64 + self.segments.fractional_bytes(*k, &e.segments);
+            }
+        }
+        // Deterministic round-half-up; the class charge is a hard bound, so
+        // we always round up any fractional residue.
+        exact.ceil() as u64
     }
 
     /// Select the no-hit probationers that must be evicted to bring the

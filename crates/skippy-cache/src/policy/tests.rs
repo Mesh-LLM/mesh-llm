@@ -520,3 +520,106 @@ fn probation_cap_selection_is_not_committed_removal() {
     // Committed removals become ghosts (bounded).
     assert!(policy.ghost_count() > 0);
 }
+
+#[test]
+fn invalid_observation_leaves_clock_and_ghosts_untouched() {
+    let nan = f64::NAN;
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        grace_observations: 2,
+        ghost_max_age_observations: 1,
+        ..PolicyConfig::default()
+    });
+    // Seed one ghost.
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(9);
+    assert!(policy.ghost(9).is_some());
+
+    // Invalid admission: clock must not advance, ghost must survive
+    // (age bound is 1, so a real observation would have expired it).
+    let before_clock = policy.clock_debug();
+    let decision = policy.consider_admission(
+        1,
+        1 << 20,
+        vec![],
+        CostSample {
+            cold_prefill_cost: nan,
+            restore_cost: 10.0,
+        },
+    );
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert_eq!(policy.clock_debug(), before_clock);
+    assert!(policy.ghost(9).is_some());
+
+    // Invalid hit: same invariants.
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    let before_clock = policy.clock_debug();
+    assert!(
+        policy
+            .record_hit(
+                2,
+                CostSample {
+                    cold_prefill_cost: nan,
+                    restore_cost: 10.0
+                }
+            )
+            .is_none()
+    );
+    assert_eq!(policy.clock_debug(), before_clock);
+}
+
+#[test]
+fn many_reference_small_segment_still_charges_probation_bytes() {
+    // A 4-byte segment referenced by 9 probation entries: per-entry
+    // truncation would charge 0; the class total must still be 4.
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    for key in 1..=9u64 {
+        policy.consider_admission(key, 0, vec![(1u64, 4)], cost(400.0, 100.0));
+    }
+    assert!(
+        policy.probation_bytes() >= 4,
+        "charged {}",
+        policy.probation_bytes()
+    );
+    // And with a 1-byte cap, admission must select shared-only victims.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 0,
+        ..PolicyConfig::default()
+    });
+    let decision = policy.consider_admission(1, 0, vec![(1u64, 4)], cost(400.0, 100.0));
+    assert!(!decision.probation_cap_victims.is_empty());
+}
+
+#[test]
+fn ghost_promoted_recurrence_returns_admit_persist() {
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    assert!(policy.record_hit(1, cost(400.0, 100.0)).is_none()); // hits = 1
+    policy.remove(1);
+    let decision = policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    assert_eq!(decision.kind, AdmissionDecisionKind::AdmitPersist);
+    assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Admitted);
+    // Non-promoted recurrence stays AdmitProbation/Probation.
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(2);
+    let decision = policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0));
+    assert_eq!(decision.kind, AdmissionDecisionKind::AdmitProbation);
+    assert_eq!(policy.entry(2).unwrap().state, PolicyEntryState::Probation);
+}
+
+#[test]
+fn zero_ghost_capacity_is_a_real_zero_bound() {
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        ghost_capacity: 0,
+        ..PolicyConfig::default()
+    });
+    assert!(
+        PolicyConfig {
+            ghost_capacity: 0,
+            ..PolicyConfig::default()
+        }
+        .is_valid()
+    );
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(1);
+    assert_eq!(policy.ghost_count(), 0, "zero capacity must retain nothing");
+}

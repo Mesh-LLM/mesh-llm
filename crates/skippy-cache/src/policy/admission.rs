@@ -16,6 +16,19 @@ pub enum AdmissionDecisionKind {
     Reject,
 }
 
+impl AdmissionDecision {
+    /// A rejected offer whose measured cost was invalid. Constructed without
+    /// touching policy state.
+    pub fn rejected_invalid_cost() -> Self {
+        Self {
+            kind: AdmissionDecisionKind::Reject,
+            verdict: AdmissionVerdict::Reject,
+            reasons: vec!["invalid-cost-sample".into()],
+            probation_cap_victims: Vec::new(),
+        }
+    }
+}
+
 /// The verdict plus opaque reasons for logging.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdmissionDecision {
@@ -79,7 +92,6 @@ pub(crate) fn consider(
             probation_cap_victims: Vec::new(),
         };
     }
-
     // Carry ghost history in: a recurring entry re-enters with its past
     // reuse signal, and an entry whose history already clears the hit
     // threshold admits straight to the admitted class (equivalent value
@@ -99,10 +111,18 @@ pub(crate) fn consider(
         ghost.reuse_weight = ghost.reuse_weight * policy.config.decay.factor + 1.0;
         ghost.observation_weight = ghost.observation_weight * policy.config.decay.factor + 1.0;
     }
-    let state = if ghost.hits >= policy.config.persistence_hit_threshold as u64 {
+    let ghost_promoted = ghost.hits >= policy.config.persistence_hit_threshold as u64;
+    let state = if ghost_promoted {
         PolicyEntryState::Admitted
     } else {
         PolicyEntryState::Probation
+    };
+    // The decision kind must match the resulting entry state so a
+    // store-facing caller persists exactly what the policy admitted.
+    let kind = if ghost_promoted {
+        AdmissionDecisionKind::AdmitPersist
+    } else {
+        kind
     };
     let segment_ids: Vec<SegmentId> = shared.iter().map(|(s, _)| *s).collect();
     for (segment, size) in &shared {
