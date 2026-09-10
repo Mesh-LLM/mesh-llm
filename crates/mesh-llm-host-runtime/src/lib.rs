@@ -198,7 +198,8 @@ pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Re
     if !runtime_options_require_native_runtime(options) {
         return initialize_logging_for_cli(options.config.as_deref()).await;
     }
-    initialize_host_runtime_with_config(options.config.as_deref()).await
+    initialize_host_runtime_with_config_and_flavor(options.config.as_deref(), options.llama_flavor)
+        .await
 }
 
 fn runtime_options_require_native_runtime(options: &RuntimeOptions) -> bool {
@@ -206,6 +207,13 @@ fn runtime_options_require_native_runtime(options: &RuntimeOptions) -> bool {
 }
 
 pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> Result<()> {
+    initialize_host_runtime_with_config_and_flavor(config_path, None).await
+}
+
+async fn initialize_host_runtime_with_config_and_flavor(
+    config_path: Option<&Path>,
+    binary_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+) -> Result<()> {
     let config = plugin::load_config(config_path)?;
 
     // Logging config is validated as part of config loading and must be resolved
@@ -227,7 +235,14 @@ pub async fn initialize_host_runtime_with_config(config_path: Option<&Path>) -> 
                     runtime_selection,
                 )
             }
-            None => system::native_runtime::NativeRuntimeStartupSelection::current(),
+            None => match binary_flavor {
+                Some(flavor) => {
+                    system::native_runtime::NativeRuntimeStartupSelection::current_with_flavor(
+                        flavor,
+                    )
+                }
+                None => system::native_runtime::NativeRuntimeStartupSelection::current(),
+            },
         };
         if let Some(runtime) =
             system::native_runtime::try_load_installed_native_runtime(startup_selection).await?
