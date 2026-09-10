@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts" / "llama-canary-agent-repair.sh"
+RUNBOOK = ROOT / "ci" / "llama-canary" / "agent-repair-prompt.md"
 
 
 class LlamaCanaryStateMachineContractTests(unittest.TestCase):
@@ -135,6 +136,101 @@ class LlamaCanaryStateMachineContractTests(unittest.TestCase):
         self.assertNotIn("--body-file \"$PR_BODY\" 2>/dev/null", ensure)
         self.assertIn("could not create the terminal canary PR", ensure)
         self.assertIn("creation returned no PR number", ensure)
+
+    def test_runner_environment_is_validated_before_expensive_work(self) -> None:
+        preflight = self.wrapper[: self.wrapper.index("agent_turn() {")]
+        self.assertIn(
+            "for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE GITHUB_REPOSITORY",
+            preflight,
+        )
+        self.assertIn("CANARY_REPAIR_TOKEN is not set", preflight)
+        self.assertNotIn("${LLAMA_STAGE_BUILD_DIR:?}", self.wrapper)
+        self.assertNotIn("${HF_CACHE:?}", self.wrapper)
+
+        target = "a" * 40
+        base_env = {
+            **os.environ,
+            "CANARY_REPAIR_TOKEN": "fixture-token",
+            "GITHUB_REPOSITORY": "Mesh-LLM/mesh-llm",
+            "HF_CACHE": "/tmp/fixture-hf-cache",
+            "LLAMA_STAGE_BUILD_DIR": "/tmp/fixture-llama-build",
+        }
+        for missing in ("LLAMA_STAGE_BUILD_DIR", "HF_CACHE", "GITHUB_REPOSITORY"):
+            with self.subTest(missing=missing):
+                env = {**base_env}
+                env.pop(missing)
+                result = subprocess.run(
+                    [str(WRAPPER), target],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertIn(f"{missing} is not set", result.stderr)
+
+    def test_git_push_uses_env_sourced_askpass_without_token_in_argv(self) -> None:
+        publish = self.wrapper[
+            self.wrapper.index("publish_terminal_branch() {") : self.wrapper.index(
+                "write_upstream_summary() {"
+            )
+        ]
+        self.assertIn('GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"', publish)
+        self.assertIn("GIT_TERMINAL_PROMPT=0", publish)
+        self.assertIn('git push "https://github.com/${GITHUB_REPOSITORY}.git"', publish)
+        self.assertNotIn("x-access-token:${CANARY_REPAIR_TOKEN}", self.wrapper)
+        self.assertIn('os.environ["CANARY_REPAIR_TOKEN"]', self.wrapper)
+        self.assertIn(".replace(token,", self.wrapper)
+
+        redact = self.wrapper[
+            self.wrapper.index("redact_token() {") : self.wrapper.index(
+                "remaining_work_seconds() {"
+            )
+        ]
+        token = "fixture/[]$.*\\token"
+        result = subprocess.run(
+            ["bash", "-c", f"{redact}\nprintf '%s' \"$INPUT\" | redact_token"],
+            env={**os.environ, "CANARY_REPAIR_TOKEN": token, "INPUT": f"a{token}b"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("a***redacted***b", result.stdout)
+
+    def test_pr_body_contains_generated_upstream_summary(self) -> None:
+        summary = self.wrapper[
+            self.wrapper.index("write_upstream_summary() {") : self.wrapper.index(
+                "ensure_pr() {"
+            )
+        ]
+        self.assertIn("scripts/summarize-llama-upstream.sh", summary)
+        self.assertIn("$OLD_SHA", summary)
+        self.assertIn("$UPSTREAM_SHA", summary)
+        self.assertIn('cat "$UPSTREAM_SUMMARY"', summary)
+        self.assertIn("automated upstream summary was unavailable", summary)
+
+    def test_phase_error_propagation_is_documented_as_load_bearing(self) -> None:
+        main = self.wrapper[self.wrapper.index('phase="prepare"\nwhile true; do') :]
+        self.assertIn("inherits disabled errexit", main)
+        self.assertIn("explicit `|| return 1`", main)
+        self.assertIn("This is load-bearing", main)
+
+    def test_agent_runbook_matches_wrapper_owned_state_machine(self) -> None:
+        runbook = RUNBOOK.read_text(encoding="utf-8")
+        self.assertIn("prepare -> build -> certify -> publish", runbook)
+        self.assertIn("scripts/prepare-llama.sh pinned", runbook)
+        self.assertIn("Do not switch or create a branch in the mesh-llm", runbook)
+        self.assertIn("Do not push, open a PR, or use GitHub credentials", self.wrapper)
+        for obsolete in (
+            "patch-queue mode",
+            "battery mode",
+            "llama-canary/patch-queue-fix",
+            "separate review agent",
+        ):
+            self.assertNotIn(obsolete, runbook)
 
     def test_agent_has_no_github_credentials_or_publication_authority(self) -> None:
         self.assertNotIn("export GH_TOKEN", self.wrapper)

@@ -258,10 +258,18 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
     def test_changed_pin_uses_one_terminal_state_machine(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        duplicate = _step_block(workflow, "Detect existing changed-pin canary PR")
+        self.assertIn("github.event_name == 'schedule'", duplicate)
+        self.assertIn("$CANDIDATE_SHA in:body", duplicate)
+        self.assertIn('startswith("llama-canary/repair-")', duplicate)
+        self.assertIn('contains("- Candidate pin: `\\($sha)`")', duplicate)
+        self.assertIn('echo "found=true"', duplicate)
+
         changed = _step_block(
             workflow, "Changed-pin prepare, build, certify, and publish"
         )
         self.assertIn("steps.sha.outputs.changed == 'true'", changed)
+        self.assertIn("steps.existing_changed_pin.outputs.found != 'true'", changed)
         self.assertIn("timeout-minutes: 720", changed)
         self.assertIn("continue-on-error: true", changed)
         self.assertIn("CANARY_REPAIR_BUDGET_SECONDS: \"41400\"", changed)
@@ -274,11 +282,18 @@ class LlamaUpstreamCanaryWorkflowTests(unittest.TestCase):
 
         stop = _step_block(workflow, "Stop after changed-pin terminal PR")
         self.assertIn("steps.sha.outputs.changed == 'true'", stop)
+        self.assertIn("!cancelled()", stop)
+        self.assertNotIn("always()", stop)
         self.assertIn("exit 1", stop)
-        self.assertIn("run-specific PR", stop)
+        self.assertIn("EXISTING_CANARY_FOUND", stop)
+        self.assertIn("Skipped duplicate scheduled certification", stop)
+        self.assertIn("duplicate-PR lookup failed", stop)
+        self.assertIn("A preflight failure can stop before any branch or PR", stop)
 
         upload = _step_block(workflow, "Upload changed-pin canary evidence")
         self.assertIn("llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}", upload)
+        self.assertIn("llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}", upload)
+        self.assertNotIn("name: llama-family-battery-", upload)
         self.assertIn("retention-days: 14", upload)
 
     def test_post_green_modifying_review_is_removed(self) -> None:

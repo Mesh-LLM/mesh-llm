@@ -39,6 +39,8 @@ PREPARE_LOG="$STATE_DIR/prepare.log"
 BUILD_LOG="$STATE_DIR/build.log"
 CERTIFY_LOG="$STATE_DIR/certify.log"
 PR_BODY="$STATE_DIR/pr-body.md"
+UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
+GIT_ASKPASS_SCRIPT="$STATE_DIR/git-askpass.sh"
 FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
 STARTED_AT="$(date +%s)"
@@ -59,10 +61,30 @@ if [[ ! "$REPAIR_BUDGET_SECONDS" =~ ^[0-9]+$ || ! "$PUBLISH_RESERVE_SECONDS" =~ 
   echo "the canary budget must be numeric and exceed the publication reserve" >&2
   exit 1
 fi
+for required_name in LLAMA_STAGE_BUILD_DIR HF_CACHE GITHUB_REPOSITORY; do
+  if [[ -z "${!required_name:-}" ]]; then
+    echo "${required_name} is not set; cannot run the changed-pin canary" >&2
+    exit 1
+  fi
+done
+if [[ -z "${CANARY_REPAIR_TOKEN:-}" ]]; then
+  echo "CANARY_REPAIR_TOKEN is not set; cannot publish the terminal canary PR" >&2
+  exit 1
+fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$PLAN_PATH")"
-rm -f "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" "$PR_BODY"
+rm -f "$PREPARE_LOG" "$BUILD_LOG" "$CERTIFY_LOG" "$PR_BODY" "$UPSTREAM_SUMMARY"
 printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
+cat > "$GIT_ASKPASS_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  Username*) printf '%s\n' 'x-access-token' ;;
+  Password*) printf '%s\n' "${CANARY_REPAIR_TOKEN:?}" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod 700 "$GIT_ASKPASS_SCRIPT"
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "opencode CLI not found on runner; install opencode-ai on the family-certify image" >&2
@@ -75,11 +97,6 @@ if [[ -z "${OPENCODE_API_KEY:-}" && -z "${NEMOTRON_API_KEY:-}" ]]; then
     exit 1
   fi
 fi
-if [[ -z "${CANARY_REPAIR_TOKEN:-}" ]]; then
-  echo "CANARY_REPAIR_TOKEN is not set; cannot publish the terminal canary PR" >&2
-  exit 1
-fi
-
 gh_repair() {
   GH_TOKEN="$CANARY_REPAIR_TOKEN" "$@"
 }
@@ -106,12 +123,8 @@ check_repair_token_permissions() {
   echo "preflight: repair token identity '${login}' verified read+write on ${GITHUB_REPOSITORY}"
 }
 
-repair_remote() {
-  echo "https://x-access-token:${CANARY_REPAIR_TOKEN}@github.com/${GITHUB_REPOSITORY:?}.git"
-}
-
 redact_token() {
-  sed "s/${CANARY_REPAIR_TOKEN}/***redacted***/g"
+  python3 -c 'import os, sys; token = os.environ["CANARY_REPAIR_TOKEN"]; sys.stdout.write(sys.stdin.read().replace(token, "***redacted***"))'
 }
 
 remaining_work_seconds() {
@@ -208,7 +221,7 @@ run_full_build() {
     LLAMA_STAGE_UPSTREAM_TESTS=ON uv run --no-project --with jinja2==3.1.6 -- \
     arch -arm64 bash scripts/build-llama.sh -DCMAKE_OSX_ARCHITECTURES=arm64 \
     || return 1
-  archive="${LLAMA_STAGE_BUILD_DIR:?}/src/libllama.a"
+  archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
   arches="$(lipo -archs "$archive" 2>/dev/null || true)"
   if [[ "$arches" != "arm64" ]]; then
     echo "candidate native archive must be arm64, got: ${arches:-missing}" | tee -a "$BUILD_LOG" >&2
@@ -237,7 +250,7 @@ run_certification() {
       --cadence llama-bump \
       --shard-count 1 \
       --check-cache \
-      --cache-root "${HF_CACHE:?}" \
+      --cache-root "$HF_CACHE" \
       --output "$PLAN_PATH" \
     || return 1
   if [[ "${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" != "0" \
@@ -283,7 +296,7 @@ repair_prompt() {
   turn="$(( $(phase_turns "$phase") + 1 ))"
   printf 'The llama.cpp canary %s phase failed at upstream %s (repair turn %s of %s for this phase).
 
-Read ci/llama-canary/agent-repair-prompt.md and the repository instructions it names. That runbook describes the former two-mode workflow; this invocation is the single prepare -> build -> certify -> publish state machine. Reproduce this run with scripts/prepare-llama.sh using the target in .deps/llama-canary-target-sha. Ignore the old branch and publication instructions in that runbook: remain in the current checkout and leave final branch/PR work to the wrapper. Fix the root cause minimally. Do not weaken, skip, or narrow any gate. Use focused checks while repairing; the deterministic wrapper will restart at prepare, run the complete build, and run the full supported-family certification before it can publish success. Leave changes local. Do not push, open a PR, or use GitHub credentials.
+Read ci/llama-canary/agent-repair-prompt.md and the repository instructions it names. Follow that runbook for this wrapper-owned prepare -> build -> certify -> publish state machine. Fix the root cause minimally. Do not weaken, skip, or narrow any gate. Use focused checks while repairing; the deterministic wrapper will restart at prepare, run the complete build, and run the full supported-family certification before it can publish success. Leave changes local. Do not push, open a PR, or use GitHub credentials.
 
 Failure evidence (tail):
 
@@ -317,14 +330,31 @@ publish_terminal_branch() {
   if [[ "$outcome" == "certified" ]]; then
     CERTIFIED_SHA="$PUBLISHED_SHA"
   fi
-  if ! git push "$(repair_remote)" "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
+  if ! GIT_ASKPASS="$GIT_ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
+      git push "https://github.com/${GITHUB_REPOSITORY}.git" \
+      "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
     echo "ERROR: could not push ${BRANCH}; the identity behind CANARY_REPAIR_TOKEN needs Contents and pull-request write access" >&2
     return 1
   fi
 }
 
+write_upstream_summary() {
+  if SKIPPY_CI_SMOKE="${LLAMA_UPSTREAM_CANARY_SMOKE:-1}" \
+      scripts/summarize-llama-upstream.sh "$OLD_SHA" "$UPSTREAM_SHA" "$ROOT/.deps/llama.cpp" \
+      | awk 'BEGIN { include = 1 } /^## Validation$/ { include = 0 } include { print }' \
+      > "$UPSTREAM_SUMMARY"; then
+    return 0
+  fi
+  printf '%s\n' \
+    '## Upstream Summary' \
+    '' \
+    'The automated upstream summary was unavailable; inspect the candidate pin and patch queue directly.' \
+    > "$UPSTREAM_SUMMARY"
+}
+
 write_pr_body() {
   local outcome="$1"
+  write_upstream_summary
   {
     echo "Automated llama.cpp upstream canary for \`${UPSTREAM_SHA}\`."
     echo
@@ -341,6 +371,8 @@ write_pr_body() {
     fi
     echo
     echo "State machine: \`prepare -> build -> certify -> publish\`. Agent turns may edit local files, while the wrapper owns every gate and all GitHub mutations."
+    echo
+    cat "$UPSTREAM_SUMMARY"
   } > "$PR_BODY"
 }
 
@@ -403,6 +435,9 @@ report_terminal() {
 phase="prepare"
 while true; do
   phase_status=0
+  # A function called on the left side of `||` inherits disabled errexit.
+  # Every fallible phase command therefore has an explicit `|| return 1`;
+  # the final command's status is the function status. This is load-bearing.
   case "$phase" in
     prepare)
       run_prepare || phase_status=$?

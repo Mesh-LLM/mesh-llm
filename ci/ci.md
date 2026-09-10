@@ -32,6 +32,15 @@ The changed-pin canary wrapper owns the target-pin transition: it writes the
 sole upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through
 the checked-in `pinned` selector, and verifies the prepared-upstream stamp
 before build or certification. Publication happens once at terminal state.
+Scheduled changed-pin runs first query open `llama-canary/repair-*` PR bodies
+and skip the expensive state machine when one records the exact candidate SHA.
+The wrapper validates its runner paths, model cache, repository identity, and
+repair token before phase execution; a failed preflight is reported without
+claiming that a terminal PR exists. Git publication uses an environment-sourced
+askpass helper so the repair PAT never appears in the push URL or process
+arguments. Terminal PR bodies include the generated upstream diffstat and
+commit summary, and changed-pin evidence has a distinct artifact name from the
+unchanged-pin battery upload.
 
 Scheduled coverage details: an unchanged-pin llama canary uses the bounded
 `nightly` cadence (Qwen3 dense, Falcon-H1, Qwen3Next, and Mamba). Changed pins

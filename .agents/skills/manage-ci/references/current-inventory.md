@@ -97,10 +97,19 @@ work deadline inside the 720-minute Actions step and reserves 30 minutes for
 terminal publication. It publishes once to the unique
 `llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
 state opens a normal PR bound to the exact green commit; a turn- or time-bounded
-failure opens a draft PR preserving the last attempted bytes. No agent turn
-runs after green, and changed pins are never pushed directly to `main`.
-Repair pushes and PR operations authenticate with the `CANARY_REPAIR_TOKEN`
-fine-grained PAT; the canary job itself remains `contents: read`. Every
+failure opens a draft PR preserving the last attempted bytes. The PR body
+includes a deterministic upstream diffstat and commit summary even though the
+unchanged-pin workflow summary path is skipped. Scheduled runs query open
+`llama-canary/repair-*` PR bodies before starting the state machine and skip an
+exact candidate SHA already under review. No agent turn runs after green, and
+changed pins are never pushed directly to `main`. Repair pushes and PR
+operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT; Git
+receives it through a run-scoped askpass helper instead of a credential-bearing
+URL, and stderr redaction uses literal replacement. The wrapper validates the
+native build directory, HF cache, repository identity, and repair token before
+the first phase. The canary job itself remains `contents: read`; the dedicated
+repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
+`llama-canary-changed-pin-*` artifact namespace. Every
 changed-pin outcome keeps the canary run red until a certified PR is reviewed
 and merged. Unchanged scheduled and forced certifications stay read-only and
 never invoke the repair agent.

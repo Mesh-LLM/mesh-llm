@@ -131,9 +131,40 @@ jobs:
             fi
           } >> "$GITHUB_OUTPUT"
 
+      - name: Detect existing changed-pin canary PR
+        id: existing_changed_pin
+        if: github.event_name == 'schedule' && steps.sha.outputs.changed == 'true'
+        env:
+          CANDIDATE_SHA: ${{ steps.sha.outputs.new_sha }}
+          GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+        run: |
+          set -euo pipefail
+          pr="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --search "$CANDIDATE_SHA in:body" \
+              --limit 100 \
+              --json number,headRefName,body \
+              | jq -r --arg sha "$CANDIDATE_SHA" \
+                  'first(
+                     .[]
+                     | select(.headRefName | startswith("llama-canary/repair-"))
+                     | select((.body // "") | contains("- Candidate pin: `\($sha)`"))
+                     | .number
+                   ) // empty'
+          )"
+          if [[ -n "$pr" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "pr=$pr" >> "$GITHUB_OUTPUT"
+            echo "scheduled changed-pin certification already has open PR #${pr} for ${CANDIDATE_SHA}"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Changed-pin prepare, build, certify, and publish
         id: changed_canary
-        if: steps.sha.outputs.changed == 'true'
+        if: steps.sha.outputs.changed == 'true' && steps.existing_changed_pin.outputs.found != 'true'
         timeout-minutes: 720
         continue-on-error: true
         env:
@@ -146,10 +177,10 @@ jobs:
         run: scripts/llama-canary-agent-repair.sh
 
       - name: Upload changed-pin canary evidence
-        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
+        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' && steps.existing_changed_pin.outputs.found != 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-battery-${{ github.run_id }}-${{ github.run_attempt }}
+          name: llama-canary-changed-pin-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/family-battery/${{ github.run_id }}-${{ github.run_attempt }}/
             target/skippy-stage-rewriter-check/
@@ -158,15 +189,26 @@ jobs:
           retention-days: 14
 
       - name: Stop after changed-pin terminal PR
-        if: steps.sha.outputs.changed == 'true'
+        if: ${{ !cancelled() && steps.sha.outputs.changed == 'true' }}
         env:
           CHANGED_CANARY_OUTCOME: ${{ steps.changed_canary.outcome }}
+          DEDUPLICATION_OUTCOME: ${{ steps.existing_changed_pin.outcome }}
+          EXISTING_CANARY_FOUND: ${{ steps.existing_changed_pin.outputs.found }}
+          EXISTING_CANARY_PR: ${{ steps.existing_changed_pin.outputs.pr }}
         run: |
           {
             echo "## llama.cpp changed-pin canary"
             echo
-            echo "The deterministic state machine reached a terminal outcome: **${CHANGED_CANARY_OUTCOME}**."
-            echo "Its run-specific PR contains either the exact certified commit or a draft of the bounded failing state."
+            if [[ "$EXISTING_CANARY_FOUND" == "true" ]]; then
+              echo "Skipped duplicate scheduled certification because open canary PR #${EXISTING_CANARY_PR} already records this exact candidate SHA."
+            elif [[ "$DEDUPLICATION_OUTCOME" == "failure" ]]; then
+              echo "The scheduled duplicate-PR lookup failed before the changed-pin state machine started. No branch or PR was created; inspect that step for the GitHub API error."
+            elif [[ "$CHANGED_CANARY_OUTCOME" == "success" ]]; then
+              echo "The deterministic state machine certified the candidate and published its exact terminal commit in a run-specific PR."
+            else
+              echo "The changed-pin state machine ended with outcome **${CHANGED_CANARY_OUTCOME}**."
+              echo "If terminal publication completed, the log names the preserved draft PR. A preflight failure can stop before any branch or PR is created."
+            fi
             echo "The canary remains red until a certified PR is reviewed and merged."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
