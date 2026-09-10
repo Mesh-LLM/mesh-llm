@@ -1341,21 +1341,35 @@ mod tests {
     }
 
     #[test]
-    fn aggregator_measured_buffers_survive_model_load_reset() {
+    fn aggregator_reset_clears_stale_measured_buffers_on_model_load() {
         // Review blocker (PR #1719): the model-load "loaded meta data" line
-        // fires reset_model_loading_state mid-open. Buffer lines arrive both
-        // before and after it; the measured sizes must reflect every line
-        // of the load, never be stranded empty by the reset, and the host
+        // fires reset_model_loading_state mid-open. A new model load
+        // invalidates the previous model's measured buffer sizes (buffer
+        // scales are model/shape-specific), so the reset clears them; buffer
+        // lines emitted after the reset are measured normally, and the host
         // plan tuple (model/context/lanes) lives outside the aggregator
         // entirely so it is untouched by the reset.
         let mut aggregator = NativeLogAggregator::default();
         aggregator.process_line("sched_reserve:        CUDA0 compute buffer size =   579.83 MiB");
-        aggregator.process_line("llama_model_loader: loaded meta data with 26 key-value pairs");
+        // Use a fully parsable line so `process_line` actually invokes
+        // reset_model_loading_state (see parse_loaded_metadata_counts).
+        aggregator.process_line(
+            "llama_model_loader: loaded meta data with 26 key-value pairs and 291 tensors from model.gguf (version GGUF V3)",
+        );
+        // The pre-reset measurement belongs to the previous model and must be
+        // cleared, not stranded into the new model's footprint.
+        assert_eq!(
+            aggregator.measured_snapshot(),
+            MeasuredNativeBuffers {
+                compute_mib: None,
+                kv_mib: None,
+            }
+        );
         aggregator.process_line("llama_kv_cache:        CUDA0 KV buffer size =  1088.00 MiB");
         assert_eq!(
             aggregator.measured_snapshot(),
             MeasuredNativeBuffers {
-                compute_mib: Some(579.83),
+                compute_mib: None,
                 kv_mib: Some(1088.00),
             }
         );
