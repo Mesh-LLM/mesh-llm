@@ -1,3 +1,4 @@
+pub mod cachegen;
 pub mod config;
 pub mod fsinfo;
 pub mod identity;
