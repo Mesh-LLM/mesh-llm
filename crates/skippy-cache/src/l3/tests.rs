@@ -27,6 +27,7 @@ fn manifest_for<'store>(
             offset: (index * segment_bytes) as u64,
             bytes: chunk.len() as u64,
             digest: stored.digest.clone(),
+            codec_identity: Some(SegmentCodecIdentity::raw(chunk.len() as u64)),
             meta_json: None,
         });
         held.push(stored);
@@ -69,6 +70,7 @@ fn commit_packed_payload(
             offset,
             bytes,
             digest: stored.digest.clone(),
+            codec_identity: Some(SegmentCodecIdentity::raw(bytes)),
             meta_json: None,
         });
         offset += bytes;
@@ -587,6 +589,7 @@ fn eviction_cost_at_realistic_segment_counts() {
                 offset: (index * bytes.len()) as u64,
                 bytes: bytes.len() as u64,
                 digest: digest.clone(),
+                codec_identity: Some(SegmentCodecIdentity::raw(bytes.len() as u64)),
                 meta_json: Some(format!("k:{}:0:{}", index % 32, index / 32)),
             });
         }
@@ -945,5 +948,226 @@ fn future_version_raw_manifest_is_refused_before_assembly() {
     assert!(
         error.to_string().contains("version"),
         "assemble error should name the version: {error}"
+    );
+}
+
+/// Rewrites the on-disk manifest as a v3 (#1750) build wrote it: payload-level
+/// codec identity only, no per-segment identity.
+fn rewrite_on_disk_as_v3(store: &HandoffSegmentStore, digest: &str) {
+    let path = store.manifest_path(digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    let object = value.as_object_mut().expect("manifest object");
+    object.insert(
+        "version".to_string(),
+        serde_json::json!(LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION),
+    );
+    for segment in object
+        .get_mut("segments")
+        .expect("segments")
+        .as_array_mut()
+        .expect("segment array")
+    {
+        segment
+            .as_object_mut()
+            .expect("segment object")
+            .remove("codec_identity");
+    }
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write v3 manifest");
+}
+
+#[test]
+fn v4_manifest_stamps_per_segment_identity_and_round_trips() {
+    let root = temp_root("codec-v4-roundtrip");
+    let store = store(&root, 0);
+    let payload: Vec<u8> = (0..50_000u32).map(|value| value as u8).collect();
+    let manifest = commit_payload(&store, &payload, 4096);
+    assert_eq!(manifest.version, MANIFEST_VERSION);
+    assert!(
+        manifest.segments.iter().all(|segment| segment.codec_identity
+            == Some(SegmentCodecIdentity::raw(segment.bytes))),
+        "every v4 segment carries its raw identity"
+    );
+
+    // The identity is written explicitly per segment, not inferred at read.
+    let manifest_json = fs::read_to_string(store.manifest_path(&manifest.payload_digest))
+        .expect("read manifest json");
+    let value: serde_json::Value =
+        serde_json::from_str(&manifest_json).expect("parse manifest json");
+    for segment in value["segments"].as_array().expect("segment array") {
+        assert_eq!(segment["codec_identity"]["name"], CODEC_RAW);
+        assert_eq!(segment["codec_identity"]["version"], CODEC_RAW_VERSION);
+        assert_eq!(segment["codec_identity"]["class"], "exact");
+        assert_eq!(segment["codec_identity"]["decoded_len"], segment["bytes"]);
+        assert!(
+            segment["codec_identity"]
+                .get("calibration_digest")
+                .is_none()
+        );
+    }
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    assert_eq!(store.assemble(&loaded).expect("assemble"), payload);
+}
+
+#[test]
+fn v3_manifest_reads_and_assembles_through_payload_codec() {
+    let root = temp_root("codec-v3-read");
+    let store = store(&root, 0);
+    let payload = vec![11u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    rewrite_on_disk_as_v3(&store, &manifest.payload_digest);
+
+    let loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load v3 manifest");
+    assert_eq!(
+        loaded.version, LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION,
+        "v3 stays v3: identity is normalized per segment, not rewritten"
+    );
+    assert!(
+        loaded
+            .segments
+            .iter()
+            .all(|segment| segment.codec_identity.is_none()),
+        "v3 segments carry no per-segment identity"
+    );
+    assert_eq!(store.assemble(&loaded).expect("assemble v3"), payload);
+}
+
+#[test]
+fn stripping_identity_from_a_v4_segment_rejects_everywhere() {
+    let root = temp_root("codec-v4-stripped");
+    let store = store(&root, 0);
+    let payload = vec![12u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let path = store.manifest_path(&manifest.payload_digest);
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    assert_eq!(original["version"], MANIFEST_VERSION);
+
+    // On-disk: a v4 manifest with one segment's identity stripped must never
+    // load — it cannot fall back to the payload codec or to raw.
+    let mut stripped = original.clone();
+    stripped["segments"][1]
+        .as_object_mut()
+        .expect("segment object")
+        .remove("codec_identity");
+    fs::write(&path, serde_json::to_vec(&stripped).expect("serialize")).expect("write stripped");
+    let error = store
+        .load_manifest(&manifest.payload_digest)
+        .expect_err("a stripped v4 segment identity must not load");
+    assert!(
+        error.to_string().contains("per-segment codec identity"),
+        "load error should name the missing per-segment identity: {error}"
+    );
+
+    // In-memory: the same shape must not commit (nothing unassemblable is
+    // ever persisted) and must not assemble (an unloadable entry is a miss).
+    let mut memory = manifest.clone();
+    memory.segments[0].codec_identity = None;
+    assert!(
+        store.commit(&memory).is_err(),
+        "a v4 commit with a stripped segment identity must be refused"
+    );
+    assert!(
+        store.assemble(&memory).is_err(),
+        "a v4 assembly with a stripped segment identity must be refused"
+    );
+
+    // Restore the on-disk manifest and strip ALL identities: still rejected,
+    // proving no aggregate fallback to the payload codec exists.
+    fs::write(&path, serde_json::to_vec(&original).expect("serialize")).expect("write original");
+    let mut all_stripped: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse");
+    for segment in all_stripped["segments"]
+        .as_array_mut()
+        .expect("segment array")
+    {
+        segment
+            .as_object_mut()
+            .expect("segment object")
+            .remove("codec_identity");
+    }
+    fs::write(&path, serde_json::to_vec(&all_stripped).expect("serialize"))
+        .expect("write all-stripped");
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "stripping every v4 segment identity must not enable a payload-codec fallback"
+    );
+}
+
+#[test]
+fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
+    let root = temp_root("codec-v4-unsupported");
+    let store = store(&root, 0);
+    let payload = vec![13u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // In-memory: a single lossy-coded segment makes the whole manifest
+    // unassemblable here, and the refusal names the offending segment.
+    let mut tampered = manifest.clone();
+    tampered.segments[0].codec_identity = Some(SegmentCodecIdentity {
+        name: "cachegen".to_string(),
+        version: 1,
+        class: CodecClass::Lossy,
+        decoded_len: tampered.segments[0].bytes,
+        calibration_digest: Some("blake3:calibration".to_string()),
+    });
+    let error = store
+        .commit(&tampered)
+        .expect_err("an unsupported segment codec must not commit");
+    let message = error.to_string();
+    assert!(
+        message.contains("segment 0") && message.contains("cachegen"),
+        "commit error should name the segment and codec: {message}"
+    );
+    drop(store);
+
+    // On-disk: the same shape cannot load on a fresh store. Tamper only the
+    // segment's identity (payload codec stays raw) so the per-segment gate,
+    // not the payload gate, is what rejects it.
+    let reopened = HandoffSegmentStore::open(&root, 0).expect("reopen store");
+    let path = reopened.manifest_path(&manifest.payload_digest);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read manifest")).expect("parse manifest");
+    value["segments"][0]["codec_identity"] = serde_json::json!({
+        "name": "cachegen",
+        "version": 1,
+        "class": "lossy",
+        "decoded_len": manifest.segments[0].bytes,
+        "calibration_digest": "blake3:calibration",
+    });
+    fs::write(&path, serde_json::to_vec(&value).expect("serialize")).expect("write tampered");
+    let error = reopened
+        .load_manifest(&manifest.payload_digest)
+        .expect_err("an on-disk unsupported segment codec must not load");
+    assert!(
+        error.to_string().contains("segment"),
+        "load error should name the segment: {error}"
+    );
+}
+
+#[test]
+fn v4_segment_identity_length_mismatch_is_refused() {
+    let root = temp_root("codec-v4-length");
+    let store = store(&root, 0);
+    let payload = vec![14u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+
+    // An exact identity whose decoded_len disagrees with the stored bytes is
+    // corruption, not a hint: refuse before any segment is read.
+    let mut tampered = manifest.clone();
+    let bytes = tampered.segments[0].bytes;
+    tampered.segments[0].codec_identity = Some(SegmentCodecIdentity::raw(bytes + 1));
+    assert!(
+        store.assemble(&tampered).is_err(),
+        "an exact identity with a decoded_len mismatch must not assemble"
+    );
+    assert!(
+        store.commit(&tampered).is_err(),
+        "an exact identity with a decoded_len mismatch must not commit"
     );
 }

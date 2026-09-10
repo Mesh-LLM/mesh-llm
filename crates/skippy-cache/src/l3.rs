@@ -55,15 +55,20 @@ const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// On-disk format version stamped into every manifest. A released change to
 /// the layout bumps this and makes older entries misses, never migrations.
 ///
-/// Version 3 requires an explicit [`PayloadCodec`]; a manifest at this version
-/// with the codec field removed is rejected rather than silently read as raw.
-pub const MANIFEST_VERSION: u32 = 3;
+/// Version 4 requires explicit per-segment codec identity; a manifest at this
+/// version whose segment lacks it is rejected rather than reinterpreted.
+pub const MANIFEST_VERSION: u32 = 4;
 
 /// The pre-codec-identity manifest format. These entries predate codec
 /// identity, are always raw by construction, and are decoded as raw through
 /// the explicit legacy path in [`decode_manifest`]. New manifests are never
 /// written at this version.
 pub const LEGACY_MANIFEST_VERSION: u32 = 2;
+
+/// The payload-level-codec manifest format (#1750): codec identity is carried
+/// once on the payload and every segment is implicitly that codec. Read for
+/// compatibility, never written. New manifests stamp identity per segment.
+pub const LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION: u32 = 3;
 
 /// Identity of the only implemented payload codec: raw, uncompressed exact
 /// state. Its bytes are the segments verbatim.
@@ -114,12 +119,113 @@ impl Default for PayloadCodec {
     }
 }
 
+/// What a codec's output promises at assembly time. The class is contract,
+/// not documentation: an exact entry can satisfy an exact lookup; a lossy
+/// entry can only satisfy a lookup that accepts its codec family and
+/// calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecClass {
+    /// Decodes to the exact segment bytes the writer held. Payload digest
+    /// verification applies at assembly.
+    Exact,
+    /// Decodes to a calibrated approximation of the segment bytes. Never
+    /// verified against a payload digest; must never satisfy an exact
+    /// lookup.
+    Lossy,
+}
+
+impl CodecClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Lossy => "lossy",
+        }
+    }
+}
+
+/// Per-segment codec identity: which codec, which representation version,
+/// what it promises, and (for lossy codecs) which calibration produced it.
+/// Required on every segment of a current-version manifest.
+///
+/// The identity is namespaced per segment rather than per payload so one
+/// payload can mix raw and compressed segments (e.g. a grown prefix whose
+/// leading windows are compressed and whose new tail is raw), and so a v4
+/// manifest with the identity stripped from a segment is detectable and
+/// rejected instead of silently inheriting the payload codec or raw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SegmentCodecIdentity {
+    /// Segment codec name, e.g. `raw`. Distinct namespace from the payload
+    /// codec so entry formats version independently.
+    pub name: String,
+    /// On-disk representation version within `name`.
+    pub version: u32,
+    /// What decoding promises: [`CodecClass::Exact`] entries verify against
+    /// the payload digest; [`CodecClass::Lossy`] entries never do.
+    pub class: CodecClass,
+    /// Byte length the codec decodes to. Must equal the assembled payload
+    /// region this segment covers; a mismatch is corruption, not a hint.
+    pub decoded_len: u64,
+    /// Calibration namespace for lossy codecs (e.g. the CacheGen CDF
+    /// calibration digest). Must be empty for exact codecs; lossy lookups
+    /// only ever match a payload calibrated with the same digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_digest: Option<String>,
+}
+
+impl SegmentCodecIdentity {
+    /// Identity for a segment stored verbatim: the exact raw codec at the
+    /// store's raw version, decoding to `segment.bytes`.
+    pub fn raw(encoded_len: u64) -> Self {
+        Self {
+            name: CODEC_RAW.to_string(),
+            version: CODEC_RAW_VERSION,
+            class: CodecClass::Exact,
+            decoded_len: encoded_len,
+            calibration_digest: None,
+        }
+    }
+
+    /// Whether this build can assemble a segment encoded with this identity.
+    /// Only the exact raw codec is implemented; anything else is unknown and
+    /// must be refused before assembly.
+    pub fn is_supported(&self) -> bool {
+        self.name == CODEC_RAW
+            && self.version == CODEC_RAW_VERSION
+            && self.class == CodecClass::Exact
+            && self.calibration_digest.is_none()
+    }
+
+    /// Internal consistency the capability negotiation relies on: an exact
+    /// identity must be raw-shaped (decoded length equals the stored bytes,
+    /// no calibration), and every identity must agree that decoding yields
+    /// what the manifest says it yields.
+    pub fn is_self_consistent(&self, encoded_len: u64) -> bool {
+        match self.class {
+            CodecClass::Exact => {
+                self.decoded_len == encoded_len && self.calibration_digest.is_none()
+            }
+            // A lossy identity must declare a calibration to decode against;
+            // its decoded length is checked against the payload layout at
+            // negotiation, not against the stored bytes.
+            CodecClass::Lossy => self.calibration_digest.is_some(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandoffSegmentRef {
     pub index: u32,
     pub offset: u64,
     pub bytes: u64,
     pub digest: String,
+    /// Per-segment codec identity: what the stored bytes are, what decoding
+    /// them promises, and (for lossy codecs) which calibration applies.
+    /// Required on a current-version manifest; the `Option` exists only so a
+    /// v4 manifest with the identity stripped is *detectable* and rejected —
+    /// it never falls back to the payload codec or to raw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec_identity: Option<SegmentCodecIdentity>,
     /// Per-segment metadata for page-stream payloads (serialized
     /// `RuntimeKvPageDesc` plus token range), opaque to the store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1723,27 +1829,95 @@ fn reject_unsupported_codec(manifest: &HandoffManifest) -> Result<()> {
     }
 }
 
-/// Versions this build can read and write: the current format and the legacy
-/// pre-codec-identity format.
+/// Versions this build can read and write: the current per-segment format
+/// and the two legacy formats (pre-codec and payload-level-codec).
 fn manifest_version_is_supported(version: u32) -> bool {
-    version == MANIFEST_VERSION || version == LEGACY_MANIFEST_VERSION
+    version == MANIFEST_VERSION
+        || version == LEGACY_MANIFEST_VERSION
+        || version == LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION
+}
+
+/// Reject a manifest whose segment codec identities this build cannot decode,
+/// before any segment is read or reassembled. Also enforces the per-segment
+/// negotiation contract: every identity must be internally consistent with
+/// the stored bytes it covers, and a mixed manifest must name the payload
+/// codec that describes the assembled whole. Positional errors name the
+/// segment index so the offending ref is identifiable in the message.
+fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
+    for segment in &manifest.segments {
+        let Some(identity) = segment.codec_identity.as_ref() else {
+            // Legacy formats carry no per-segment identity by construction;
+            // the payload gate covers what their segments decode as.
+            continue;
+        };
+        if !identity.is_supported() {
+            bail!(
+                "manifest {} segment {} uses unsupported codec {}/{}; this build assembles only {}/{}",
+                manifest.payload_digest,
+                segment.index,
+                identity.name,
+                identity.version,
+                CODEC_RAW,
+                CODEC_RAW_VERSION
+            );
+        }
+        if !identity.is_self_consistent(segment.bytes) {
+            bail!(
+                "manifest {} segment {} codec identity is inconsistent with its stored bytes ({}/{} class, decoded_len {}, encoded_len {})",
+                manifest.payload_digest,
+                segment.index,
+                identity.name,
+                identity.version,
+                identity.decoded_len,
+                segment.bytes
+            );
+        }
+        // Contract note for the compressed-codec slices: the payload codec
+        // describes the assembled whole. Once any segment stops being raw,
+        // the payload codec must be upgraded to name the mixed encoding —
+        // never left claiming raw while per-segment identities disagree.
+    }
+    Ok(())
+}
+
+/// The current format requires explicit per-segment codec identity. Shared
+/// by `decode_manifest` (on-disk reads) and
+/// `validate_manifest_compatibility` (commit and assembly), so neither path
+/// can persist or partially read a v4 manifest whose segment identity was
+/// stripped — there is no fallback to the payload codec or to raw.
+fn require_v4_segment_identities(manifest: &HandoffManifest) -> Result<()> {
+    for segment in &manifest.segments {
+        if segment.codec_identity.is_none() {
+            bail!(
+                "manifest {digest} at version {MANIFEST_VERSION} is missing per-segment codec identity on segment {index}",
+                digest = manifest.payload_digest,
+                index = segment.index
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Validate that an in-memory manifest is one this build can both persist and
-/// assemble: a supported format version *and* a supported codec. `try_commit`
-/// and `assemble` call this before writing or reading any segment, so a
-/// manifest that `decode_manifest` would later reject — an unknown version
-/// (e.g. a future version carrying a raw codec) or an unsupported codec —
-/// cannot be committed to disk or partially assembled from segments.
+/// assemble: a supported format version *and* supported codecs at both the
+/// payload and every segment. `try_commit` and `assemble` call this before
+/// writing or reading any segment, so a manifest that `decode_manifest` would
+/// later reject — an unknown version (e.g. a future version carrying a raw
+/// codec) or an unsupported codec at either level — cannot be committed to
+/// disk or partially assembled from segments.
 fn validate_manifest_compatibility(manifest: &HandoffManifest) -> Result<()> {
     if !manifest_version_is_supported(manifest.version) {
         bail!(
-            "manifest {} has version {} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}",
+            "manifest {} has version {} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}/{LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION}",
             manifest.payload_digest,
             manifest.version
         );
     }
-    reject_unsupported_codec(manifest)
+    if manifest.version == MANIFEST_VERSION {
+        require_v4_segment_identities(manifest)?;
+    }
+    reject_unsupported_codec(manifest)?;
+    reject_unsupported_segment_codecs(manifest)
 }
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
@@ -1751,12 +1925,27 @@ fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest
         serde_json::from_slice(bytes).context("malformed manifest")?;
     match manifest.version {
         MANIFEST_VERSION => {
-            // The current format must stamp its codec explicitly. A missing
-            // field here means it was stripped to force a raw reinterpretation
-            // of possibly non-raw bytes — reject, never default to raw.
+            // The current format must stamp both the payload codec and every
+            // per-segment codec identity explicitly. A missing field means it
+            // was stripped to force a reinterpretation of bytes this build
+            // may not decode — reject, never default to raw or to the payload
+            // codec.
             if manifest.codec.is_none() {
                 bail!(
                     "manifest {payload_digest} at version {MANIFEST_VERSION} is missing its required codec identity"
+                );
+            }
+            require_v4_segment_identities(&manifest)?;
+        }
+        LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION => {
+            // #1750 format: codec identity is carried once at the payload
+            // level and every segment implicitly is that codec. The payload
+            // codec is required there (a stripped one is rejected, same as
+            // current), and no per-segment identity exists to normalize —
+            // the payload gate below covers what the segments decode as.
+            if manifest.codec.is_none() {
+                bail!(
+                    "manifest {payload_digest} at version {LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION} is missing its required codec identity"
                 );
             }
         }
@@ -1775,14 +1964,15 @@ fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest
             }
         }
         other => bail!(
-            "manifest {payload_digest} has version {other} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}"
+            "manifest {payload_digest} has version {other} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}/{LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION}"
         ),
     }
     // Central capability gate: no load entry point returns a manifest whose
-    // codec this build cannot decode. Startup reconciliation quarantines it,
+    // codecs this build cannot decode. Startup reconciliation quarantines it,
     // manifest_for_prefix prunes the link and falls back to a shorter prefix,
     // and a direct load fails.
     reject_unsupported_codec(&manifest)?;
+    reject_unsupported_segment_codecs(&manifest)?;
     if manifest.payload_digest != payload_digest {
         bail!(
             "manifest key {payload_digest} disagrees with payload digest {}",
