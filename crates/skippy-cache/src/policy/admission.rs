@@ -20,10 +20,16 @@ impl AdmissionDecision {
     /// A rejected offer whose measured cost was invalid. Constructed without
     /// touching policy state.
     pub fn rejected_invalid_cost() -> Self {
+        Self::rejected("invalid-cost-sample")
+    }
+
+    /// A structurally rejected offer. Constructed without touching policy
+    /// state.
+    pub fn rejected(reason: &str) -> Self {
         Self {
             kind: AdmissionDecisionKind::Reject,
             verdict: AdmissionVerdict::Reject,
-            reasons: vec!["invalid-cost-sample".into()],
+            reasons: vec![reason.into()],
             probation_cap_victims: Vec::new(),
         }
     }

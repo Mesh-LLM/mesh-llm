@@ -283,10 +283,26 @@ impl BenefitPolicy {
         shared: Vec<(SegmentId, u64)>,
         cost: CostSample,
     ) -> AdmissionDecision {
-        // Validate before any mutation: an invalid observation must not
-        // advance the clock (aging grace) or expire ghosts.
+        // Full structural prevalidation before any policy mutation: an
+        // invalid cost, duplicate segment IDs, a size conflict, or an
+        // already-resident key must not advance the clock (aging grace) or
+        // expire ghosts.
         if !cost.is_valid() {
             return AdmissionDecision::rejected_invalid_cost();
+        }
+        if self.entries.contains_key(&key) {
+            return AdmissionDecision::rejected("already-resident-key");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if shared.iter().any(|(s, _)| !seen.insert(*s)) {
+            return AdmissionDecision::rejected("duplicate-segment-reference");
+        }
+        if shared.iter().any(|(segment, size)| {
+            self.segments
+                .segment_record(*segment)
+                .is_some_and(|r| !r.references.contains(&key) && r.size != *size)
+        }) {
+            return AdmissionDecision::rejected("segment-size-conflict");
         }
         self.clock += 1;
         self.expire_ghosts();

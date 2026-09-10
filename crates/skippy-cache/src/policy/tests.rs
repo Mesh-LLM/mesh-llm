@@ -488,8 +488,10 @@ fn ghosts_are_bounded_by_count_and_age() {
     policy.consider_admission(99, 1 << 20, vec![], cost(400.0, 100.0));
     policy.remove(99);
     assert!(policy.ghost(99).is_some());
-    for _ in 0..50 {
-        policy.consider_admission(0, 1 << 20, vec![], cost(400.0, 100.0));
+    for i in 0..50u64 {
+        // Unique keys: an already-resident key is rejected before the clock
+        // advances, so age must be driven by fresh observations.
+        policy.consider_admission(1000 + i, 1 << 20, vec![], cost(400.0, 100.0));
     }
     assert!(
         policy.ghost(99).is_none(),
@@ -756,5 +758,83 @@ fn conflict_on_a_later_segment_leaves_state_untouched() {
     assert_eq!(record.references, vec![1u64]);
     assert_eq!(record.size, 100);
     // Class charge unchanged: the original entry's shared 100 bytes only.
+    assert_eq!(policy.probation_bytes(), 100);
+}
+
+#[test]
+fn structural_rejects_leave_clock_and_zero_horizon_ghosts_untouched() {
+    // ghost_max_age_observations = 0: any real observation would expire the
+    // ghost. Duplicate-ID and size-conflict rejects must not.
+    let mk = || {
+        BenefitPolicy::new(PolicyConfig {
+            ghost_max_age_observations: 0,
+            grace_observations: 4,
+            ..PolicyConfig::default()
+        })
+    };
+
+    // Duplicate segment IDs.
+    let mut policy = mk();
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(9);
+    assert!(policy.ghost(9).is_some());
+    let clock = policy.clock_debug();
+    let decision =
+        policy.consider_admission(1, 0, vec![(42u64, 100), (42u64, 100)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert_eq!(
+        policy.clock_debug(),
+        clock,
+        "duplicate reject must not advance clock"
+    );
+    assert!(
+        policy.ghost(9).is_some(),
+        "duplicate reject must not expire ghosts"
+    );
+
+    // Size conflict on a later segment.
+    let mut policy = mk();
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
+    policy.consider_admission(9, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(9);
+    assert!(policy.ghost(9).is_some());
+    let clock = policy.clock_debug();
+    let decision = policy.consider_admission(
+        9,
+        1 << 20,
+        vec![(2u64, 100), (1u64, 200)],
+        cost(400.0, 100.0),
+    );
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert_eq!(
+        policy.clock_debug(),
+        clock,
+        "conflict reject must not advance clock"
+    );
+    assert!(
+        policy.ghost(9).is_some(),
+        "conflict reject must not expire ghosts"
+    );
+}
+
+#[test]
+fn already_resident_key_rejection_leaves_no_stale_references() {
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    policy.consider_admission(1, 0, vec![(1u64, 100)], cost(400.0, 100.0));
+    // Re-admitting a resident key is rejected and must not swap the entry's
+    // segment list or leak old ledger references.
+    let decision = policy.consider_admission(1, 0, vec![(2u64, 50)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert!(
+        decision
+            .reasons
+            .contains(&"already-resident-key".to_string())
+    );
+    let record = policy.segments.segment_record(1).expect("segment 1 intact");
+    assert_eq!(record.references, vec![1u64]);
+    assert!(
+        policy.segments.segment_record(2).is_none(),
+        "segment 2 must not be registered"
+    );
     assert_eq!(policy.probation_bytes(), 100);
 }
