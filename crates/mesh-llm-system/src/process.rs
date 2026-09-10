@@ -141,10 +141,9 @@ mod platform {
 }
 
 /// Parse the output of `ps -o lstart=` under `LANG=C`/`LC_ALL=C`, e.g.
-/// `Wed Sep  9 18:43:39 2026`: weekday, month, day, time, year. Kept outside
-/// the macOS-only platform module (its only caller) so the parser is
-/// unit-tested on every CI runner, not just a macOS one.
-#[cfg(any(test, target_os = "macos"))]
+/// `Wed Sep  9 18:43:39 2026`: weekday, month, day, time, year, and convert
+/// it to a Unix timestamp in the local timezone.
+#[cfg(target_os = "macos")]
 fn parse_lstart(s: &str) -> anyhow::Result<Option<i64>> {
     use chrono::{Local, TimeZone};
 
@@ -159,8 +158,10 @@ fn parse_lstart(s: &str) -> anyhow::Result<Option<i64>> {
 }
 
 /// Parses the weekday/month/day/time/year fields into a naive (timezone-free)
-/// datetime, split out from [`parse_lstart`] so the field decoding can be
-/// tested without depending on the test runner's local timezone.
+/// datetime. Split out of [`parse_lstart`] and out of the macOS-only platform
+/// module (its only real caller) so this field decoding is unit-tested on
+/// every CI runner rather than only a macOS one, and so the test doesn't
+/// depend on the runner's local timezone.
 #[cfg(any(test, target_os = "macos"))]
 fn parse_lstart_naive(s: &str) -> Option<chrono::NaiveDateTime> {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
