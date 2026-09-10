@@ -10,7 +10,19 @@
 //! 3. host→device bytes copied
 //! 4. device→host bytes copied
 //! 5. peak temporary device memory
-//! 6. output equality against the CPU reference
+//! 6. output equality against the CPU reference (bitwise)
+//!
+//! Measurement honesty, per the review of PR #1752: every timed stage
+//! ends with a `client.sync()` *inside* the timer, so the number covers
+//! real completion — not unsynchronized enqueue. "Cold JIT" is the first
+//! launch of a kernel specialization in this process (compile + pipeline
+//! creation + execution); in cubecl 0.10.0 the only on-disk kernel cache
+//! is the Vulkan-only SPIR-V cache, which this build does not enable, so
+//! per-process first launch is the true cold path for CPU and Metal
+//! alike. Warm numbers are the average over synchronized steady-state
+//! launches. Equality is exact `==` on symbols and f32 values: dequantized
+//! values are exact products of small integers and dyadic floats, so any
+//! non-bit-equal output is a real divergence, not rounding noise.
 //!
 //! Kernel decomposition, stated honestly: quantization is embarrassingly
 //! parallel; the token-axis delta is a scan along rows. KV tiles are
@@ -23,7 +35,10 @@
 //!
 //! Run:
 //!   cargo run -p skippy-cache --example cachegen_cubecl_spike \
-//!     --features cachegen-spike -- --rows 4096 --dims 128
+//!     --features cachegen-spike -- --rows 4096 --dims 128 [--iterations 20]
+//!
+//! `--iterations` only widens the warm-dispatch sample; the cold-JIT
+//! number is a single first launch by definition.
 
 use cubecl::prelude::*;
 use skippy_cache::cachegen::reference;
@@ -79,25 +94,45 @@ fn undelta_dequantize_columns(
 }
 
 struct StageTiming {
+    /// First synchronized launch of this kernel specialization in this
+    /// process: JIT compile + pipeline creation + execution to completion.
     cold_compile_ms: u128,
+    /// Average over synchronized steady-state launches (completion, not
+    /// enqueue).
     warm_dispatch_us: u128,
 }
 
+/// Blocks until the client's stream drains. Called inside every timed
+/// region: without it the timer measures launch enqueue only and the
+/// actual work lands after the clock stops (the PR #1752 review bug).
+fn synchronize<R: Runtime>(client: &ComputeClient<R>) {
+    cubecl::future::block_on(client.sync())
+        .unwrap_or_else(|error| panic!("device sync failed: {error}"));
+}
+
 fn timed_stage<R: Runtime>(
-    _client: &ComputeClient<R>,
+    client: &ComputeClient<R>,
     iterations: u32,
     mut launch: impl FnMut(),
 ) -> StageTiming {
+    synchronize::<R>(client);
     let cold = std::time::Instant::now();
     launch();
+    synchronize::<R>(client);
     let cold_compile_ms = cold.elapsed().as_millis();
-    let warm = std::time::Instant::now();
+    // Steady state: the first launch populated the pipeline cache, so
+    // every launch here is the warm path. Each launch is individually
+    // synchronized inside the timed region; the reported number is total
+    // elapsed / iterations, i.e. the steady-state cost per launch
+    // including completion.
+    let warm_start = std::time::Instant::now();
     for _ in 0..iterations {
         launch();
+        synchronize::<R>(client);
     }
     StageTiming {
         cold_compile_ms,
-        warm_dispatch_us: warm.elapsed().as_micros() / u128::from(iterations),
+        warm_dispatch_us: warm_start.elapsed().as_micros() / u128::from(iterations),
     }
 }
 
@@ -108,6 +143,7 @@ fn run_backend<R: Runtime>(
     dims: usize,
     expected_symbols: &[u8],
     expected_values: &[f32],
+    iterations: u32,
 ) -> Result<(), String> {
     if dims > 1024 {
         return Err(format!(
@@ -154,12 +190,15 @@ fn run_backend<R: Runtime>(
             dims,
         )
     };
-    let encode_timing = timed_stage::<R>(&client, 20, encode);
+    let encode_timing = timed_stage::<R>(&client, iterations, encode);
 
     let symbols_bytes = client
         .read_one(symbols_handle.clone())
         .map_err(|error| error.to_string())?;
     let device_symbols_u32 = u32::from_bytes(&symbols_bytes);
+    // Range-check before the narrowing cast: `as u8` would silently alias
+    // an out-of-alphabet u32 (e.g. 256 -> 0) into a false parity pass.
+    let all_in_alphabet = device_symbols_u32.iter().all(|&symbol| symbol < 16);
     let device_symbols: Vec<u8> = device_symbols_u32.iter().map(|&s| s as u8).collect();
 
     let decode = || unsafe {
@@ -174,7 +213,7 @@ fn run_backend<R: Runtime>(
             dims,
         )
     };
-    let decode_timing = timed_stage::<R>(&client, 20, decode);
+    let decode_timing = timed_stage::<R>(&client, iterations, decode);
 
     let rebuilt_bytes = client
         .read_one(rebuilt_handle.clone())
@@ -197,12 +236,26 @@ fn run_backend<R: Runtime>(
     let stream = encoder.finish();
     let ratio = stream.len() as f64 / tile.len() as f64;
 
-    let symbols_match = device_symbols == expected_symbols;
+    let symbols_match = all_in_alphabet && device_symbols == expected_symbols;
+    // Exact bitwise comparison: dequantized values are `symbol * scale +
+    // min` where symbol is a small integer and scale/min are identical f32
+    // bits on both sides, so the f32 words must match exactly. A tolerance
+    // here is what let an enqueue-only measurement pass for parity.
     let values_match = rebuilt.len() == expected_values.len()
         && rebuilt
             .iter()
             .zip(expected_values.iter())
-            .all(|(device, reference_value)| (device - reference_value).abs() < 1e-6);
+            .all(|(device, reference_value)| device.to_bits() == reference_value.to_bits());
+    let symbol_mismatches = device_symbols
+        .iter()
+        .zip(expected_symbols.iter())
+        .filter(|(device, expected)| device != expected)
+        .count();
+    let value_mismatches = rebuilt
+        .iter()
+        .zip(expected_values.iter())
+        .filter(|(device, expected)| device.to_bits() != expected.to_bits())
+        .count();
 
     println!("=== {backend} ===");
     println!(
@@ -224,7 +277,12 @@ fn run_backend<R: Runtime>(
         tile.len(),
         ratio
     );
-    println!("equality vs CPU reference: symbols={symbols_match}, values={values_match}");
+    println!("equality vs CPU reference (bitwise): symbols={symbols_match}, values={values_match}");
+    println!(
+        "mismatch counts: symbols {symbol_mismatches}/{}, values {value_mismatches}/{}",
+        device_symbols.len(),
+        rebuilt.len()
+    );
     if symbols_match && values_match {
         Ok(())
     } else {
@@ -248,6 +306,7 @@ fn main() {
     };
     let rows = parse("--rows", 4096);
     let dims = parse("--dims", 128);
+    let iterations = u32::try_from(parse("--iterations", 20)).unwrap_or(20);
 
     // Smooth KV-like fixture, deterministic, the shape CacheGen gains come
     // from.
@@ -290,6 +349,7 @@ fn main() {
         dims,
         &symbols,
         &expected_values,
+        iterations,
     ) {
         failures.push(error);
     }
@@ -300,6 +360,7 @@ fn main() {
         dims,
         &symbols,
         &expected_values,
+        iterations,
     ) {
         failures.push(error);
     }

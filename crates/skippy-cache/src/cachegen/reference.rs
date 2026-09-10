@@ -128,12 +128,23 @@ pub fn delta_decode(symbols: &mut [u8], dims: usize) -> Result<()> {
 /// lowest index) until the frequencies sum to the rANS scale. The
 /// redistribution order is fixed, so the same histogram always yields the
 /// same table on every backend.
+///
+/// `total` must equal `sum(histogram)` — the caller's contract, enforced
+/// here. With it, both normalization loops are provably bounded: the
+/// decrement loop removes at most one unit per min-clamped symbol (at most
+/// `TOKEN_COUNT` iterations) and the increment loop adds at most
+/// `SCALE - 1` missing units. Without it, a forged histogram/total pair
+/// could drive unbounded repair work.
 pub fn histogram_to_freqs(histogram: &[u32], total: usize) -> Result<Vec<u32>> {
     if histogram.len() != TOKEN_COUNT {
         bail!("histogram must cover every 4-bit symbol");
     }
     if total == 0 {
         bail!("cannot build a symbol table for an empty tile");
+    }
+    let histogram_total: u64 = histogram.iter().map(|&count| u64::from(count)).sum();
+    if histogram_total != total as u64 {
+        bail!("histogram totals {histogram_total} but the caller declares {total} symbols");
     }
     let mut freqs: Vec<u32> = histogram
         .iter()
@@ -157,6 +168,12 @@ pub fn histogram_to_freqs(histogram: &[u32], total: usize) -> Result<Vec<u32>> {
     }
     let mut index = 0usize;
     while sum < u64::from(super::rans::SCALE) {
+        // Unreachable with a validated histogram (every other symbol holds
+        // at least one unit, so no target can sit at the full scale), but
+        // the bound makes the loop's totality explicit rather than argued.
+        if index > u64::from(super::rans::SCALE) as usize {
+            bail!("histogram normalization failed to converge");
+        }
         let candidate = histogram
             .iter()
             .enumerate()
@@ -254,6 +271,24 @@ mod tests {
         let sum: u32 = first.iter().sum();
         assert_eq!(sum, super::super::rans::SCALE);
         assert!(first.iter().all(|&freq| freq >= 1));
+    }
+
+    #[test]
+    fn a_total_that_disagrees_with_the_histogram_is_refused() {
+        let mut histogram = vec![0u32; TOKEN_COUNT];
+        histogram[0] = 700;
+        histogram[3] = 200;
+        histogram[9] = 100;
+        // The forged-total cases: wildly low, wildly high, and off-by-one.
+        // Any of them used to seed the CDF from a tile that never existed.
+        for lie in [1usize, usize::MAX, 1001] {
+            let error = histogram_to_freqs(&histogram, lie)
+                .expect_err("a disagreeing total must be refused");
+            assert!(
+                error.to_string().contains("declares"),
+                "error should name the disagreement: {error}"
+            );
+        }
     }
 
     #[test]

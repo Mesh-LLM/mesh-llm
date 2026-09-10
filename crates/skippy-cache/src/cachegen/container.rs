@@ -32,10 +32,11 @@ const MAGIC: [u8; 4] = *b"CGv1";
 /// Fixed prefix: 4 magic + 2 dims + 4 rows + 4 min bits + 4 scale bits +
 /// 4 stream length + 2 reserved.
 const FIXED_HEADER_LEN: usize = 24;
-/// The histogram travels as `TOKEN_COUNT` little-endian `u16` counts. The
-/// histogram never exceeds `u16::MAX` because a segment tile is capped at
-/// 64Ki symbols by the encode contract (f16 rows in a segment).
-const HISTOGRAM_LEN: usize = TOKEN_COUNT * 2;
+/// The histogram travels as `TOKEN_COUNT` little-endian `u32` counts.
+/// Wide counts keep the format honest at real tile sizes: a 4096x128 tile
+/// is 524,288 symbols and would overflow a `u16` count, and CGv1 is one
+/// format for every tile the codec can encode.
+const HISTOGRAM_LEN: usize = TOKEN_COUNT * 4;
 /// Total bytes before the rANS stream.
 const HEADER_LEN: usize = FIXED_HEADER_LEN + HISTOGRAM_LEN;
 
@@ -114,9 +115,8 @@ pub fn encode_f16_segment(raw_segment: &[u8], dims: usize) -> Result<Vec<u8>> {
         .map_err(|_| anyhow!("encoded stream exceeds container field width"))?;
     out.extend_from_slice(&stream_len.to_le_bytes());
     out.extend_from_slice(&[0u8; 2]);
+    // Counts are `u32` throughout the encoder; the write is direct.
     for &count in &histogram {
-        let count =
-            u16::try_from(count).map_err(|_| anyhow!("symbol count exceeds u16 histogram"))?;
         out.extend_from_slice(&count.to_le_bytes());
     }
     out.extend_from_slice(&stream);
@@ -191,11 +191,22 @@ fn parse_container(payload: &[u8]) -> Result<(ContainerHeader, Vec<u32>, &[u8])>
         bail!("cachegen container declares an empty tile");
     }
     let histogram: Vec<u32> = payload[FIXED_HEADER_LEN..HEADER_LEN]
-        .as_chunks::<2>()
+        .as_chunks::<4>()
         .0
         .iter()
-        .map(|bytes| u32::from(u16::from_le_bytes(*bytes)))
+        .map(|bytes| u32::from_le_bytes(*bytes))
         .collect();
+    // The histogram must account for exactly the declared tile. A total
+    // that disagrees with `rows * dims` is a corrupt (or hostile) header:
+    // accepting it would build a CDF for a tile that never existed and
+    // drive unbounded normalization repair at decode time.
+    let histogram_total: u64 = histogram.iter().map(|&count| u64::from(count)).sum();
+    let expected_total = (rows as u64) * (dims as u64);
+    if histogram_total != expected_total {
+        bail!(
+            "cachegen histogram totals {histogram_total} but the tile declares {expected_total} symbols"
+        );
+    }
     if payload.len() != HEADER_LEN + stream_len {
         bail!(
             "cachegen container length {} disagrees with its declared stream length {stream_len}",
@@ -356,6 +367,57 @@ mod tests {
         let mut bad_histogram = encoded.clone();
         bad_histogram[FIXED_HEADER_LEN] ^= 0xff;
         assert!(decode_f16_segment(&bad_histogram).is_err());
+
+        // A histogram that plausibly formats but does not sum to the
+        // declared tile is refused at parse, before any table is built:
+        // this is the bounded-normalization contract (scama blocker 2).
+        let mut total_lie = encoded.clone();
+        let lie_position = FIXED_HEADER_LEN + 4 * 3;
+        let current = u32::from_le_bytes(
+            total_lie[lie_position..lie_position + 4]
+                .try_into()
+                .expect("4 bytes"),
+        );
+        total_lie[lie_position..lie_position + 4]
+            .copy_from_slice(&current.wrapping_add(1).to_le_bytes());
+        let error = decode_f16_segment(&total_lie).expect_err("histogram/shape disagreement");
+        assert!(
+            error.to_string().contains("histogram totals"),
+            "rejection should name the histogram total: {error}"
+        );
+    }
+
+    /// The exact shape scama's review measured and the spike reports:
+    /// 4096 rows x 128 dims, end to end through the real CGv1 container,
+    /// not a bypass. This is the regression for the u16 histogram cap.
+    #[test]
+    fn the_measured_4096x128_tile_round_trips_through_the_container() {
+        let dims = 128;
+        let rows = 4096;
+        let raw = smooth_tile(rows, dims, 0xC0FFEE);
+        let encoded = encode_f16_segment(&raw, dims).expect("encode a full-size tile");
+        assert_eq!(
+            decoded_value_count(&encoded).expect("count"),
+            rows * dims,
+            "container must declare the full measured tile"
+        );
+        let decoded = decode_f16_segment(&encoded).expect("decode a full-size tile");
+        assert_eq!(decoded.len(), raw.len());
+        let max_error: f32 = raw
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<2>().0)
+            .map(|(original, restored)| {
+                (f16_bits_to_f32(u16::from_le_bytes(*original))
+                    - f16_bits_to_f32(u16::from_le_bytes(*restored)))
+                .abs()
+            })
+            .fold(0.0, f32::max);
+        assert!(
+            max_error < 0.05,
+            "full-size tile decoded outside quantization error: {max_error}"
+        );
     }
 
     #[test]
