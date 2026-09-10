@@ -155,11 +155,21 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
 
     for access in trace {
         if policy.entry(access.entry).is_some() {
-            policy.record_hit(
+            let decision = policy.record_hit(
                 access.entry,
                 cost(access.cold_prefill_cost, access.restore_cost),
             );
             policy_saved += (access.cold_prefill_cost - access.restore_cost).max(0.0);
+            // Promotion is the persistence event for a probational entry:
+            // the bytes are written when the policy commits to persisting
+            // it, not at probation admission.
+            if let Some(AdmissionDecision {
+                kind: AdmissionDecisionKind::Promote,
+                ..
+            }) = &decision
+            {
+                policy_written += access.exclusive_bytes;
+            }
         } else {
             // Re-offer a rejected/evicted entry each time it recurs;
             // probation keeps new candidates in the accounting set until
@@ -171,7 +181,12 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
                 cost(access.cold_prefill_cost, access.restore_cost),
                 &[],
             );
-            policy_written += access.exclusive_bytes;
+            // Count bytes only when the decision actually persists.
+            // AdmitProbation is memory-only accounting; the entry becomes
+            // written when a later hit promotes it to Admitted (persist).
+            if decision.kind == AdmissionDecisionKind::AdmitPersist {
+                policy_written += access.exclusive_bytes;
+            }
             // Hard probation cap is enforced as part of admission: commit the
             // selected victims.
             for key in decision.probation_cap_repair.victims().iter().copied() {
@@ -259,6 +274,74 @@ fn no_regression_on_mixed_size_trace() {
         "policy saved {} vs lru {}",
         comparison.policy_saved_cost,
         comparison.lru_saved_cost
+    );
+}
+
+/// The mixed-size trace must actually exercise mixed resident size
+/// classes and large-entry eviction at a capacity smaller than the
+/// 256 MiB class.
+#[test]
+fn mixed_size_trace_has_real_mixed_residency_and_large_eviction() {
+    let trace = traces::mixed_size_trace(5, 300);
+    // Distinct keys per class, each consistently sized.
+    let mut sizes = std::collections::BTreeMap::new();
+    let mut classes = std::collections::BTreeSet::new();
+    for a in &trace {
+        let prev = sizes.insert(a.entry, a.exclusive_bytes);
+        assert!(
+            prev.is_none_or(|s| s == a.exclusive_bytes),
+            "key {} changed size class",
+            a.entry
+        );
+        classes.insert(a.exclusive_bytes);
+    }
+    assert_eq!(classes.len(), 3, "all three size classes present");
+    // Run the trace at a capacity that cannot hold a 256 MiB entry
+    // alongside the hot 4 MiB set: large entries must be admitted
+    // (probation) and evicted, never violating capacity.
+    let capacity = 96 << 20;
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    let mut resident_classes = std::collections::BTreeSet::new();
+    for access in &trace {
+        if policy.entry(access.entry).is_some() {
+            policy.record_hit(
+                access.entry,
+                cost(access.cold_prefill_cost, access.restore_cost),
+            );
+        } else {
+            let decision = policy.consider_admission(
+                access.entry,
+                access.exclusive_bytes,
+                vec![],
+                cost(access.cold_prefill_cost, access.restore_cost),
+                &[],
+            );
+            for key in decision.probation_cap_repair.victims().iter().copied() {
+                policy.remove(key, &[]);
+            }
+        }
+        let mut used: u64 = policy.entries.values().map(|e| e.exclusive_bytes).sum();
+        while used > capacity {
+            let victims = policy.choose_victims(used - capacity, &[]);
+            if victims.is_empty() {
+                break;
+            }
+            for (key, verdict) in victims {
+                if verdict == EvictionVerdict::Evict {
+                    policy.remove(key, &[]);
+                }
+            }
+            used = policy.entries.values().map(|e| e.exclusive_bytes).sum();
+        }
+        assert!(used <= capacity, "used {} over capacity after access", used);
+        for e in policy.entries.values() {
+            resident_classes.insert(e.exclusive_bytes);
+        }
+    }
+    assert!(
+        resident_classes.len() >= 2,
+        "mixed resident sizes never observed: {:?}",
+        resident_classes
     );
 }
 
@@ -988,4 +1071,48 @@ fn all_pinned_cap_is_deferred_with_shortfall_never_a_pin() {
     // selectable again).
     let repair = policy.select_probation_cap_victims(&[]);
     assert!(!repair.is_deferred());
+}
+
+/// Grace must expire under repeated misses: a miss is a real observation
+/// that advances the clock but is a negative value signal (no recency
+/// refresh), so a miss-only stream ages an entry out of grace and makes
+/// it evictable instead of holding it indefinitely.
+#[test]
+fn grace_expires_under_repeated_misses() {
+    let grace = 8u64;
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        grace_observations: grace,
+        ..PolicyConfig::default()
+    });
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
+    // Miss key 1 repeatedly (each miss advances the clock); the clock at
+    // admission was 2, so after `grace` misses key 1 is out of grace
+    // while key 2 (admitted later) stays in grace.
+    let clock_at_admission = policy.clock_debug();
+    for _ in 0..grace {
+        policy.record_miss(1);
+    }
+    assert!(
+        policy.clock_debug() >= clock_at_admission + grace,
+        "misses must advance the clock"
+    );
+    // Out-of-grace entry 1 is now evictable in pass 1 (grace honored);
+    // requesting only its bytes must never touch in-grace entry 2.
+    let victims = policy.choose_victims(1 << 20, &[]);
+    let evictable: Vec<u64> = victims.iter().map(|(k, _)| *k).collect();
+    assert!(
+        evictable.contains(&1),
+        "miss-only entry must age out of grace, victims {:?}",
+        evictable
+    );
+    assert!(
+        !evictable.contains(&2),
+        "in-grace entry must not be evicted first, victims {:?}",
+        evictable
+    );
+    // And a miss-only stream cannot hold grace forever: entry 1's grace
+    // age equals clock - last_observation >= grace.
+    let e1 = policy.entry(1).unwrap();
+    assert!(policy.clock_debug().saturating_sub(e1.last_observation) >= grace);
 }

@@ -90,8 +90,12 @@ pub fn mixed_size_trace(seed: u64, len: usize) -> Vec<TraceAccess> {
     let mut rng = Rng::new(seed);
     let mut out = Vec::with_capacity(len);
     for i in 0..len as u64 {
-        let mut access = access_for(i % 32, &mut rng);
         let class = (i / 32) % 3;
+        // Distinct key per size class: reusing one key would make the
+        // larger sizes hits on a 64 KiB resident entry, so the trace
+        // would never exercise mixed resident sizes or large-entry
+        // eviction.
+        let mut access = access_for(class * 32 + i % 32, &mut rng);
         access.exclusive_bytes = match class {
             0 => 64 << 10,
             1 => 4 << 20,

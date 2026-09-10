@@ -396,7 +396,13 @@ impl BenefitPolicy {
     }
 
     /// Record a miss/cold recompute for an admitted entry (decays reuse).
+    /// A miss is a real observation that advances the clock, but unlike a
+    /// hit it is a negative value signal: it decays reuse and does NOT
+    /// refresh `last_observation`, so a miss-only stream ages the grace
+    /// window and the entry becomes evictable — grace cannot hold a
+    /// never-reused entry indefinitely.
     pub fn record_miss(&mut self, key: EntryKey) {
+        self.clock += 1;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.misses += 1;
             entry.observation_weight = entry.observation_weight * self.config.decay.factor + 1.0;
