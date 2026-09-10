@@ -39,10 +39,6 @@ DISPLAY_PREFIX_RE = re.compile(
     r"^(?:" + "|".join(DISPLAY_TYPES) + r")(?:\([^)]*\))?!?:\s+", re.IGNORECASE
 )
 TAIL_RE = re.compile(r"^(## New Contributors|\*\*Full Changelog\*\*)")
-DEFAULT_INTRO = (
-    "The notable changes in this release, grouped per "
-    "[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)."
-)
 
 
 def normalize_subject(subject):
@@ -132,7 +128,8 @@ def validate(plan, entries, order):
 
 
 def render(plan, entries, tail):
-    out = [plan.get("intro", DEFAULT_INTRO), ""]
+    # No preamble: the reader can see they are looking at a changelog.
+    out = []
     if plan.get("version"):
         heading = f"## [{plan['version']}]"
         if plan.get("date"):

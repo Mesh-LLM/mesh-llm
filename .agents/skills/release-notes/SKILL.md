@@ -46,6 +46,61 @@ readiness or build the change inventory from source; that is
 Two passes, in this order. The first always runs and always produces a
 publishable body; the second is best-effort.
 
+```
+   stable release published
+             |
+             v
+   +--------------------------------------------------+
+   | 1. CAPTURE                                        |
+   |    gh release view -> body.md + body.backup.md    |
+   |    GitHub's flat "What's Changed" list            |
+   +--------------------------------------------------+
+             |
+             v
+   +--------------------------------------------------+
+   | 2. CLASSIFY   deterministic, always runs          |
+   |    read git log <base>..<tag>, map each entry by  |
+   |    its Conventional Commits type:                 |
+   |      feat -> Added        fix -> Fixed            |
+   |      perf -> Changed      security -> Security    |
+   |      ci|build|test|chore -> Internal (folded)     |
+   |      no conventional type -> "Other changes"      |
+   |    -> plan.deterministic.json                     |
+   +--------------------------------------------------+
+             |
+             v
+        [ RENDER + GATE ] --fails--> exit 1, publish nothing
+             | passes
+             v
+   +--------------------------------------------------+
+   | 3. AGENT REVIEW   optional, best-effort           |
+   |    probe: model set? CLI present? credentials?    |
+   |           liveness call inside a timeout?         |
+   |      any no -> skip, keep deterministic notes ----+---+
+   |    review plan, mainly "Other changes" and any    |   |
+   |    security fix committed as a plain fix          |   |
+   |    -> plan.agent.json                             |   |
+   +--------------------------------------------------+   |
+             |                                             |
+             v                                             |
+        [ RENDER + SAME GATE ] --fails--> keep -----------+|
+             | passes                     deterministic   ||
+             v                                            vv
+        agent notes  ------------------>  deterministic notes
+             |                                    |
+             +----------------+-------------------+
+                              v
+                   4. PUBLISH  gh release edit
+                              v
+                   5. VERIFY the live body carries
+                      exactly the same pull requests
+```
+
+The gate in steps 2, 3 and 5 is one rule: **the set of referenced pull
+requests must not change**. Sections move, subjects lose their type prefix,
+but no PR is dropped, duplicated, or invented, and author credit is copied
+through untouched. Nothing publishes unless that holds.
+
 ### 1. Deterministic pass (authoritative)
 
 `scripts/release-notes-classify.py` reads the canonical squash-merge commits
