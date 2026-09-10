@@ -24,6 +24,10 @@ display-only and overstates schedulable capacity (see #1656 for the itemized
 total / reserved / usable breakdown that will replace the single value). The
 `Mesh VRAM` tile shows the rated sum as secondary text when it differs.
 
+![Dashboard showing Mesh VRAM 115.4 GB, usable of 128 GB rated](assets/vram-dashboard-advertised.png)
+
+![Chat header showing 1 node and 115.4 GB from live status](assets/vram-chat-advertised.png)
+
 | Location | Value source | Classification | Current use |
 |---|---|---|---|
 | `crates/mesh-llm-system/src/hardware/mod.rs` | platform tools, Skippy devices, system RAM fallback | internal source | Builds `HardwareSurvey.vram_bytes`, per-GPU `gpu_vram`, and `gpu_reserved`. |
