@@ -11,6 +11,13 @@ pub struct DecayConfig {
     pub factor: f64,
 }
 
+impl DecayConfig {
+    /// The retention factor must be finite and strictly inside `(0, 1)`.
+    pub fn is_valid(&self) -> bool {
+        self.factor.is_finite() && self.factor > 0.0 && self.factor < 1.0
+    }
+}
+
 impl Default for DecayConfig {
     fn default() -> Self {
         Self { factor: 0.9 }

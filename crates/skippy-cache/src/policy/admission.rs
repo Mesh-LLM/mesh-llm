@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 use crate::policy::{
-    BenefitPolicy, CostSample, DecisionReason, EntryKey, EvictionVerdict, PolicyEntry, SegmentId,
+    BenefitPolicy, CostSample, EntryKey, EvictionVerdict, GhostStats, PolicyEntry, SegmentId,
 };
 
 /// What the policy decided to do with a candidate or admitted entry.
@@ -69,6 +69,29 @@ pub(crate) fn consider(
         };
     }
 
+    // Carry ghost history in: a recurring entry re-enters with its past
+    // reuse signal, and an entry whose history already clears the hit
+    // threshold admits straight to the admitted class (equivalent value
+    // signal).
+    let had_ghost = policy.ghosts.contains_key(&key);
+    let mut ghost = policy.ghosts.remove(&key).unwrap_or(GhostStats {
+        hits: 0,
+        reuse_weight: 0.0,
+        observation_weight: 0.0,
+    });
+    if had_ghost {
+        // This offer *is* a recurrence: count it as a reuse observation, the
+        // same way record_hit would, so eviction cannot erase the value
+        // signal the recurrence just demonstrated.
+        ghost.hits += 1;
+        ghost.reuse_weight = ghost.reuse_weight * policy.config.decay.factor + 1.0;
+        ghost.observation_weight = ghost.observation_weight * policy.config.decay.factor + 1.0;
+    }
+    let state = if ghost.hits >= policy.config.persistence_hit_threshold as u64 {
+        PolicyEntryState::Admitted
+    } else {
+        PolicyEntryState::Probation
+    };
     let segment_ids: Vec<SegmentId> = shared.iter().map(|(s, _)| *s).collect();
     for (segment, size) in &shared {
         policy.segments.add(*segment, *size, key);
@@ -76,11 +99,11 @@ pub(crate) fn consider(
     policy.entries.insert(
         key,
         PolicyEntry {
-            state: PolicyEntryState::Probation,
-            hits: 0,
+            state,
+            hits: ghost.hits,
             misses: 0,
-            reuse_weight: 0.0,
-            observation_weight: 0.0,
+            reuse_weight: ghost.reuse_weight,
+            observation_weight: ghost.observation_weight,
             last_observation: policy.clock,
             last_cost: Some(cost),
             exclusive_bytes,
@@ -124,72 +147,88 @@ pub(crate) fn choose_victims(
     bytes_to_free: u64,
     pinned: &[EntryKey],
 ) -> Vec<(EntryKey, EvictionVerdict)> {
-    let mut candidates: Vec<(f64, EntryKey, f64)> = policy
+    let grace = policy.config.grace_observations;
+    let clock = policy.clock;
+    let in_grace = |e: &PolicyEntry| clock.saturating_sub(e.last_observation) < grace;
+
+    // NaN-free scores only (score::compute rejects invalid costs/config), so
+    // a total ordering is safe: finite values ordered normally, keys
+    // tie-break. We still avoid partial_cmp().unwrap() defensively.
+    let mut candidates: Vec<(f64, EntryKey)> = policy
         .entries
         .iter()
         .filter(|(k, _)| !pinned.contains(k))
         .filter_map(|(k, e)| {
             let score = super::score::compute(&policy.config, *k, e, &policy.segments)?;
-            let footprint =
-                e.exclusive_bytes as f64 + policy.segments.fractional_bytes(*k, &e.segments);
-            Some((score.value, *k, footprint))
+            Some((score.value, *k))
         })
         .collect();
-    // Deterministic: ascending score, ascending key tie-break.
-    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-    // Probation entries with no hits are always droppable first: they have
-    // not yet earned bytes under second-hit admission.
-    let mut freed = 0.0f64;
-    let mut victims = Vec::new();
-    let grace = policy.config.grace_observations;
-    let clock = policy.clock;
-    let in_grace = |e: &PolicyEntry| clock.saturating_sub(e.last_observation) < grace;
-    let probation_first: Vec<EntryKey> = policy
+    // Marginal physical release for `key` given `selected` victims already
+    // chosen: exclusive bytes plus segments whose remaining references are
+    // all inside the selected victim set (or the entry itself).
+    let marginal_release =
+        |key: EntryKey, selected: &std::collections::BTreeSet<EntryKey>| -> u64 {
+            let entry = policy.entries.get(&key).expect("candidate present");
+            let mut release = entry.exclusive_bytes;
+            for segment in &entry.segments {
+                if let Some(record) = policy.segments.segment_record(*segment) {
+                    let others_kept = record
+                        .references
+                        .iter()
+                        .any(|r| *r != key && !selected.contains(r));
+                    if !others_kept {
+                        release += record.size;
+                    }
+                }
+            }
+            release
+        };
+
+    // Eviction order: no-hit probationers first (they have not earned
+    // bytes), oldest observation first — LRU within the probation class so a
+    // recently offered candidate is not the automatic first victim. Then
+    // ascending benefit score. Grace waives under a hard capacity request:
+    // the byte budget always wins.
+    let mut order: Vec<(u64, EntryKey)> = policy
         .entries
         .iter()
         .filter(|(k, e)| {
-            !pinned.contains(k)
-                && e.state == PolicyEntryState::Probation
-                && e.hits == 0
-                && !in_grace(e)
+            !pinned.contains(k) && e.state == PolicyEntryState::Probation && e.hits == 0
         })
-        .map(|(k, _)| *k)
+        .map(|(k, e)| (e.last_observation, *k))
         .collect();
-    for key in probation_first {
-        if freed >= bytes_to_free as f64 {
+    order.sort(); // (oldest observation, key): deterministic
+    let mut ordered_keys: Vec<EntryKey> = order.into_iter().map(|(_, k)| k).collect();
+    ordered_keys.extend(candidates.into_iter().map(|(_, key)| key));
+    let order = ordered_keys;
+
+    let mut freed: u64 = 0;
+    let mut victims = Vec::new();
+    let mut selected: std::collections::BTreeSet<EntryKey> = Default::default();
+    // Pass 1: grace honored. Pass 2 (only if the hard budget is still unmet):
+    // grace waived — the hard byte budget always wins under pressure.
+    for waive_grace in [false, true] {
+        for key in &order {
+            if freed >= bytes_to_free {
+                break;
+            }
+            if selected.contains(key) || policy.entries.get(key).is_none() {
+                continue; // dedup: probation-first and scored paths overlap
+            }
+            let evictable = waive_grace || policy.entries.get(key).is_some_and(|e| !in_grace(e));
+            if !evictable {
+                continue;
+            }
+            let release = marginal_release(*key, &selected);
+            selected.insert(*key);
+            victims.push((*key, EvictionVerdict::Evict));
+            freed += release;
+        }
+        if freed >= bytes_to_free {
             break;
         }
-        let entry = policy.entries.get(&key).unwrap();
-        let footprint =
-            entry.exclusive_bytes as f64 + policy.segments.fractional_bytes(key, &entry.segments);
-        victims.push((key, EvictionVerdict::Evict));
-        freed += footprint;
-    }
-    for (_score, key, footprint) in candidates {
-        if freed >= bytes_to_free as f64 {
-            break;
-        }
-        if policy.entries.get(&key).is_some_and(in_grace) {
-            continue; // grace window: not yet evictable
-        }
-        victims.push((key, EvictionVerdict::Evict));
-        freed += footprint;
     }
     victims
-}
-
-#[allow(dead_code)]
-fn reason(
-    entry: EntryKey,
-    decision: AdmissionDecisionKind,
-    reasons: Vec<String>,
-    score: Option<f64>,
-) -> DecisionReason {
-    DecisionReason {
-        entry,
-        decision,
-        reasons,
-        score,
-    }
 }

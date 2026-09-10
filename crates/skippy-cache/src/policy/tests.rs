@@ -254,3 +254,135 @@ fn no_regression_on_mixed_size_trace() {
         comparison.lru_saved_cost
     );
 }
+
+#[test]
+fn invalid_costs_and_config_are_rejected_not_panicked() {
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    let nan = f64::NAN;
+    policy.consider_admission(
+        1,
+        1 << 20,
+        vec![],
+        CostSample {
+            cold_prefill_cost: nan,
+            restore_cost: 10.0,
+        },
+    );
+    assert!(policy.score(1).is_none()); // NaN never enters the ordering
+    assert!(
+        !PolicyConfig {
+            min_reuse_probability: f64::NAN,
+            ..PolicyConfig::default()
+        }
+        .is_valid()
+    );
+    assert!(
+        !PolicyConfig {
+            persistence_hit_threshold: 0,
+            ..PolicyConfig::default()
+        }
+        .is_valid()
+    );
+    assert!(
+        !PolicyConfig {
+            decay: DecayConfig { factor: 0.0 },
+            ..PolicyConfig::default()
+        }
+        .is_valid()
+    );
+    assert!(
+        !PolicyConfig {
+            decay: DecayConfig { factor: 1.5 },
+            ..PolicyConfig::default()
+        }
+        .is_valid()
+    );
+}
+
+#[test]
+fn choose_victims_never_returns_a_duplicate_key() {
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    for key in 1..=8u64 {
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+    }
+    let victims = policy.choose_victims(u64::MAX, &[]);
+    let keys: Vec<u64> = victims.iter().map(|(k, _)| *k).collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(keys.len(), sorted.len(), "duplicate victim keys");
+    assert_eq!(keys.len(), 8);
+}
+
+#[test]
+fn victim_selection_counts_marginal_physical_bytes_of_shared_segments() {
+    // Three entries share one segment; only evicting the last reference
+    // physically frees it. Victim selection must keep choosing until the
+    // requested *physical* bytes are covered.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    let seg = (1u64, 3 << 20);
+    policy.consider_admission(1, 0, vec![seg], cost(400.0, 100.0));
+    policy.consider_admission(2, 0, vec![seg], cost(400.0, 100.0));
+    policy.consider_admission(3, 0, vec![seg], cost(400.0, 100.0));
+    for key in [1u64, 2, 3] {
+        policy.record_hit(key, cost(400.0, 100.0));
+        policy.record_hit(key, cost(400.0, 100.0));
+    }
+    // Freeing 3 MiB must select all three references, not one (each alone
+    // releases nothing physical).
+    let victims = policy.choose_victims(3 << 20, &[]);
+    assert_eq!(victims.len(), 3);
+    // Freeing 1 MiB: marginal release of two of the three is 0, the third is
+    // 3 MiB; the loop must not stop before the target is met.
+    let victims = policy.choose_victims(1 << 20, &[]);
+    assert_eq!(victims.len(), 3);
+}
+
+#[test]
+fn probation_byte_cap_is_enforced_over_grace() {
+    // Grace must never hold the policy over the hard probation byte cap.
+    // Cap fits two small entries only.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 2 << 20,
+        ..PolicyConfig::default()
+    });
+    for key in 1..=10u64 {
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+    }
+    assert!(policy.probation_bytes() > config.probation_byte_budget);
+    for key in policy.enforce_probation_cap() {
+        policy.remove(key);
+    }
+    assert!(
+        policy.probation_bytes() <= 2 << 20,
+        "probation bytes {} over cap {}",
+        policy.probation_bytes(),
+        2 << 20
+    );
+}
+
+#[test]
+fn recurrence_after_eviction_is_a_value_signal() {
+    // An entry evicted before its second hit must not restart from zero
+    // history: its recurrence carries ghost statistics and counts as a
+    // reuse observation (issue: "second-hit or equivalent value signal").
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    assert!(policy.record_hit(1, cost(400.0, 100.0)).is_none()); // first hit
+    policy.remove(1); // evicted before the second hit
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    assert_eq!(
+        policy.entry(1).unwrap().state,
+        PolicyEntryState::Admitted,
+        "recurrence with ghost history must re-admit as a value signal"
+    );
+}

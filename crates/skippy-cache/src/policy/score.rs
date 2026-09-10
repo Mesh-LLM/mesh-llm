@@ -25,6 +25,9 @@ pub(crate) fn compute(
     ledger: &SharedSegmentLedger,
 ) -> Option<BenefitScore> {
     let cost: CostSample = entry.last_cost?;
+    if !cost.is_valid() {
+        return None;
+    }
     let reuse = entry.reuse_probability().max(config.min_reuse_probability);
     let shared = ledger.fractional_bytes(key, &entry.segments);
     let exclusive = entry.exclusive_bytes as f64 + shared;
@@ -33,6 +36,9 @@ pub(crate) fn compute(
     }
     let net = cost.net_benefit();
     let value = reuse * net / exclusive;
+    if !value.is_finite() {
+        return None;
+    }
     Some(BenefitScore {
         value,
         inputs: ScoreInputs {

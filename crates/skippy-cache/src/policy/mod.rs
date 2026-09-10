@@ -63,6 +63,16 @@ impl CostSample {
     pub fn net_benefit(&self) -> f64 {
         (self.cold_prefill_cost - self.restore_cost).max(0.0)
     }
+
+    /// A usable sample must be finite and nonnegative; measured costs that
+    /// arrive NaN/infinite (or negative) are rejected so scores and orderings
+    /// stay total and panic-free.
+    pub fn is_valid(&self) -> bool {
+        self.cold_prefill_cost.is_finite()
+            && self.restore_cost.is_finite()
+            && self.cold_prefill_cost >= 0.0
+            && self.restore_cost >= 0.0
+    }
 }
 
 /// Policy decision log line: what was decided, and why, without content.
@@ -113,6 +123,17 @@ impl Default for PolicyConfig {
     }
 }
 
+impl PolicyConfig {
+    /// Config bounds: NaN/empty decay or an out-of-range reuse floor would
+    /// poison every score. `probation_byte_budget` may be 0 (probation off).
+    pub fn is_valid(&self) -> bool {
+        self.min_reuse_probability.is_finite()
+            && (0.0..=1.0).contains(&self.min_reuse_probability)
+            && self.decay.is_valid()
+            && self.persistence_hit_threshold >= 1
+    }
+}
+
 /// Per-entry policy state and statistics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyEntry {
@@ -150,15 +171,31 @@ pub struct BenefitPolicy {
     pub(crate) segments: SharedSegmentLedger,
     /// Monotonic observation counter driving the probation grace window.
     pub(crate) clock: u64,
+    /// Reuse statistics that outlive eviction ("ghosts"): an entry that
+    /// recurs after eviction carries its history back in, so the second-hit
+    /// value signal survives cache pressure.
+    pub(crate) ghosts: BTreeMap<EntryKey, GhostStats>,
+}
+
+/// Surviving statistics for an evicted entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GhostStats {
+    pub hits: u64,
+    pub reuse_weight: f64,
+    pub observation_weight: f64,
 }
 
 impl BenefitPolicy {
+    /// Panics on invalid config so misconfiguration fails at startup
+    /// rather than producing NaN scores later.
     pub fn new(config: PolicyConfig) -> Self {
+        assert!(config.is_valid(), "invalid PolicyConfig: {:?}", config);
         Self {
             config,
             entries: BTreeMap::new(),
             segments: SharedSegmentLedger::default(),
             clock: 0,
+            ghosts: BTreeMap::new(),
         }
     }
 
@@ -238,11 +275,60 @@ impl BenefitPolicy {
         admission::choose_victims(self, bytes_to_free, pinned)
     }
 
+    /// Total exclusive bytes held by probation-state entries.
+    pub fn probation_bytes(&self) -> u64 {
+        self.entries
+            .values()
+            .filter(|e| e.state == PolicyEntryState::Probation)
+            .map(|e| e.exclusive_bytes)
+            .sum()
+    }
+
+    /// Enforce the hard probation byte cap: evict no-hit probationers until
+    /// the cap holds, waiving grace under pressure (the hard cap always
+    /// wins). Oldest-observation first, then key order for determinism.
+    /// Returns the keys the caller must actually evict.
+    pub fn enforce_probation_cap(&mut self) -> Vec<EntryKey> {
+        let cap = self.config.probation_byte_budget;
+        let mut over = self.probation_bytes().saturating_sub(cap);
+        if over == 0 {
+            return Vec::new();
+        }
+        let mut probationers: Vec<(u64, EntryKey)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits == 0)
+            .map(|(k, e)| (e.last_observation, *k))
+            .collect();
+        probationers.sort();
+        let mut victims = Vec::new();
+        for (_, key) in probationers {
+            if over == 0 {
+                break;
+            }
+            if let Some(entry) = self.entries.remove(&key) {
+                self.segments.release(&entry.segments, key);
+                over = over.saturating_sub(entry.exclusive_bytes);
+                victims.push(key);
+            }
+        }
+        victims
+    }
+
     /// Remove an entry the caller has actually evicted, releasing its
-    /// fractional segment credit.
+    /// fractional segment credit and stashing its reuse statistics as a
+    /// ghost so a recurrence is recognized as a value signal.
     pub fn remove(&mut self, key: EntryKey) -> Option<PolicyEntry> {
         let entry = self.entries.remove(&key)?;
         self.segments.release(&entry.segments, key);
+        self.ghosts.insert(
+            key,
+            GhostStats {
+                hits: entry.hits,
+                reuse_weight: entry.reuse_weight,
+                observation_weight: entry.observation_weight,
+            },
+        );
         Some(entry)
     }
 }

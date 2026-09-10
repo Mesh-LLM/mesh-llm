@@ -19,9 +19,9 @@ pub struct SharedSegmentLedger {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct SegmentRecord {
-    size: u64,
-    references: Vec<EntryKey>,
+pub struct SegmentRecord {
+    pub size: u64,
+    pub references: Vec<EntryKey>,
 }
 
 impl SharedSegmentLedger {
@@ -57,6 +57,24 @@ impl SharedSegmentLedger {
             .filter_map(|s| self.segments.get(s))
             .filter(|r| r.references.contains(&entry))
             .map(|r| r.size as f64 / r.references.len() as f64)
+            .sum()
+    }
+
+    /// Read access for marginal-release computation.
+    pub fn segment_record(&self, segment: SegmentId) -> Option<&SegmentRecord> {
+        self.segments.get(&segment)
+    }
+
+    /// Physical bytes that would actually be released if `entry` were
+    /// removed: its exclusive bytes are caller-side, so this covers only
+    /// segments where this entry holds the last reference — the marginal
+    /// physical release, not the fractional credit.
+    pub fn marginal_physical_bytes(&self, entry: EntryKey, segments: &[SegmentId]) -> u64 {
+        segments
+            .iter()
+            .filter_map(|s| self.segments.get(s))
+            .filter(|r| r.references.len() == 1 && r.references[0] == entry)
+            .map(|r| r.size)
             .sum()
     }
 
