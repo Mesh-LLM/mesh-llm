@@ -30,7 +30,7 @@ impl AdmissionDecision {
             kind: AdmissionDecisionKind::Reject,
             verdict: AdmissionVerdict::Reject,
             reasons: vec![reason.into()],
-            probation_cap_victims: Vec::new(),
+            probation_cap_repair: crate::policy::CapRepair::satisfied(),
         }
     }
 }
@@ -41,11 +41,11 @@ pub struct AdmissionDecision {
     pub kind: AdmissionDecisionKind,
     pub verdict: AdmissionVerdict,
     pub reasons: Vec<String>,
-    /// Keys the caller must physically evict to keep the probation class
-    /// under its hard byte cap after this admission. Empty when the cap
-    /// holds. The policy does not remove them itself: committed removal
-    /// stays with `BenefitPolicy::remove`.
-    pub probation_cap_victims: Vec<crate::policy::EntryKey>,
+    /// Cap-repair plan after this admission (pins never selected; a
+    /// `Deferred` variant reports the shortfall). The policy does not
+    /// remove victims itself: committed removal stays with
+    /// `BenefitPolicy::remove`.
+    pub probation_cap_repair: crate::policy::CapRepair,
 }
 
 /// Lifecycle state of a policy entry.
@@ -112,7 +112,7 @@ pub(crate) fn consider(
             kind,
             verdict: AdmissionVerdict::Reject,
             reasons,
-            probation_cap_victims: Vec::new(),
+            probation_cap_repair: crate::policy::CapRepair::satisfied(),
         };
     }
     // Carry ghost history in: a recurring entry re-enters with its past
@@ -169,7 +169,7 @@ pub(crate) fn consider(
         kind,
         verdict: AdmissionVerdict::Admit,
         reasons,
-        probation_cap_victims: Vec::new(),
+        probation_cap_repair: crate::policy::CapRepair::satisfied(),
     }
 }
 
@@ -197,7 +197,7 @@ pub(crate) fn record_hit(
             kind: AdmissionDecisionKind::Promote,
             verdict: AdmissionVerdict::Admit,
             reasons: vec!["probation-second-hit".into()],
-            probation_cap_victims: Vec::new(),
+            probation_cap_repair: crate::policy::CapRepair::satisfied(),
         });
     }
     None

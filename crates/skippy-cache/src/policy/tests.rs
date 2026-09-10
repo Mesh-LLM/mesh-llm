@@ -172,7 +172,7 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
             policy_written += access.exclusive_bytes;
             // Hard probation cap is enforced as part of admission: commit the
             // selected victims.
-            for key in decision.probation_cap_victims {
+            for key in decision.probation_cap_repair.victims().iter().copied() {
                 policy.remove(key);
             }
         }
@@ -441,7 +441,7 @@ fn probation_cap_counts_shared_charge_and_is_enforced_by_admission() {
     let mut victims = Vec::new();
     for key in 1..=6u64 {
         let decision = policy.consider_admission(key, 0, vec![(1u64, 3 << 20)], cost(400.0, 100.0));
-        for v in decision.probation_cap_victims {
+        for v in decision.probation_cap_repair.victims().iter().copied() {
             policy.remove(v);
             victims.push(v);
         }
@@ -511,12 +511,12 @@ fn probation_cap_selection_is_not_committed_removal() {
     for key in 1..=4u64 {
         policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
     }
-    let victims = policy.select_probation_cap_victims();
+    let victims = policy.select_probation_cap_victims().victims().to_vec();
     assert!(!victims.is_empty());
     assert_eq!(policy.len(), 4, "selection must not remove entries");
     let decision = policy.consider_admission(5, 1 << 20, vec![], cost(400.0, 100.0));
-    assert!(!decision.probation_cap_victims.is_empty());
-    for key in &decision.probation_cap_victims {
+    assert!(!decision.probation_cap_repair.victims().is_empty());
+    for key in decision.probation_cap_repair.victims() {
         policy.remove(*key);
     }
     // Committed removals become ghosts (bounded).
@@ -588,7 +588,7 @@ fn many_reference_small_segment_still_charges_probation_bytes() {
         ..PolicyConfig::default()
     });
     let decision = policy.consider_admission(1, 0, vec![(1u64, 4)], cost(400.0, 100.0));
-    assert!(!decision.probation_cap_victims.is_empty());
+    assert!(!decision.probation_cap_repair.victims().is_empty());
 }
 
 #[test]
@@ -640,7 +640,7 @@ fn cap_victim_selection_covers_recomputed_shared_shares() {
     for key in 1..=3u64 {
         let decision =
             policy.consider_admission(key, 1 << 20, vec![(7u64, 9 << 20)], cost(400.0, 100.0));
-        for v in decision.probation_cap_victims {
+        for v in decision.probation_cap_repair.victims().iter().copied() {
             policy.remove(v);
         }
     }
@@ -705,7 +705,10 @@ fn cap_victim_selection_reproduces_reported_counterexample() {
     assert!(before > 9 << 20, "before {}", before);
     // Now select against the real cap by constructing the over-cap state
     // through the public API: reset the budget by direct selection.
-    let victims = policy.with_probation_budget(9 << 20, |p| p.select_probation_cap_victims());
+    let victims = policy
+        .with_probation_budget(9 << 20, |p| p.select_probation_cap_victims())
+        .victims()
+        .to_vec();
     assert!(!victims.is_empty());
     for key in &victims {
         policy.remove(*key);
@@ -856,7 +859,7 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
     policy.remove_without_cap_repair(1);
     let decision = policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
     assert_eq!(decision.kind, AdmissionDecisionKind::AdmitPersist);
-    for v in decision.probation_cap_victims {
+    for v in decision.probation_cap_repair.victims().iter().copied() {
         policy.remove_without_cap_repair(v);
     }
     assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Admitted);
@@ -864,7 +867,7 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
     // P shares S: half-share = 0.75 MiB fits the 1 MiB cap.
     let decision = policy.consider_admission(2, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
     assert_eq!(decision.verdict, AdmissionVerdict::Admit);
-    for v in decision.probation_cap_victims {
+    for v in decision.probation_cap_repair.victims().iter().copied() {
         policy.remove_without_cap_repair(v);
     }
     // One hit on P: still probation at threshold 2.
@@ -879,10 +882,10 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
     // Remove the admitted co-reference: P's charge rises to all of S.
     let outcome = policy.remove(1).expect("A removed");
     assert!(
-        !outcome.probation_cap_victims.is_empty(),
+        !outcome.probation_cap_repair.victims().is_empty(),
         "removal must carry cap victims for the risen share"
     );
-    for v in &outcome.probation_cap_victims {
+    for v in outcome.probation_cap_repair.victims() {
         policy.remove_without_cap_repair(*v);
     }
     assert!(
@@ -891,4 +894,81 @@ fn admitted_coreference_removal_repairs_the_probation_cap() {
         policy.probation_bytes()
     );
     assert!(policy.entry(2).is_none(), "P must be the repair victim");
+}
+
+#[test]
+fn cap_repair_prefers_unpinned_over_older_pinned_probationer() {
+    // Older pinned probationer (key 1) must never be selected while the
+    // younger unpinned probationer (key 2) can repair the cap (#1650).
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 1 << 20,
+        ..PolicyConfig::default()
+    });
+    for key in 1..=2u64 {
+        let decision =
+            policy.consider_admission_excluding(key, 1 << 20, vec![], cost(400.0, 100.0), &[1]);
+        // Do not commit yet: build the over-cap state first.
+        assert!(
+            !decision.probation_cap_repair.victims().contains(&1),
+            "admission never selects a pin"
+        );
+    }
+    let repair = policy.select_probation_cap_victims_excluding(&[1]);
+    assert!(
+        !repair.victims().contains(&1),
+        "pinned key selected as victim: {:?}",
+        repair.victims()
+    );
+    assert!(repair.victims().contains(&2));
+    assert!(!repair.is_deferred());
+    for v in repair.victims().iter().copied() {
+        policy.remove_excluding(v, &[1]);
+    }
+    assert!(policy.probation_bytes() <= 1 << 20);
+    assert!(policy.entries.contains_key(&1), "pin must survive repair");
+}
+
+#[test]
+fn all_pinned_cap_is_deferred_with_shortfall_never_a_pin() {
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 1 << 20,
+        ..PolicyConfig::default()
+    });
+    let pinned = [1u64, 2];
+    for (n, key) in pinned.iter().enumerate() {
+        let decision =
+            policy.consider_admission_excluding(*key, 1 << 20, vec![], cost(400.0, 100.0), &pinned);
+        let repair = &decision.probation_cap_repair;
+        assert!(
+            repair.victims().is_empty(),
+            "all candidates pinned: no victim may be selected"
+        );
+        // First admission is under cap; the second pushes the all-pinned
+        // class over cap with no selectable candidate.
+        if n == 1 {
+            assert!(
+                repair.is_deferred(),
+                "unsatisfiable cap must be Deferred, got {:?}",
+                repair
+            );
+            assert_eq!(repair.shortfall_bytes(), 1 << 20);
+        }
+        assert!(
+            !repair.victims().contains(&1) && !repair.victims().contains(&2),
+            "pins never selected even when cap is unsatisfiable"
+        );
+    }
+    // The removal path honors pins identically: a caller-forced removal of
+    // the pinned key 1 leaves key 2 at exactly the cap — satisfied, no pin
+    // selected.
+    let outcome = policy
+        .remove_excluding(1, &pinned)
+        .expect("entry 1 removed");
+    assert!(!outcome.probation_cap_repair.is_deferred());
+    assert!(outcome.probation_cap_repair.victims().is_empty());
+    assert!(policy.entries.contains_key(&2));
+    // Once the pin releases, repair becomes satisfiable again (key 2 is
+    // selectable again).
+    let repair = policy.select_probation_cap_victims_excluding(&[]);
+    assert!(!repair.is_deferred());
 }

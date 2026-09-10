@@ -171,13 +171,70 @@ impl PolicyEntry {
     }
 }
 
+/// Cap-repair selection result. `Deferred` means pins/holds (or candidate
+/// exhaustion) make the hard probation cap temporarily unsatisfiable: the
+/// listed victims should still be committed, and the shortfall reported —
+/// a pin is never selected to close it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapRepair {
+    /// The class is at or under cap (possibly after committing `victims`).
+    Satisfied { victims: Vec<EntryKey> },
+    /// Committing `victims` still leaves the class `shortfall_bytes` over
+    /// cap; repair is deferred until pins release.
+    Deferred {
+        victims: Vec<EntryKey>,
+        shortfall_bytes: u64,
+    },
+}
+
+impl CapRepair {
+    fn satisfied() -> Self {
+        CapRepair::Satisfied {
+            victims: Vec::new(),
+        }
+    }
+
+    fn satisfied_with(victims: Vec<EntryKey>) -> Self {
+        CapRepair::Satisfied { victims }
+    }
+
+    fn deferred(victims: Vec<EntryKey>, shortfall_bytes: u64) -> Self {
+        CapRepair::Deferred {
+            victims,
+            shortfall_bytes,
+        }
+    }
+
+    /// Victims to commit regardless of variant.
+    pub fn victims(&self) -> &[EntryKey] {
+        match self {
+            CapRepair::Satisfied { victims } | CapRepair::Deferred { victims, .. } => victims,
+        }
+    }
+
+    /// Over-cap bytes that cannot be repaired while pins are held.
+    pub fn shortfall_bytes(&self) -> u64 {
+        match self {
+            CapRepair::Satisfied { .. } => 0,
+            CapRepair::Deferred {
+                shortfall_bytes, ..
+            } => *shortfall_bytes,
+        }
+    }
+
+    /// True when no further repair is possible right now.
+    pub fn is_deferred(&self) -> bool {
+        matches!(self, CapRepair::Deferred { .. })
+    }
+}
+
 /// Result of a committed removal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemovalOutcome {
     pub entry: PolicyEntry,
-    /// Additional probationers the caller must evict to keep the probation
-    /// class under its hard cap after this removal (shares may have risen).
-    pub probation_cap_victims: Vec<EntryKey>,
+    /// Cap-repair plan after this removal (shares may have risen). Pins are
+    /// never selected; a `Deferred` result reports the shortfall.
+    pub probation_cap_repair: CapRepair,
 }
 
 /// The policy engine. Owns per-entry statistics and the shared-segment ledger;
@@ -292,6 +349,18 @@ impl BenefitPolicy {
         shared: Vec<(SegmentId, u64)>,
         cost: CostSample,
     ) -> AdmissionDecision {
+        self.consider_admission_excluding(key, exclusive_bytes, shared, cost, &[])
+    }
+
+    /// Admission with an explicit pinned/hold set excluded from cap repair.
+    pub fn consider_admission_excluding(
+        &mut self,
+        key: EntryKey,
+        exclusive_bytes: u64,
+        shared: Vec<(SegmentId, u64)>,
+        cost: CostSample,
+        pinned: &[EntryKey],
+    ) -> AdmissionDecision {
         // Full structural prevalidation before any policy mutation: an
         // invalid cost, duplicate segment IDs, a size conflict, or an
         // already-resident key must not advance the clock (aging grace) or
@@ -318,9 +387,9 @@ impl BenefitPolicy {
         let mut decision = admission::consider(self, key, exclusive_bytes, shared, cost);
         if decision.verdict == crate::policy::AdmissionVerdict::Admit {
             // Hard probation cap is part of admission: the decision carries
-            // the keys the caller must physically evict. Selection only —
-            // committed removal stays with `remove` so victims become ghosts.
-            decision.probation_cap_victims = self.select_probation_cap_victims();
+            // the cap-repair plan (pins excluded). Selection only — committed
+            // removal stays with `remove` so victims become ghosts.
+            decision.probation_cap_repair = self.select_probation_cap_victims_excluding(pinned);
         }
         decision
     }
@@ -414,15 +483,27 @@ impl BenefitPolicy {
     /// not mutate policy state; the caller commits each removal via
     /// `remove`, which also records the ghost. Keys are deterministic
     /// `(last_observation, key)` order.
-    pub fn select_probation_cap_victims(&self) -> Vec<EntryKey> {
+    ///
+    /// Pinned entries are never selected (#1650: preserve active
+    /// pins/holds). If pins make the cap temporarily unsatisfiable, the
+    /// result reports the shortfall instead of selecting a pin.
+    pub fn select_probation_cap_victims(&self) -> CapRepair {
+        self.select_probation_cap_victims_excluding(&[])
+    }
+
+    /// Cap selection with an explicit pinned/hold set excluded from both
+    /// the zero-hit and fallback candidate classes.
+    pub fn select_probation_cap_victims_excluding(&self, pinned: &[EntryKey]) -> CapRepair {
         let cap = self.config.probation_byte_budget;
         if self.probation_bytes() <= cap {
-            return Vec::new();
+            return CapRepair::satisfied();
         }
         let mut probationers: Vec<(u64, EntryKey)> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits == 0)
+            .filter(|(k, e)| {
+                e.state == PolicyEntryState::Probation && e.hits == 0 && !pinned.contains(k)
+            })
             .map(|(k, e)| (e.last_observation, *k))
             .collect();
         probationers.sort();
@@ -433,7 +514,9 @@ impl BenefitPolicy {
         let mut fallback: Vec<(u64, EntryKey)> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits > 0)
+            .filter(|(k, e)| {
+                e.state == PolicyEntryState::Probation && e.hits > 0 && !pinned.contains(k)
+            })
             .map(|(k, e)| (e.last_observation, *k))
             .collect();
         fallback.sort();
@@ -461,7 +544,21 @@ impl BenefitPolicy {
                 break;
             }
         }
-        victims
+        // After simulating every unpinned candidate, the class may still be
+        // over cap because the remainder is pinned (or candidateless). Report
+        // the shortfall explicitly instead of ever selecting a pin.
+        let final_charge: u64 = self
+            .entries
+            .iter()
+            .filter(|(k, e)| e.state == PolicyEntryState::Probation && !removed.contains(*k))
+            .map(|(k, e)| e.exclusive_bytes as f64 + scratch.fractional_bytes(*k, &e.segments))
+            .sum::<f64>()
+            .ceil() as u64;
+        if final_charge <= cap {
+            CapRepair::satisfied_with(victims)
+        } else {
+            CapRepair::deferred(victims, final_charge - cap)
+        }
     }
 
     /// Test helper: run `f` with a temporarily different probation budget.
@@ -481,9 +578,9 @@ impl BenefitPolicy {
     /// immediately: selects victims (see `select_probation_cap_victims`)
     /// and commits their removals through `remove`, so they become ghosts.
     pub fn enforce_probation_cap(&mut self) -> Vec<EntryKey> {
-        let victims = self.select_probation_cap_victims();
-        for key in &victims {
-            self.remove(*key);
+        let victims = self.select_probation_cap_victims().victims().to_vec();
+        for key in victims.iter().copied() {
+            let _ = self.remove(key);
         }
         victims
     }
@@ -492,9 +589,18 @@ impl BenefitPolicy {
     /// and stashes its reuse statistics as a ghost so a recurrence is
     /// recognized as a value signal. Removing an admitted co-reference can
     /// raise survivors' shares over the probation cap, so the removal
-    /// response carries the additional cap victims the caller must evict to
-    /// restore the hard cap; commit them through further `remove` calls.
+    /// response carries the cap-repair plan; commit its victims through
+    /// further `remove` calls. Pins are never selected.
     pub fn remove(&mut self, key: EntryKey) -> Option<RemovalOutcome> {
+        self.remove_excluding(key, &[])
+    }
+
+    /// Removal with an explicit pinned/hold set excluded from cap repair.
+    pub fn remove_excluding(
+        &mut self,
+        key: EntryKey,
+        pinned: &[EntryKey],
+    ) -> Option<RemovalOutcome> {
         let entry = self.entries.remove(&key)?;
         self.segments.release(&entry.segments, key);
         self.insert_ghost(
@@ -506,10 +612,10 @@ impl BenefitPolicy {
                 last_observation: self.clock,
             },
         );
-        let cap_victims = self.select_probation_cap_victims();
+        let cap_repair = self.select_probation_cap_victims_excluding(pinned);
         Some(RemovalOutcome {
             entry,
-            probation_cap_victims: cap_victims,
+            probation_cap_repair: cap_repair,
         })
     }
 
