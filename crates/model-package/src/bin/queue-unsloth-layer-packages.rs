@@ -1416,6 +1416,7 @@ mod tests {
             republish: false,
             confirm: true,
             dry_run: false,
+            exclude_repos: Vec::new(),
         };
         let job_plan = CpuJobPlan {
             flavor: "cpu-upgrade".to_string(),
