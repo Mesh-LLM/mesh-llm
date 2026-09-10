@@ -230,22 +230,13 @@ fn beats_lru_on_one_shot_pollution_trace() {
     let trace = traces::one_shot_trace(7, 2_000);
     let capacity = 64 << 20;
     let comparison = compare(&trace, capacity);
-    // The artifact must show which side wins on each dimension.
-    println!(
-        "one-shot pollution @ {}: saved policy={:.1} lru={:.1}, written policy={} lru={}",
-        capacity,
-        comparison.policy_saved_cost,
-        comparison.lru_saved_cost,
-        comparison.policy_bytes_written,
-        comparison.lru_bytes_written
-    );
     const TOLERANCE: f64 = 0.05;
     let wins_saved = comparison.policy_saved_cost > comparison.lru_saved_cost;
     let wins_written = comparison.policy_bytes_written < comparison.lru_bytes_written;
     // Strict improvement in at least one dimension (#1650 acceptance).
     assert!(
         wins_saved || wins_written,
-        "policy saved {} vs lru {} and wrote {} vs lru {} — no strict improvement",
+        "one-shot pollution @ {capacity}: saved policy={:.1} lru={:.1}, written policy={} lru={} — no strict improvement",
         comparison.policy_saved_cost,
         comparison.lru_saved_cost,
         comparison.policy_bytes_written,
