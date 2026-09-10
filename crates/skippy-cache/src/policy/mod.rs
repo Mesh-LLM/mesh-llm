@@ -171,6 +171,15 @@ impl PolicyEntry {
     }
 }
 
+/// Result of a committed removal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemovalOutcome {
+    pub entry: PolicyEntry,
+    /// Additional probationers the caller must evict to keep the probation
+    /// class under its hard cap after this removal (shares may have risen).
+    pub probation_cap_victims: Vec<EntryKey>,
+}
+
 /// The policy engine. Owns per-entry statistics and the shared-segment ledger;
 /// the caller drives it from cache events.
 pub struct BenefitPolicy {
@@ -417,6 +426,18 @@ impl BenefitPolicy {
             .map(|(k, e)| (e.last_observation, *k))
             .collect();
         probationers.sort();
+        // Fallback: probationers with hits still count against the class
+        // charge (e.g. their share rose when an admitted co-reference was
+        // removed), so cap repair must be able to select them too — after
+        // the zero-hit class, in deterministic age/key order.
+        let mut fallback: Vec<(u64, EntryKey)> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits > 0)
+            .map(|(k, e)| (e.last_observation, *k))
+            .collect();
+        fallback.sort();
+        probationers.extend(fallback);
         // Simulate each removal against a scratch ledger: removing a shared
         // reference raises the survivors' fractional shares, so the remaining
         // class charge must be recomputed, not decremented by stale shares.
@@ -467,10 +488,13 @@ impl BenefitPolicy {
         victims
     }
 
-    /// Remove an entry the caller has actually evicted, releasing its
-    /// fractional segment credit and stashing its reuse statistics as a
-    /// ghost so a recurrence is recognized as a value signal.
-    pub fn remove(&mut self, key: EntryKey) -> Option<PolicyEntry> {
+    /// Store-facing removal: releases the entry's fractional segment credit
+    /// and stashes its reuse statistics as a ghost so a recurrence is
+    /// recognized as a value signal. Removing an admitted co-reference can
+    /// raise survivors' shares over the probation cap, so the removal
+    /// response carries the additional cap victims the caller must evict to
+    /// restore the hard cap; commit them through further `remove` calls.
+    pub fn remove(&mut self, key: EntryKey) -> Option<RemovalOutcome> {
         let entry = self.entries.remove(&key)?;
         self.segments.release(&entry.segments, key);
         self.insert_ghost(
@@ -482,6 +506,17 @@ impl BenefitPolicy {
                 last_observation: self.clock,
             },
         );
-        Some(entry)
+        let cap_victims = self.select_probation_cap_victims();
+        Some(RemovalOutcome {
+            entry,
+            probation_cap_victims: cap_victims,
+        })
+    }
+
+    /// Remove without returning cap-repair victims (internal/harness use
+    /// where the caller re-selects the cap itself).
+    pub fn remove_without_cap_repair(&mut self, key: EntryKey) -> Option<PolicyEntry> {
+        let outcome = self.remove(key)?;
+        Some(outcome.entry)
     }
 }

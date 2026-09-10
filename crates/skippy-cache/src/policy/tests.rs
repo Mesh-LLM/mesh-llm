@@ -838,3 +838,57 @@ fn already_resident_key_rejection_leaves_no_stale_references() {
     );
     assert_eq!(policy.probation_bytes(), 100);
 }
+
+#[test]
+fn admitted_coreference_removal_repairs_the_probation_cap() {
+    // Ghost-promoted admitted A on shared segment S; probation P shares S
+    // (half-share fits the cap); one hit on P (still probation at
+    // threshold 2); remove A -> P's charge rises to all of S and exceeds
+    // the cap. The removal response must carry P as a cap victim.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 1 << 20, // 1 MiB cap; S is 1.5 MiB
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    // Build A as ghost-promoted: admit, one hit, evict (ghost), recur.
+    policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    policy.record_hit(1, cost(400.0, 100.0));
+    policy.remove_without_cap_repair(1);
+    let decision = policy.consider_admission(1, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    assert_eq!(decision.kind, AdmissionDecisionKind::AdmitPersist);
+    for v in decision.probation_cap_victims {
+        policy.remove_without_cap_repair(v);
+    }
+    assert_eq!(policy.entry(1).unwrap().state, PolicyEntryState::Admitted);
+
+    // P shares S: half-share = 0.75 MiB fits the 1 MiB cap.
+    let decision = policy.consider_admission(2, 0, vec![(7u64, (3 << 20) / 2)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Admit);
+    for v in decision.probation_cap_victims {
+        policy.remove_without_cap_repair(v);
+    }
+    // One hit on P: still probation at threshold 2.
+    policy.record_hit(2, cost(400.0, 100.0));
+    assert_eq!(policy.entry(2).unwrap().state, PolicyEntryState::Probation);
+    assert!(
+        policy.probation_bytes() <= 1 << 20,
+        "half-share state over cap: {}",
+        policy.probation_bytes()
+    );
+
+    // Remove the admitted co-reference: P's charge rises to all of S.
+    let outcome = policy.remove(1).expect("A removed");
+    assert!(
+        !outcome.probation_cap_victims.is_empty(),
+        "removal must carry cap victims for the risen share"
+    );
+    for v in &outcome.probation_cap_victims {
+        policy.remove_without_cap_repair(*v);
+    }
+    assert!(
+        policy.probation_bytes() <= 1 << 20,
+        "class {} still over cap after repair",
+        policy.probation_bytes()
+    );
+    assert!(policy.entry(2).is_none(), "P must be the repair victim");
+}
