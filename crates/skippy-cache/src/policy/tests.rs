@@ -163,13 +163,18 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
             // Re-offer a rejected/evicted entry each time it recurs;
             // probation keeps new candidates in the accounting set until
             // pressure forces a choice.
-            policy.consider_admission(
+            let decision = policy.consider_admission(
                 access.entry,
                 access.exclusive_bytes,
                 vec![],
                 cost(access.cold_prefill_cost, access.restore_cost),
             );
             policy_written += access.exclusive_bytes;
+            // Hard probation cap is enforced as part of admission: commit the
+            // selected victims.
+            for key in decision.probation_cap_victims {
+                policy.remove(key);
+            }
         }
         let mut used: u64 = policy.entries.values().map(|e| e.exclusive_bytes).sum();
         while used > capacity_bytes {
@@ -385,4 +390,133 @@ fn recurrence_after_eviction_is_a_value_signal() {
         PolicyEntryState::Admitted,
         "recurrence with ghost history must re-admit as a value signal"
     );
+}
+
+#[test]
+fn invalid_cost_samples_never_mutate_entry_state() {
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    let nan = f64::NAN;
+    // Admission with an invalid sample must not insert.
+    let decision = policy.consider_admission(
+        1,
+        1 << 20,
+        vec![],
+        CostSample {
+            cold_prefill_cost: nan,
+            restore_cost: 10.0,
+        },
+    );
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert!(policy.is_empty());
+    // A valid admission followed by an invalid hit must not poison state.
+    policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0));
+    let before = policy.entry(1).unwrap().clone();
+    assert!(
+        policy
+            .record_hit(
+                1,
+                CostSample {
+                    cold_prefill_cost: 400.0,
+                    restore_cost: nan
+                }
+            )
+            .is_none()
+    );
+    assert_eq!(policy.entry(1).unwrap().last_cost, before.last_cost);
+    assert_eq!(policy.entry(1).unwrap().hits, before.hits);
+    // NaN pressure is ignored entirely.
+    policy.observe_pressure(nan);
+    assert_eq!(policy.entry(1).unwrap().reuse_weight, before.reuse_weight);
+}
+
+#[test]
+fn probation_cap_counts_shared_charge_and_is_enforced_by_admission() {
+    // Probation entries backed entirely by shared segments charge fractional
+    // bytes and must not grow without bound.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 1 << 20, // smaller than one shared segment
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    let mut victims = Vec::new();
+    for key in 1..=6u64 {
+        let decision = policy.consider_admission(key, 0, vec![(1u64, 3 << 20)], cost(400.0, 100.0));
+        for v in decision.probation_cap_victims {
+            policy.remove(v);
+            victims.push(v);
+        }
+    }
+    assert!(
+        policy.probation_bytes() <= 1 << 20,
+        "probation bytes {} over cap",
+        policy.probation_bytes()
+    );
+    assert!(!victims.is_empty(), "shared-only probation must be capped");
+}
+
+#[test]
+fn ghosts_are_bounded_by_count_and_age() {
+    // Count bound: one-shot keys must not create permanent metadata.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        ghost_capacity: 8,
+        ghost_max_age_observations: 100,
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    for key in 0..64u64 {
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+        for (_, verdict) in policy.choose_victims(u64::MAX, &[]) {
+            if verdict == EvictionVerdict::Evict {
+                policy.remove(key);
+                break;
+            }
+        }
+    }
+    assert!(
+        policy.ghost_count() <= 8,
+        "ghost count {}",
+        policy.ghost_count()
+    );
+
+    // Age bound: stale popularity cannot revive indefinitely.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        ghost_capacity: 1024,
+        ghost_max_age_observations: 10,
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    policy.consider_admission(99, 1 << 20, vec![], cost(400.0, 100.0));
+    policy.remove(99);
+    assert!(policy.ghost(99).is_some());
+    for _ in 0..50 {
+        policy.consider_admission(0, 1 << 20, vec![], cost(400.0, 100.0));
+    }
+    assert!(
+        policy.ghost(99).is_none(),
+        "old ghost must expire via age bound"
+    );
+}
+
+#[test]
+fn probation_cap_selection_is_not_committed_removal() {
+    // Selection must leave state untouched so callers can commit physically;
+    // committed removal through `remove` records the ghost.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 1 << 20,
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    for key in 1..=4u64 {
+        policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
+    }
+    let victims = policy.select_probation_cap_victims();
+    assert!(!victims.is_empty());
+    assert_eq!(policy.len(), 4, "selection must not remove entries");
+    let decision = policy.consider_admission(5, 1 << 20, vec![], cost(400.0, 100.0));
+    assert!(!decision.probation_cap_victims.is_empty());
+    for key in &decision.probation_cap_victims {
+        policy.remove(*key);
+    }
+    // Committed removals become ghosts (bounded).
+    assert!(policy.ghost_count() > 0);
 }

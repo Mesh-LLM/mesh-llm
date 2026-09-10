@@ -22,6 +22,11 @@ pub struct AdmissionDecision {
     pub kind: AdmissionDecisionKind,
     pub verdict: AdmissionVerdict,
     pub reasons: Vec<String>,
+    /// Keys the caller must physically evict to keep the probation class
+    /// under its hard byte cap after this admission. Empty when the cap
+    /// holds. The policy does not remove them itself: committed removal
+    /// stays with `BenefitPolicy::remove`.
+    pub probation_cap_victims: Vec<crate::policy::EntryKey>,
 }
 
 /// Lifecycle state of a policy entry.
@@ -49,7 +54,12 @@ pub(crate) fn consider(
     let reasons: Vec<String>;
     let kind;
 
-    if cost.net_benefit() <= 0.0 {
+    if !cost.is_valid() {
+        // Invalid measured costs (NaN/infinite/negative) are rejected before
+        // any mutation: they must never enter entry state.
+        kind = AdmissionDecisionKind::Reject;
+        reasons = vec!["invalid-cost-sample".into()];
+    } else if cost.net_benefit() <= 0.0 {
         kind = AdmissionDecisionKind::Reject;
         reasons = vec!["no-net-benefit".into()];
     } else if exclusive_bytes == 0 && shared.is_empty() {
@@ -66,6 +76,7 @@ pub(crate) fn consider(
             kind,
             verdict: AdmissionVerdict::Reject,
             reasons,
+            probation_cap_victims: Vec::new(),
         };
     }
 
@@ -78,6 +89,7 @@ pub(crate) fn consider(
         hits: 0,
         reuse_weight: 0.0,
         observation_weight: 0.0,
+        last_observation: 0,
     });
     if had_ghost {
         // This offer *is* a recurrence: count it as a reuse observation, the
@@ -114,6 +126,7 @@ pub(crate) fn consider(
         kind,
         verdict: AdmissionVerdict::Admit,
         reasons,
+        probation_cap_victims: Vec::new(),
     }
 }
 
@@ -122,6 +135,10 @@ pub(crate) fn record_hit(
     key: EntryKey,
     cost: CostSample,
 ) -> Option<AdmissionDecision> {
+    if !cost.is_valid() {
+        // Invalid measured costs never mutate entry state.
+        return None;
+    }
     let entry = policy.entries.get_mut(&key)?;
     entry.hits += 1;
     entry.last_observation = policy.clock;
@@ -137,6 +154,7 @@ pub(crate) fn record_hit(
             kind: AdmissionDecisionKind::Promote,
             verdict: AdmissionVerdict::Admit,
             reasons: vec!["probation-second-hit".into()],
+            probation_cap_victims: Vec::new(),
         });
     }
     None

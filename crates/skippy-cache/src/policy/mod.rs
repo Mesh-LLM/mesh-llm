@@ -109,6 +109,12 @@ pub struct PolicyConfig {
     /// chosen as an eviction victim: probation must get a fair chance to land
     /// its second hit before pressure can reclaim its bytes.
     pub grace_observations: u64,
+    /// Maximum retained ghost records. One-shot keys must not create
+    /// permanent metadata.
+    pub ghost_capacity: usize,
+    /// Ghosts older than this many observations are expired so stale
+    /// popularity cannot revive indefinitely.
+    pub ghost_max_age_observations: u64,
 }
 
 impl Default for PolicyConfig {
@@ -119,6 +125,8 @@ impl Default for PolicyConfig {
             min_reuse_probability: 0.01,
             decay: DecayConfig::default(),
             grace_observations: 32,
+            ghost_capacity: 4096,
+            ghost_max_age_observations: 1024,
         }
     }
 }
@@ -173,8 +181,39 @@ pub struct BenefitPolicy {
     pub(crate) clock: u64,
     /// Reuse statistics that outlive eviction ("ghosts"): an entry that
     /// recurs after eviction carries its history back in, so the second-hit
-    /// value signal survives cache pressure.
+    /// value signal survives cache pressure. Bounded by count and age.
     pub(crate) ghosts: BTreeMap<EntryKey, GhostStats>,
+}
+
+impl BenefitPolicy {
+    /// Insert a ghost, evicting the oldest ghost when the count bound is
+    /// exceeded, and dropping ghosts past their age bound.
+    fn insert_ghost(&mut self, key: EntryKey, stats: GhostStats) {
+        while self.ghosts.len() >= self.config.ghost_capacity {
+            let oldest = self
+                .ghosts
+                .iter()
+                .min_by_key(|(k, g)| (g.last_observation, **k))
+                .map(|(k, _)| *k);
+            match oldest {
+                Some(k) => {
+                    self.ghosts.remove(&k);
+                }
+                None => break,
+            }
+        }
+        self.ghosts.insert(key, stats);
+    }
+
+    /// Drop ghosts older than the configured age bound. Called from the
+    /// observation-driven entry points so expiry is deterministic over a
+    /// trace without a background timer.
+    fn expire_ghosts(&mut self) {
+        let horizon = self
+            .clock
+            .saturating_sub(self.config.ghost_max_age_observations);
+        self.ghosts.retain(|_, g| g.last_observation >= horizon);
+    }
 }
 
 /// Surviving statistics for an evicted entry.
@@ -183,6 +222,8 @@ pub struct GhostStats {
     pub hits: u64,
     pub reuse_weight: f64,
     pub observation_weight: f64,
+    /// Clock value when the ghost was created; drives age expiry.
+    pub last_observation: u64,
 }
 
 impl BenefitPolicy {
@@ -201,6 +242,14 @@ impl BenefitPolicy {
 
     pub fn config(&self) -> &PolicyConfig {
         &self.config
+    }
+
+    pub fn ghost(&self, key: EntryKey) -> Option<&GhostStats> {
+        self.ghosts.get(&key)
+    }
+
+    pub fn ghost_count(&self) -> usize {
+        self.ghosts.len()
     }
 
     pub fn entry(&self, key: EntryKey) -> Option<&PolicyEntry> {
@@ -226,7 +275,15 @@ impl BenefitPolicy {
         cost: CostSample,
     ) -> AdmissionDecision {
         self.clock += 1;
-        admission::consider(self, key, exclusive_bytes, shared, cost)
+        self.expire_ghosts();
+        let mut decision = admission::consider(self, key, exclusive_bytes, shared, cost);
+        if decision.verdict == crate::policy::AdmissionVerdict::Admit {
+            // Hard probation cap is part of admission: the decision carries
+            // the keys the caller must physically evict. Selection only —
+            // committed removal stays with `remove` so victims become ghosts.
+            decision.probation_cap_victims = self.select_probation_cap_victims();
+        }
+        decision
     }
 
     /// Record a restore hit on an admitted entry; may promote out of probation.
@@ -247,13 +304,29 @@ impl BenefitPolicy {
     /// decays reuse history faster than the observation base, so stale
     /// popularity cannot pin bytes forever.
     pub fn observe_pressure(&mut self, pressure: f64) {
-        let pressure = pressure.clamp(0.0, 1.0);
+        // Non-finite pressure never poisons history: NaN is ignored,
+        // +inf saturates to full pressure, -inf to none.
+        if pressure.is_nan() {
+            return;
+        }
+        let pressure = if pressure == f64::INFINITY {
+            1.0
+        } else if pressure == f64::NEG_INFINITY {
+            0.0
+        } else {
+            pressure.clamp(0.0, 1.0)
+        };
         let base = self.config.decay.factor;
         let reuse_factor = base * (1.0 - pressure);
         for entry in self.entries.values_mut() {
             entry.reuse_weight *= reuse_factor;
             entry.observation_weight *= base + (1.0 - base) * pressure;
         }
+        for ghost in self.ghosts.values_mut() {
+            ghost.reuse_weight *= reuse_factor;
+            ghost.observation_weight *= base + (1.0 - base) * pressure;
+        }
+        self.expire_ghosts();
     }
 
     /// Score an entry under the current statistics. Returns `None` for
@@ -275,42 +348,60 @@ impl BenefitPolicy {
         admission::choose_victims(self, bytes_to_free, pinned)
     }
 
-    /// Total exclusive bytes held by probation-state entries.
+    /// Bytes charged to the probation class: exclusive bytes plus the
+    /// fractional shared-segment credit per entry, so probation entries
+    /// backed entirely by shared segments cannot grow without bound.
     pub fn probation_bytes(&self) -> u64 {
         self.entries
-            .values()
-            .filter(|e| e.state == PolicyEntryState::Probation)
-            .map(|e| e.exclusive_bytes)
+            .iter()
+            .filter(|(_, e)| e.state == PolicyEntryState::Probation)
+            .map(|(k, e)| {
+                e.exclusive_bytes + self.segments.fractional_bytes(*k, &e.segments) as u64
+            })
             .sum()
     }
 
-    /// Enforce the hard probation byte cap: evict no-hit probationers until
-    /// the cap holds, waiving grace under pressure (the hard cap always
-    /// wins). Oldest-observation first, then key order for determinism.
-    /// Returns the keys the caller must actually evict.
-    pub fn enforce_probation_cap(&mut self) -> Vec<EntryKey> {
+    /// Select the no-hit probationers that must be evicted to bring the
+    /// probation class back under its byte cap, oldest observation first
+    /// (grace waived: the hard cap always wins). Selection only — this does
+    /// not mutate policy state; the caller commits each removal via
+    /// `remove`, which also records the ghost. Keys are deterministic
+    /// `(last_observation, key)` order.
+    pub fn select_probation_cap_victims(&self) -> Vec<EntryKey> {
         let cap = self.config.probation_byte_budget;
         let mut over = self.probation_bytes().saturating_sub(cap);
         if over == 0 {
             return Vec::new();
         }
-        let mut probationers: Vec<(u64, EntryKey)> = self
+        let mut probationers: Vec<(u64, EntryKey, u64)> = self
             .entries
             .iter()
             .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits == 0)
-            .map(|(k, e)| (e.last_observation, *k))
+            .map(|(k, e)| {
+                let charge =
+                    e.exclusive_bytes + self.segments.fractional_bytes(*k, &e.segments) as u64;
+                (e.last_observation, *k, charge)
+            })
             .collect();
         probationers.sort();
         let mut victims = Vec::new();
-        for (_, key) in probationers {
+        for (_, key, charge) in probationers {
             if over == 0 {
                 break;
             }
-            if let Some(entry) = self.entries.remove(&key) {
-                self.segments.release(&entry.segments, key);
-                over = over.saturating_sub(entry.exclusive_bytes);
-                victims.push(key);
-            }
+            over = over.saturating_sub(charge);
+            victims.push(key);
+        }
+        victims
+    }
+
+    /// Compatibility wrapper for callers that want cap enforcement applied
+    /// immediately: selects victims (see `select_probation_cap_victims`)
+    /// and commits their removals through `remove`, so they become ghosts.
+    pub fn enforce_probation_cap(&mut self) -> Vec<EntryKey> {
+        let victims = self.select_probation_cap_victims();
+        for key in &victims {
+            self.remove(*key);
         }
         victims
     }
@@ -321,12 +412,13 @@ impl BenefitPolicy {
     pub fn remove(&mut self, key: EntryKey) -> Option<PolicyEntry> {
         let entry = self.entries.remove(&key)?;
         self.segments.release(&entry.segments, key);
-        self.ghosts.insert(
+        self.insert_ghost(
             key,
             GhostStats {
                 hits: entry.hits,
                 reuse_weight: entry.reuse_weight,
                 observation_weight: entry.observation_weight,
+                last_observation: self.clock,
             },
         );
         Some(entry)
