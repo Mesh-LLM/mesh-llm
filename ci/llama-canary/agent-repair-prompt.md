@@ -1,10 +1,11 @@
-# llama.cpp canary patch-queue repair runbook (agent instructions)
+# llama.cpp changed-pin canary repair runbook (agent instructions)
 
 You are running on the `family-certify` self-hosted runner inside a mesh-llm
-checkout. The nightly llama-upstream canary either failed to apply our patch
-queue in `third_party/llama.cpp/patches/` onto the new upstream pin
-(patch-queue mode) or applied the queue but failed a certification lane
-(battery mode). Your job:
+checkout. The deterministic wrapper owns one
+`prepare -> build -> certify -> publish` state machine for the candidate SHA in
+`.deps/llama-canary-target-sha`. It has handed you one failed phase to repair.
+Keep all work in the current checkout and leave commits, branches, pushes, PRs,
+and comments to the wrapper.
 
 **Before touching the queue, read the repo skills and follow them:**
 `.agents/skills/llama-patch-changes/SKILL.md` (queue edits, upstream pin,
@@ -12,10 +13,13 @@ prepare/build flow, patch ownership boundaries) and, when a patch changes the
 stage ABI, `.agents/skills/llama-stage-patch-changes/SKILL.md`. The boundaries
 in those skills are hard requirements for this repair, not suggestions.
 
-1. **Reproduce.** Run `scripts/prepare-llama.sh "$(cat .deps/llama-canary-target-sha)"`
-   and capture which patch fails to apply (`git -C .deps/llama.cpp am --3way ...`).
-   A `.git/rebase-apply` state may be left behind; use `git am --show-current-patch`
-   and `git am --3way --continue`/`--abort` to inspect the conflict.
+1. **Reproduce the failed phase.** The wrapper has already written the candidate
+   to `third_party/llama.cpp/upstream.txt`; prepare it with
+   `scripts/prepare-llama.sh pinned`. Inspect the supplied failure tail and run
+   only the focused build or certification commands needed to identify the root
+   cause. If patch application left `.git/rebase-apply`, use
+   `git am --show-current-patch` and `git am --3way --continue`/`--abort` to
+   inspect the conflict.
 
 2. **Fix the queue — follow `llama-patch-changes`, do not loop on `git am`.**
    If a patch fails to apply, `git am --3way` retry alone is not an acceptable
@@ -36,32 +40,25 @@ in those skills are hard requirements for this repair, not suggestions.
    irregular builder remains unchanged with the rewriter's precise
    `unsupported_shape` reason until a sound general rule exists.
 
-3. **Build.** `scripts/build-llama.sh` then
-   `cargo check -p skippy-ffi -p skippy-runtime -p skippy-server`.
+3. **Use focused verification while repairing.** The wrapper restarts from
+   prepare after every agent turn, runs the complete patched llama.cpp and Rust
+   build gates, and only then runs certification. Do not spend the remaining
+   wrapper deadline duplicating the complete battery unless the failure itself
+   requires a focused battery reproduction.
 
-4. **Certify.** `scripts/skippy-family-battery.sh --skip-build`.
-   All lanes must pass. Do not weaken a failing lane; if a model is genuinely
-   broken by upstream, revert to fixing our patches or flag it in the PR body.
-   The wrapper re-runs the battery itself after your turn; if lanes fail you
-   will get the failure output in a follow-up repair turn — the loop only
-   ends when the wrapper's own battery run passes.
+4. **Preserve every gate.** Do not weaken, skip, narrow, or mark a failing lane
+   unsupported to make the run green. Repair the patch queue, ABI mirrors,
+   manifests, or runtime code that owns the failure. The loop ends only when
+   the wrapper's own complete certification passes or its phase turn/time bound
+   is exhausted.
 
-5. **Commit locally; the wrapper owns the PR.** Work on branch
-   `llama-canary/patch-queue-fix`. Commit the patch-queue changes with a
-   `fix(llama): rebase patch queue onto upstream <short-sha>` message. You
-   have no GitHub credentials: the deterministic wrapper that drives you
-   keeps the repair local while repair and certification are active, then
-   commits any remaining work, pushes the branch, and creates/updates the
-   repair PR only at terminal success or failure. The wrapper separately asks
-   you to write the full PR
-   description (key upstream changes, how the patch queue evolved, risks for
-   reviewers) — when that turn arrives, write the finished Markdown to the
-   file it names and touch nothing else. After the wrapper's own battery run
-   passes, a separate review agent — not you — gets one fresh-context turn
-   to review the certified repair and fix any dropped intent or rebase
-   leftovers it finds; its changes land as their own `review(llama):`
-   commit locally and must pass the complete battery again before the wrapper
-   publishes the branch and PR.
+5. **Leave the result local.** Do not switch or create a branch in the mesh-llm
+   checkout, commit there, push, open or edit a PR, comment on GitHub, or use
+   GitHub credentials. Temporary llama.cpp reconstruction branches and
+   worktrees required by the patch-queue skill remain local. The wrapper
+   commits the final mesh-llm tree, publishes one run-specific branch,
+   generates the PR body with the upstream summary, and opens either an exact
+   certified PR or an uncertified draft at terminal failure.
 
 Notes:
 - Models come from the runner's pre-warmed HF cache (`HF_CACHE`); `hf download`

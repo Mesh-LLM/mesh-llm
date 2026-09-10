@@ -102,6 +102,7 @@ pub(super) fn fleet_peer(seed: u32, model: FleetModel) -> mesh::PeerInfo {
         is_soc: None,
         gpu_vram: None,
         gpu_reserved_bytes: None,
+        memory: None,
         gpu_mem_bandwidth_gbps: None,
         gpu_compute_tflops_fp32: None,
         gpu_compute_tflops_fp16: None,
@@ -210,7 +211,7 @@ async fn admitted_pool(fleet: &[(FleetModel, usize)]) -> Vec<String> {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     models.into_iter().map(|m| m.name).collect()
 }
 
@@ -289,7 +290,7 @@ async fn bimodal_fleet_admission_and_actor() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
 
     tracing::debug!("fleet nodes = {}", total_nodes(&fleet));
@@ -435,7 +436,7 @@ async fn healthy_small_model_precedes_deprioritized_big_actor() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
     assert_eq!(models.len(), 3, "small spillover must remain admitted");
     assert_eq!(
@@ -484,7 +485,7 @@ async fn local_small_model_absorbs_load_when_big_models_are_deprioritized() {
     );
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
 
     assert_eq!(
@@ -589,7 +590,7 @@ async fn throughput_breaks_ties_between_healthy_same_tier_models() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
     let ranked_bases = actors
         .iter()
@@ -769,7 +770,7 @@ async fn tool_capability_outranks_health_for_the_acting_model() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
     assert_eq!(
         super::pool::canonical_base_name(&models[actors[0]].name),
@@ -812,7 +813,7 @@ async fn tool_capability_outranks_advertised_throughput_for_the_acting_model() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
     assert_eq!(
         super::pool::canonical_base_name(&models[actors[0]].name),
@@ -850,7 +851,7 @@ async fn actor_candidates_retain_every_admitted_worker_as_hedge_fallback() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
     let actors = compute_actor_candidates(&node, &models).await;
     assert_eq!(
         actors.len(),
@@ -920,7 +921,7 @@ async fn committee_cap_keeps_a_healthy_worker_over_deprioritized_ones() {
     let targets = election::ModelTargets::default();
     let http = reqwest::Client::new();
     let (_backends, models) =
-        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http).await;
+        assemble_worker_pool(&node, Some(&targets), Some(13_000), &http, None).await;
 
     let kept: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
     assert!(
