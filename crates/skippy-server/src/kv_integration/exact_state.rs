@@ -15,6 +15,10 @@ fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Locat
     format!("{}:{}", l3.state_identity(), location.manifest_key)
 }
 
+fn resident_prefix_is_complete(matched_tokens: usize, requested_tokens: usize) -> bool {
+    matched_tokens >= requested_tokens
+}
+
 impl KvStageIntegration {
     pub fn restore_exact_state(
         &self,
@@ -41,9 +45,12 @@ impl KvStageIntegration {
         // importing the serialized snapshot would otherwise make enabling L3
         // slower than the ordinary L1 path on every repeated request.
         if self.payload == StagePrefixCachePayload::ResidentKv
-            && identities
-                .iter()
-                .any(|identity| self.probe_resident_prefix(identity).is_some())
+            && identities.iter().any(|identity| {
+                self.probe_resident_prefix(identity)
+                    .is_some_and(|resident| {
+                        resident_prefix_is_complete(resident.token_count, identity.token_ids.len())
+                    })
+            })
         {
             return Ok(None);
         }
@@ -691,12 +698,19 @@ mod tests {
 
     use skippy_cache::UnifiedRadixCache;
 
-    use super::try_touch_exact_state;
+    use super::{resident_prefix_is_complete, try_touch_exact_state};
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
         crate::kv_integration::RadixExactEntry,
     >;
+
+    #[test]
+    fn only_complete_resident_prefixes_skip_exact_restore() {
+        assert!(resident_prefix_is_complete(4_000, 4_000));
+        assert!(resident_prefix_is_complete(4_001, 4_000));
+        assert!(!resident_prefix_is_complete(200, 4_000));
+    }
 
     #[test]
     fn busy_exact_state_lock_skips_touch_without_waiting() {

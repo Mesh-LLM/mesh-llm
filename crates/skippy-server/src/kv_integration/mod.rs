@@ -515,7 +515,9 @@ impl KvStageIntegration {
         self.payload
             .is_exact_state()
             .then_some(self.payload)
-            .or(self.durable_payload)
+            .or(self
+                .durable_payload
+                .filter(|payload| payload.is_exact_state()))
     }
 
     pub fn should_lookup(&self) -> bool {
