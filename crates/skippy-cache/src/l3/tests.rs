@@ -905,3 +905,45 @@ fn startup_reconciliation_quarantines_unsupported_codec_manifest() {
     );
     assert!(root.join(QUARANTINE_DIR).exists());
 }
+
+#[test]
+fn future_version_raw_manifest_is_refused_at_commit_and_leaves_no_manifest() {
+    let root = temp_root("codec-future-version-commit");
+    let store = store(&root, 0);
+    let payload = vec![8u8; 8192];
+    let (mut manifest, held) = manifest_for(&store, &payload, 4096);
+    // A supported (raw) codec but an unknown future version: commit must refuse
+    // it, or it would persist a manifest load_manifest immediately rejects.
+    manifest.version = MANIFEST_VERSION + 1;
+    let error = store
+        .commit(&manifest)
+        .expect_err("a future manifest version must not commit");
+    assert!(
+        error.to_string().contains("version"),
+        "commit error should name the version: {error}"
+    );
+    drop(held);
+    assert!(
+        store.load_manifest(&manifest.payload_digest).is_err(),
+        "no manifest should exist after a refused future-version commit"
+    );
+}
+
+#[test]
+fn future_version_raw_manifest_is_refused_before_assembly() {
+    let root = temp_root("codec-future-version-assemble");
+    let store = store(&root, 0);
+    let payload = vec![9u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut loaded = store
+        .load_manifest(&manifest.payload_digest)
+        .expect("load manifest");
+    loaded.version = MANIFEST_VERSION + 1;
+    let error = store
+        .assemble(&loaded)
+        .expect_err("a future manifest version must not assemble");
+    assert!(
+        error.to_string().contains("version"),
+        "assemble error should name the version: {error}"
+    );
+}

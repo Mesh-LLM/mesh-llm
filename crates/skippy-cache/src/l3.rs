@@ -1075,7 +1075,7 @@ impl HandoffSegmentStore {
         if manifest.payload_digest.is_empty() {
             bail!("manifest has no payload digest");
         }
-        reject_unsupported_codec(manifest)?;
+        validate_manifest_compatibility(manifest)?;
         let mut expected_offset = 0u64;
         let locations = manifest
             .segments
@@ -1211,7 +1211,7 @@ impl HandoffSegmentStore {
     /// Assemble the full payload for a manifest, verifying every segment
     /// digest, the tiling, and the whole-payload digest.
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
-        reject_unsupported_codec(manifest)?;
+        validate_manifest_compatibility(manifest)?;
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
         let mut payload_hasher = blake3::Hasher::new();
@@ -1721,6 +1721,29 @@ fn reject_unsupported_codec(manifest: &HandoffManifest) -> Result<()> {
             manifest.payload_digest
         ),
     }
+}
+
+/// Versions this build can read and write: the current format and the legacy
+/// pre-codec-identity format.
+fn manifest_version_is_supported(version: u32) -> bool {
+    version == MANIFEST_VERSION || version == LEGACY_MANIFEST_VERSION
+}
+
+/// Validate that an in-memory manifest is one this build can both persist and
+/// assemble: a supported format version *and* a supported codec. `try_commit`
+/// and `assemble` call this before writing or reading any segment, so a
+/// manifest that `decode_manifest` would later reject — an unknown version
+/// (e.g. a future version carrying a raw codec) or an unsupported codec —
+/// cannot be committed to disk or partially assembled from segments.
+fn validate_manifest_compatibility(manifest: &HandoffManifest) -> Result<()> {
+    if !manifest_version_is_supported(manifest.version) {
+        bail!(
+            "manifest {} has version {} but this build reads {MANIFEST_VERSION} or legacy {LEGACY_MANIFEST_VERSION}",
+            manifest.payload_digest,
+            manifest.version
+        );
+    }
+    reject_unsupported_codec(manifest)
 }
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
