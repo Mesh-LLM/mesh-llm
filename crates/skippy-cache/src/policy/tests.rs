@@ -217,25 +217,57 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
 }
 
 /// The acceptance direction the issue requires: on a trace where one-shot
-/// large entries pollute an LRU, the benefit policy must save more cold
-/// prefill cost at the same capacity, or write fewer bytes.
+/// large entries pollute an LRU, the benefit policy must STRICTLY save
+/// more cold prefill cost or STRICTLY write fewer persisted bytes, with
+/// the non-winning dimension held inside an explicit regression
+/// tolerance.
 #[test]
 fn beats_lru_on_one_shot_pollution_trace() {
     let trace = traces::one_shot_trace(7, 2_000);
     let capacity = 64 << 20;
     let comparison = compare(&trace, capacity);
-    assert!(
-        comparison.policy_saved_cost >= comparison.lru_saved_cost * 0.95,
-        "policy saved {} vs lru {}",
+    // The artifact must show which side wins on each dimension.
+    println!(
+        "one-shot pollution @ {}: saved policy={:.1} lru={:.1}, written policy={} lru={}",
+        capacity,
         comparison.policy_saved_cost,
-        comparison.lru_saved_cost
-    );
-    assert!(
-        comparison.policy_bytes_written <= comparison.lru_bytes_written,
-        "policy wrote {} vs lru {}",
+        comparison.lru_saved_cost,
         comparison.policy_bytes_written,
         comparison.lru_bytes_written
     );
+    const TOLERANCE: f64 = 0.05;
+    let wins_saved = comparison.policy_saved_cost > comparison.lru_saved_cost;
+    let wins_written = comparison.policy_bytes_written < comparison.lru_bytes_written;
+    // Strict improvement in at least one dimension (#1650 acceptance).
+    assert!(
+        wins_saved || wins_written,
+        "policy saved {} vs lru {} and wrote {} vs lru {} — no strict improvement",
+        comparison.policy_saved_cost,
+        comparison.lru_saved_cost,
+        comparison.policy_bytes_written,
+        comparison.lru_bytes_written
+    );
+    // The non-winning dimension must stay inside an explicit regression
+    // tolerance rather than degrading unboundedly.
+    if !wins_saved {
+        assert!(
+            comparison.policy_saved_cost >= comparison.lru_saved_cost * (1.0 - TOLERANCE),
+            "policy saved {} vs lru {} — saved cost regressed beyond {:.0}%",
+            comparison.policy_saved_cost,
+            comparison.lru_saved_cost,
+            TOLERANCE * 100.0
+        );
+    }
+    if !wins_written {
+        assert!(
+            (comparison.policy_bytes_written as f64)
+                <= comparison.lru_bytes_written as f64 * (1.0 + TOLERANCE),
+            "policy wrote {} vs lru {} — writes regressed beyond {:.0}%",
+            comparison.policy_bytes_written,
+            comparison.lru_bytes_written,
+            TOLERANCE * 100.0
+        );
+    }
 }
 
 #[test]
