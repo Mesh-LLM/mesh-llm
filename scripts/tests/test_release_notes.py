@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 GENERATE = SCRIPTS / "release-notes-generate.sh"
-HOOK = ROOT / ".githooks" / "commit-msg"
+HOOK = ROOT / "scripts" / "hooks" / "commit-msg"
 
 
 def load(name, filename):
@@ -359,9 +359,6 @@ class WorkflowContractTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TrailerDenyListTest(unittest.TestCase):
     def denied(self, line):
@@ -483,3 +480,114 @@ class SubjectNormalizationTest(unittest.TestCase):
 
     def test_a_subject_that_is_only_a_prefix_is_left_alone(self):
         self.assertEqual(self.subject(self.entry("fix:")), "fix:")
+
+class OverrideHardeningTest(unittest.TestCase):
+    def classify(self, subject, trailers):
+        return CLASSIFY.classify({"subject": subject, "trailers": trailers})
+
+    def test_invalid_override_is_not_silently_ignored(self):
+        # A typo must not fall through and land a security fix in Fixed.
+        self.assertEqual(
+            self.classify("fix: redact health details", {"release-notes": "Secuirty"}),
+            (None, None),
+        )
+
+    def test_valid_override_still_wins(self):
+        section, _ = self.classify(
+            "fix: redact health details", {"release-notes": "Security"}
+        )
+        self.assertEqual(section, "Security")
+
+    def test_internal_override_survives_a_non_conventional_subject(self):
+        plan, _ = CLASSIFY.build_plan(
+            [1],
+            {1: {"subject": "Some non-conventional subject",
+                 "trailers": {"release-notes": "Internal"}}},
+            "1.0.0",
+            "2026-01-01",
+        )
+        groups = [g["title"] for g in plan["internal"]["groups"]]
+        self.assertEqual(groups, ["Refactors, docs, and hygiene"])
+
+
+class PlanMetadataTest(unittest.TestCase):
+    """Plan text can be agent-authored, so it must not reach the body unchecked."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.body = self.dir / "body.md"
+        self.body.write_text(BODY, encoding="utf-8")
+
+    def check(self, plan, extra=()):
+        path = self.dir / "plan.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "release-notes-regroup.py"),
+             "--body", str(self.body), "--plan", str(path), "--check", *extra],
+            capture_output=True, text=True,
+        )
+
+    def all_prs(self, **plan):
+        plan.setdefault("sections", [{"title": "Added", "prs": [1, 2, 3]}])
+        return plan
+
+    def test_rejects_an_unknown_section(self):
+        result = self.check(self.all_prs(sections=[{"title": "Sponsors", "prs": [1, 2, 3]}]))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown section", result.stderr)
+
+    def test_rejects_markup_in_a_group_title(self):
+        result = self.check(self.all_prs(sections=[{
+            "title": "Added",
+            "groups": [{"title": "See [click](http://evil.example)", "prs": [1, 2, 3]}],
+        }]))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain heading", result.stderr)
+
+    def test_rejects_a_multiline_version(self):
+        result = self.check(self.all_prs(version="1.0\n## Injected"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain version string", result.stderr)
+
+    def test_rejects_markup_in_the_internal_summary(self):
+        result = self.check(self.all_prs(
+            sections=[{"title": "Added", "prs": [1, 2]}],
+            internal={"summary": "<img src=x onerror=1>",
+                      "groups": [{"title": "CI", "prs": [3]}]},
+        ))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a plain heading", result.stderr)
+
+    def test_accepts_an_ordinary_plan(self):
+        result = self.check(self.all_prs(version="0.76.0", date="2026-09-10"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_metadata_from_overrides_plan_authored_version(self):
+        trusted = self.dir / "trusted.json"
+        trusted.write_text(json.dumps({"version": "0.76.0", "date": "2026-09-10"}))
+        result = self.check(
+            self.all_prs(version="9.9.9", date="1999-01-01"),
+            extra=["--metadata-from", str(trusted)],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class PublishGuardTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = GENERATE.read_text(encoding="utf-8")
+
+    def test_manual_runs_require_explicit_approval(self):
+        self.assertIn('"${GITHUB_ACTIONS:-}" != "true"', self.script)
+        self.assertIn('"${RELEASE_NOTES_APPROVED:-}" != "true"', self.script)
+        self.assertLess(
+            self.script.index("RELEASE_NOTES_APPROVED"),
+            self.script.index("gh release edit"),
+        )
+
+    def test_agent_plan_renders_with_deterministic_metadata(self):
+        self.assertIn("--metadata-from", self.script)
+
+
+if __name__ == "__main__":
+    unittest.main()

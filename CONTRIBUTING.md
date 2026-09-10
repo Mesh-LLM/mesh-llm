@@ -205,7 +205,7 @@ v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
 Install the hook that enforces it:
 
 ```bash
-just hooks-install          # sets core.hooksPath to .githooks
+just hooks-install          # sets core.hooksPath to scripts/hooks
 just check-commits          # validates origin/main..HEAD
 ```
 
@@ -218,7 +218,7 @@ the tooling types collapse into a folded Internal section. A subject that is
 not conventional cannot be classified and lands in "Other changes".
 
 Two overrides exist. `BREAKING CHANGE: <what>` in the body (or `!` after the
-type) moves a `feat` to Changed. `Release-Notes: <Section>` in the body wins
+type) moves the entry to Changed, whatever its type. `Release-Notes: <Section>` in the body wins
 outright — reach for it when the type cannot express the change, above all for
 a fix that closes a security exposure and belongs in Security rather than
 Fixed.

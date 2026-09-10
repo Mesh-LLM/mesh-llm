@@ -113,8 +113,10 @@ RELEASE_TAG=v0.76.0 RELEASE_NOTES_BASE=v0.75.1 DRY_RUN=true \
   scripts/release-notes-generate.sh
 ```
 
-`DRY_RUN=true` renders and gates without touching the release. Drop it to
-publish. The work directory keeps `body.backup.md`; restore with
+`DRY_RUN=true` renders and gates without touching the release. Publishing from
+a manual run additionally needs `RELEASE_NOTES_APPROVED=true`, so a hand run
+cannot edit a published release by accident; the release job sets no such
+variable because `GITHUB_ACTIONS` already marks it automated. The work directory keeps `body.backup.md`; restore with
 `gh release edit <tag> --notes-file body.backup.md`.
 
 To hand-classify instead, list the entries, write a plan, and render:
@@ -187,7 +189,7 @@ reviewing a plan by hand or as the agent pass:
 ## Improving Coverage
 
 Every entry the deterministic pass cannot classify is a commit that did not
-follow Conventional Commits. `.githooks/commit-msg` rejects those locally
+follow Conventional Commits. `scripts/hooks/commit-msg` rejects those locally
 (`just hooks-install`), and `just check-commits` validates a range. Because the
 repository squash-merges, the PR title becomes the commit subject, so the PR
 title is what has to be conventional.

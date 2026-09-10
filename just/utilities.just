@@ -95,8 +95,8 @@ docker-run-client tag="mesh-llm:client":
 # Install the repository git hooks (Conventional Commits subject validation).
 [unix]
 hooks-install:
-    git config core.hooksPath .githooks
-    @echo "git hooks installed from .githooks (bypass one commit with --no-verify)"
+    git config core.hooksPath scripts/hooks
+    @echo "git hooks installed from scripts/hooks (bypass one commit with --no-verify)"
 
 # Validate commit subjects in a range against Conventional Commits v1.0.0.
 [unix]

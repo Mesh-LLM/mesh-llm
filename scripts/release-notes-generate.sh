@@ -142,8 +142,11 @@ PROMPT
     echo "release-notes: agent produced no plan; keeping deterministic notes"
     return 1
   fi
+  # Version and date come from the deterministic plan, never the agent's, and
+  # the renderer rejects any section or heading text the agent invents.
   if ! python3 "$ROOT/scripts/release-notes-regroup.py" \
       --body "$WORKDIR/body.md" --plan "$WORKDIR/plan.agent.json" \
+      --metadata-from "$WORKDIR/plan.deterministic.json" \
       --out "$WORKDIR/notes.agent.md"; then
     echo "release-notes: agent plan failed validation; keeping deterministic notes"
     return 1
@@ -169,6 +172,12 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "release-notes: DRY_RUN=true; not editing the release"
   echo "release-notes: would publish $chosen"
   exit 0
+fi
+
+if [[ "${GITHUB_ACTIONS:-}" != "true" && "${RELEASE_NOTES_APPROVED:-}" != "true" ]]; then
+  echo "release-notes: refusing to edit a published release from a manual run" >&2
+  echo "release-notes: preview with DRY_RUN=true, or publish with RELEASE_NOTES_APPROVED=true" >&2
+  exit 1
 fi
 
 gh release edit "$TAG" --repo "$REPO" --notes-file "$chosen"

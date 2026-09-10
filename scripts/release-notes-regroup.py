@@ -18,6 +18,16 @@ import json
 import re
 import sys
 
+# A plan may be written by an agent that has read PR subjects, so every piece
+# of plan-authored text that reaches the published body is constrained here.
+ALLOWED_SECTIONS = (
+    "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security",
+    "Other changes",
+)
+TITLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,.:&/()'\-]{0,79}$")
+VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 ENTRY_RE = re.compile(r"^\* .*/pull/(\d+)\s*$")
 ENTRY_PARTS_RE = re.compile(
     r"^\* (?P<subject>.*?)(?P<credit> by @[^ ]+ in \S*/pull/(?P<pr>\d+))\s*$"
@@ -101,6 +111,39 @@ def plan_groups(plan):
             yield "Internal", group["title"], group["prs"]
 
 
+def validate_metadata(plan):
+    """Reject plan-authored text that must not reach the published body."""
+    problems = []
+    version = plan.get("version")
+    if version is not None and not VERSION_RE.match(str(version)):
+        problems.append(f"version is not a plain version string: {version!r}")
+    date = plan.get("date")
+    if date is not None and not DATE_RE.match(str(date)):
+        problems.append(f"date is not YYYY-MM-DD: {date!r}")
+
+    def check_title(label, value):
+        if not isinstance(value, str) or not TITLE_RE.match(value):
+            problems.append(f"{label} is not a plain heading: {value!r}")
+
+    for section in plan.get("sections", []):
+        title = section.get("title")
+        if title not in ALLOWED_SECTIONS:
+            problems.append(
+                f"unknown section {title!r}; allowed: {', '.join(ALLOWED_SECTIONS)}"
+            )
+        for group in section.get("groups", []):
+            check_title("group title", group.get("title"))
+
+    internal = plan.get("internal")
+    if internal:
+        check_title("internal summary", internal.get("summary"))
+        for group in internal.get("groups", []):
+            check_title("internal group title", group.get("title"))
+
+    if problems:
+        sys.exit("error: plan metadata rejected\n" + "\n".join("  " + p for p in problems))
+
+
 def validate(plan, entries, order):
     assigned, seen, dupes = [], set(), []
     for _, _, prs in plan_groups(plan):
@@ -171,6 +214,10 @@ def main():
     parser.add_argument(
         "--check", action="store_true", help="validate the plan without rendering"
     )
+    parser.add_argument(
+        "--metadata-from",
+        help="take version and date from this plan instead of the one rendered",
+    )
     args = parser.parse_args()
 
     entries, order, tail = parse_body(open(args.body, encoding="utf-8").read())
@@ -185,6 +232,11 @@ def main():
     if not args.plan:
         parser.error("--plan is required unless --list is given")
     plan = json.load(open(args.plan, encoding="utf-8"))
+    if args.metadata_from:
+        trusted = json.load(open(args.metadata_from, encoding="utf-8"))
+        for field in ("version", "date"):
+            plan[field] = trusted.get(field)
+    validate_metadata(plan)
     count = validate(plan, entries, order)
 
     if args.check:

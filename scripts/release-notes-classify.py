@@ -122,6 +122,20 @@ def read_commits(git_range, repo_root=None):
     return commits
 
 
+def scope_of(commit):
+    """Return the conventional scope of a subject, or None if it has none."""
+    authored = CONVENTIONAL.TRAILING_PR_RE.sub("", commit["subject"])
+    match = CONVENTIONAL.SUBJECT_RE.match(authored)
+    return match.group("scope") if match else None
+
+
+def type_of(commit):
+    """Return the conventional type of a subject, or None if it has none."""
+    authored = CONVENTIONAL.TRAILING_PR_RE.sub("", commit["subject"])
+    match = CONVENTIONAL.SUBJECT_RE.match(authored)
+    return match.group("type") if match else None
+
+
 def classify(commit):
     """Return (section, group_key) for one commit, or (None, None) if unknown."""
     if commit is None:
@@ -132,7 +146,10 @@ def classify(commit):
     if override:
         title = override.strip().title()
         if title in SECTION_ORDER or title == "Internal":
-            return title, None
+            return title, scope_of(commit)
+        # A misspelled override ("Secuirty") must not quietly fall through to
+        # type classification and land a security fix in Fixed.
+        return None, None
 
     authored = CONVENTIONAL.TRAILING_PR_RE.sub("", commit["subject"])
     match = CONVENTIONAL.SUBJECT_RE.match(authored)
@@ -192,8 +209,9 @@ def build_plan(prs, commits, version, date):
             unclassified += 1
             continue
         if section == "Internal":
-            authored = CONVENTIONAL.TRAILING_PR_RE.sub("", commit["subject"])
-            kind = CONVENTIONAL.SUBJECT_RE.match(authored).group("type")
+            # A Release-Notes: Internal override can arrive on a subject with no
+            # conventional type at all, so fall back rather than assume one.
+            kind = type_of(commit)
             title = INTERNAL_SCOPES.get(scope) or next(
                 (name for name, kinds in INTERNAL_GROUPS.items() if kind in kinds),
                 "Refactors, docs, and hygiene",

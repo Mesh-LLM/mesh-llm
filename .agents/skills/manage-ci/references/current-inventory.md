@@ -141,7 +141,7 @@ Merge settings observed on 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_message=COMMIT_MESSAGES`. The `COMMIT_MESSAGES` setting
 composes the squash body from the branch commit messages, which is how agent
 and bot `Co-authored-by:` trailers reach `main` even when the PR title is
-clean. `.githooks/commit-msg` rejects those trailers locally.
+clean. `scripts/hooks/commit-msg` rejects those trailers locally.
 
 The active `main` ruleset (id 20090642) carries `deletion`,
 `non_fast_forward`, `required_linear_history`, `required_status_checks`, and

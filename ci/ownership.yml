@@ -58,7 +58,6 @@
         ".agents/**",
         ".cargo/**",
         ".dockerignore",
-        ".githooks/**",
         ".gitignore",
         ".nvmrc",
         ".well-known/**",
