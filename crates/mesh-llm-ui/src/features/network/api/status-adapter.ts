@@ -1,7 +1,7 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
-import type { StatusPayload, PeerInfo, GpuInfo, ServingModelEntry } from '@/lib/api/types'
+import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
-import { gpuRatedVramGB } from '@/lib/vram'
+import { meshAdvertisedVramGB, meshRatedVramGB, nodeAdvertisedVramGB } from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -115,23 +115,25 @@ function finiteMetric(value: number | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
-function gpuTotalVramGb(gpus?: GpuInfo[]): number | null {
-  if (!gpus?.length) return null
-
-  const total = gpus.reduce((sum, gpu) => {
-    return sum + (gpuRatedVramGB(gpu) ?? 0)
-  }, 0)
-
-  return total > 0 ? total : null
-}
-
+// Node and mesh VRAM figures use the capacity each node advertises to the mesh,
+// so the dashboard agrees with `/api/status`, `doctor split`, and the scheduler.
+// Per-GPU labels elsewhere keep the rated class (see docs/specs/vram-accounting.md).
 function peerVramGb(peer: PeerInfo): number {
-  return finiteMetric(gpuTotalVramGb(peer.gpus) ?? peer.my_vram_gb ?? peer.vram_gb ?? undefined)
+  return finiteMetric(nodeAdvertisedVramGB(peer) ?? undefined)
 }
 
-function meshTotalVramGb(payload: StatusPayload): number {
-  const localVram = finiteMetric(gpuTotalVramGb(payload.gpus) ?? payload.my_vram_gb ?? undefined)
-  return payload.peers.reduce((sum, peer) => sum + peerVramGb(peer), localVram)
+function selfVramGb(payload: StatusPayload): number {
+  return finiteMetric(nodeAdvertisedVramGB({ vram_gb: payload.my_vram_gb, gpus: payload.gpus }) ?? undefined)
+}
+
+function meshVramInput(payload: StatusPayload) {
+  return { vram_gb: payload.my_vram_gb, gpus: payload.gpus, peers: payload.peers }
+}
+
+function ratedVramMeta(payload: StatusPayload, advertisedGb: number): string | undefined {
+  const rated = meshRatedVramGB(meshVramInput(payload))
+  if (rated == null || Math.abs(rated - advertisedGb) < 0.05) return undefined
+  return `usable of ${rated.toFixed(0)} GB rated`
 }
 
 function resolveInflightRequests(payload: StatusPayload): number {
@@ -197,7 +199,7 @@ function adaptSelfPeer(payload: StatusPayload): Peer {
     role: 'you' as const,
     nodeState: effectiveState,
     version: payload.version,
-    vramGB: gpuTotalVramGb(payload.gpus) ?? payload.my_vram_gb,
+    vramGB: selfVramGb(payload),
     toksPerSec: payload.tok_per_sec,
     firstJoinedMeshTs: payload.first_joined_mesh_ts
   }
@@ -232,7 +234,8 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
   ])
   const remoteServingModelNames = normalizeModelList(payload.peers.flatMap(resolveHostedModels))
   const activeModelNames = normalizeModelList([...localServingModelNames, ...remoteServingModelNames])
-  const totalMeshVram = meshTotalVramGb(payload)
+  const totalMeshVram = meshAdvertisedVramGB(meshVramInput(payload))
+  const meshVramMeta = ratedVramMeta(payload, totalMeshVram)
   const peerCount = payload.peers.length
   const inflightRequests = resolveInflightRequests(payload)
   const owner = resolveOwner(payload.owner) ?? 'Unsigned'
@@ -276,7 +279,8 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
       id: 'mesh-vram',
       label: 'Mesh VRAM',
       value: totalMeshVram.toFixed(1),
-      unit: 'GB'
+      unit: 'GB',
+      ...(meshVramMeta ? { meta: meshVramMeta } : {})
     },
     {
       id: 'inflight',

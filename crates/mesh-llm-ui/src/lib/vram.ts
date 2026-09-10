@@ -84,3 +84,59 @@ export function formatRatedVramGB(valueGB: number | null | undefined): string {
 export function formatRatedVramBytes(bytes: number | null | undefined): string {
   return formatRatedVramGB(ratedVramGBFromBytes(bytes))
 }
+
+export type VramNodeInput = {
+  vram_gb?: number | null
+  my_vram_gb?: number | null
+  gpus?: VramGpuInput[] | null
+}
+
+export type VramMeshInput = VramNodeInput & {
+  peers?: VramNodeInput[] | null
+}
+
+function sumGpuVramGB(
+  gpus: VramGpuInput[] | null | undefined,
+  pick: (gpu: VramGpuInput) => number | null
+): number | null {
+  if (!gpus?.length) return null
+  const total = gpus.reduce((sum, gpu) => sum + (pick(gpu) ?? 0), 0)
+  return total > 0 ? total : null
+}
+
+/**
+ * Rated capacity class summed across a node's GPU inventory (marketing GB, e.g. 32 + 10 = 42).
+ * Display-only; never use it for fit math or mesh totals.
+ */
+export function nodeRatedVramGB(node: VramNodeInput): number | null {
+  return sumGpuVramGB(node.gpus, gpuRatedVramGB)
+}
+
+/**
+ * Capacity the node advertises to the mesh, in decimal GB. This is the figure
+ * `/api/status` reports as `my_vram_gb` / `vram_gb` and the one the scheduler and
+ * `doctor split` sum, so aggregates built from it agree with the API and CLI.
+ * Falls back to per-GPU allocatable bytes, then to the rated class, for payloads
+ * that predate the announced value.
+ */
+export function nodeAdvertisedVramGB(node: VramNodeInput): number | null {
+  return (
+    finitePositive(node.vram_gb) ??
+    finitePositive(node.my_vram_gb) ??
+    sumGpuVramGB(node.gpus, gpuAllocatableVramGB) ??
+    nodeRatedVramGB(node)
+  )
+}
+
+/** Advertised capacity of the local node plus every peer, in decimal GB. */
+export function meshAdvertisedVramGB(mesh: VramMeshInput): number {
+  const local = nodeAdvertisedVramGB(mesh) ?? 0
+  return (mesh.peers ?? []).reduce((sum, peer) => sum + (nodeAdvertisedVramGB(peer) ?? 0), local)
+}
+
+/** Rated capacity of the local node plus every peer, or null when no inventory is known. */
+export function meshRatedVramGB(mesh: VramMeshInput): number | null {
+  const nodes = [mesh, ...(mesh.peers ?? [])]
+  const total = nodes.reduce((sum, node) => sum + (nodeRatedVramGB(node) ?? 0), 0)
+  return total > 0 ? total : null
+}
