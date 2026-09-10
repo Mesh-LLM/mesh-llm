@@ -176,17 +176,34 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/n
 # shellcheck source=/dev/null
 source "${CARGO_HOME}/env"
 
+# Fetch a raw commit SHA with retries: GitHub's ref advertisement for
+# allow-any-SHA fetches ("upload-pack: not our ref") lags behind the push for
+# freshly-pushed commits, which killed two jobs 90 seconds in. Poll until the
+# commit is servable, up to 10 minutes.
+fetch_ref_with_retry() {
+    local ref="$1" attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if git fetch --depth 1 origin "$ref"; then
+            return 0
+        fi
+        echo "  fetch of ${ref} failed (attempt ${attempt}/10); retrying in 60s..." >&2
+        sleep 60
+    done
+    echo "ERROR: could not fetch ${ref} from origin after 10 attempts" >&2
+    return 1
+}
+
 echo "=== [3/9] Cloning mesh-llm and building skippy-model-package ==="
 git clone --filter=blob:none https://github.com/Mesh-LLM/mesh-llm.git "$BUILD_DIR"
 cd "$BUILD_DIR"
 if git ls-remote --exit-code --heads origin "$MESH_LLM_REF" >/dev/null 2>&1 || \
    git ls-remote --exit-code --tags origin "$MESH_LLM_REF" >/dev/null 2>&1; then
-    git fetch --depth 1 origin "$MESH_LLM_REF"
+    fetch_ref_with_retry "$MESH_LLM_REF"
     git checkout --detach FETCH_HEAD
 elif git cat-file -e "$MESH_LLM_REF^{commit}" 2>/dev/null; then
     git checkout --detach "$MESH_LLM_REF"
 else
-    git fetch --depth 1 origin "$MESH_LLM_REF"
+    fetch_ref_with_retry "$MESH_LLM_REF"
     git checkout --detach FETCH_HEAD
 fi
 
