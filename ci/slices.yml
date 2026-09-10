@@ -237,7 +237,7 @@
     {"id": "platform-checks", "kind": "platform-checks", "depends_on": [], "runner_role": "platform-build", "cache_mode": "none"},
     {"id": "product-smoke", "kind": "product-smoke", "depends_on": ["runtime-product"], "runner_role": "linux-build-4", "cache_mode": "none"},
     {"id": "model-download", "kind": "model-download", "depends_on": [], "runner_role": "linux-build-4", "cache_mode": "none"},
-    {"id": "sdk", "kind": "sdk", "depends_on": ["runtime-product"], "runner_role": "platform-build", "cache_mode": "none"},
+    {"id": "sdk", "kind": "sdk", "depends_on": ["runtime-product"], "runner_role": "platform-build", "cache_mode": "pr-isolated"},
     {"id": "runner-contract", "kind": "runner-contract", "depends_on": [], "runner_role": "linux-plan", "cache_mode": "none"}
   ]
 }

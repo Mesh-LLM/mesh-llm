@@ -111,11 +111,16 @@ describe('live node state helpers', () => {
     expect(localRoutableModels({ ...baseStatus, node_state: 'client', is_client: false })).toEqual([])
   })
 
-  it('prefers rated GPU inventory over effective capacity for VRAM display', () => {
+  it('prefers advertised capacity over rated GPU inventory for VRAM totals', () => {
     const physicalVramBytes = 17_094_934_528
 
     expect(gpuInventoryVramGb([{ vram_bytes: physicalVramBytes }])).toBe(16)
-    expect(displayVramGb(false, 29.4, [{ vram_bytes: physicalVramBytes }])).toBe(16)
+    expect(displayVramGb(false, 29.4, [{ vram_bytes: physicalVramBytes }])).toBe(29.4)
+  })
+
+  it('falls back to allocatable inventory, then rated class, when no capacity is advertised', () => {
+    expect(displayVramGb(false, 0, [{ vram_bytes: 32_000_000_000, reserved_bytes: 1_000_000_000 }])).toBe(31)
+    expect(displayVramGb(false, undefined, [{ rated_vram_gb: 24 }])).toBe(24)
   })
 
   it('prefers explicit rated VRAM when formatting GPU inventory', () => {
@@ -145,7 +150,7 @@ describe('live node state helpers', () => {
     expect(overviewVramGb(true, 12.5)).toBe(0)
   })
 
-  it('uses physical GPU inventory for mesh VRAM totals when available', () => {
+  it('sums advertised capacity for mesh VRAM totals, matching /api/status', () => {
     const status: StatusPayload = {
       node_id: 'local-node',
       node_status: 'Serving',
@@ -187,6 +192,7 @@ describe('live node state helpers', () => {
       wakeable_nodes: []
     }
 
-    expect(meshGpuVram(status)).toBe(36)
+    // 29.4 local + 48 + 8 advertised, not the 16 + 12 rated inventory sum.
+    expect(meshGpuVram(status)).toBeCloseTo(85.4, 6)
   })
 })
