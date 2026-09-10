@@ -166,12 +166,15 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains("Estimated fallback /bucket cache needed"));
         assert!(EMBEDDED_SCRIPT.contains("estimate_bucket_workspace_bytes"));
         assert!(
-            EMBEDDED_SCRIPT.contains(r#"PACKAGE_DIR="${PACKAGE_DIR:-${JOB_WORK_DIR}/package}""#)
+            EMBEDDED_SCRIPT.contains(r#"PACKAGE_DIR="${PACKAGE_DIR:-${LOCAL_WORK_DIR}/package}""#)
         );
         assert!(EMBEDDED_SCRIPT.contains(
-            "package workspace is on the container root filesystem, which is capped at 50G"
+            "refusing to continue (unset PACKAGE_DIR_ALLOW_BUCKET to require local staging)"
         ));
-        assert!(EMBEDDED_SCRIPT.contains(r#"HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}""#));
+        assert!(
+            EMBEDDED_SCRIPT
+                .contains(r#"HF_XET_CACHE="${HF_XET_CACHE:-${LOCAL_WORK_DIR}/xet-cache}""#)
+        );
         assert!(EMBEDDED_SCRIPT.contains(r#"JOB_TMP_DIR="${JOB_TMP_DIR:-${LOCAL_WORK_DIR}/tmp}""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"LOCAL_WORK_DIR="${LOCAL_WORK_DIR:-/tmp/"#));
         assert!(
