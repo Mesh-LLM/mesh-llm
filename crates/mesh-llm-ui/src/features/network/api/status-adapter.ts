@@ -1,7 +1,7 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
-import { meshAdvertisedVramGB, meshCapacityInputFromStatus, nodeAdvertisedVramGB } from '@/lib/vram'
+import { isClientPeer, meshAdvertisedVramGB, meshCapacityInputFromStatus, nodeAdvertisedVramGB } from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -119,9 +119,7 @@ function finiteMetric(value: number | undefined): number {
 // so the dashboard agrees with `/api/status`, `doctor split`, and the scheduler.
 // Per-GPU labels elsewhere keep the rated class (see docs/specs/vram-accounting.md).
 function peerVramGb(peer: PeerInfo): number {
-  return finiteMetric(
-    nodeAdvertisedVramGB({ ...peer, client: peer.state === 'client' || peer.role === 'Client' }) ?? undefined
-  )
+  return finiteMetric(nodeAdvertisedVramGB({ ...peer, client: isClientPeer(peer) }) ?? undefined)
 }
 
 function selfVramGb(payload: StatusPayload): number {

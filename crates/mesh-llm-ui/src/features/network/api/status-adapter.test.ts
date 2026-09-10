@@ -229,7 +229,15 @@ describe('adaptStatusToDashboard', () => {
       my_vram_gb: 115.4,
       peers: [
         { id: 'host-peer', role: 'Host', state: 'serving', models: [], vram_gb: 44, hostname: 'host-peer' },
-        { id: 'client-peer', role: 'Client', state: 'client', models: [], vram_gb: 24, hostname: 'client-peer' }
+        { id: 'client-peer', role: 'Client', state: 'client', models: [], vram_gb: 24, hostname: 'client-peer' },
+        {
+          id: 'client-by-node-state',
+          role: 'Worker',
+          node_state: 'client',
+          models: [],
+          vram_gb: 16,
+          hostname: 'client-by-node-state'
+        }
       ]
     })
 
@@ -237,6 +245,10 @@ describe('adaptStatusToDashboard', () => {
       expect.objectContaining({ value: '159.4', unit: 'GB' })
     )
     expect(dashboard.peers.find((peer) => peer.id === 'client-peer')).toEqual(expect.objectContaining({ vramGB: 0 }))
+    expect(dashboard.peers.find((peer) => peer.id === 'client-by-node-state')).toEqual(
+      expect.objectContaining({ vramGB: 0 })
+    )
+    expect(dashboard.peerSummary.capacity).toBe('159 GB')
   })
 
   it('suppresses local capacity in Mesh Capacity when this node is a client', () => {

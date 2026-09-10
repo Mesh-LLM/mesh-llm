@@ -144,11 +144,12 @@ export type VramStatusLike = {
   gpus?: VramGpuInput[] | null
   is_client?: boolean
   node_state?: string
-  peers?: Array<VramNodeInput & { state?: string; role?: string }> | null
+  peers?: Array<VramNodeInput & { node_state?: string; state?: string; role?: string }> | null
 }
 
-function isClientPeer(peer: { state?: string; role?: string }): boolean {
-  return peer.state === 'client' || peer.role === 'Client'
+/** Mirrors the dashboard adapter's role resolution: any of the three fields can mark a client. */
+export function isClientPeer(peer: { node_state?: string; state?: string; role?: string }): boolean {
+  return peer.node_state === 'client' || peer.state === 'client' || peer.role?.toLowerCase() === 'client'
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   gpuReservedVramGB,
   gpuSystemReportedVramGB,
   meshAdvertisedVramGB,
+  isClientPeer,
   meshCapacityInputFromStatus,
   nodeAdvertisedVramGB,
   nodeRatedVramGB,
@@ -108,5 +109,12 @@ describe('VRAM accounting utilities', () => {
     expect(
       meshAdvertisedVramGB(meshCapacityInputFromStatus({ my_vram_gb: 115.4, node_state: 'client', peers: [] }))
     ).toBe(0)
+  })
+
+  it('recognises a client peer from node_state, state, or role', () => {
+    expect(isClientPeer({ node_state: 'client' })).toBe(true)
+    expect(isClientPeer({ state: 'client' })).toBe(true)
+    expect(isClientPeer({ role: 'Client' })).toBe(true)
+    expect(isClientPeer({ node_state: 'serving', role: 'Host' })).toBe(false)
   })
 })
