@@ -355,7 +355,7 @@ fn probation_byte_cap_is_enforced_over_grace() {
     for key in 1..=10u64 {
         policy.consider_admission(key, 1 << 20, vec![], cost(400.0, 100.0));
     }
-    assert!(policy.probation_bytes() > config.probation_byte_budget);
+    assert!(policy.probation_bytes() > 2 << 20);
     for key in policy.enforce_probation_cap() {
         policy.remove(key);
     }
