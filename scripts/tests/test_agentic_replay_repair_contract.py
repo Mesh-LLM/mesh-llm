@@ -35,6 +35,10 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn('BASE_SHA=$(git rev-parse HEAD)', self.repair)
         self.assertIn('git add -A\ngit reset --soft "$BASE_SHA"', self.repair)
         self.assertIn("git -c core.hooksPath=/dev/null commit --no-gpg-sign", self.repair)
+        self.assertIn('RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"', self.repair)
+        self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', self.repair)
+        self.assertIn('s|{{SOURCE_SHA}}|${BASE_SHA}|g', self.repair)
+        self.assertNotIn('"repair_commit_sha"', self.repair)
 
     def test_hosted_publication_job_owns_secret_and_publication(self) -> None:
         repair_step = self.workflow.split(
@@ -61,7 +65,13 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn("push \"https://github.com/${GITHUB_REPOSITORY}.git\"", publication)
         self.assertIn("gh pr create", publication)
         self.assertIn("--body-file \"$PUBLICATION_DIR/pr-body.md\"", publication)
-        self.assertIn("git -c core.hooksPath=/dev/null commit --no-gpg-sign", publication)
+        self.assertIn('"${{ github.run_attempt }}"', publication)
+        self.assertIn('"run_attempt"', publication)
+        self.assertIn('echo "run_attempt=$RUN_ATTEMPT"', publication)
+        self.assertIn("git -c core.hooksPath=/dev/null am --no-verify --no-gpg-sign --empty=keep", publication)
+        self.assertNotIn('"repair_commit_sha"', publication)
+        self.assertIn('repair-${RUN_ID}-${RUN_ATTEMPT}', publication)
+        self.assertIn('run ${RUN_ID}-${RUN_ATTEMPT}', publication)
 
     def test_repair_rerun_uses_all_matrix_replay_parameters(self) -> None:
         for argument, variable in (

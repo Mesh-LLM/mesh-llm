@@ -364,7 +364,7 @@ jobs:
           STATUS_FILE="$PUBLICATION_DIR/status.json"
           PATCH_FILE="$PUBLICATION_DIR/repair.patch"
           BODY_FILE="$PUBLICATION_DIR/pr-body.md"
-          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" <<'PY'
+          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" "${{ github.run_attempt }}" <<'PY'
           import hashlib
           import json
           import pathlib
@@ -377,6 +377,7 @@ jobs:
           patch_path = pathlib.Path(sys.argv[3])
           body_path = pathlib.Path(sys.argv[4])
           expected_base = sys.argv[5]
+          expected_attempt = sys.argv[6]
           expected_files = {"pr-body.md", "repair.patch", "status.json"}
           if publication_dir.is_symlink() or not publication_dir.is_dir() or {
               path.name for path in publication_dir.iterdir()
@@ -393,9 +394,9 @@ jobs:
               "body_sha256",
               "patch_bytes",
               "patch_sha256",
-              "repair_commit_sha",
               "resolution",
               "run_id",
+              "run_attempt",
               "schema_version",
           }
           if (
@@ -406,9 +407,17 @@ jobs:
               raise SystemExit("repair publication status schema is invalid")
           if status["resolution"] not in {"fix-verified", "needs-attention"}:
               raise SystemExit("repair publication resolution is invalid")
-          if not re.fullmatch(r"[0-9]+", status["run_id"]):
+          if not isinstance(status["run_id"], str) or not re.fullmatch(r"[0-9]+", status["run_id"]):
               raise SystemExit("repair publication run_id is invalid")
-          for key in ("base_sha", "repair_commit_sha"):
+          if (
+              isinstance(status["run_attempt"], bool)
+              or not isinstance(status["run_attempt"], int)
+              or status["run_attempt"] <= 0
+              or not re.fullmatch(r"[1-9][0-9]*", expected_attempt)
+              or status["run_attempt"] != int(expected_attempt)
+          ):
+              raise SystemExit("repair publication run_attempt is invalid")
+          for key in ("base_sha",):
               if not isinstance(status[key], str) or not re.fullmatch(r"[0-9a-f]{40}", status[key]):
                   raise SystemExit(f"repair publication {key} is invalid")
           if status["base_sha"] != expected_base:
@@ -438,21 +447,19 @@ jobs:
           patch = patch_path.read_bytes()
           if not patch.startswith(b"From ") or b"\nSubject: " not in patch:
               raise SystemExit("repair patch is not a format-patch artifact")
-          print(f'{status["run_id"]}\t{status["resolution"]}')
+          print(f'{status["run_id"]}\t{status["run_attempt"]}\t{status["resolution"]}')
           PY
           )
-          IFS=$'\t' read -r RUN_ID RESOLUTION <<< "$VALIDATED"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "resolution=$RESOLUTION" >> "$GITHUB_OUTPUT"
+          IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RESOLUTION <<< "$VALIDATED"
+          {
+            echo "run_id=$RUN_ID"
+            echo "run_attempt=$RUN_ATTEMPT"
+            echo "resolution=$RESOLUTION"
+          } >> "$GITHUB_OUTPUT"
           PATCH_FILE="$RUNNER_TEMP/replay-artifacts/repair-publication/repair.patch"
-          if grep -q '^diff --git ' "$PATCH_FILE"; then
-            git -c core.hooksPath=/dev/null apply --check "$PATCH_FILE"
-            git -c core.hooksPath=/dev/null apply --index "$PATCH_FILE"
-          fi
           git config user.name "mesh-replay-bot"
           git config user.email "replay-bot@meshllm.invalid"
-          git -c core.hooksPath=/dev/null commit --no-gpg-sign --allow-empty --no-verify \
-            -m "fix: agentic replay nightly regression (run $RUN_ID)"
+          git -c core.hooksPath=/dev/null am --no-verify --no-gpg-sign --empty=keep "$PATCH_FILE"
           test "$(git rev-parse HEAD^)" = "${{ github.sha }}"
 
       - name: Push repair branch and open PR
@@ -462,14 +469,15 @@ jobs:
           set -euo pipefail
           PUBLICATION_DIR="$RUNNER_TEMP/replay-artifacts/repair-publication"
           RUN_ID="${{ steps.validate.outputs.run_id }}"
+          RUN_ATTEMPT="${{ steps.validate.outputs.run_attempt }}"
           RESOLUTION="${{ steps.validate.outputs.resolution }}"
           case "$RESOLUTION" in
             fix-verified)
-              TITLE="Agentic replay nightly regression — run ${RUN_ID} (fix verified)"
+              TITLE="Agentic replay nightly regression — run ${RUN_ID}-${RUN_ATTEMPT} (fix verified)"
               LABELS="agentic-replay,nightly"
               ;;
             needs-attention)
-              TITLE="Agentic replay nightly regression — run ${RUN_ID} — NEEDS ATTENTION"
+              TITLE="Agentic replay nightly regression — run ${RUN_ID}-${RUN_ATTEMPT} — NEEDS ATTENTION"
               LABELS="agentic-replay,nightly,needs-attention"
               ;;
             *)
@@ -477,7 +485,7 @@ jobs:
               exit 1
               ;;
           esac
-          BRANCH="agentic-replay-nightly/repair-${RUN_ID}"
+          BRANCH="agentic-replay-nightly/repair-${RUN_ID}-${RUN_ATTEMPT}"
           ASKPASS_SCRIPT=$(mktemp "${RUNNER_TEMP}/agentic-replay-askpass.XXXXXX")
           chmod 700 "$ASKPASS_SCRIPT"
           trap 'rm -f -- "$ASKPASS_SCRIPT"' EXIT

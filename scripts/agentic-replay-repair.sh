@@ -10,6 +10,8 @@ set -euo pipefail
 unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN
 
 OUTPUT_DIR="${1:?usage: agentic-replay-repair.sh <output-dir>}"
+RUN_ID="${GITHUB_RUN_ID:-local}"
+RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 RESOLVED=0
 MATRIX_FILE="${MATRIX_FILE:-ci/agentic-replay-nightly/matrix.json}"
 REPLAY_PARAMS_FILE=""
@@ -27,7 +29,7 @@ run_untrusted() {
 
 git config user.name "mesh-replay-bot"
 git config user.email "replay-bot@meshllm.invalid"
-git checkout -b "agentic-replay-nightly/repair-${GITHUB_RUN_ID:-local}"
+git checkout -b "agentic-replay-nightly/repair-${RUN_ID}-${RUN_ATTEMPT}"
 BASE_SHA=$(git rev-parse HEAD)
 
 # Repair evidence and downloaded history are inputs, never source changes.
@@ -50,12 +52,12 @@ git add -A
 git reset --soft "$BASE_SHA"
 if git diff --cached --quiet; then
   echo "opencode produced no changes — needs-attention" >&2
-  git -c core.hooksPath=/dev/null commit --no-gpg-sign --allow-empty -m "chore: agentic replay nightly regression needs attention (run ${GITHUB_RUN_ID:-local})
+  git -c core.hooksPath=/dev/null commit --no-gpg-sign --allow-empty -m "chore: agentic replay nightly regression needs attention (run ${RUN_ID}-${RUN_ATTEMPT})
 
 Automated repair produced no changes; PR opened for human triage with the
 run evidence attached."
 else
-  git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "fix: agentic replay nightly regression (run ${GITHUB_RUN_ID:-local})
+  git -c core.hooksPath=/dev/null commit --no-gpg-sign -m "fix: agentic replay nightly regression (run ${RUN_ID}-${RUN_ATTEMPT})
 
 Attempted automated repair by opencode from nightly run evidence.
 
@@ -180,9 +182,7 @@ mkdir -p "$PUBLICATION_DIR"
 PATCH_FILE="$PUBLICATION_DIR/repair.patch"
 BODY_FILE="$PUBLICATION_DIR/pr-body.md"
 STATUS_FILE="$PUBLICATION_DIR/status.json"
-RUN_ID="${GITHUB_RUN_ID:-local}"
 BASE_SHA=$(git rev-parse HEAD^)
-REPAIR_COMMIT_SHA=$(git rev-parse HEAD)
 if [[ "$RESOLVED" == "1" ]]; then
   RESOLUTION="fix-verified"
   BODY=$'The nightly agentic replay regressed; opencode analyzed the evidence and this fix passes the re-run benchmark.\n\nResults (HF card format) are linked in the run report artifact and the dataset shard.'
@@ -200,10 +200,10 @@ git format-patch -1 --binary --stdout HEAD > "$PATCH_FILE"
 TEMPLATE_FILE="$(git rev-parse --show-toplevel)/.github/AGENTIC_REPLAY_REPAIR_PR_TEMPLATE.md"
 if [[ -f "$TEMPLATE_FILE" ]]; then
   sed -e "s|{{RESOLUTION_STATUS}}|$( [[ $RESOLVED == 1 ]] && echo 'fix verified' || echo 'NEEDS ATTENTION' )|" \
-      -e "s|{{RUN_URL}}|${GITHUB_SERVER_URL:-}/Mesh-LLM/mesh-llm/actions/runs/${RUN_ID}|g" \
+      -e "s|{{RUN_URL}}|${GITHUB_SERVER_URL:-}/Mesh-LLM/mesh-llm/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}|g" \
       -e "s|{{RUN_DATE}}|$(date -u +%F)|g" \
       -e "s|{{RUN_ID}}|${RUN_ID}|g" \
-      -e "s|{{SOURCE_SHA}}|${REPAIR_COMMIT_SHA}|g" \
+      -e "s|{{SOURCE_SHA}}|${BASE_SHA}|g" \
       -e "s|{{DATASET_REPO}}|${DATASET_REPO:-meshllm/agentic-replay-nightly}|g" \
       -e "s|{{REGRESSING_COHORTS}}|${REPAIR_REGRESSING_COHORTS:-unavailable}|g" \
       -e "s|{{GATE_OUTPUT}}|see run artifacts|g" \
@@ -220,7 +220,7 @@ else
   printf '%s\n' "$BODY" > "$BODY_FILE"
 fi
 
-python3 - "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "$RUN_ID" "$RESOLUTION" "$BASE_SHA" "$REPAIR_COMMIT_SHA" <<'PY'
+python3 - "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "$RUN_ID" "$RUN_ATTEMPT" "$RESOLUTION" "$BASE_SHA" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -230,13 +230,15 @@ import sys
 status_path = pathlib.Path(sys.argv[1])
 patch_path = pathlib.Path(sys.argv[2])
 body_path = pathlib.Path(sys.argv[3])
-run_id, resolution, base_sha, commit_sha = sys.argv[4:]
+run_id, run_attempt, resolution, base_sha = sys.argv[4:]
 
 if resolution not in {"fix-verified", "needs-attention"}:
     raise SystemExit(f"invalid repair resolution: {resolution!r}")
 if run_id != "local" and not re.fullmatch(r"[0-9]+", run_id):
     raise SystemExit(f"invalid GitHub run id: {run_id!r}")
-for name, value in (("base_sha", base_sha), ("repair_commit_sha", commit_sha)):
+if not re.fullmatch(r"[1-9][0-9]*", run_attempt):
+    raise SystemExit(f"invalid GitHub run attempt: {run_attempt!r}")
+for name, value in (("base_sha", base_sha),):
     if not re.fullmatch(r"[0-9a-f]{40}", value):
         raise SystemExit(f"invalid {name}: {value!r}")
 
@@ -257,9 +259,9 @@ metadata = {
     "body_sha256": digest(body_path),
     "patch_bytes": patch_bytes,
     "patch_sha256": digest(patch_path),
-    "repair_commit_sha": commit_sha,
     "resolution": resolution,
     "run_id": run_id,
+    "run_attempt": int(run_attempt),
     "schema_version": 1,
 }
 status_path.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
