@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REPAIR = ROOT / "scripts" / "agentic-replay-repair.sh"
+PARAMS = ROOT / "scripts" / "agentic-replay-params.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "agentic-replay-nightly.yml"
 MATRIX = ROOT / "ci" / "agentic-replay-nightly" / "matrix.json"
 
@@ -14,6 +15,7 @@ MATRIX = ROOT / "ci" / "agentic-replay-nightly" / "matrix.json"
 class AgenticReplayRepairContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repair = REPAIR.read_text(encoding="utf-8")
+        self.params = PARAMS.read_text(encoding="utf-8")
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
         self.matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
 
@@ -52,6 +54,10 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn("!cancelled()", publication)
         self.assertNotIn("always()", publication)
         self.assertIn("needs.replay.result == 'failure'", publication)
+        self.assertIn("needs.replay.outputs.repair_prepared == 'true'", publication)
+        self.assertIn("repair_prepared: ${{ steps.repair.outputs.prepared }}", self.workflow)
+        self.assertIn('echo "prepared=true" >> "$GITHUB_OUTPUT"', repair_step)
+        self.assertIn('echo "prepared=false" >> "$GITHUB_OUTPUT"', repair_step)
         self.assertIn("runs-on: ubuntu-latest", publication)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", publication)
         self.assertIn("ref: ${{ github.sha }}", publication)
@@ -83,24 +89,25 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         ):
             self.assertIn(f"{argument} {variable}", self.repair)
         self.assertIn('MATRIX_FILE="${MATRIX_FILE:-ci/agentic-replay-nightly/matrix.json}"', self.repair)
-        self.assertIn("unsupported replay mode", self.repair)
-        self.assertIn('mode_map = {"checkpoint": "checkpoints", "final": "final", "all": "all"}', self.repair)
-        self.assertIn("max_output_tokens", self.repair)
+        self.assertIn("python3 scripts/agentic-replay-params.py", self.repair)
+        self.assertIn('--json-output "$REPLAY_PARAMS_FILE" --print-shell', self.repair)
+        self.assertIn("MAX_OUTPUT_TOKENS", self.repair)
         self.assertNotIn("--trajectories-per-framework 8", self.repair)
         self.assertNotIn("--warmup-turns 4", self.repair)
 
     def test_workflow_validates_and_passes_mode_and_max_output(self) -> None:
-        self.assertIn('mode_map = {"checkpoint": "checkpoints", "final": "final", "all": "all"}', self.workflow)
-        self.assertIn('replay_mode = mode_map[mode]', self.workflow)
-        self.assertIn('f"{key} must be a positive integer"', self.workflow)
-        self.assertIn('"max_output_tokens"', self.workflow)
+        self.assertIn("python3 scripts/agentic-replay-params.py", self.workflow)
+        self.assertIn('--github-env "$GITHUB_ENV"', self.workflow)
+        self.assertIn('MODE_MAP = {"checkpoint": "checkpoints", "final": "final", "all": "all"}', self.params)
+        self.assertIn('raise SystemExit(f"{key} must be a positive integer")', self.params)
+        self.assertIn("AGENTIC_REPLAY_MAX_OUTPUT_TOKENS", self.workflow)
         self.assertIn('--replay-mode "$REPLAY_MODE"', self.workflow)
         self.assertIn('--max-output-tokens "$MAX_OUTPUT"', self.workflow)
         self.assertIn('--trajectories-per-framework "$TPFS"', self.workflow)
         self.assertIn('--passes "$PASSES"', self.workflow)
         self.assertIn('--warmup-turns "$WARMUP"', self.workflow)
         self.assertIn('LEVEL_ARGS+=(--concurrency "$level")', self.workflow)
-        self.assertIn('json.dumps(replay, sort_keys=True)', self.workflow)
+        self.assertIn('json.dumps(replay, sort_keys=True)', self.params)
         self.assertIn('--replay "$RUNNER_TEMP/agentic-replay-params.json"', self.workflow)
         self.assertEqual(self.matrix["replay"]["mode"], "checkpoint")
         self.assertEqual(
@@ -108,6 +115,13 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
             "checkpoints",
         )
         self.assertGreater(self.matrix["replay"]["max_output_tokens"], 0)
+
+    def test_replay_parameter_contract_has_one_implementation(self) -> None:
+        self.assertNotIn("mode_map =", self.workflow)
+        self.assertNotIn("mode_map =", self.repair)
+        self.assertNotIn("concurrency must be a non-empty list", self.workflow)
+        self.assertNotIn("concurrency must be a non-empty list", self.repair)
+        self.assertIn("concurrency must be a non-empty list", self.params)
 
 
 if __name__ == "__main__":

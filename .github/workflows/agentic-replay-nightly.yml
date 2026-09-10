@@ -26,6 +26,8 @@ jobs:
       github.ref == 'refs/heads/main'
     runs-on: [self-hosted, X64, macOS, family-certify, agentic-replay]
     timeout-minutes: 720
+    outputs:
+      repair_prepared: ${{ steps.repair.outputs.prepared }}
     steps:
       - name: Verify trusted replay context
         shell: bash
@@ -58,8 +60,8 @@ jobs:
           # Validate pins before any download: format errors and drift from
           # the canonical harness pin must fail in seconds, not after hours
           # of downloads.
-          python3 - "$MATRIX_FILE" evals/skippy-competitive-benchmark.json "$RUNNER_TEMP/agentic-replay-params.json" > "$RUNNER_TEMP/agentic-replay-models.tsv" <<'PY'
-          import json, os, pathlib, re, sys
+          python3 - "$MATRIX_FILE" evals/skippy-competitive-benchmark.json > "$RUNNER_TEMP/agentic-replay-models.tsv" <<'PY'
+          import json, pathlib, re, sys
           matrix = json.loads(pathlib.Path(sys.argv[1]).read_text())
           canonical = json.loads(pathlib.Path(sys.argv[2]).read_text())["thoughtworks"]["dataset"]
           for model in matrix["models"]:
@@ -75,29 +77,6 @@ jobs:
           replay = matrix.get("replay")
           if not isinstance(replay, dict):
               raise SystemExit("matrix replay block is missing")
-          mode = replay.get("mode")
-          mode_map = {"checkpoint": "checkpoints", "final": "final", "all": "all"}
-          if mode not in mode_map:
-              raise SystemExit(f"replay mode must be one of checkpoint, final, all (got {mode!r})")
-          replay_mode = mode_map[mode]
-          positive_fields = (
-              "trajectories_per_framework",
-              "passes",
-              "warmup_turns",
-              "max_output_tokens",
-          )
-          for key in positive_fields:
-              value = replay.get(key)
-              if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                  raise SystemExit(f"{key} must be a positive integer")
-          concurrency = replay.get("concurrency")
-          if (
-              not isinstance(concurrency, list)
-              or not concurrency
-              or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in concurrency)
-              or len(set(concurrency)) != len(concurrency)
-          ):
-              raise SystemExit("concurrency must be a non-empty list of unique positive integers")
           dataset = {
               "repo": replay.get("dataset"),
               "revision": replay.get("dataset_revision"),
@@ -109,16 +88,11 @@ jobs:
                   "nightly dataset pin must match the agentic-replay harness pin:\n"
                   f"  matrix:   {dataset}\n  canonical: {canonical}"
               )
-          pathlib.Path(sys.argv[3]).write_text(
-              json.dumps(replay, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          with pathlib.Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
-              env.write(f"AGENTIC_REPLAY_MODE={replay_mode}\n")
-              for key in positive_fields:
-                  env.write(f"AGENTIC_REPLAY_{key.upper()}={replay[key]}\n")
-              env.write(f"AGENTIC_REPLAY_CONCURRENCY={','.join(map(str, concurrency))}\n")
           PY
+          python3 scripts/agentic-replay-params.py \
+            --matrix "$MATRIX_FILE" \
+            --json-output "$RUNNER_TEMP/agentic-replay-params.json" \
+            --github-env "$GITHUB_ENV"
           while IFS=$'\t' read -r family repo revision file expected_sha; do
             model_path=$(hf download "$repo" "$file" --revision "$revision")
             python3 - "$model_path" "$expected_sha" "$family" <<'PY'
@@ -138,7 +112,6 @@ jobs:
           import json, pathlib, sys
           d = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"]
           missing = [k for k in ("dataset", "dataset_revision", "dataset_file", "dataset_sha256") if not d.get(k)]
-          missing += [k for k in ("mode", "trajectories_per_framework", "passes", "warmup_turns", "max_output_tokens", "concurrency") if not d.get(k)]
           if missing:
               raise SystemExit(f"matrix replay block missing fields: {missing}")
           print(d["dataset"], d["dataset_revision"], d["dataset_file"], d["dataset_sha256"])
@@ -313,15 +286,19 @@ jobs:
             --commit-message "card refresh $RUN_DATE"
 
       - name: Prepare repair PR artifact on regression (opencode loop)
+        id: repair
         if: failure()
         env:
           # Same location the summarize step downloaded the baseline to.
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |
           set -euo pipefail
-          scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts" || {
+          if scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts"; then
+            echo "prepared=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prepared=false" >> "$GITHUB_OUTPUT"
             echo "repair artifact preparation failed; no PR was opened" >&2
-          }
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
@@ -336,7 +313,8 @@ jobs:
       !cancelled() &&
       github.repository == 'Mesh-LLM/mesh-llm' &&
       github.ref == 'refs/heads/main' &&
-      needs.replay.result == 'failure'
+      needs.replay.result == 'failure' &&
+      needs.replay.outputs.repair_prepared == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

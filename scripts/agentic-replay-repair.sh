@@ -65,50 +65,13 @@ Co-authored-by: opencode <opencode@meshllm.invalid>"
 
   # 2. Re-run the benchmark on the repaired tree with the nightly benchmark
   # shape, then re-normalize and gate the repaired summaries.
-  REPLAY_CONFIG="$(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
-import json
-import pathlib
-import sys
-
-replay = json.loads(pathlib.Path(sys.argv[1]).read_text()).get("replay")
-if not isinstance(replay, dict):
-    raise SystemExit("matrix replay block is missing")
-mode = replay.get("mode")
-mode_map = {"checkpoint": "checkpoints", "final": "final", "all": "all"}
-if mode not in mode_map:
-    raise SystemExit(f"unsupported replay mode: {mode!r}")
-values = {
-    "trajectories_per_framework": replay.get("trajectories_per_framework"),
-    "passes": replay.get("passes"),
-    "warmup_turns": replay.get("warmup_turns"),
-    "max_output_tokens": replay.get("max_output_tokens"),
-}
-for key, value in values.items():
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise SystemExit(f"{key} must be a positive integer")
-print(mode_map[mode], *(values[key] for key in (
-    "trajectories_per_framework", "passes", "warmup_turns", "max_output_tokens")))
-PY
-)"
-  read -r REPLAY_MODE TRAJECTORIES_PER_FRAMEWORK PASSES WARMUP_TURNS MAX_OUTPUT_TOKENS <<< "$REPLAY_CONFIG"
-  LEVELS="$(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
-import json
-import pathlib
-import sys
-
-levels = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"].get("concurrency")
-if (
-    not isinstance(levels, list)
-    or not levels
-    or any(isinstance(level, bool) or not isinstance(level, int) or level <= 0 for level in levels)
-    or len(set(levels)) != len(levels)
-):
-    raise SystemExit("concurrency must be a non-empty list of unique positive integers")
-print(" ".join(map(str, levels)))
-PY
-)"
+  REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
+  REPLAY_CONFIG="$(run_untrusted python3 scripts/agentic-replay-params.py \
+    --matrix "$MATRIX_FILE" --json-output "$REPLAY_PARAMS_FILE" --print-shell)"
+  IFS=$'\t' read -r REPLAY_MODE TRAJECTORIES_PER_FRAMEWORK PASSES WARMUP_TURNS MAX_OUTPUT_TOKENS LEVELS <<< "$REPLAY_CONFIG"
+  IFS=',' read -r -a CONCURRENCY_LEVELS <<< "$LEVELS"
   LEVEL_ARGS=()
-  for level in $LEVELS; do LEVEL_ARGS+=(--concurrency "$level"); done
+  for level in "${CONCURRENCY_LEVELS[@]}"; do LEVEL_ARGS+=(--concurrency "$level"); done
   REPLAY_DATASET_FILE="${DATASET_FILE:-${MESH_AGENTIC_REPLAY_DATASET_FILE:-}}"
   RERUN_FAILED=0
   if [[ -z "$REPLAY_DATASET_FILE" ]]; then
@@ -147,16 +110,6 @@ PY
       --dataset-file "$REPLAY_DATASET_FILE" \
       --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
   done
-  REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
-  # Process substitution breaks on micstudio (/dev/fd is not passable to the
-  # child); write the replay parameters to a plain file instead.
-run_untrusted python3 - "$MATRIX_FILE" <<'PY' > "$REPLAY_PARAMS_FILE"
-import json
-import pathlib
-import sys
-replay = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"]
-print(json.dumps(replay, sort_keys=True))
-PY
   HISTORY_ARGS=(
     --matrix "$MATRIX_FILE"
     --replay-dir "$OUTPUT_DIR/repair"
