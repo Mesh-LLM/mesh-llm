@@ -513,8 +513,10 @@ impl BenefitPolicy {
         })
     }
 
-    /// Remove without returning cap-repair victims (internal/harness use
-    /// where the caller re-selects the cap itself).
+    /// Remove without returning cap-repair victims (test-only harness use
+    /// where the caller re-selects the cap itself). External callers must
+    /// use `remove` so the hard probation cap cannot be bypassed.
+    #[cfg(test)]
     pub fn remove_without_cap_repair(&mut self, key: EntryKey) -> Option<PolicyEntry> {
         let outcome = self.remove(key)?;
         Some(outcome.entry)
