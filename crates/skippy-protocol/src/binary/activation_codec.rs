@@ -382,72 +382,86 @@ fn f32_to_bf16_bits(value: f32) -> u16 {
 }
 
 fn f32_to_f16_bits(value: f32) -> u16 {
-    let bits = value.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exponent = ((bits >> 23) & 0xff) as i32;
-    let mantissa = bits & 0x7f_ffff;
+    f16_bits::f32_to_f16_bits(value)
+}
 
-    if exponent == 0 {
-        return sign;
-    }
-    if exponent == 0xff {
-        return sign | 0x7c00 | u16::from(mantissa != 0);
-    }
+/// Shared bit-exact IEEE 754 binary16 conversions. Lived inside this module
+/// historically; exposed as a `pub(crate)` submodule so the CacheGen
+/// reference in `skippy-cache` reuses the exact conversion instead of
+/// duplicating it (a second RNE implementation is a future bit-mismatch).
+pub(crate) mod f16_bits {
+    pub fn f32_to_f16_bits(value: f32) -> u16 {
+        let bits = value.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exponent = ((bits >> 23) & 0xff) as i32;
+        let mantissa = bits & 0x7f_ffff;
 
-    let half_exponent = exponent - 127 + 15;
-    if half_exponent >= 31 {
-        return sign | 0x7c00;
-    }
-    if half_exponent <= 0 {
-        if half_exponent < -10 {
+        if exponent == 0 {
             return sign;
         }
-        let mantissa = mantissa | 0x80_0000;
-        let shift = 14 - half_exponent;
-        let mut half_mantissa = mantissa >> shift;
-        let remainder = mantissa & ((1_u32 << shift) - 1);
-        let halfway = 1_u32 << (shift - 1);
-        if remainder > halfway || (remainder == halfway && (half_mantissa & 1) != 0) {
-            half_mantissa += 1;
+        if exponent == 0xff {
+            return sign | 0x7c00 | u16::from(mantissa != 0);
         }
-        return sign | half_mantissa as u16;
+
+        let half_exponent = exponent - 127 + 15;
+        if half_exponent >= 31 {
+            return sign | 0x7c00;
+        }
+        if half_exponent <= 0 {
+            if half_exponent < -10 {
+                return sign;
+            }
+            let mantissa = mantissa | 0x80_0000;
+            let shift = 14 - half_exponent;
+            let mut half_mantissa = mantissa >> shift;
+            let remainder = mantissa & ((1_u32 << shift) - 1);
+            let halfway = 1_u32 << (shift - 1);
+            if remainder > halfway || (remainder == halfway && (half_mantissa & 1) != 0) {
+                half_mantissa += 1;
+            }
+            return sign | half_mantissa as u16;
+        }
+
+        let mut half_mantissa = mantissa >> 13;
+        let remainder = mantissa & 0x1fff;
+        if remainder > 0x1000 || (remainder == 0x1000 && (half_mantissa & 1) != 0) {
+            half_mantissa += 1;
+            if half_mantissa == 0x400 {
+                let rounded_exponent = half_exponent + 1;
+                if rounded_exponent >= 31 {
+                    return sign | 0x7c00;
+                }
+                return sign | ((rounded_exponent as u16) << 10);
+            }
+        }
+        sign | ((half_exponent as u16) << 10) | half_mantissa as u16
     }
 
-    let mut half_mantissa = mantissa >> 13;
-    let remainder = mantissa & 0x1fff;
-    if remainder > 0x1000 || (remainder == 0x1000 && (half_mantissa & 1) != 0) {
-        half_mantissa += 1;
-        if half_mantissa == 0x400 {
-            let rounded_exponent = half_exponent + 1;
-            if rounded_exponent >= 31 {
-                return sign | 0x7c00;
+    pub fn f16_bits_to_f32(bits: u16) -> f32 {
+        let sign = (u32::from(bits & 0x8000)) << 16;
+        let exponent = (bits >> 10) & 0x1f;
+        let mantissa = u32::from(bits & 0x03ff);
+        let f32_bits = match exponent {
+            0 if mantissa == 0 => sign,
+            0 => {
+                let mut mantissa = mantissa;
+                let mut exponent = -14_i32;
+                while (mantissa & 0x0400) == 0 {
+                    mantissa <<= 1;
+                    exponent -= 1;
+                }
+                mantissa &= 0x03ff;
+                sign | (((exponent + 127) as u32) << 23) | (mantissa << 13)
             }
-            return sign | ((rounded_exponent as u16) << 10);
-        }
+            0x1f => sign | 0x7f80_0000 | (mantissa << 13),
+            _ => sign | ((u32::from(exponent) + 112) << 23) | (mantissa << 13),
+        };
+        f32::from_bits(f32_bits)
     }
-    sign | ((half_exponent as u16) << 10) | half_mantissa as u16
 }
 
 fn f16_bits_to_f32(bits: u16) -> f32 {
-    let sign = (u32::from(bits & 0x8000)) << 16;
-    let exponent = (bits >> 10) & 0x1f;
-    let mantissa = u32::from(bits & 0x03ff);
-    let f32_bits = match exponent {
-        0 if mantissa == 0 => sign,
-        0 => {
-            let mut mantissa = mantissa;
-            let mut exponent = -14_i32;
-            while (mantissa & 0x0400) == 0 {
-                mantissa <<= 1;
-                exponent -= 1;
-            }
-            mantissa &= 0x03ff;
-            sign | (((exponent + 127) as u32) << 23) | (mantissa << 13)
-        }
-        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
-        _ => sign | ((u32::from(exponent) + 112) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(f32_bits)
+    f16_bits::f16_bits_to_f32(bits)
 }
 
 #[cfg(test)]
