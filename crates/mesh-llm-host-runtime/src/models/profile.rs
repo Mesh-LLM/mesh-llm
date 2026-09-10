@@ -20,13 +20,7 @@ pub(crate) fn served_model_metadata_for_path(
         .flatten();
     let metadata = match compact {
         Some(meta) => {
-            // Authoritative size: sum the GGUF tensor element counts. This is
-            // the ONLY source — no name-based fallback. If a served model
-            // cannot be summed from its GGUF, it advertises no size and MoA
-            // tiering treats it as the lowest-param (weakest) model rather than
-            // guessing from a brittle name label (per i386 review).
-            //
-            // Summed across the whole shard set: `find_model_path` resolves a
+            // Sum across the whole shard set: `find_model_path` resolves a
             // split GGUF to its first part, and each shard's tensor-info table
             // holds only that shard's weights. Scanning one part reported
             // roughly `total / shard_count` — an ~80B 4-shard model advertised
@@ -35,11 +29,8 @@ pub(crate) fn served_model_metadata_for_path(
                 .exists()
                 .then(|| crate::models::gguf::scan_gguf_bundle_total_parameters(path))
                 .flatten();
-            let parameter_size = meta
-                .parameter_size
-                .clone()
-                .or_else(|| parameter_count.and_then(parameter_size_from_count))
-                .or_else(|| parameter_size_from_text(model_name));
+            let parameter_size =
+                resolve_parameter_size(model_name, meta.parameter_size.clone(), parameter_count);
             let parameter_count_b = parameter_count.map(|total| total as f64 / 1e9);
             let kv_head_count = meta.effective_kv_head_count();
             crate::mesh::ServedModelMetadata {
@@ -62,7 +53,7 @@ pub(crate) fn served_model_metadata_for_path(
             }
         }
         None => crate::mesh::ServedModelMetadata {
-            parameter_size: parameter_size_from_text(model_name),
+            parameter_size: resolve_parameter_size(model_name, None, None),
             // No GGUF to sum -> no authoritative size. Advertise none rather
             // than a name-guessed count (per i386 review); MoA treats a
             // sizeless model as the weakest.
@@ -91,6 +82,18 @@ fn quant_from_text(value: &str) -> Option<String> {
     (!quant.is_empty()).then_some(quant)
 }
 
+/// Resolve a display label consistently: source metadata, verified tensor
+/// count, then a guarded model-name fallback.
+fn resolve_parameter_size(
+    model_name: &str,
+    source_size: Option<String>,
+    parameter_count: Option<u64>,
+) -> Option<String> {
+    source_size
+        .or_else(|| parameter_count.and_then(parameter_size_from_count))
+        .or_else(|| parameter_size_from_text(model_name))
+}
+
 fn parameter_size_from_count(parameter_count: u64) -> Option<String> {
     if parameter_count == 0 {
         return None;
@@ -106,11 +109,8 @@ fn parameter_size_from_count(parameter_count: u64) -> Option<String> {
     }
 
     let billions = parameter_count as f64 / 1e9;
-    Some(if parameter_count.is_multiple_of(1_000_000_000) {
-        format!("{billions:.0}B")
-    } else {
-        format!("{billions:.1}B")
-    })
+    let label = format!("{billions:.1}");
+    Some(format!("{}B", label.strip_suffix(".0").unwrap_or(&label)))
 }
 
 fn parameter_size_from_text(text: &str) -> Option<String> {
@@ -119,10 +119,12 @@ fn parameter_size_from_text(text: &str) -> Option<String> {
     }
 
     static MULTIPLIED_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])").unwrap()
+        Regex::new(r"(?i)(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)([bm])(?:$|[^a-z0-9.])")
+            .unwrap()
     });
-    static SIMPLE_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)([bm])").unwrap());
+    static SIMPLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(?:^|[^a-z0-9.])(\d+(?:\.\d+)?)([bm])(?:$|[^a-z0-9.])").unwrap()
+    });
 
     MULTIPLIED_RE
         .captures(text)
@@ -146,7 +148,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        parameter_size_from_count, parameter_size_from_text, served_model_metadata_for_path,
+        parameter_size_from_count, parameter_size_from_text, resolve_parameter_size,
+        served_model_metadata_for_path,
     };
 
     #[test]
@@ -168,6 +171,25 @@ mod tests {
             None
         );
         assert_eq!(parameter_size_from_text("model-dead8061beef"), None);
+        assert_eq!(parameter_size_from_text("model-7bfoo"), None);
+        assert_eq!(parameter_size_from_text("model-8x7bfoo"), None);
+    }
+
+    #[test]
+    fn resolves_parameter_size_with_shared_source_precedence() {
+        assert_eq!(
+            resolve_parameter_size("model-7B", Some("6B".to_string()), Some(8_000_000_000))
+                .as_deref(),
+            Some("6B")
+        );
+        assert_eq!(
+            resolve_parameter_size("model-7B", None, Some(8_000_000_000)).as_deref(),
+            Some("8B")
+        );
+        assert_eq!(
+            resolve_parameter_size("model-7B", None, None).as_deref(),
+            Some("7B")
+        );
     }
 
     #[test]
