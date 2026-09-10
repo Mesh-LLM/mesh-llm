@@ -6,9 +6,44 @@
 # an unresolved regression that needs human attention.
 set -euo pipefail
 
+REPAIR_TOKEN="${CANARY_REPAIR_TOKEN:-}"
+# Keep the captured secret as a shell-only value. It is passed to a child only
+# for the narrowly scoped credential operations below.
+export -n REPAIR_TOKEN 2>/dev/null || true
+unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN
+if [[ -z "$REPAIR_TOKEN" ]]; then
+  echo "CANARY_REPAIR_TOKEN is required to publish the repair PR" >&2
+  exit 1
+fi
+
 OUTPUT_DIR="${1:?usage: agentic-replay-repair.sh <output-dir>}"
 BRANCH="agentic-replay-nightly/repair-${GITHUB_RUN_ID:-local}"
 RESOLVED=0
+MATRIX_FILE="${MATRIX_FILE:-ci/agentic-replay-nightly/matrix.json}"
+ASKPASS_SCRIPT=""
+REPLAY_PARAMS_FILE=""
+BODY_FILE=""
+
+# shellcheck disable=SC2329 # invoked indirectly by the EXIT trap
+cleanup() {
+  [[ -z "${ASKPASS_SCRIPT:-}" ]] || rm -f -- "$ASKPASS_SCRIPT"
+  [[ -z "${REPLAY_PARAMS_FILE:-}" ]] || rm -f -- "$REPLAY_PARAMS_FILE"
+  [[ -z "${BODY_FILE:-}" ]] || rm -f -- "$BODY_FILE"
+}
+trap cleanup EXIT
+
+run_untrusted() {
+  env -u CANARY_REPAIR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN -u REPAIR_TOKEN "$@"
+}
+
+gh_repair() {
+  GH_TOKEN="$REPAIR_TOKEN" gh "$@"
+}
+
+redact_token() {
+  REDACTION_TOKEN="$REPAIR_TOKEN" python3 -c \
+    'import os, sys; sys.stdout.write(sys.stdin.read().replace(os.environ["REDACTION_TOKEN"], "***redacted***"))'
+}
 
 git config user.name "mesh-replay-bot"
 git config user.email "replay-bot@meshllm.invalid"
@@ -25,8 +60,9 @@ for artifact_root in "$OUTPUT_DIR" "${HISTORY_LOCAL:-$REPO_ROOT/.replay-history-
 done
 
 # 1. opencode analyzes the regression evidence and attempts a fix. It must not
-# see GitHub credentials.
-env -u GH_TOKEN -u GITHUB_TOKEN opencode run --mode agent \
+# see GitHub credentials. The same wrapper is used for every command that can
+# execute repair-modified repository code.
+run_untrusted opencode run --mode agent \
   "The nightly agentic replay benchmark on micstudio regressed. Evidence: $OUTPUT_DIR/summary/history.jsonl and per-model artifacts in $OUTPUT_DIR. Analyze the regression, identify the offending change (git log origin/main is available), and attempt a minimal fix. Do not touch ci/agentic-replay-nightly baselines or thresholds." || true
 
 if [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
@@ -45,39 +81,100 @@ Co-authored-by: opencode <opencode@meshllm.invalid>"
 
   # 2. Re-run the benchmark on the repaired tree with the nightly benchmark
   # shape, then re-normalize and gate the repaired summaries.
-  LEVELS=$(python3 -c "import json;print(' '.join(map(str, json.load(open('ci/agentic-replay-nightly/matrix.json'))['replay']['concurrency'])))")
+  REPLAY_CONFIG="$(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+replay = json.loads(pathlib.Path(sys.argv[1]).read_text()).get("replay")
+if not isinstance(replay, dict):
+    raise SystemExit("matrix replay block is missing")
+mode = replay.get("mode")
+mode_map = {"checkpoint": "checkpoints", "final": "final", "all": "all"}
+if mode not in mode_map:
+    raise SystemExit(f"unsupported replay mode: {mode!r}")
+values = {
+    "trajectories_per_framework": replay.get("trajectories_per_framework"),
+    "passes": replay.get("passes"),
+    "warmup_turns": replay.get("warmup_turns"),
+    "max_output_tokens": replay.get("max_output_tokens"),
+}
+for key, value in values.items():
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise SystemExit(f"{key} must be a positive integer")
+print(mode_map[mode], *(values[key] for key in (
+    "trajectories_per_framework", "passes", "warmup_turns", "max_output_tokens")))
+PY
+)"
+  read -r REPLAY_MODE TRAJECTORIES_PER_FRAMEWORK PASSES WARMUP_TURNS MAX_OUTPUT_TOKENS <<< "$REPLAY_CONFIG"
+  LEVELS="$(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+levels = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"].get("concurrency")
+if (
+    not isinstance(levels, list)
+    or not levels
+    or any(isinstance(level, bool) or not isinstance(level, int) or level <= 0 for level in levels)
+    or len(set(levels)) != len(levels)
+):
+    raise SystemExit("concurrency must be a non-empty list of unique positive integers")
+print(" ".join(map(str, levels)))
+PY
+)"
   LEVEL_ARGS=()
   for level in $LEVELS; do LEVEL_ARGS+=(--concurrency "$level"); done
-  PASSES=$(python3 -c "import json;print(json.load(open('ci/agentic-replay-nightly/matrix.json'))['replay']['passes'])")
   REPLAY_DATASET_FILE="${DATASET_FILE:-${MESH_AGENTIC_REPLAY_DATASET_FILE:-}}"
   RERUN_FAILED=0
   if [[ -z "$REPLAY_DATASET_FILE" ]]; then
     echo "replay dataset file is unavailable — needs-attention" >&2
     RERUN_FAILED=1
   fi
-  for family in $(python3 -c "import json;print(' '.join(m['family'] for m in json.load(open('ci/agentic-replay-nightly/matrix.json'))['models']))"); do
+  for family in $(run_untrusted python3 - "$MATRIX_FILE" <<'PY'
+import json
+import pathlib
+import sys
+print(" ".join(model["family"] for model in json.loads(pathlib.Path(sys.argv[1]).read_text())["models"]))
+PY
+  ); do
     if [[ "$RERUN_FAILED" == "1" && -z "$REPLAY_DATASET_FILE" ]]; then break; fi
-    model_uri=$(python3 -c "import json;m=[m for m in json.load(open('ci/agentic-replay-nightly/matrix.json'))['models'] if m['family']=='$family'][0];print(m['repo']+'@'+m['revision']+'/'+m['file'])")
-    python3 evals/agentic-replay.py run \
+    model_uri=$(run_untrusted python3 - "$MATRIX_FILE" "$family" <<'PY'
+import json
+import pathlib
+import sys
+
+family = sys.argv[2]
+model = next(model for model in json.loads(pathlib.Path(sys.argv[1]).read_text())["models"] if model["family"] == family)
+print(f'{model["repo"]}@{model["revision"]}/{model["file"]}')
+PY
+    )
+    run_untrusted python3 evals/agentic-replay.py run \
       --ref fixed=HEAD \
       --ref base=origin/main \
       --model "$model_uri" \
       --backend metal \
-      --trajectories-per-framework 8 \
+      --replay-mode "$REPLAY_MODE" \
+      --trajectories-per-framework "$TRAJECTORIES_PER_FRAMEWORK" \
       "${LEVEL_ARGS[@]}" \
       --passes "$PASSES" \
-      --warmup-turns 4 \
+      --warmup-turns "$WARMUP_TURNS" \
+      --max-output-tokens "$MAX_OUTPUT_TOKENS" \
       --dataset-file "$REPLAY_DATASET_FILE" \
       --output "$OUTPUT_DIR/repair/$family" || RERUN_FAILED=1
   done
   REPLAY_PARAMS_FILE=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-params.XXXXXX")
-  trap 'rm -f "$REPLAY_PARAMS_FILE"' EXIT
   # Process substitution breaks on micstudio (/dev/fd is not passable to the
   # child); write the replay parameters to a plain file instead.
-  python3 -c "import json;print(json.dumps(json.load(open('ci/agentic-replay-nightly/matrix.json'))['replay']))" \
-    > "$REPLAY_PARAMS_FILE"
+run_untrusted python3 - "$MATRIX_FILE" <<'PY' > "$REPLAY_PARAMS_FILE"
+import json
+import pathlib
+import sys
+replay = json.loads(pathlib.Path(sys.argv[1]).read_text())["replay"]
+print(json.dumps(replay, sort_keys=True))
+PY
   HISTORY_ARGS=(
-    --matrix ci/agentic-replay-nightly/matrix.json
+    --matrix "$MATRIX_FILE"
     --replay-dir "$OUTPUT_DIR/repair"
     --label fixed
     --hardware "$OUTPUT_DIR/hardware.json"
@@ -90,7 +187,7 @@ Co-authored-by: opencode <opencode@meshllm.invalid>"
   if [[ -d "$HISTORY_RUNS" ]]; then
     HISTORY_ARGS+=(--baseline "$HISTORY_RUNS")
   fi
-  if [[ "$RERUN_FAILED" == "0" ]] && python3 scripts/agentic-replay-history.py "${HISTORY_ARGS[@]}"; then
+  if [[ "$RERUN_FAILED" == "0" ]] && run_untrusted python3 scripts/agentic-replay-history.py "${HISTORY_ARGS[@]}"; then
     RESOLVED=1
   fi
 fi
@@ -108,9 +205,29 @@ else
   BODY=$'The nightly agentic replay regressed and the automated repair did not clear it. Review the evidence: history.jsonl, per-model artifacts, and the HF dataset shard for this run.'
 fi
 
-# Push with the token explicitly (no gh auth setup-git on this runner).
-PUSH_REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}.git"
-git push "$PUSH_REMOTE" "$BRANCH"
+# Push with a temporary askpass helper. The token is never present in the
+# remote URL or process arguments, and the helper is removed on every exit.
+ASKPASS_SCRIPT=$(mktemp "${TMPDIR:-/tmp}/agentic-replay-askpass.XXXXXX")
+chmod 700 "$ASKPASS_SCRIPT"
+cat > "$ASKPASS_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  Username*) printf '%s\n' 'x-access-token' ;;
+  Password*) printf '%s\n' "${CANARY_REPAIR_TOKEN:?}" ;;
+  *) exit 1 ;;
+esac
+EOF
+if ! CANARY_REPAIR_TOKEN="$REPAIR_TOKEN" \
+  GIT_ASKPASS="$ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
+  git -c core.hooksPath=/dev/null -c credential.helper= \
+    push "https://github.com/${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}.git" \
+  "HEAD:refs/heads/${BRANCH}" 2> >(redact_token >&2); then
+  echo "repair branch push failed" >&2
+  exit 1
+fi
+rm -f -- "$ASKPASS_SCRIPT"
+ASKPASS_SCRIPT=""
 
 # Fill the PR template from the run evidence where available; fall back to
 # the short body if the template or fill data is missing.
@@ -136,7 +253,6 @@ if [[ -f "$TEMPLATE_FILE" ]]; then
 else
   printf '%s\n' "$BODY" > "$BODY_FILE"
 fi
-gh pr create --title "$TITLE" --body-file "$BODY_FILE" --label "$LABELS" --base main --head "$BRANCH" || \
+gh_repair pr create --title "$TITLE" --body-file "$BODY_FILE" --label "$LABELS" --base main --head "$BRANCH" || \
   echo "PR creation failed — evidence retained in run artifacts" >&2
-rm -f "$BODY_FILE"
 exit 0 # the nightly is red; the PR is the actionable output
