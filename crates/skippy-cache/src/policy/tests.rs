@@ -679,3 +679,40 @@ fn duplicate_segment_references_are_rejected() {
     // One 100-byte segment: class charge is exactly 100.
     assert_eq!(policy.probation_bytes(), 100);
 }
+
+#[test]
+fn cap_victim_selection_reproduces_reported_counterexample() {
+    // Exact shape of the reported probe: before=10,590,618 over
+    // cap=9,437,184 (9 MiB); stale-share subtraction selected [1,2] and
+    // left the committed class at 10,354,688. Reproduce it with concrete
+    // numbers: 10 MiB cap basis scaled to 9 MiB via three probationers —
+    // 1 MiB exclusive each (3 MiB) plus one shared 8 MiB segment
+    // (8/3 MiB per share -> class ~3+8=11 MiB before, over cap).
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 9 << 20,
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    // Admission applies cap victims incrementally, so build the over-cap
+    // state with cap victims disabled (huge probation budget), then swap
+    // in the real cap and select.
+    for key in 1..=3u64 {
+        policy.consider_admission(key, 1 << 20, vec![(7u64, 8 << 20)], cost(400.0, 100.0));
+    }
+    let before = policy.probation_bytes();
+    assert!(before > 9 << 20, "before {}", before);
+    // Now select against the real cap by constructing the over-cap state
+    // through the public API: reset the budget by direct selection.
+    let victims = policy.with_probation_budget(9 << 20, |p| p.select_probation_cap_victims());
+    assert!(!victims.is_empty());
+    for key in &victims {
+        policy.remove(*key);
+    }
+    let after = policy.probation_bytes();
+    assert!(
+        after <= 9 << 20,
+        "committed class {} still over cap after victims {:?}",
+        after,
+        victims
+    );
+}

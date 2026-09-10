@@ -391,30 +391,53 @@ impl BenefitPolicy {
     /// `(last_observation, key)` order.
     pub fn select_probation_cap_victims(&self) -> Vec<EntryKey> {
         let cap = self.config.probation_byte_budget;
-        let mut over = self.probation_bytes().saturating_sub(cap);
-        if over == 0 {
+        if self.probation_bytes() <= cap {
             return Vec::new();
         }
-        let mut probationers: Vec<(u64, EntryKey, u64)> = self
+        let mut probationers: Vec<(u64, EntryKey)> = self
             .entries
             .iter()
             .filter(|(_, e)| e.state == PolicyEntryState::Probation && e.hits == 0)
-            .map(|(k, e)| {
-                let charge =
-                    e.exclusive_bytes + self.segments.fractional_bytes(*k, &e.segments) as u64;
-                (e.last_observation, *k, charge)
-            })
+            .map(|(k, e)| (e.last_observation, *k))
             .collect();
         probationers.sort();
+        // Simulate each removal against a scratch ledger: removing a shared
+        // reference raises the survivors' fractional shares, so the remaining
+        // class charge must be recomputed, not decremented by stale shares.
+        let mut scratch = self.segments.clone();
+        let mut removed: std::collections::BTreeSet<EntryKey> = Default::default();
         let mut victims = Vec::new();
-        for (_, key, charge) in probationers {
-            if over == 0 {
+        for (_, key) in probationers {
+            let Some(entry) = self.entries.get(&key) else {
+                continue;
+            };
+            scratch.release(&entry.segments, key);
+            removed.insert(key);
+            let charge: f64 = self
+                .entries
+                .iter()
+                .filter(|(k, e)| e.state == PolicyEntryState::Probation && !removed.contains(*k))
+                .map(|(k, e)| e.exclusive_bytes as f64 + scratch.fractional_bytes(*k, &e.segments))
+                .sum();
+            victims.push(key);
+            if charge.ceil() as u64 <= cap {
                 break;
             }
-            over = over.saturating_sub(charge);
-            victims.push(key);
         }
         victims
+    }
+
+    /// Test helper: run `f` with a temporarily different probation budget.
+    #[cfg(test)]
+    pub fn with_probation_budget<R>(&mut self, budget: u64, f: impl FnOnce(&Self) -> R) -> R {
+        let saved = std::mem::replace(
+            // Safety of construction: same struct, one field changed.
+            &mut self.config.probation_byte_budget,
+            budget,
+        );
+        let result = f(self);
+        self.config.probation_byte_budget = saved;
+        result
     }
 
     /// Compatibility wrapper for callers that want cap enforcement applied
