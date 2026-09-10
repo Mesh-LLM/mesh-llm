@@ -16,6 +16,7 @@ import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
 import { useDataMode } from '@/lib/data-mode'
 import { useBooleanFeatureFlag } from '@/lib/feature-flags'
 import { CHAT_HARNESS } from '@/features/app-tabs/data'
+import { liveChatActionMetrics } from '@/features/chat/lib/live-chat-metrics'
 import { statusBackedChatModels } from '@/features/chat/lib/live-chat-models'
 import type { ChatHarnessData, Conversation, ModelSelectOption, TransparencyMessage } from '@/features/app-tabs/types'
 import {
@@ -59,6 +60,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
     [modelsQuery.data]
   )
   const statusModels = useMemo(() => statusBackedChatModels(liveStatus), [liveStatus])
+  const liveActionMetrics = useMemo(() => liveChatActionMetrics(liveStatus), [liveStatus])
   const liveModels = catalogModels && catalogModels.length > 0 ? catalogModels : statusModels
   const displayModels = liveMode ? liveModels : data.models
   const selectableModels = useMemo(() => displayModels.filter(isChatSelectableModel), [displayModels])
@@ -736,7 +738,7 @@ export function ChatPageContent({ data = CHAT_HARNESS }: ChatPageProps) {
       onAttachmentPreviewOpenChange={(open) => {
         if (!open) setSelectedAttachmentPreview(null)
       }}
-      actionMetrics={data.actionMetrics}
+      actionMetrics={liveMode ? liveActionMetrics : data.actionMetrics}
       modelLabel={data.modelLabel}
       modelOptions={options}
       selectedModelValue={selectedModelValue}

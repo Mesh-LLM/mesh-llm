@@ -224,6 +224,34 @@ describe('ChatPage', () => {
     expect(screen.getByRole('option', { name: /peer-model/ })).toBeVisible()
   })
 
+  it('shows live node count and advertised mesh capacity in the header instead of harness fixtures', () => {
+    vi.mocked(useModelsQuery).mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useModelsQuery>)
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: {
+        llama_ready: true,
+        node_state: 'serving',
+        my_vram_gb: 115.448725504,
+        gpus: [{ name: 'Apple M4 Max', rated_vram_gb: 128, vram_bytes: 115_448_725_504 }],
+        serving_models: ['local-model'],
+        peers: [{ state: 'serving', vram_gb: 44.02970624, hosted_models: ['peer-model'], hosted_models_known: true }]
+      },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn()
+    } as unknown as ReturnType<typeof useStatusQuery>)
+
+    renderChatPage({ mode: 'live' })
+
+    expect(screen.getByText('2 nodes')).toBeInTheDocument()
+    expect(screen.getByText('159.5 GB')).toBeInTheDocument()
+    expect(screen.queryByText('61.7 GB')).not.toBeInTheDocument()
+  })
+
   it('keeps live chat usable when catalog enrichment fails but runtime status is ready', () => {
     vi.mocked(useModelsQuery).mockReturnValue({
       data: undefined,
