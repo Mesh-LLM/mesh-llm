@@ -460,6 +460,7 @@ mod tests {
 
     use super::*;
     use crate::ExactStatePayload;
+    use crate::l3::SegmentCodec;
 
     fn temp_root(name: &str) -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -625,6 +626,7 @@ mod tests {
             bytes: 4,
             digest: "missing-segment".to_string(),
             meta_json: None,
+            codec: SegmentCodec::raw(),
         });
         fs::write(
             root.join("manifests/incomplete.json"),

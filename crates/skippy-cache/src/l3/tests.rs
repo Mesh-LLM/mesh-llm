@@ -28,6 +28,7 @@ fn manifest_for<'store>(
             bytes: chunk.len() as u64,
             digest: stored.digest.clone(),
             meta_json: None,
+            codec: SegmentCodec::raw(),
         });
         held.push(stored);
     }
@@ -70,6 +71,7 @@ fn commit_packed_payload(
             bytes,
             digest: stored.digest.clone(),
             meta_json: None,
+            codec: SegmentCodec::raw(),
         });
         offset += bytes;
     }
@@ -80,10 +82,17 @@ fn commit_packed_payload(
     manifest
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn temp_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir()
-        .join("skippy-l3-tests")
-        .join(format!("{name}-{}", std::process::id()));
+    let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join("skippy-l3-tests").join(format!(
+        "{name}-{}-{}",
+        std::process::id(),
+        id
+    ));
     let _ = fs::remove_dir_all(&root);
     root
 }
@@ -588,6 +597,7 @@ fn eviction_cost_at_realistic_segment_counts() {
                 bytes: bytes.len() as u64,
                 digest: digest.clone(),
                 meta_json: Some(format!("k:{}:0:{}", index % 32, index / 32)),
+                codec: SegmentCodec::raw(),
             });
         }
         manifest.total_bytes = (SEGMENTS_PER_MANIFEST * bytes.len()) as u64;
@@ -649,4 +659,349 @@ fn unreferenced_segments_are_collected() {
     let freed = store.collect_unreferenced_segments().expect("collect");
     assert_eq!(freed, 12);
     assert!(store.assemble(&manifest).is_ok());
+}
+
+/// Older manifests without the codec field (written before codec identity
+/// existed) should default to raw v1 and be accepted.
+#[test]
+fn older_manifest_without_codec_defaults_to_raw_v1() {
+    let root = temp_root("older-manifest");
+    let payload = vec![42u8; 8192];
+    // Create a valid manifest first to set up the store structure.
+    {
+        let s = store(&root, 0);
+        commit_payload(&s, &payload, 4096);
+    }
+
+    // Now create a separate old-format manifest with its own payload.
+    let old_payload = vec![99u8; 8192];
+    let s = store(&root, 0);
+    let (old_manifest, _held) = manifest_for(&s, &old_payload, 4096);
+    // Remove codec fields to simulate old format (version 2).
+    let old_manifest_json = serde_json::json!({
+        "version": 2,
+        "model_identity": "blake3:test",
+        "state_identity": "blake3:test",
+        "payload_kind": "full-state",
+        "total_bytes": old_manifest.total_bytes,
+        "payload_digest": old_manifest.payload_digest,
+        "segments": old_manifest.segments.iter().map(|seg| serde_json::json!({
+            "index": seg.index,
+            "offset": seg.offset,
+            "bytes": seg.bytes,
+            "digest": seg.digest,
+            "meta_json": null
+        })).collect::<Vec<_>>(),
+        "kv_bytes": 0,
+        "recurrent_bytes": 0,
+        "token_count": 0,
+        "continuation_token": 0,
+        "expected_tokens": []
+    });
+    let old_manifest_path = s.manifest_path(&old_manifest.payload_digest);
+    fs::write(
+        &old_manifest_path,
+        serde_json::to_vec(&old_manifest_json).unwrap(),
+    )
+    .unwrap();
+    drop(_held);
+    drop(s);
+
+    // Reopen store and verify the old manifest loads and assembles correctly.
+    let reopened = store(&root, 0);
+    reopened.reconcile_startup().expect("reconcile");
+    let loaded = reopened
+        .load_manifest(&old_manifest.payload_digest)
+        .expect("load old manifest");
+    // Segments should have defaulted to raw v1 codec.
+    for segment in &loaded.segments {
+        assert_eq!(segment.codec.name, RAW_CODEC);
+        assert_eq!(segment.codec.version, RAW_CODEC_VERSION);
+        assert!(segment.codec.calibration_digest.is_none());
+    }
+    assert_eq!(reopened.assemble(&loaded).expect("assemble"), old_payload);
+}
+
+/// Unknown codec name should be rejected at manifest load.
+#[test]
+fn unknown_codec_rejected_at_load() {
+    let root = temp_root("unknown-codec");
+    let payload = vec![42u8; 8192];
+    // Create a valid manifest first to set up the store structure.
+    {
+        let s = store(&root, 0);
+        commit_payload(&s, &payload, 4096);
+    }
+
+    // Manually write a manifest with an unknown codec.
+    let bad_payload = vec![42u8; 8192];
+    let bad_digest = format!("bad-{}", segment_digest(&bad_payload));
+    let s = store(&root, 0);
+    let bad_manifest_json = serde_json::json!({
+        "version": MANIFEST_VERSION,
+        "model_identity": "blake3:test",
+        "state_identity": "blake3:test",
+        "payload_kind": "full-state",
+        "total_bytes": bad_payload.len() as u64,
+        "payload_digest": bad_digest,
+        "segments": [{
+            "index": 0,
+            "offset": 0,
+            "bytes": 4096,
+            "digest": segment_digest(&bad_payload[..4096]),
+            "meta_json": null,
+            "codec": { "name": "unknown-codec-v1", "version": 1, "calibration_digest": null }
+        }, {
+            "index": 1,
+            "offset": 4096,
+            "bytes": 4096,
+            "digest": segment_digest(&bad_payload[4096..]),
+            "meta_json": null,
+            "codec": { "name": "unknown-codec-v1", "version": 1, "calibration_digest": null }
+        }],
+        "kv_bytes": 0,
+        "recurrent_bytes": 0,
+        "token_count": 0,
+        "continuation_token": 0,
+        "expected_tokens": []
+    });
+    let bad_manifest_path = s.manifest_path(&bad_digest);
+    fs::write(
+        &bad_manifest_path,
+        serde_json::to_vec(&bad_manifest_json).unwrap(),
+    )
+    .unwrap();
+    drop(s);
+
+    // Loading should fail with codec error (skip reconcile to avoid quarantine).
+    let reopened = store(&root, 0);
+    let error = reopened
+        .load_manifest(&bad_digest)
+        .expect_err("unknown codec should be rejected");
+    assert!(format!("{error:#}").contains("unsupported codec"));
+}
+
+/// Mismatched codec version should be rejected.
+#[test]
+fn mismatched_codec_version_rejected() {
+    let root = temp_root("mismatched-version");
+    let payload = vec![42u8; 8192];
+    // Create a valid manifest first to set up the store structure.
+    {
+        let s = store(&root, 0);
+        commit_payload(&s, &payload, 4096);
+    }
+
+    // Write manifest with raw codec but wrong version.
+    let bad_payload = vec![42u8; 8192];
+    let bad_digest = format!("badv-{}", segment_digest(&bad_payload));
+    let s = store(&root, 0);
+    let bad_manifest_json = serde_json::json!({
+        "version": MANIFEST_VERSION,
+        "model_identity": "blake3:test",
+        "state_identity": "blake3:test",
+        "payload_kind": "full-state",
+        "total_bytes": bad_payload.len() as u64,
+        "payload_digest": bad_digest,
+        "segments": [{
+            "index": 0,
+            "offset": 0,
+            "bytes": 4096,
+            "digest": segment_digest(&bad_payload[..4096]),
+            "meta_json": null,
+            "codec": { "name": "raw", "version": 999, "calibration_digest": null }
+        }, {
+            "index": 1,
+            "offset": 4096,
+            "bytes": 4096,
+            "digest": segment_digest(&bad_payload[4096..]),
+            "meta_json": null,
+            "codec": { "name": "raw", "version": 999, "calibration_digest": null }
+        }],
+        "kv_bytes": 0,
+        "recurrent_bytes": 0,
+        "token_count": 0,
+        "continuation_token": 0,
+        "expected_tokens": []
+    });
+    let bad_manifest_path = s.manifest_path(&bad_digest);
+    fs::write(
+        &bad_manifest_path,
+        serde_json::to_vec(&bad_manifest_json).unwrap(),
+    )
+    .unwrap();
+    drop(s);
+
+    // Loading should fail with codec error (skip reconcile to avoid quarantine).
+    let reopened = store(&root, 0);
+    let error = reopened
+        .load_manifest(&bad_digest)
+        .expect_err("mismatched version should be rejected");
+    assert!(format!("{error:#}").contains("unsupported codec"));
+}
+
+/// Mixed codec in one manifest should be rejected.
+#[test]
+fn mixed_codec_in_manifest_rejected() {
+    let root = temp_root("mixed-codec");
+    let payload = vec![42u8; 8192];
+    // Create a valid manifest first to set up the store structure.
+    {
+        let s = store(&root, 0);
+        commit_payload(&s, &payload, 4096);
+    }
+
+    // Write manifest with one segment raw v1, another unknown codec.
+    let bad_payload = vec![42u8; 8192];
+    let bad_digest = format!("mixed-{}", segment_digest(&bad_payload));
+    let s = store(&root, 0);
+    let bad_manifest_json = serde_json::json!({
+        "version": MANIFEST_VERSION,
+        "model_identity": "blake3:test",
+        "state_identity": "blake3:test",
+        "payload_kind": "full-state",
+        "total_bytes": bad_payload.len() as u64,
+        "payload_digest": bad_digest,
+        "segments": [
+            {
+                "index": 0,
+                "offset": 0,
+                "bytes": 4096,
+                "digest": segment_digest(&bad_payload[..4096]),
+                "meta_json": null,
+                "codec": { "name": "raw", "version": 1, "calibration_digest": null }
+            },
+            {
+                "index": 1,
+                "offset": 4096,
+                "bytes": 4096,
+                "digest": segment_digest(&bad_payload[4096..]),
+                "meta_json": null,
+                "codec": { "name": "q8_0", "version": 1, "calibration_digest": null }
+            }
+        ],
+        "kv_bytes": 0,
+        "recurrent_bytes": 0,
+        "token_count": 0,
+        "continuation_token": 0,
+        "expected_tokens": []
+    });
+    let bad_manifest_path = s.manifest_path(&bad_digest);
+    fs::write(
+        &bad_manifest_path,
+        serde_json::to_vec(&bad_manifest_json).unwrap(),
+    )
+    .unwrap();
+    drop(s);
+
+    // Loading should fail (skip reconcile to avoid quarantine).
+    let reopened = store(&root, 0);
+    let error = reopened
+        .load_manifest(&bad_digest)
+        .expect_err("mixed codec should be rejected");
+    assert!(format!("{error:#}").contains("unsupported codec"));
+}
+
+/// Corrupt segment with valid codec should still be caught by digest verification.
+#[test]
+fn corrupt_segment_with_valid_codec_is_quarantined() {
+    let root = temp_root("corrupt-with-codec");
+    let store = store(&root, 0);
+    let payload = vec![42u8; 8192];
+    let manifest = commit_packed_payload(&store, &payload, 4096);
+
+    // Corrupt the pack file.
+    let pack = fs::read_dir(root.join(PACK_DIR))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut bytes = fs::read(&pack).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&pack, bytes).unwrap();
+
+    // Assemble should fail and quarantine the pack.
+    assert!(store.assemble(&manifest).is_err());
+    assert!(!pack.exists());
+    assert!(root.join(QUARANTINE_DIR).exists());
+}
+
+/// Restart preserves codec identity and correctly loads segments.
+#[test]
+fn restart_preserves_codec_identity() {
+    let root = temp_root("restart-codec");
+    {
+        let s = store(&root, 0);
+        let payload = vec![42u8; 8192];
+        let manifest = commit_packed_payload(&s, &payload, 4096);
+        // Verify segments have codec set.
+        for segment in &manifest.segments {
+            assert_eq!(segment.codec.name, RAW_CODEC);
+            assert_eq!(segment.codec.version, RAW_CODEC_VERSION);
+        }
+    }
+    // Reopen and verify.
+    let reopened = store(&root, 0);
+    reopened.reconcile_startup().expect("reconcile");
+    let manifest = reopened
+        .load_manifest(&reopened.list_manifests().unwrap()[0])
+        .expect("load manifest");
+    for segment in &manifest.segments {
+        assert_eq!(segment.codec.name, RAW_CODEC);
+        assert_eq!(segment.codec.version, RAW_CODEC_VERSION);
+        assert!(segment.codec.calibration_digest.is_none());
+    }
+    assert_eq!(
+        reopened.assemble(&manifest).expect("assemble"),
+        vec![42u8; 8192]
+    );
+}
+
+/// Prune removes entries with codec identity intact.
+#[test]
+fn prune_preserves_codec_identity_on_remaining() {
+    let root = temp_root("prune-codec");
+    let s = store(&root, 20_000);
+    let payload1 = vec![1u8; 8_000];
+    let payload2 = vec![2u8; 8_000];
+    let _m1 = commit_packed_payload(&s, &payload1, 4096);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let m2 = commit_packed_payload(&s, &payload2, 4096);
+
+    // Prune to half - should evict m1.
+    let before = s.managed_usage_bytes().expect("usage");
+    s.prune_to(before / 2).expect("prune");
+
+    // m2 should remain with codec intact.
+    let manifests = s.list_manifests().expect("list");
+    assert_eq!(manifests.len(), 1);
+    assert_eq!(manifests[0], m2.payload_digest);
+    let loaded = s.load_manifest(&m2.payload_digest).expect("load");
+    for segment in &loaded.segments {
+        assert_eq!(segment.codec.name, RAW_CODEC);
+        assert_eq!(segment.codec.version, RAW_CODEC_VERSION);
+    }
+    assert_eq!(s.assemble(&loaded).expect("assemble"), payload2);
+}
+
+/// Clear removes all entries, codec identity is not leaked.
+#[test]
+fn clear_removes_all_codec_entries() {
+    let root = temp_root("clear-codec");
+    let s = store(&root, 0);
+    let payload = vec![42u8; 8192];
+    let manifest = commit_packed_payload(&s, &payload, 4096);
+
+    // Verify codec is present.
+    let loaded = s.load_manifest(&manifest.payload_digest).expect("load");
+    for segment in &loaded.segments {
+        assert_eq!(segment.codec.name, RAW_CODEC);
+    }
+
+    // Clear the store.
+    let freed = s.clear().expect("clear");
+    assert!(freed > 0);
+    assert!(s.list_manifests().expect("list").is_empty());
+    assert_eq!(s.segment_footprint_bytes().expect("footprint"), 0);
 }

@@ -18,6 +18,12 @@
 //!   temp-file + atomic rename.
 //! - **Capped budget**: `enforce_budget` evicts oldest manifests first (the
 //!   newest is never evicted) and garbage-collects unreferenced segments.
+//!
+//! - **Codec identity**: every segment carries an explicit codec/version/
+//!   calibration identity. A loader must recognize the codec before importing;
+//!   unknown or mismatched codecs are hard misses. Raw is the only currently
+//!   implemented representation; Q8/Q4 and lossy paths are reserved for future
+//!   slices and must never alias the exact codec namespace.
 
 use std::{
     fs,
@@ -43,6 +49,65 @@ const PREFIX_INDEX_DIR: &str = "prefixes";
 const QUARANTINE_DIR: &str = "quarantine";
 const ROOT_LOCK_FILE: &str = ".owner.lock";
 
+/// Raw (uncompressed, bit-exact) segment codec identity.
+pub const RAW_CODEC: &str = "raw";
+
+/// Current raw codec version.
+pub const RAW_CODEC_VERSION: u32 = 1;
+
+/// Codec identity for a segment. Every segment carries an explicit
+/// codec/version/calibration tag so that loaders can reject unknown or
+/// mismatched representations before attempting to decode.
+///
+/// Raw is the only implemented codec. Q8/Q4 native and lossy codecs are
+/// reserved for future slices and must occupy distinct compatibility
+/// namespaces — a lossy entry must never satisfy an exact lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SegmentCodec {
+    /// Codec name (e.g., "raw", "q8_0", "q4_0", "cachegen-v1").
+    pub name: String,
+    /// Monotonic codec version. A released change to the encoding bumps this.
+    pub version: u32,
+    /// Optional calibration digest for lossy codecs (e.g., imatrix hash).
+    /// Exact codecs must leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_digest: Option<String>,
+}
+
+impl SegmentCodec {
+    /// Raw codec identity — the exact, uncompressed, bit-exact representation.
+    pub fn raw() -> Self {
+        Self {
+            name: RAW_CODEC.to_string(),
+            version: RAW_CODEC_VERSION,
+            calibration_digest: None,
+        }
+    }
+
+    /// Check if this codec is a known exact (lossless) codec.
+    pub fn is_exact(&self) -> bool {
+        self.name == RAW_CODEC && self.calibration_digest.is_none()
+    }
+
+    /// Check if this codec is compatible with another codec for loading.
+    /// Exact codecs require exact name+version match. Lossy codecs have
+    /// their own compatibility rules (future slices).
+    pub fn is_compatible_with(&self, other: &SegmentCodec) -> bool {
+        if self.name != other.name {
+            return false;
+        }
+        // Same codec name: require version match. Future lossy codecs may
+        // relax this with calibration-aware logic.
+        self.version == other.version && self.calibration_digest == other.calibration_digest
+    }
+}
+
+impl Default for SegmentCodec {
+    fn default() -> Self {
+        Self::raw()
+    }
+}
+
 /// Evict to this percentage of the budget rather than exactly to it.
 ///
 /// An eviction pass is O(manifests x segments): it parses every manifest to
@@ -54,7 +119,7 @@ const ROOT_LOCK_FILE: &str = ".owner.lock";
 const EVICTION_LOW_WATER_PERCENT: u64 = 85;
 /// On-disk format version stamped into every manifest. A released change to
 /// the layout bumps this and makes older entries misses, never migrations.
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandoffSegmentRef {
@@ -66,6 +131,10 @@ pub struct HandoffSegmentRef {
     /// `RuntimeKvPageDesc` plus token range), opaque to the store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta_json: Option<String>,
+    /// Codec identity for this segment. Defaults to raw v1 for backward
+    /// compatibility with manifests written before this field existed.
+    #[serde(default)]
+    pub codec: SegmentCodec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -611,6 +680,16 @@ impl HandoffSegmentStore {
             if segment.index as usize != position || segment.offset != expected_offset {
                 bail!("manifest {key} has invalid segment ordering");
             }
+            // Validate codec identity.
+            if !segment.codec.is_exact() || !segment.codec.is_compatible_with(&SegmentCodec::raw())
+            {
+                bail!(
+                    "manifest {key} segment {} has unsupported codec {} v{}",
+                    segment.index,
+                    segment.codec.name,
+                    segment.codec.version
+                );
+            }
             self.validate_segment_ref(segment, location.as_ref())
                 .with_context(|| format!("manifest {key} references a missing segment"))?;
             expected_offset = expected_offset
@@ -1030,6 +1109,16 @@ impl HandoffSegmentStore {
                     segment.offset
                 );
             }
+            // Validate codec identity at commit time.
+            if !segment.codec.is_exact() || !segment.codec.is_compatible_with(&SegmentCodec::raw())
+            {
+                bail!(
+                    "manifest segment {} has unsupported codec {} v{}",
+                    segment.index,
+                    segment.codec.name,
+                    segment.codec.version
+                );
+            }
             self.validate_segment_ref(segment, location.as_ref())
                 .with_context(|| {
                     format!(
@@ -1142,7 +1231,7 @@ impl HandoffSegmentStore {
     }
 
     /// Assemble the full payload for a manifest, verifying every segment
-    /// digest, the tiling, and the whole-payload digest.
+    /// digest, the tiling, the codec identity, and the whole-payload digest.
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
@@ -1157,6 +1246,16 @@ impl HandoffSegmentStore {
                     "segment {} offset {} does not match assembled length {expected_offset}",
                     segment.index,
                     segment.offset,
+                );
+            }
+            // Validate codec identity before reading segment data.
+            if !segment.codec.is_exact() || !segment.codec.is_compatible_with(&SegmentCodec::raw())
+            {
+                bail!(
+                    "segment {} has unsupported codec {} v{}",
+                    segment.index,
+                    segment.codec.name,
+                    segment.codec.version
                 );
             }
             expected_offset = expected_offset
@@ -1634,10 +1733,13 @@ impl HandoffSegmentStore {
 
 fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest> {
     let manifest: HandoffManifest = serde_json::from_slice(bytes).context("malformed manifest")?;
-    if manifest.version != MANIFEST_VERSION {
+    // Accept version 2 (pre-codec) and current version. Version 2 manifests
+    // default to raw v1 codec via SegmentCodec::default().
+    if manifest.version < 2 || manifest.version > MANIFEST_VERSION {
         bail!(
-            "manifest {payload_digest} has version {} but this build reads {MANIFEST_VERSION}",
-            manifest.version
+            "manifest {payload_digest} has version {} but this build reads {} (min 2)",
+            manifest.version,
+            MANIFEST_VERSION
         );
     }
     if manifest.payload_digest != payload_digest {
@@ -1645,6 +1747,19 @@ fn decode_manifest(payload_digest: &str, bytes: &[u8]) -> Result<HandoffManifest
             "manifest key {payload_digest} disagrees with payload digest {}",
             manifest.payload_digest
         );
+    }
+    // Validate that all segments use a known and compatible codec.
+    // Raw v1 is the only supported codec; unknown or mismatched codecs
+    // are hard misses to prevent silent numerical corruption.
+    for segment in &manifest.segments {
+        if !segment.codec.is_exact() || !segment.codec.is_compatible_with(&SegmentCodec::raw()) {
+            bail!(
+                "manifest {payload_digest} segment {} has unsupported codec {} v{}",
+                segment.index,
+                segment.codec.name,
+                segment.codec.version
+            );
+        }
     }
     Ok(manifest)
 }
