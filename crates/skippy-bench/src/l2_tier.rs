@@ -1,13 +1,18 @@
-//! `l2-tier` benchmark: cold L3 fill versus warm L2 fill on identical packed
-//! entries (#1651).
+//! `l2-tier` benchmark: cold L3 fill versus warm L2 lookup on identical
+//! packed entries (#1651).
 //!
 //! Builds a temporary L3 store, spills a synthetic multi-turn prompt at a
 //! recorded prefix length, then measures two restore paths in-process:
 //!
 //! - **L3 cold fill**: `L3Tier::fill_longest` — index probe + segment
 //!   assembly + digest verification from disk.
-//! - **L2 warm fill**: `L2Tier::peek` + `get` — the entry was captured from
-//!   an identical L3 fill, so the hit is a handle clone plus digest check.
+//! - **L2 warm lookup**: `L2Tier::get` + `to_payload` — the entry was
+//!   admitted from an identical verified L3 fill, so the lookup is a
+//!   digest-keyed handle assembly (no re-hash: admission verified the
+//!   wire once; segments are immutable afterward).
+//!
+//! Admission hashing (the one-time wire BLAKE3) is measured separately
+//! and reported as its own metric, never inside the timed lookup.
 //!
 //! Both paths produce payloads with identical bytes; the harness asserts
 //! that before timing so a correctness regression cannot hide behind a
@@ -28,13 +33,28 @@ fn percentile(samples_ns: &mut [u128], pct: f64) -> f64 {
 }
 
 pub fn l2_tier(args: L2TierArgs) -> Result<()> {
+    // Validation: reject degenerate configurations up front instead of
+    // dividing by zero or allocating nothing below.
+    if args.pairs == 0 {
+        anyhow::bail!("--pairs must be at least 1");
+    }
+    if args.tokens == 0 {
+        anyhow::bail!("--tokens must be at least 1");
+    }
+    if args.kv_bytes_per_token == 0 {
+        anyhow::bail!("--kv-bytes-per-token must be at least 1");
+    }
+
     let namespace = "bench-namespace";
     let state_identity = args.model_identity.clone();
     let token_ids: Vec<i32> = (0..args.tokens).map(|i| (i % 128_000) as i32).collect();
 
     // Deterministic synthetic KV payload: content matters only for digests,
     // size matters for timing.
-    let payload_len = args.tokens * args.kv_bytes_per_token;
+    let payload_len = args
+        .tokens
+        .checked_mul(args.kv_bytes_per_token)
+        .context("--tokens * --kv-bytes-per-token overflows")?;
     let payload_bytes: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
     let payload = ExactStatePayload::full_state(payload_bytes);
 
@@ -64,25 +84,36 @@ pub fn l2_tier(args: L2TierArgs) -> Result<()> {
 
     let l2_budget_bytes = args
         .l2_budget_mib
-        .map(|mib| mib * 1024 * 1024)
+        .map(|mib| {
+            mib.checked_mul(1024 * 1024)
+                .context("--l2-budget-mib overflows")
+        })
+        .transpose()?
         .unwrap_or(payload_len as u64 * 4);
     let l2 = L2Tier::new(l2_budget_bytes);
 
-    // Warmup: one of each path, then capture the L3 fill into L2 so the
-    // warm path is genuinely populated from L3, not inserted by fiat.
+    let cache_key = l2_cache_key(&args.model_identity, &state_identity, namespace, &token_ids);
+
+    // Warmup: one L3 fill, then admit it into L2 from the verified wire.
+    // The wire check inside `admit` is the one-time admission hash; it is
+    // timed separately below.
     let warm_fill = tier
         .fill_longest(namespace, &token_ids, 8)
         .context("bench warmup L3 fill failed")?
         .context("bench warmup L3 fill missed")?;
-    let cache_key = l2_cache_key(&args.model_identity, &state_identity, namespace, &token_ids);
-    l2.insert(
+    let (warm_wire, _) = warm_fill.payload.full_state_bytes_timed().context("wire")?;
+    let admission_started = Instant::now();
+    l2.admit(
         cache_key.clone(),
         warm_fill.token_count,
         payload_digest.clone(),
-        ExactStatePayloadMirror::capture(&warm_fill.payload),
+        &warm_wire,
+        ExactStatePayloadMirror::from_manifest(&manifest)
+            .map_err(|refusal| anyhow::anyhow!(refusal.reason()))?,
         L2Origin::FromL3,
     )
-    .map_err(|refusal| anyhow::anyhow!("bench warmup L2 insert refused: {}", refusal.reason()))?;
+    .map_err(|refusal| anyhow::anyhow!("bench warmup L2 admit refused: {}", refusal.reason()))?;
+    let admission_hash_ns = admission_started.elapsed().as_nanos();
 
     let mut l3_samples: Vec<u128> = Vec::with_capacity(args.pairs);
     let mut l2_samples: Vec<u128> = Vec::with_capacity(args.pairs);
@@ -99,25 +130,23 @@ pub fn l2_tier(args: L2TierArgs) -> Result<()> {
         let l3_ns = start.elapsed().as_nanos();
 
         let start = Instant::now();
-        let hit = l2
-            .peek(&cache_key)
-            .filter(|peek| peek.payload_digest == payload_digest)
-            .map(|_| ())
-            .and_then(|()| l2.get(&cache_key, &payload_digest));
+        let hit = l2.get(&cache_key);
+        let l2_payload = hit.as_ref().map(|hit| hit.to_payload());
         let l2_ns = start.elapsed().as_nanos();
 
-        let hit = hit.context("bench L2 get missed after peek")?;
-        // Correctness gate: L2 must return byte-identical state to the L3
-        // fill, or the speedup is meaningless.
+        // Correctness gate, outside the timer: L2 must return
+        // byte-identical state to the L3 fill, or the speedup is
+        // meaningless.
+        let hit = hit.context("bench L2 lookup missed")?;
+        let l2_payload = l2_payload.context("bench L2 payload missing")?;
+        anyhow::ensure!(hit.token_count == fill.token_count);
+        anyhow::ensure!(hit.payload_digest == payload_digest);
         let (l3_bytes, _) = fill.payload.full_state_bytes_timed().context("l3 bytes")?;
-        let l2_payload = hit.payload.to_payload();
         let (l2_bytes, _) = l2_payload.full_state_bytes_timed().context("l2 bytes")?;
         anyhow::ensure!(
             l3_bytes == l2_bytes,
             "pair {pair}: L2 payload diverged from L3 fill"
         );
-        anyhow::ensure!(hit.token_count == fill.token_count);
-        let _ = (l3_bytes, l2_bytes);
 
         l3_samples.push(l3_ns);
         l2_samples.push(l2_ns);
@@ -137,16 +166,19 @@ pub fn l2_tier(args: L2TierArgs) -> Result<()> {
             "p50": percentile(&mut l3_sorted, 50.0),
             "p99": percentile(&mut l3_sorted, 99.0),
         },
-        "l2_fill_ns": {
+        "l2_lookup_assembly_handle_ns": {
             "p50": percentile(&mut l2_sorted, 50.0),
             "p99": percentile(&mut l2_sorted, 99.0),
         },
+        "l2_admission_hash_ns_one_time": admission_hash_ns,
         "speedup_p50": percentile(&mut l3_sorted, 50.0) / percentile(&mut l2_sorted, 50.0).max(1.0),
         "l2_stats": {
             "hits": stats.hits,
             "misses": stats.misses,
             "evictions": stats.evictions,
             "bytes": stats.bytes,
+            "segments": stats.segments,
+            "shared_bytes_admitted": stats.shared_bytes_admitted,
         },
         "l3_prefix_key": l3_prefix_key(namespace, &token_ids),
     });
