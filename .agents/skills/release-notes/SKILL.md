@@ -21,10 +21,16 @@ readiness or build the change inventory from source; that is
 
 ## Ground Rules
 
-- **Move entries, never rewrite them.** Each `* <subject> by @<author> in <url>`
-  line is copied verbatim into its new section. Rewriting subjects silently
-  reinterprets other people's work and breaks the link between the notes and the
-  PR.
+- **Move entries; the only edit is the type prefix.** The renderer strips a
+  known conventional type from the front of a subject and sentence-cases what
+  follows, because the type already chose the section and repeating it reads
+  inconsistently beside entries that never had one. A subject with no
+  recognised prefix is left exactly as written -- an unrecognised `word:` may
+  be part of the sentence, as in "Durable KV prefix cache: agent prefixes
+  survive eviction". Nothing else about a subject changes.
+- **Never touch the credit.** The ` by @<author> in <url>` tail is copied
+  through byte for byte, and the set of referenced pull requests is the
+  invariant every gate checks.
 - **Never drop an entry.** Every merged PR credits a contributor, including the
   CI and build churn. Noisy entries collapse into `### Internal`, never deleted.
 - **Keep the tail.** `## New Contributors` and the `**Full Changelog**` link
@@ -122,11 +128,13 @@ The plan assigns every PR number to a section:
 A section takes either a flat `prs` list or `groups`. Section order follows
 Keep a Changelog, then `Other changes`, then `Internal`. Omit empty sections.
 
-Always prove that only the grouping changed:
+Always prove no pull request was dropped, duplicated, or invented. Entry lines
+are not byte-identical after prefix stripping, so compare the PR set:
 
 ```bash
-diff <(grep '^\* ' body.backup.md | sort) <(grep '^\* ' new.md | sort) \
-  && echo "identical entry sets"
+diff <(grep -o 'pull/[0-9]*' body.backup.md | sort) \
+     <(grep -o 'pull/[0-9]*' new.md | sort) \
+  && echo "identical pull-request sets"
 ```
 
 ## Judgement Calls

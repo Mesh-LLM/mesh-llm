@@ -19,11 +19,55 @@ import re
 import sys
 
 ENTRY_RE = re.compile(r"^\* .*/pull/(\d+)\s*$")
+ENTRY_PARTS_RE = re.compile(
+    r"^\* (?P<subject>.*?)(?P<credit> by @[^ ]+ in \S*/pull/(?P<pr>\d+))\s*$"
+)
+
+# The conventional type already chose the section, so repeating it in the entry
+# is noise -- and it reads inconsistently beside entries that never had one.
+# Only these known types are stripped: an unrecognised "word:" may be part of
+# the sentence ("Durable KV prefix cache: agent prefixes survive eviction").
+DISPLAY_TYPES = (
+    "feat", "fix", "perf", "security", "revert", "refactor", "style", "test",
+    "build", "deps", "ci", "chore", "docs",
+    # Legacy pseudo-types this repository used before the commit hook. They are
+    # bare type words, not component names: "skippy-quantize:" is a tool and is
+    # deliberately absent, so its subject keeps the prefix.
+    "task", "spec", "feature", "config", "runtime", "skippy", "bench",
+)
+DISPLAY_PREFIX_RE = re.compile(
+    r"^(?:" + "|".join(DISPLAY_TYPES) + r")(?:\([^)]*\))?!?:\s+", re.IGNORECASE
+)
 TAIL_RE = re.compile(r"^(## New Contributors|\*\*Full Changelog\*\*)")
 DEFAULT_INTRO = (
     "The notable changes in this release, grouped per "
     "[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)."
 )
+
+
+def normalize_subject(subject):
+    """Strip a known conventional type prefix and sentence-case what follows.
+
+    A subject with no recognised prefix is left exactly as its author wrote it,
+    so "skippy-quantize: compose-mtp ..." keeps its casing.
+    """
+    stripped, count = DISPLAY_PREFIX_RE.subn("", subject, count=1)
+    if not count:
+        return subject
+    stripped = stripped.strip()
+    if not stripped:
+        return subject
+    if stripped[0].isalpha() and stripped[0].islower():
+        stripped = stripped[0].upper() + stripped[1:]
+    return stripped
+
+
+def render_entry(line):
+    """Return the entry line as it should appear, credit untouched."""
+    match = ENTRY_PARTS_RE.match(line)
+    if not match:
+        return line
+    return f"* {normalize_subject(match.group('subject'))}{match.group('credit')}"
 
 
 def parse_body(text):
@@ -40,7 +84,7 @@ def parse_body(text):
         pr = int(match.group(1))
         if pr in entries:
             sys.exit(f"error: PR #{pr} appears twice in the source body")
-        entries[pr] = line
+        entries[pr] = render_entry(line)
         order.append(pr)
     if not entries:
         sys.exit("error: no '* ... /pull/<n>' entry lines found in the body")

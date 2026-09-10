@@ -53,11 +53,18 @@ python3 "$ROOT/scripts/release-notes-regroup.py" \
   --plan "$WORKDIR/plan.deterministic.json" \
   --out "$WORKDIR/notes.deterministic.md"
 
-# Gate: the rendered body must carry exactly the entries GitHub published.
+# Gate: the rendered body must carry exactly the PRs GitHub published. The
+# renderer strips the conventional type prefix from a subject, so the entry
+# lines are not byte-identical; the set of referenced pull requests is the
+# invariant, and author credit is copied through untouched.
+entry_prs() {
+  grep -o 'pull/[0-9]\+' "$1" | sort
+}
+
 verify_entries() {
   local candidate="$1"
-  diff <(grep '^\* ' "$WORKDIR/body.backup.md" | sort) \
-       <(grep '^\* ' "$candidate" | sort) > "$WORKDIR/entry-diff.txt"
+  diff <(entry_prs "$WORKDIR/body.backup.md") \
+       <(entry_prs "$candidate") > "$WORKDIR/entry-diff.txt"
 }
 
 if ! verify_entries "$WORKDIR/notes.deterministic.md"; then
@@ -167,8 +174,7 @@ fi
 gh release edit "$TAG" --repo "$REPO" --notes-file "$chosen"
 
 gh release view "$TAG" --repo "$REPO" --json body -q .body > "$WORKDIR/live.md"
-if ! diff <(grep '^\* ' "$WORKDIR/body.backup.md" | sort) \
-          <(grep '^\* ' "$WORKDIR/live.md" | sort); then
+if ! diff <(entry_prs "$WORKDIR/body.backup.md") <(entry_prs "$WORKDIR/live.md"); then
   echo "release-notes: published body does not carry the original entry set" >&2
   echo "release-notes: restore with: gh release edit $TAG --repo $REPO --notes-file $WORKDIR/body.backup.md" >&2
   exit 1

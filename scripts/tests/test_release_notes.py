@@ -214,7 +214,7 @@ class RegroupTest(unittest.TestCase):
         )
         return result, out
 
-    def test_renders_and_preserves_every_entry_verbatim(self):
+    def test_preserves_every_pull_request_and_its_credit(self):
         plan = {
             "version": "1.0.0",
             "sections": [{"title": "Added", "prs": [1, 2, 3]}],
@@ -222,13 +222,32 @@ class RegroupTest(unittest.TestCase):
         result, out = self.render(plan)
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = out.read_text(encoding="utf-8")
-        original = [line for line in BODY.splitlines() if line.startswith("* ")]
-        for line in original:
-            self.assertIn(line, rendered)
-        self.assertEqual(
-            sorted(original),
-            sorted(line for line in rendered.splitlines() if line.startswith("* ")),
+        keep = lambda text: [
+            line
+            for line in text.splitlines()
+            if line.startswith("* ") and "/pull/" in line
+        ]
+        original, emitted = keep(BODY), keep(rendered)
+        self.assertEqual(len(original), len(emitted))
+        # The subject may lose its type prefix; the credit tail never changes.
+        credits = lambda lines: sorted(line[line.index(" by @"):] for line in lines)
+        self.assertEqual(credits(original), credits(emitted))
+
+    def test_strips_the_type_prefix_and_sentence_cases_the_subject(self):
+        _, out = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3]}]}
         )
+        rendered = out.read_text(encoding="utf-8")
+        self.assertIn("* Add a thing by @someone", rendered)
+        self.assertIn("* Repair a thing by @someone", rendered)
+        self.assertNotIn("feat(skippy):", rendered)
+        self.assertNotIn("* fix:", rendered)
+
+    def test_leaves_an_unprefixed_subject_exactly_as_written(self):
+        _, out = self.render(
+            {"version": "1.0.0", "sections": [{"title": "Added", "prs": [1, 2, 3]}]}
+        )
+        self.assertIn("* Something without a prefix by @someone", out.read_text(encoding="utf-8"))
 
     def test_preserves_the_tail(self):
         _, out = self.render(
@@ -411,3 +430,56 @@ class TrailerDenyListTest(unittest.TestCase):
         result = subprocess.run([str(HOOK), path], capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 1)
         self.assertIn("agent attribution address", result.stderr)
+
+
+class SubjectNormalizationTest(unittest.TestCase):
+    def subject(self, line):
+        return REGROUP.render_entry(line).split(" by @")[0][2:]
+
+    def entry(self, subject):
+        return f"* {subject} by @x in https://github.com/Mesh-LLM/mesh-llm/pull/1"
+
+    def test_strips_type_scope_and_breaking_marker(self):
+        cases = {
+            "feat(skippy): load SafeTensors checkpoints directly":
+                "Load SafeTensors checkpoints directly",
+            "fix: repair a thing": "Repair a thing",
+            "chore(deps)!: drop the old runtime": "Drop the old runtime",
+            "perf(kv): keep recording off the inference path":
+                "Keep recording off the inference path",
+        }
+        for original, expected in cases.items():
+            self.assertEqual(self.subject(self.entry(original)), expected)
+
+    def test_strips_legacy_and_uppercase_prefixes(self):
+        self.assertEqual(
+            self.subject(self.entry("task: refine logging console UX")),
+            "Refine logging console UX",
+        )
+        self.assertEqual(
+            self.subject(self.entry("CI: pin Depot audit to merged policy")),
+            "Pin Depot audit to merged policy",
+        )
+
+    def test_never_strips_an_unrecognised_word_before_a_colon(self):
+        # "Durable KV prefix cache:" is a sentence, not a type.
+        for subject in [
+            "Durable KV prefix cache: agent prefixes survive eviction",
+            "skippy-quantize: compose-mtp splices an MTP draft",
+            "Fix split serving: stages above layer 0 fail to load",
+        ]:
+            self.assertEqual(self.subject(self.entry(subject)), subject)
+
+    def test_credit_is_never_touched(self):
+        line = (
+            "* feat(ui): render LaTeX by @ndizazzo in "
+            "https://github.com/Mesh-LLM/mesh-llm/pull/1466"
+        )
+        self.assertTrue(
+            REGROUP.render_entry(line).endswith(
+                " by @ndizazzo in https://github.com/Mesh-LLM/mesh-llm/pull/1466"
+            )
+        )
+
+    def test_a_subject_that_is_only_a_prefix_is_left_alone(self):
+        self.assertEqual(self.subject(self.entry("fix:")), "fix:")
