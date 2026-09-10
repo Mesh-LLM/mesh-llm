@@ -3697,9 +3697,47 @@
       "macro_name": "println!"
     }
   ],
+  "crates/skippy-cache/examples/cachegen_cubecl_spike.rs": [
+    {
+      "line": 273,
+      "macro_name": "println!"
+    },
+    {
+      "line": 274,
+      "macro_name": "println!"
+    },
+    {
+      "line": 281,
+      "macro_name": "println!"
+    },
+    {
+      "line": 285,
+      "macro_name": "println!"
+    },
+    {
+      "line": 291,
+      "macro_name": "println!"
+    },
+    {
+      "line": 292,
+      "macro_name": "println!"
+    },
+    {
+      "line": 350,
+      "macro_name": "println!"
+    },
+    {
+      "line": 380,
+      "macro_name": "println!"
+    },
+    {
+      "line": 383,
+      "macro_name": "eprintln!"
+    }
+  ],
   "crates/skippy-cache/src/l3/tests.rs": [
     {
-      "line": 605,
+      "line": 608,
       "macro_name": "println!"
     }
   ],

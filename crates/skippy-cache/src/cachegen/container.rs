@@ -39,13 +39,17 @@ const FIXED_HEADER_LEN: usize = 24;
 const HISTOGRAM_LEN: usize = TOKEN_COUNT * 4;
 /// Total bytes before the rANS stream.
 const HEADER_LEN: usize = FIXED_HEADER_LEN + HISTOGRAM_LEN;
-/// Hard format ceiling on the tile one container may declare, in values.
-/// Bounds `rows * dims` and the decoded allocation (`count * 2` bytes)
-/// before any capacity is reserved. Far above any real KV segment tile
-/// (the measured 4096x128 shape is 524,288 values), far below the
-/// unbounded product a hostile `rows`/`dims` pair can claim; raising it
-/// is a format-version decision, not a per-parse judgment call.
-pub const MAX_DECODED_VALUES: usize = 1 << 30;
+/// Hard format ceiling on the tile one container may declare, in values
+/// (`2^24` = 16,777,216 values = 32 MiB decoded f16). Bounds the decode
+/// working set — symbols + f32 materialization + f16 output is ~7 bytes
+/// per value, so this caps the worst case near 112 MiB instead of the
+/// multi-GiB bomb an unbounded product permits — and is enforced
+/// symmetrically by [`encode_f16_segment`] and [`parse_container`]. The
+/// measured 4096x128 tile is 524,288 values, so real tiles sit 32x under
+/// the ceiling; raising it is a format-version decision, not a per-parse
+/// judgment call. A later slice additionally binds decode to the
+/// manifest's per-segment `decoded_len`.
+pub const MAX_DECODED_VALUES: usize = 1 << 24;
 
 /// The per-segment identity a CacheGen segment carries: lossy, calibrated.
 pub fn segment_identity(decoded_len: u64, calibration_digest: String) -> SegmentCodecIdentity {
@@ -79,6 +83,11 @@ pub fn encode_f16_segment(raw_segment: &[u8], dims: usize) -> Result<Vec<u8>> {
     if dims == 0 || raw_segment.is_empty() || !raw_segment.len().is_multiple_of(2) {
         bail!("segment must be a non-empty run of f16 pairs");
     }
+    // Same ceiling the parser enforces, applied before any decode-sized
+    // allocation on either side: encode and decode agree on what the
+    // format bounds, so a tile that would be undecodable is rejected at
+    // entry — and before the f32 materialization below, not after it.
+    checked_tile_len(raw_segment.len() / 2)?;
     let values: Vec<f32> = raw_segment
         .as_chunks::<2>()
         .0
@@ -169,6 +178,21 @@ fn decoded_byte_len(count: usize) -> Result<usize> {
         .ok_or_else(|| anyhow!("cachegen decoded size exceeds the address space"))
 }
 
+/// Admission check for the format ceiling, shared by both codec
+/// directions: a tile of `count` values is representable only at or
+/// under [`MAX_DECODED_VALUES`]. `parse_container` and
+/// `encode_f16_segment` both route through this so the bound is
+/// enforced symmetrically by construction — and so the boundary is
+/// unit-testable without allocating a real over-ceiling tile.
+fn checked_tile_len(count: usize) -> Result<()> {
+    if count > MAX_DECODED_VALUES {
+        bail!(
+            "cachegen tile declares {count} values, above the format ceiling of {MAX_DECODED_VALUES}"
+        );
+    }
+    Ok(())
+}
+
 /// Value count a container decodes to (`rows * dims`), for capability
 /// negotiation against a segment's declared decoded length before any
 /// decode work happens. The count is the parse-validated, bounded
@@ -220,11 +244,7 @@ fn parse_container(payload: &[u8]) -> Result<(ContainerHeader, Vec<u32>, &[u8])>
     let count = rows
         .checked_mul(dims)
         .ok_or_else(|| anyhow!("cachegen tile shape overflows the address space"))?;
-    if count > MAX_DECODED_VALUES {
-        bail!(
-            "cachegen tile declares {count} values, above the format ceiling of {MAX_DECODED_VALUES}"
-        );
-    }
+    checked_tile_len(count)?;
     // Calibration crosses the trust boundary as raw f32 bits; it must be
     // a usable affine map before anything derives from it. NaN/inf poison
     // every dequantized value, and a negative scale inverts the quantizer
@@ -435,9 +455,9 @@ mod tests {
         bomb[4..6].copy_from_slice(&(dims as u16).to_le_bytes());
         bomb[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
         bomb[18..22].copy_from_slice(&4u32.to_le_bytes());
-        for entry in bomb[FIXED_HEADER_LEN..HEADER_LEN].chunks_exact_mut(4) {
-            entry.copy_from_slice(&u32::MAX.to_le_bytes());
-        }
+        // Every histogram entry at u32::MAX: little-endian u32::MAX is
+        // four 0xFF bytes, so a fill covers all TOKEN_COUNT entries.
+        bomb[FIXED_HEADER_LEN..HEADER_LEN].fill(0xFF);
         assert!(decoded_value_count(&bomb).is_err());
         assert!(decode_f16_segment(&bomb).is_err());
         // And a merely huge-but-well-formed total still exceeds the
@@ -446,6 +466,93 @@ mod tests {
         let mut huge = encoded.clone();
         huge[6..10].copy_from_slice(&(MAX_DECODED_VALUES as u32).to_le_bytes());
         assert!(decoded_value_count(&huge).is_err());
+    }
+
+    /// A minimal well-formed header for a `(rows x dims)` tile: correct
+    /// magic, zero reserved bytes, a histogram whose total supports the
+    /// declared shape, and a 4-byte stream. The stream is not decodable —
+    /// callers assert admission (`decoded_value_count`,
+    /// `container_calibration`) or parse-time rejection, never a full
+    /// decode.
+    fn crafted_header(dims: usize, rows: u32) -> Vec<u8> {
+        let mut payload = vec![0u8; FIXED_HEADER_LEN];
+        payload[0..4].copy_from_slice(&MAGIC);
+        payload[4..6].copy_from_slice(&(dims as u16).to_le_bytes());
+        payload[6..10].copy_from_slice(&rows.to_le_bytes());
+        payload[18..22].copy_from_slice(&4u32.to_le_bytes());
+        // Every entry equal to count / TOKEN_COUNT sums to exactly
+        // rows * dims. Written the way the encoder writes histograms.
+        let per_token = (u64::from(rows) * dims as u64 / TOKEN_COUNT as u64) as u32;
+        for _ in 0..TOKEN_COUNT {
+            payload.extend_from_slice(&per_token.to_le_bytes());
+        }
+        payload.extend_from_slice(&[0u8; 4]);
+        payload
+    }
+
+    /// scama's remaining blocker, bounded at both edges of the ceiling.
+    /// Exactly `MAX_DECODED_VALUES` (65536 x 256) must be admitted by the
+    /// boundary probes; exactly one value more (16777217 == 97 x 172961,
+    /// a real shape, not a truncation artifact) must be refused by every
+    /// probe before any decode-sized allocation happens.
+    #[test]
+    fn ceiling_boundary_is_inclusive_and_rejects_exactly_one_more() {
+        // The inclusive edge: largest tile the format admits.
+        let boundary = crafted_header(256, (MAX_DECODED_VALUES / 256) as u32);
+        assert_eq!(
+            decoded_value_count(&boundary).expect("boundary tile is admitted"),
+            MAX_DECODED_VALUES
+        );
+        assert!(container_calibration(&boundary).is_ok());
+
+        // One value above: refused everywhere, naming the ceiling.
+        // 16_777_217 = 97 * 172_961, so rows x dims hits MAX + 1 exactly.
+        assert_eq!(97usize * 172_961usize, MAX_DECODED_VALUES + 1);
+        let over = crafted_header(97, 172_961);
+        assert_eq!(
+            97usize.checked_mul(172_961).expect("shape"),
+            MAX_DECODED_VALUES + 1
+        );
+        for (name, refused) in [
+            ("decoded_value_count", decoded_value_count(&over).is_err()),
+            (
+                "container_calibration",
+                container_calibration(&over).is_err(),
+            ),
+            ("decode_f16_segment", decode_f16_segment(&over).is_err()),
+        ] {
+            assert!(refused, "{name} must refuse MAX + 1 values");
+        }
+        let error = decoded_value_count(&over).expect_err("over-ceiling tile");
+        assert!(
+            error.to_string().contains("format ceiling"),
+            "rejection should name the format ceiling: {error}"
+        );
+    }
+
+    /// The encoder enforces the same ceiling before any work — the
+    /// symmetric half of the blocker. The direct probe covers the exact
+    /// +1 edge without materializing the tile; the end-to-end call proves
+    /// the encoder actually routes through it (33.5 MB of f16 input is
+    /// refused before the f32 conversion, so the test stays cheap).
+    #[test]
+    fn encode_refuses_over_ceiling_tiles_symmetrically() {
+        assert!(checked_tile_len(MAX_DECODED_VALUES).is_ok());
+        let error =
+            checked_tile_len(MAX_DECODED_VALUES + 1).expect_err("one value above the ceiling");
+        assert!(
+            error.to_string().contains("format ceiling"),
+            "rejection should name the format ceiling: {error}"
+        );
+
+        let dims = 16usize;
+        let over_ceiling_input = vec![0u8; 2 * (MAX_DECODED_VALUES + 1)];
+        let error = encode_f16_segment(&over_ceiling_input, dims)
+            .expect_err("over-ceiling input must not encode");
+        assert!(
+            error.to_string().contains("format ceiling"),
+            "encode must refuse before any work: {error}"
+        );
     }
 
     /// The flat tile (scale == 0) is a legal encoding and must stay one
