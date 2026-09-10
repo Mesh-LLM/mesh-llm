@@ -217,47 +217,14 @@ async fn main() -> Result<()> {
             continue;
         }
         let status = candidate_status(&hf_client, &candidate, args.retry_queued_after).await?;
-        if args.republish
-            && matches!(
-                status,
-                QueueStatus::Published { .. }
-                    | QueueStatus::Cataloged { .. }
-                    | QueueStatus::Failed { .. }
-            )
-        {
-            // Replacement policy: republish v2 over the existing package in place.
-        } else {
-            match status {
-                QueueStatus::Published { repo } => {
-                    println!(
-                        "skip {}: already has published layer package {}",
-                        candidate.model.repo_id, repo
-                    );
-                    continue;
-                }
-                QueueStatus::Cataloged { repo } => {
-                    println!(
-                        "skip {}: already has layer package {} in meshllm/catalog",
-                        candidate.model.repo_id, repo
-                    );
-                    continue;
-                }
-                QueueStatus::Queued { repo } => {
-                    println!(
-                        "skip {}: already recently queued layer package {}",
-                        candidate.model.repo_id, repo
-                    );
-                    continue;
-                }
-                QueueStatus::Failed { repo } => {
-                    println!(
-                        "skip {}: layer package job previously failed for {}",
-                        candidate.model.repo_id, repo
-                    );
-                    continue;
-                }
-                QueueStatus::Missing | QueueStatus::StaleQueued => {}
-            }
+        // `Queued` is authoritative regardless of `--republish`: a fresh
+        // queue marker means an in-flight (paid) job already covers this
+        // candidate, and re-submitting would double-spend. The republish
+        // replacement policy only re-queues candidates whose previous job
+        // is finished (published/catalogued/failed).
+        if let Some(skip_message) = should_skip(&status, args.republish) {
+            println!("skip {}: {}", candidate.model.repo_id, skip_message);
+            continue;
         }
 
         let source_total_bytes = candidate_source_total_bytes(&candidate);
@@ -832,6 +799,14 @@ async fn candidate_status(
     candidate: &Candidate,
     retry_queued_after: Duration,
 ) -> Result<QueueStatus> {
+    // Check the target repo's queue marker FIRST: a recent marker means an
+    // in-flight (paid) job already covers this candidate. Without this, the
+    // cataloged/published/failure returns below would shadow `Queued`, and a
+    // second `--republish` run would submit (and pay for) the same job again.
+    if let Some(repo) = recently_queued_target_repo(client, candidate, retry_queued_after).await? {
+        return Ok(QueueStatus::Queued { repo });
+    }
+
     if let Some(repo) = catalog_layer_package_repo(client, candidate).await? {
         return Ok(QueueStatus::Cataloged { repo });
     }
@@ -842,7 +817,7 @@ async fn candidate_status(
             continue;
         };
 
-        let siblings = repo_info.siblings.unwrap_or_default();
+        let siblings = repo_info.siblings.clone().unwrap_or_default();
         if siblings
             .iter()
             .any(|sibling| sibling.rfilename == "model-package.json")
@@ -859,29 +834,82 @@ async fn candidate_status(
         if has_failure_marker && repo == &candidate.target_repo {
             return Ok(QueueStatus::Failed { repo: repo.clone() });
         }
-        if has_queue_marker {
-            let queued_recently = repo_info
-                .last_modified
-                .as_deref()
-                .and_then(parse_hf_datetime)
-                .map(|last_modified| {
-                    Utc::now()
-                        .signed_duration_since(last_modified)
-                        .to_std()
-                        .unwrap_or_default()
-                        < retry_queued_after
-                })
-                .unwrap_or(true);
-            if queued_recently {
-                return Ok(QueueStatus::Queued { repo: repo.clone() });
-            }
-            if repo == &candidate.target_repo {
-                exact_status = QueueStatus::StaleQueued;
-            }
+        if has_queue_marker && repo_queued_recently(&repo_info, retry_queued_after) {
+            return Ok(QueueStatus::Queued { repo: repo.clone() });
+        }
+        if has_queue_marker && repo == &candidate.target_repo {
+            exact_status = QueueStatus::StaleQueued;
         }
     }
 
     Ok(exact_status)
+}
+
+/// True when the repo's `last_modified` is within `retry_queued_after` of now
+/// (or is unknown, which we treat as recent to stay on the safe side).
+fn repo_queued_recently(repo_info: &ModelInfo, retry_queued_after: Duration) -> bool {
+    repo_info
+        .last_modified
+        .as_deref()
+        .and_then(parse_hf_datetime)
+        .map(|last_modified| {
+            Utc::now()
+                .signed_duration_since(last_modified)
+                .to_std()
+                .unwrap_or_default()
+                < retry_queued_after
+        })
+        .unwrap_or(true)
+}
+
+/// Check the candidate's target repo for a fresh queue marker before any
+/// cataloged/published/failure state, so `QueueStatus::Queued` can never be
+/// shadowed by them (the double-submit bug in the `--republish` review).
+async fn recently_queued_target_repo(
+    client: &HFClient,
+    candidate: &Candidate,
+    retry_queued_after: Duration,
+) -> Result<Option<String>> {
+    let Some(repo_info) = model_repo_info(client, &candidate.target_repo).await? else {
+        return Ok(None);
+    };
+    let has_queue_marker = repo_info
+        .siblings
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|sibling| sibling.rfilename == "automation/queue.json");
+    if has_queue_marker && repo_queued_recently(&repo_info, retry_queued_after) {
+        return Ok(Some(candidate.target_repo.clone()));
+    }
+    Ok(None)
+}
+
+/// Replacement/skip policy for a candidate. Returns the skip message when the
+/// candidate must NOT be queued, or `None` when it should be.
+///
+/// `Queued` always skips — even under `--republish` — because a recent queue
+/// marker means an in-flight (paid) job already covers the candidate.
+fn should_skip(status: &QueueStatus, republish: bool) -> Option<String> {
+    match status {
+        QueueStatus::Missing | QueueStatus::StaleQueued => None,
+        QueueStatus::Queued { repo } => Some(format!(
+            "already recently queued layer package {repo} (--republish cannot re-submit an in-flight job)"
+        )),
+        QueueStatus::Published { repo } if !republish => {
+            Some(format!("already has published layer package {repo}"))
+        }
+        QueueStatus::Cataloged { repo } if !republish => Some(format!(
+            "already has layer package {repo} in meshllm/catalog"
+        )),
+        QueueStatus::Failed { repo } if !republish => {
+            Some(format!("layer package job previously failed for {repo}"))
+        }
+        // Replacement policy: republish re-queues finished packages in place.
+        QueueStatus::Published { .. }
+        | QueueStatus::Cataloged { .. }
+        | QueueStatus::Failed { .. } => None,
+    }
 }
 
 fn model_pipeline_tag(info: &ModelInfo) -> Option<String> {
@@ -1001,7 +1029,34 @@ async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Arg
         .send()
         .await
         .with_context(|| format!("upload queue marker to {}", candidate.target_repo))?;
+    // A republished job supersedes any earlier failure: leave the repo without
+    // a stale failure marker so a future status check cannot read the old job's
+    // outcome as the current state.
+    if args.republish {
+        delete_queue_failure_marker(client, candidate).await?;
+    }
     Ok(())
+}
+
+/// Remove a stale `automation/failure.json` from the candidate's target repo.
+/// A 404 (nothing to delete) is fine.
+async fn delete_queue_failure_marker(client: &HFClient, candidate: &Candidate) -> Result<()> {
+    let repo = model_repo(client, &candidate.target_repo)?;
+    match repo
+        .delete_file()
+        .path_in_repo("automation/failure.json")
+        .commit_message(format!(
+            "Clear stale failure marker for {}",
+            candidate.model_id
+        ))
+        .send()
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(HFError::Http { context }) if context.status.as_u16() == 404 => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("delete queue failure marker from {}", candidate.target_repo)),
+    }
 }
 
 async fn write_queue_failure_marker(
@@ -1334,13 +1389,100 @@ fn parse_duration_seconds(input: &str) -> Result<u64> {
 mod tests {
     use std::time::Duration;
 
+    use chrono::Utc;
     use model_package::jobs::CpuJobPlan;
 
     use super::{
-        Args, Candidate, DiscoveredProjector, DiscoveredQuant, RankedModel,
+        Args, Candidate, DiscoveredProjector, DiscoveredQuant, ModelInfo, QueueStatus, RankedModel,
         estimated_bucket_workspace_bytes, job_spec_with_token, json_layer_package_repo,
-        model_family_key, model_layer_repos,
+        model_family_key, model_layer_repos, repo_queued_recently, should_skip,
     };
+
+    #[test]
+    fn should_skip_queues_missing_and_stale_candidates() {
+        assert!(should_skip(&QueueStatus::Missing, false).is_none());
+        assert!(should_skip(&QueueStatus::StaleQueued, false).is_none());
+        assert!(should_skip(&QueueStatus::Missing, true).is_none());
+        assert!(should_skip(&QueueStatus::StaleQueued, true).is_none());
+    }
+
+    #[test]
+    fn should_skip_blocks_finished_states_without_republish() {
+        for status in [
+            QueueStatus::Published {
+                repo: "meshllm/foo".to_string(),
+            },
+            QueueStatus::Cataloged {
+                repo: "meshllm/foo".to_string(),
+            },
+            QueueStatus::Failed {
+                repo: "meshllm/foo".to_string(),
+            },
+        ] {
+            let message = should_skip(&status, false).expect("must skip without --republish");
+            assert!(message.contains("meshllm/foo"));
+        }
+    }
+
+    #[test]
+    fn should_skip_allows_republish_over_finished_states() {
+        for status in [
+            QueueStatus::Published {
+                repo: "meshllm/foo".to_string(),
+            },
+            QueueStatus::Cataloged {
+                repo: "meshllm/foo".to_string(),
+            },
+            QueueStatus::Failed {
+                repo: "meshllm/foo".to_string(),
+            },
+        ] {
+            assert!(
+                should_skip(&status, true).is_none(),
+                "republish must re-queue finished states"
+            );
+        }
+    }
+
+    #[test]
+    fn republish_cannot_resubmit_an_in_flight_job() {
+        // Regression (PR #1718 review): run 1 `--republish --confirm` writes
+        // automation/queue.json and submits the job; run 2 must skip it, not
+        // submit (and pay for) the same job again.
+        let status = QueueStatus::Queued {
+            repo: "meshllm/foo".to_string(),
+        };
+        assert!(should_skip(&status, false).is_some());
+        let message =
+            should_skip(&status, true).expect("--republish must still skip an in-flight job");
+        assert!(message.contains("--republish cannot re-submit an in-flight job"));
+    }
+
+    #[test]
+    fn repo_queued_recently_treats_unknown_timestamp_as_recent() {
+        let info = model_info_for_queued_recently("meshllm/foo", None);
+        assert!(repo_queued_recently(&info, Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn repo_queued_recently_uses_last_modified() {
+        let fresh = model_info_for_queued_recently("meshllm/foo", Some(Utc::now().to_rfc3339()));
+        assert!(repo_queued_recently(&fresh, Duration::from_secs(3600)));
+        let stale = model_info_for_queued_recently(
+            "meshllm/foo",
+            Some((Utc::now() - chrono::Duration::hours(2)).to_rfc3339()),
+        );
+        assert!(!repo_queued_recently(&stale, Duration::from_secs(3600)));
+    }
+
+    /// Build a minimal `ModelInfo` — the type has no `Default`.
+    fn model_info_for_queued_recently(id: &str, last_modified: Option<String>) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            last_modified,
+            ..serde_json::from_value(serde_json::json!({ "id": id })).unwrap()
+        }
+    }
 
     #[test]
     fn model_family_key_collapses_common_unsloth_families() {
