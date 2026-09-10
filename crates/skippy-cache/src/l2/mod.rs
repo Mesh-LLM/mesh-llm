@@ -167,7 +167,20 @@ impl ExactStatePayloadMirror {
             manifest
                 .segments
                 .iter()
-                .map(|segment| {
+                .enumerate()
+                .map(|(index, segment)| {
+                    if segment.index != index as u32 {
+                        return Err(L2InsertRefusal::MalformedManifest(format!(
+                            "segment {} records index {} but sits at position {index}",
+                            segment.digest, segment.index
+                        )));
+                    }
+                    if segment.offset != offset {
+                        return Err(L2InsertRefusal::MalformedManifest(format!(
+                            "segment {} records offset {} but tiles at {offset}",
+                            segment.digest, segment.offset
+                        )));
+                    }
                     let start = offset;
                     offset = offset.checked_add(segment.bytes).ok_or(
                         L2InsertRefusal::MalformedManifest("segment tiling overflows".to_string()),
@@ -313,6 +326,22 @@ pub enum L2InsertRefusal {
         expected: String,
         actual: String,
     },
+    /// A layout segment's claimed digest does not match the BLAKE3 of its
+    /// exact wire range: the pool identity would not describe the bytes it
+    /// is supposed to serve.
+    SegmentDigestMismatch {
+        digest: String,
+        expected: String,
+        actual: String,
+    },
+    /// A layout claims a segment digest for two different wire ranges, or
+    /// claims a digest the pool already holds with different content that
+    /// another live entry still references. Content-addressed identity must
+    /// stay unambiguous.
+    ConflictingSegment {
+        digest: String,
+        detail: String,
+    },
     UnknownPayloadKind(String),
     MalformedManifest(String),
 }
@@ -332,6 +361,17 @@ impl L2InsertRefusal {
                 "admission digest check failed: wire hashes to {actual} but the payload \
                  claims {expected}"
             ),
+            Self::SegmentDigestMismatch {
+                digest,
+                expected,
+                actual,
+            } => format!(
+                "segment {digest} does not describe its wire range: range hashes to {actual} \
+                 but the layout claims {expected}"
+            ),
+            Self::ConflictingSegment { digest, detail } => {
+                format!("conflicting claims for segment {digest}: {detail}")
+            }
             Self::UnknownPayloadKind(kind) => {
                 format!("manifest holds unknown payload kind {kind}")
             }
@@ -400,6 +440,80 @@ fn is_valid_digest(digest: &str) -> bool {
     hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// One validated layout segment: its claimed digest and the exact verified
+/// slice of the wire it describes.
+type ValidatedSegment<'a> = (&'a str, &'a [u8]);
+
+/// Fully validate a mirror's layout against the verified wire *before* any
+/// pool mutation:
+///
+/// - the tiling is non-empty and contiguous over `0..total_bytes`;
+/// - `kv_bytes + recurrent_bytes == total_bytes`;
+/// - every segment digest is well-formed and hashes its exact wire range.
+///
+/// A layout that fails any check is refused (`MalformedManifest` or
+/// `SegmentDigestMismatch`): the pool is content-addressed, so a handle's
+/// digest must describe the bytes it serves.
+fn validate_layout<'a>(
+    mirror: &'a ExactStatePayloadMirror,
+    wire: &'a [u8],
+) -> Result<Vec<ValidatedSegment<'a>>, L2InsertRefusal> {
+    let layout = mirror.layout();
+    if layout.segments.is_empty() {
+        return Err(L2InsertRefusal::MalformedManifest(
+            "layout holds no segments".to_string(),
+        ));
+    }
+    if layout.total_bytes != wire.len() as u64 {
+        return Err(L2InsertRefusal::MalformedManifest(format!(
+            "layout claims {total} total bytes but the wire holds {len}",
+            total = layout.total_bytes,
+            len = wire.len()
+        )));
+    }
+    if layout.kv_bytes.saturating_add(layout.recurrent_bytes) != layout.total_bytes {
+        return Err(L2InsertRefusal::MalformedManifest(format!(
+            "kv ({kv}) + recurrent ({rec}) bytes do not tile the {total}-byte payload",
+            kv = layout.kv_bytes,
+            rec = layout.recurrent_bytes,
+            total = layout.total_bytes
+        )));
+    }
+    let mut expected_start = 0u64;
+    let mut validated = Vec::with_capacity(layout.segments.len());
+    for (digest, range) in &layout.segments {
+        if !is_valid_digest(digest) {
+            return Err(L2InsertRefusal::MalformedManifest(format!(
+                "segment digest {digest:?} is not a blake3 hex digest"
+            )));
+        }
+        if range.start != expected_start || range.end < range.start || range.end > wire.len() as u64
+        {
+            return Err(L2InsertRefusal::MalformedManifest(format!(
+                "segment range {range:?} does not contiguously tile the wire at offset \
+                 {expected_start}"
+            )));
+        }
+        expected_start = range.end;
+        let slice = &wire[range.start as usize..range.end as usize];
+        let actual = segment_digest(slice);
+        if actual != *digest {
+            return Err(L2InsertRefusal::SegmentDigestMismatch {
+                digest: digest.clone(),
+                expected: digest.clone(),
+                actual,
+            });
+        }
+        validated.push((digest.as_str(), slice));
+    }
+    if expected_start != layout.total_bytes {
+        return Err(L2InsertRefusal::MalformedManifest(format!(
+            "segments tile {expected_start} bytes but the layout claims {}",
+            layout.total_bytes
+        )));
+    }
+    Ok(validated)
+}
 impl L2Tier {
     pub fn new(budget_bytes: u64) -> Self {
         Self {
@@ -417,15 +531,22 @@ impl L2Tier {
     ///
     /// `wire` is the payload's concatenated L3 wire — the exact bytes whose
     /// BLAKE3 is the manifest key. Admission verifies
-    /// `segment_digest(&wire) == payload_digest` exactly once and refuses
-    /// the insert on mismatch: L2 never holds bytes it did not verify.
-    /// After admission the segment bytes are immutable, so reads are a
-    /// digest lookup plus handle assembly — no re-hash.
+    /// `segment_digest(&wire) == payload_digest` and refuses the insert on
+    /// mismatch: L2 never holds bytes it did not verify. Every layout
+    /// segment's digest is verified against its exact wire range before the
+    /// pool is touched, so a handle can never serve bytes its digest does
+    /// not describe. After admission the segment bytes are immutable, so
+    /// reads are a digest lookup plus handle assembly — no re-hash.
     ///
-    /// Returns the evictions the admission caused, so callers and tests can
-    /// assert policy. The budget is charged with the entry's *distinct*
-    /// segment bytes: segments already held by another entry are shared,
-    /// not duplicated, and only the first admission pays for them.
+    /// The admission is atomic with respect to the segment pool: the
+    /// incoming layout's segments are installed (or reserved) *before* the
+    /// previous entry at the same key is released and before eviction runs,
+    /// with those handles pinned against removal, so a replacement or a
+    /// sharing admission can never release a handle it is about to
+    /// reference. Returns the evictions the admission caused. The budget is
+    /// charged with the entry's *distinct* segment bytes: segments already
+    /// held by another entry are shared, not duplicated, and only the first
+    /// admission pays for them.
     pub fn admit(
         &self,
         cache_key: String,
@@ -439,8 +560,8 @@ impl L2Tier {
             self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
             return Err(L2InsertRefusal::MalformedDigest);
         }
-        // The one integrity check: the wire must hash to the claimed
-        // manifest-key digest.
+        // The one integrity check on the whole wire: it must hash to the
+        // claimed manifest-key digest.
         let actual = segment_digest(wire);
         if actual != payload_digest {
             self.stats.admission_rejects.fetch_add(1, Ordering::Relaxed);
@@ -460,42 +581,73 @@ impl L2Tier {
                 wire.len()
             )));
         }
+        // Every segment slice is hashed against its claimed digest before
+        // any pool mutation: pool reuse trusts content, not digest text.
+        let segments = validate_layout(&mirror, wire)?;
+
         let mut inner = self.inner.lock().expect("L2 map lock poisoned");
-        // Distinct-byte charge: segments the pool already holds (shared
-        // prefix with another entry) cost nothing new, provided the pool's
-        // copy still covers the segment's full length. Anything else is cut
-        // out of the verified wire.
+        // Distinct-byte charge: segments the pool already holds with
+        // exactly the verified content are shared (anything else conflicts
+        // or is new). `shared` pins every handle this admission references
+        // — including segments still owned by the entry being replaced —
+        // so release and eviction below cannot drop them out from under
+        // the transaction.
+        let mut shared: Vec<String> = Vec::new();
         let mut new_segments: Vec<(String, SegmentHandle)> = Vec::new();
         let mut new_bytes = 0u64;
         let mut shared_bytes = 0u64;
-        for (digest, range) in &mirror.layout().segments {
-            let expected_len = (range.end.saturating_sub(range.start)) as usize;
-            if let Some(handle) = inner.segments.get(digest) {
-                if handle.bytes.len() == expected_len {
-                    shared_bytes += expected_len as u64;
-                    continue;
+        for &(digest, slice) in segments.iter() {
+            if new_segments.iter().any(|(d, _)| d == digest) {
+                // Within-admission duplicate digest: the validation pass
+                // already proved both slices have identical content, so
+                // keep the first copy.
+                shared_bytes += slice.len() as u64;
+                continue;
+            }
+            match inner.segments.get(digest) {
+                // Pool already holds this exact content: share it, whoever
+                // currently owns it.
+                Some(handle) if handle.bytes.as_ref() == slice => {
+                    shared_bytes += slice.len() as u64;
+                    shared.push(digest.to_string());
                 }
-                // Pool copy disagrees with the verified wire: replace it.
-                let stale = inner.segments.remove(digest);
-                if let Some(handle) = stale {
-                    inner.bytes = inner.bytes.saturating_sub(handle.bytes.len() as u64);
+                // Same digest text, different bytes in the pool.
+                Some(_) => {
+                    // Replacing an entry at the same key legitimately
+                    // re-uses a digest with new content: the old owner is
+                    // about to be released. Anything else is a conflict —
+                    // a stale handle another live entry still references
+                    // must never be swapped underneath it.
+                    let replacing_same_key = inner
+                        .map
+                        .get(&cache_key)
+                        .is_some_and(|entry| entry.payload.segment_digests().contains(&digest));
+                    if !replacing_same_key {
+                        return Err(L2InsertRefusal::ConflictingSegment {
+                            digest: digest.to_string(),
+                            detail: "the pool holds different bytes under this digest \
+                                     for another live entry"
+                                .to_string(),
+                        });
+                    }
+                    new_bytes = new_bytes.saturating_add(slice.len() as u64);
+                    new_segments.push((
+                        digest.to_string(),
+                        SegmentHandle {
+                            bytes: Arc::new(slice.to_vec()),
+                        },
+                    ));
+                }
+                None => {
+                    new_bytes = new_bytes.saturating_add(slice.len() as u64);
+                    new_segments.push((
+                        digest.to_string(),
+                        SegmentHandle {
+                            bytes: Arc::new(slice.to_vec()),
+                        },
+                    ));
                 }
             }
-            if let Some(position) = new_segments.iter().position(|(d, _)| d == digest) {
-                // Within-admission duplicate: keep the first copy.
-                let existing = &new_segments[position].1;
-                if existing.bytes.len() == expected_len {
-                    shared_bytes += expected_len as u64;
-                    continue;
-                }
-                new_bytes = new_bytes.saturating_sub(existing.bytes.len() as u64);
-                new_segments.remove(position);
-            }
-            let start = (range.start as usize).min(wire.len());
-            let end = (range.end as usize).min(wire.len());
-            let bytes = Arc::new(wire[start..end].to_vec());
-            new_bytes = new_bytes.saturating_add(bytes.len() as u64);
-            new_segments.push((digest.to_string(), SegmentHandle { bytes }));
         }
         if new_bytes > self.budget_bytes {
             self.stats
@@ -505,21 +657,55 @@ impl L2Tier {
                 payload_bytes: new_bytes,
             });
         }
+        // Reserve the new handles in the pool before releasing anything,
+        // so a digest re-used with new content is unambiguous from here on
+        // and the incoming entry's bytes cannot be dropped mid-transaction.
+        for (digest, handle) in &new_segments {
+            inner.bytes = inner.bytes.saturating_add(handle.bytes.len() as u64);
+            inner.segments.insert(digest.clone(), handle.clone());
+        }
+        let protected: Vec<String> = new_segments
+            .iter()
+            .map(|(digest, _)| digest.clone())
+            .chain(shared.iter().cloned())
+            .collect();
         // One entry per cache key: a re-admit at the same coordinates is a
         // replacement (fresher state for the same prefix), not a duplicate.
+        // The old entry's segments survive release where the incoming
+        // layout shares them (`protected`), so identical-wire re-admits
+        // never delete their own handles.
         if let Some(existing) = inner.map.remove(&cache_key) {
-            self.release_entry_segments(&mut inner, &existing);
+            self.release_entry_segments(&mut inner, &existing, &protected);
         }
-        // Evict to make room BEFORE the new segments land: the projected
-        // footprint is the live pool plus this admission's distinct bytes.
-        let headroom = self.budget_bytes.saturating_sub(new_bytes);
-        let evictions = self.evict_to_limit(&mut inner, headroom, &cache_key);
+        // Evict to make room: the reservation already counts toward
+        // `inner.bytes`, so the pool (including this admission's distinct
+        // bytes) must fit the whole budget. Shared handles are pinned and
+        // can keep a victim from freeing — those retained bytes transfer
+        // to this entry's charge below.
+        let evictions = self.evict_to_limit(&mut inner, self.budget_bytes, &cache_key, &protected);
+        // A victim that shared segments with this admission freed nothing:
+        // those bytes are now exclusively this entry's, so the charge must
+        // include them. (The pool may then sit above budget by exactly the
+        // pinned bytes the victim could not release — bounded by this
+        // entry's own wire.)
+        let mut charge_bytes = new_bytes;
+        for digest in &shared {
+            let still_shared = inner
+                .map
+                .values()
+                .any(|other| other.payload.segment_digests().contains(&digest.as_str()));
+            if !still_shared {
+                charge_bytes = charge_bytes.saturating_add(
+                    inner
+                        .segments
+                        .get(digest)
+                        .map(|handle| handle.bytes.len() as u64)
+                        .unwrap_or(0),
+                );
+            }
+        }
         inner.clock = inner.clock.wrapping_add(1);
         let last_used = inner.clock;
-        for (digest, handle) in new_segments {
-            inner.bytes = inner.bytes.saturating_add(handle.bytes.len() as u64);
-            inner.segments.insert(digest, handle);
-        }
         self.stats
             .shared_bytes_admitted
             .fetch_add(shared_bytes, Ordering::Relaxed);
@@ -531,7 +717,7 @@ impl L2Tier {
                 payload_digest,
                 origin,
                 last_used,
-                charge_bytes: new_bytes,
+                charge_bytes,
                 payload_bytes,
             },
         );
@@ -543,23 +729,57 @@ impl L2Tier {
     /// `Arc` clones of its segment handles (no byte copies). Digests are
     /// not re-hashed: admission verified the wire, and segments are
     /// immutable afterward.
+    ///
+    /// If a segment handle the entry references is missing from the pool,
+    /// the entry is corrupt: the hit is downgraded to a miss, the entry and
+    /// its surviving segments are removed, LRU recency never moves, and the
+    /// miss counter is incremented.
     pub fn get(&self, cache_key: &str) -> Option<L2Hit> {
         let mut inner = self.inner.lock().expect("L2 map lock poisoned");
+        let digests: Vec<String> = match inner.map.get(cache_key) {
+            Some(entry) => entry
+                .payload
+                .segment_digests()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            // Absent key: a miss, never an LRU touch.
+            None => {
+                self.stats.misses.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+        };
+        let missing = digests
+            .iter()
+            .any(|digest| !inner.segments.contains_key(digest));
+        if missing {
+            // Corrupt entry: a segment handle vanished without an entry
+            // removal. Serve a miss, never partial bytes; drop the entry
+            // and its surviving handles; recency stays untouched.
+            let removed = inner.map.remove(cache_key);
+            if let Some(entry) = removed {
+                self.release_entry_segments(&mut inner, &entry, &[]);
+            }
+            self.stats.misses.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         let now = {
             inner.clock = inner.clock.wrapping_add(1);
             inner.clock
         };
-        let entry = inner.map.get_mut(cache_key)?;
+        let entry = inner.map.get_mut(cache_key).expect("entry checked above");
         entry.last_used = now;
         let payload = entry.payload.clone();
         let token_count = entry.token_count;
         let payload_digest = entry.payload_digest.clone();
         self.stats.hits.fetch_add(1, Ordering::Relaxed);
-        let mut segments = HashMap::with_capacity(payload.segment_digests().len());
-        for digest in payload.segment_digests() {
-            if let Some(handle) = inner.segments.get(digest) {
-                segments.insert(digest.to_string(), handle.clone());
-            }
+        let mut segments = HashMap::with_capacity(digests.len());
+        for digest in &digests {
+            let handle = inner
+                .segments
+                .get(digest)
+                .expect("all digests checked above");
+            segments.insert(digest.clone(), handle.clone());
         }
         Some(L2Hit {
             payload,
@@ -589,7 +809,7 @@ impl L2Tier {
         let mut inner = self.inner.lock().expect("L2 map poisoned");
         let removed = inner.map.remove(cache_key)?;
         let before = inner.bytes;
-        self.release_entry_segments(&mut inner, &removed);
+        self.release_entry_segments(&mut inner, &removed, &[]);
         let freed = before.saturating_sub(inner.bytes);
         Some(L2Eviction {
             cache_key: cache_key.to_string(),
@@ -620,6 +840,15 @@ impl L2Tier {
         self.len() == 0
     }
 
+    /// Test-only: drop every pool handle without touching the entry map,
+    /// to force the missing-handle corruption path in `get`.
+    #[cfg(test)]
+    fn clear_pool_for_test(&self) {
+        let mut inner = self.inner.lock().expect("L2 map lock poisoned");
+        inner.segments.clear();
+        inner.bytes = 0;
+    }
+
     /// Point-in-time snapshot combining atomics with the locked totals.
     pub fn stats(&self) -> L2Stats {
         let inner = self.inner.lock().expect("L2 map lock poisoned");
@@ -645,12 +874,16 @@ impl L2Tier {
         }
     }
 
-    /// Drop an entry's exclusive segments from the pool, decrementing the
-    /// pool byte total. Shared segments stay: another entry still
-    /// references them. Zero-byte segments are dropped without accounting
-    /// (a pool without payload bytes must never charge the budget).
-    fn release_entry_segments(&self, inner: &mut L2Inner, entry: &L2Entry) {
+    /// Drop an entry's segments from the pool, decrementing the pool byte
+    /// total. Segments still referenced by another live entry, or pinned by
+    /// an in-flight admission (`protected`), stay. Zero-byte segments are
+    /// dropped without accounting (a pool without payload bytes must never
+    /// charge the budget).
+    fn release_entry_segments(&self, inner: &mut L2Inner, entry: &L2Entry, protected: &[String]) {
         for digest in entry.payload.segment_digests() {
+            if protected.iter().any(|p| p == digest) {
+                continue;
+            }
             let still_referenced = inner
                 .map
                 .values()
@@ -667,12 +900,15 @@ impl L2Tier {
 
     /// Evict in deterministic LRU order until the pool fits `limit` bytes.
     /// Shared segments are released only with their last referencing
-    /// entry; a victim that frees nothing is still counted as an eviction.
+    /// entry; handles pinned by the in-flight admission (`protected`) are
+    /// never released; a victim that frees nothing is still counted as an
+    /// eviction.
     fn evict_to_limit(
         &self,
         inner: &mut L2Inner,
         limit: u64,
         protect_key: &str,
+        protected: &[String],
     ) -> Vec<L2Eviction> {
         let mut evictions = Vec::new();
         while inner.bytes > limit {
@@ -690,7 +926,7 @@ impl L2Tier {
                 break;
             };
             let before = inner.bytes;
-            self.release_entry_segments(inner, &removed);
+            self.release_entry_segments(inner, &removed, protected);
             let freed = before.saturating_sub(inner.bytes);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             evictions.push(L2Eviction {
@@ -1246,14 +1482,14 @@ mod tests {
                     index: 0,
                     offset: 0,
                     bytes: 16,
-                    digest: "blake3:seg-a".to_string(),
+                    digest: segment_digest(&wire_bytes[..16]),
                     meta_json: None,
                 },
                 HandoffSegmentRef {
                     index: 1,
                     offset: 16,
                     bytes: 16,
-                    digest: "blake3:seg-b".to_string(),
+                    digest: segment_digest(&wire_bytes[16..]),
                     meta_json: None,
                 },
             ],
@@ -1393,5 +1629,222 @@ mod tests {
         assert!(tier.remove(&k).is_none(), "second remove is None");
         assert_eq!(tier.stats().bytes, 0);
         assert_eq!(tier.stats().segments, 0);
+    }
+
+    #[test]
+    fn identical_wire_same_key_readmit_keeps_its_own_segments() {
+        // The original failure: re-admitting an identical wire at the same
+        // key classified the existing pool segments as shared, released the
+        // old entry's last references, inserted no replacement handles, and
+        // left an entry whose segments were absent
+        // (`declared=14 restored=0 pool=0`).
+        let tier = L2Tier::new(1 << 20);
+        let k = key("ns", &[11]);
+        let segment_len = 16u64;
+        let (w, digest) = wire(64, 21);
+        for round in 0..3 {
+            let mirror = manifest_shaped_mirror(&w, segment_len);
+            tier.admit(k.clone(), 4, digest.clone(), &w, mirror, L2Origin::FromL3)
+                .expect("identical re-admit must be accepted");
+            let hit = tier
+                .get(&k)
+                .unwrap_or_else(|| panic!("round {round}: re-admitted key must hit"));
+            let payload = hit.to_payload();
+            let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
+            assert_eq!(
+                bytes.as_ref(),
+                &w[..],
+                "round {round}: re-admitted entry must serve its full wire"
+            );
+            let stats = tier.stats();
+            assert_eq!(stats.entries, 1);
+            assert_eq!(
+                stats.segments, 4,
+                "round {round}: pool must still hold every segment"
+            );
+            assert_eq!(stats.bytes, 64, "round {round}: pool bytes exact");
+        }
+    }
+
+    #[test]
+    fn eviction_cannot_release_segments_the_incoming_entry_shares() {
+        // Pressure case: the incoming entry shares its would-be victim's
+        // segments. The victim is not protected by the cache-key filter
+        // (different key) and is not yet replaced in the map, so eviction
+        // could drop the shared handles before the new entry lands.
+        let segment_len = 16u64;
+        let total = segment_len * 4;
+        // Budget forces eviction: the reserved pool (64 bytes) exceeds it
+        // by one byte until the old entry releases its exclusive segment.
+        let tier = L2Tier::new(total - 1);
+        let (w, _) = wire(total as usize, 30);
+        let short_len = segment_len * 3;
+
+        let old = key("ns", &[1]);
+        tier.admit(
+            old.clone(),
+            3,
+            segment_digest(&w[..short_len as usize]),
+            &w[..short_len as usize],
+            manifest_shaped_mirror(&w[..short_len as usize], segment_len),
+            L2Origin::FromL3,
+        )
+        .expect("old entry admitted");
+
+        // New key whose wire extends the old entry's segments; the budget
+        // forces eviction of the old entry during this admission.
+        let grown = key("ns", &[2]);
+        let evictions = tier
+            .admit(
+                grown.clone(),
+                4,
+                segment_digest(&w[..total as usize]),
+                &w[..total as usize],
+                manifest_shaped_mirror(&w, segment_len),
+                L2Origin::FromL3,
+            )
+            .expect("admission must succeed by evicting the old entry");
+        assert_eq!(evictions.len(), 1, "old entry is the victim");
+        assert_eq!(evictions[0].cache_key, old);
+
+        // The shared prefix segments must have survived the eviction.
+        let hit = tier.get(&grown).expect("grown entry hits");
+        let payload = hit.to_payload();
+        let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
+        assert_eq!(
+            bytes.as_ref(),
+            &w[..total as usize],
+            "shared segments must survive the admission that evicted their old owner"
+        );
+        let stats = tier.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.segments, 4);
+        assert_eq!(stats.bytes, total);
+        assert!(tier.peek(&old).is_none(), "old entry was evicted");
+    }
+
+    #[test]
+    fn same_digest_different_bytes_is_rejected_unless_replacing_same_key() {
+        // A second wire claiming an existing segment digest with
+        // different-length content must not steal or replace the live
+        // pool handle.
+        let tier = L2Tier::new(1 << 20);
+        let (w1, _) = wire(32, 41);
+        let k1 = key("ns", &[1]);
+        tier.admit(
+            k1.clone(),
+            2,
+            segment_digest(&w1),
+            &w1,
+            single_segment_mirror(&w1),
+            L2Origin::FromL3,
+        )
+        .expect("first entry admitted");
+
+        // Forge a fake digest; the wire integrity check would reject a
+        // mismatched whole-wire digest, so claim the real segment digest
+        // of another wire as the *layout segment* digest instead. Build a
+        // second wire whose layout claims k1's segment digest.
+        let (w2, d2) = wire(48, 42);
+        let stolen = segment_digest(&w1);
+        let mirror = ExactStatePayloadMirror::FullState {
+            layout: L2Layout {
+                payload_kind: ExactStatePayloadKind::FullState,
+                total_bytes: 48,
+                kv_bytes: 48,
+                recurrent_bytes: 0,
+                segments: vec![(stolen, 0..24), (segment_digest(&w2[24..]), 24..48)],
+            },
+        };
+        let k2 = key("ns", &[2]);
+        let err = tier
+            .admit(k2, 3, d2, &w2, mirror, L2Origin::Direct)
+            .expect_err(
+                "a layout that claims another entry's digest with different bytes \
+                         must be refused",
+            );
+        assert!(
+            matches!(err, L2InsertRefusal::SegmentDigestMismatch { .. }),
+            "expected segment digest mismatch, got: {err:?}"
+        );
+        // The first entry's handle is untouched and still serves its bytes.
+        let hit = tier.get(&k1).expect("first entry intact");
+        let payload = hit.to_payload();
+        let (bytes, _) = payload.full_state_bytes_timed().expect("bytes");
+        assert_eq!(bytes.as_ref(), &w1[..]);
+    }
+
+    #[test]
+    fn get_with_missing_segment_handle_is_a_cold_miss_without_recency() {
+        let tier = L2Tier::new(1 << 20);
+        let k = key("ns", &[5]);
+        let (w, d) = wire(64, 51);
+        tier.admit(
+            k.clone(),
+            4,
+            d,
+            &w,
+            manifest_shaped_mirror(&w, 16),
+            L2Origin::FromL3,
+        )
+        .expect("admitted");
+
+        // Simulate corruption: drop one handle directly out of the pool
+        // (test-only access through the public remove on a scratch entry
+        // would also free it, but here we remove the pool entry via the
+        // tier's own release path by admitting an exclusive same-digest
+        // layout is impossible — so exercise via a second tier sharing
+        // nothing is not needed; directly verify the downgrade path by
+        // clearing the pool).
+        tier.clear_pool_for_test();
+
+        let hit = tier.get(&k);
+        assert!(hit.is_none(), "missing handles must downgrade to a miss");
+        let stats = tier.stats();
+        assert_eq!(stats.misses, 1, "the miss counter must move");
+        assert_eq!(stats.hits, 0);
+        // The corrupt entry is removed: the next get is also a miss, not a
+        // partial hit, and no panic occurs.
+        assert!(tier.get(&k).is_none());
+        assert_eq!(tier.stats().misses, 2);
+        assert!(
+            tier.peek(&k).is_none(),
+            "corrupt entry must be dropped, not left peekable"
+        );
+    }
+
+    #[test]
+    fn from_manifest_rejects_wrong_segment_index_and_offset() {
+        let (w, digest) = wire(32, 61);
+        let base = |index: u32, offset: u64, digest: String| HandoffManifest {
+            version: MANIFEST_VERSION,
+            model_identity: "m".to_string(),
+            state_identity: "s".to_string(),
+            payload_kind: "full-state".to_string(),
+            total_bytes: 32,
+            payload_digest: digest.clone(),
+            segments: vec![HandoffSegmentRef {
+                index,
+                offset,
+                bytes: 32,
+                digest: segment_digest(&w),
+                meta_json: None,
+            }],
+            kv_bytes: 32,
+            recurrent_bytes: 0,
+            kv_desc_json: None,
+            token_count: 1,
+            continuation_token: 0,
+            expected_tokens: Vec::new(),
+        };
+        let manifest = base(1, 0, digest.clone());
+        let err = ExactStatePayloadMirror::from_manifest(&manifest)
+            .expect_err("wrong segment index must be refused");
+        assert!(matches!(err, L2InsertRefusal::MalformedManifest(_)));
+
+        let manifest = base(0, 8, digest);
+        let err = ExactStatePayloadMirror::from_manifest(&manifest)
+            .expect_err("wrong segment offset must be refused");
+        assert!(matches!(err, L2InsertRefusal::MalformedManifest(_)));
     }
 }

@@ -49,8 +49,10 @@ pub enum CommandKind {
 
 #[derive(Parser)]
 pub struct L2TierArgs {
-    /// Working directory for the temporary L3 store. Created and removed by
-    /// the run unless `--keep-store` is set.
+    /// Working directory for the L3 store. Must not exist: the bench
+    /// creates, sentinel-marks, and (unless `--keep-store`) removes a
+    /// directory it owns, and refuses any pre-existing path instead of
+    /// deleting it.
     #[arg(long, default_value = "/tmp/skippy-l2-tier-bench")]
     pub store_root: PathBuf,
     /// Number of timed L3-cold / L2-warm matched pairs after warmup.
