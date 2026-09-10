@@ -62,6 +62,26 @@ mod dynamic {
                 runtime_selection,
             }
         }
+
+        pub(crate) fn from_config(
+            config: mesh_llm_config::NativeRuntimeConfig,
+            llama_flavor: Option<mesh_llm_system::backend::BinaryFlavor>,
+        ) -> Result<Self> {
+            let runtime_selection = RuntimeSelection::parse(
+                llama_flavor
+                    .map(mesh_llm_system::backend::BinaryFlavor::suffix)
+                    .or(config.selection.as_deref()),
+            )?;
+            Ok(match config.mesh_version {
+                Some(mesh_version) => {
+                    Self::explicit(mesh_version, config.skippy_abi, runtime_selection)
+                }
+                None => Self {
+                    runtime_selection,
+                    ..Self::current()
+                },
+            })
+        }
     }
 
     pub(crate) fn load_local_native_runtime_for_embedded_serving()
@@ -1014,6 +1034,72 @@ mod dynamic {
             assert_eq!(
                 startup_install_message(false),
                 "Discovered native runtime bundles take precedence over installed runtimes; attempting one-shot startup install"
+            );
+        }
+
+        #[test]
+        fn cli_llama_flavor_selects_the_current_native_runtime_backend() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig::default(),
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should resolve");
+
+            assert_eq!(selection.mesh_version, crate::RELEASE_VERSION);
+            assert_eq!(
+                selection.skippy_abi.as_deref(),
+                Some(crate::system::native_runtime_install::current_skippy_abi_version().as_str())
+            );
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                }
+            );
+        }
+
+        #[test]
+        fn cli_llama_flavor_overrides_configured_backend_without_changing_version() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig {
+                    mesh_version: Some("0.75.0".to_string()),
+                    skippy_abi: Some("0.1.52".to_string()),
+                    selection: Some("cuda13".to_string()),
+                },
+                Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
+            )
+            .expect("Vulkan CLI flavor should override the configured backend");
+
+            assert_eq!(selection.mesh_version, "0.75.0");
+            assert_eq!(selection.skippy_abi.as_deref(), Some("0.1.52"));
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Vulkan,
+                    cuda_toolkit_major: None,
+                }
+            );
+        }
+
+        #[test]
+        fn configured_native_runtime_selection_is_used_without_cli_override() {
+            let selection = NativeRuntimeStartupSelection::from_config(
+                mesh_llm_config::NativeRuntimeConfig {
+                    mesh_version: Some("0.75.0".to_string()),
+                    skippy_abi: Some("0.1.52".to_string()),
+                    selection: Some("cuda13".to_string()),
+                },
+                None,
+            )
+            .expect("configured CUDA selection should resolve");
+
+            assert_eq!(
+                selection.runtime_selection,
+                RuntimeSelection::Backend {
+                    kind: mesh_llm_native_runtime::NativeRuntimeBackendKind::Cuda,
+                    cuda_toolkit_major: Some(13),
+                }
             );
         }
     }
