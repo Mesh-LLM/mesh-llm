@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download and verify pinned inputs
@@ -312,16 +312,15 @@ jobs:
             "$OUTPUT_DIR/card.md" "card.md" --repo-type dataset \
             --commit-message "card refresh $RUN_DATE"
 
-      - name: Open repair PR on regression (opencode loop)
+      - name: Prepare repair PR artifact on regression (opencode loop)
         if: failure()
         env:
-          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
           # Same location the summarize step downloaded the baseline to.
           HISTORY_LOCAL: ${{ runner.temp }}/agentic-replay-history
         run: |
           set -euo pipefail
           scripts/agentic-replay-repair.sh "$RUNNER_TEMP/agentic-replay-artifacts" || {
-            echo "repair did not clear the regression — PR opened flagged needs-attention" >&2
+            echo "repair artifact preparation failed; no PR was opened" >&2
           }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -330,3 +329,177 @@ jobs:
           name: replay-artifacts
           path: ${{ runner.temp }}/agentic-replay-artifacts/
           retention-days: 30
+
+  publish-repair:
+    needs: replay
+    if: >-
+      !cancelled() &&
+      github.repository == 'Mesh-LLM/mesh-llm' &&
+      github.ref == 'refs/heads/main' &&
+      needs.replay.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Download repair publication artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: replay-artifacts
+          path: ${{ runner.temp }}/replay-artifacts
+
+      - name: Check out trusted main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate and apply repair publication
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLICATION_DIR="$RUNNER_TEMP/replay-artifacts/repair-publication"
+          STATUS_FILE="$PUBLICATION_DIR/status.json"
+          PATCH_FILE="$PUBLICATION_DIR/repair.patch"
+          BODY_FILE="$PUBLICATION_DIR/pr-body.md"
+          VALIDATED=$(python3 - "$PUBLICATION_DIR" "$STATUS_FILE" "$PATCH_FILE" "$BODY_FILE" "${{ github.sha }}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          publication_dir = pathlib.Path(sys.argv[1])
+          status_path = pathlib.Path(sys.argv[2])
+          patch_path = pathlib.Path(sys.argv[3])
+          body_path = pathlib.Path(sys.argv[4])
+          expected_base = sys.argv[5]
+          expected_files = {"pr-body.md", "repair.patch", "status.json"}
+          if publication_dir.is_symlink() or not publication_dir.is_dir() or {
+              path.name for path in publication_dir.iterdir()
+          } != expected_files:
+              raise SystemExit("repair publication must contain exactly its three data files")
+          for path in (status_path, patch_path, body_path):
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"repair publication file is not regular: {path}")
+
+          status = json.loads(status_path.read_text(encoding="utf-8"))
+          required = {
+              "base_sha",
+              "body_bytes",
+              "body_sha256",
+              "patch_bytes",
+              "patch_sha256",
+              "repair_commit_sha",
+              "resolution",
+              "run_id",
+              "schema_version",
+          }
+          if (
+              set(status) != required
+              or type(status["schema_version"]) is not int
+              or status["schema_version"] != 1
+          ):
+              raise SystemExit("repair publication status schema is invalid")
+          if status["resolution"] not in {"fix-verified", "needs-attention"}:
+              raise SystemExit("repair publication resolution is invalid")
+          if not re.fullmatch(r"[0-9]+", status["run_id"]):
+              raise SystemExit("repair publication run_id is invalid")
+          for key in ("base_sha", "repair_commit_sha"):
+              if not isinstance(status[key], str) or not re.fullmatch(r"[0-9a-f]{40}", status[key]):
+                  raise SystemExit(f"repair publication {key} is invalid")
+          if status["base_sha"] != expected_base:
+              raise SystemExit("repair publication is for a different workflow source SHA")
+          current_base = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if current_base != expected_base:
+              raise SystemExit("trusted checkout is not the workflow source SHA")
+
+          def sha256(path: pathlib.Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          patch_bytes = patch_path.stat().st_size
+          body_bytes = body_path.stat().st_size
+          if not 0 < patch_bytes <= 64 * 1024 * 1024 or not 0 < body_bytes <= 1024 * 1024:
+              raise SystemExit("repair publication size is outside the allowed bounds")
+          if status["patch_bytes"] != patch_bytes or status["patch_sha256"] != sha256(patch_path):
+              raise SystemExit("repair patch digest does not match status metadata")
+          if status["body_bytes"] != body_bytes or status["body_sha256"] != sha256(body_path):
+              raise SystemExit("repair PR body digest does not match status metadata")
+          body_path.read_text(encoding="utf-8")
+          if b"\x00" in body_path.read_bytes():
+              raise SystemExit("repair PR body contains a NUL byte")
+          patch = patch_path.read_bytes()
+          if not patch.startswith(b"From ") or b"\nSubject: " not in patch:
+              raise SystemExit("repair patch is not a format-patch artifact")
+          print(f'{status["run_id"]}\t{status["resolution"]}')
+          PY
+          )
+          IFS=$'\t' read -r RUN_ID RESOLUTION <<< "$VALIDATED"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "resolution=$RESOLUTION" >> "$GITHUB_OUTPUT"
+          PATCH_FILE="$RUNNER_TEMP/replay-artifacts/repair-publication/repair.patch"
+          if grep -q '^diff --git ' "$PATCH_FILE"; then
+            git -c core.hooksPath=/dev/null apply --check "$PATCH_FILE"
+            git -c core.hooksPath=/dev/null apply --index "$PATCH_FILE"
+          fi
+          git config user.name "mesh-replay-bot"
+          git config user.email "replay-bot@meshllm.invalid"
+          git -c core.hooksPath=/dev/null commit --no-gpg-sign --allow-empty --no-verify \
+            -m "fix: agentic replay nightly regression (run $RUN_ID)"
+          test "$(git rev-parse HEAD^)" = "${{ github.sha }}"
+
+      - name: Push repair branch and open PR
+        env:
+          CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}
+        run: |
+          set -euo pipefail
+          PUBLICATION_DIR="$RUNNER_TEMP/replay-artifacts/repair-publication"
+          RUN_ID="${{ steps.validate.outputs.run_id }}"
+          RESOLUTION="${{ steps.validate.outputs.resolution }}"
+          case "$RESOLUTION" in
+            fix-verified)
+              TITLE="Agentic replay nightly regression — run ${RUN_ID} (fix verified)"
+              LABELS="agentic-replay,nightly"
+              ;;
+            needs-attention)
+              TITLE="Agentic replay nightly regression — run ${RUN_ID} — NEEDS ATTENTION"
+              LABELS="agentic-replay,nightly,needs-attention"
+              ;;
+            *)
+              echo "validated resolution is invalid" >&2
+              exit 1
+              ;;
+          esac
+          BRANCH="agentic-replay-nightly/repair-${RUN_ID}"
+          ASKPASS_SCRIPT=$(mktemp "${RUNNER_TEMP}/agentic-replay-askpass.XXXXXX")
+          chmod 700 "$ASKPASS_SCRIPT"
+          trap 'rm -f -- "$ASKPASS_SCRIPT"' EXIT
+          cat > "$ASKPASS_SCRIPT" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            Username*) printf '%s\n' 'x-access-token' ;;
+            Password*) printf '%s\n' "${CANARY_REPAIR_TOKEN:?}" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          CANARY_REPAIR_TOKEN="$CANARY_REPAIR_TOKEN" \
+            GIT_ASKPASS="$ASKPASS_SCRIPT" GIT_TERMINAL_PROMPT=0 \
+            git -c core.hooksPath=/dev/null -c credential.helper= \
+              push "https://github.com/${GITHUB_REPOSITORY}.git" \
+              "HEAD:refs/heads/${BRANCH}"
+          rm -f -- "$ASKPASS_SCRIPT"
+          ASKPASS_SCRIPT=""
+          GH_TOKEN="$CANARY_REPAIR_TOKEN" gh pr create \
+            --title "$TITLE" \
+            --body-file "$PUBLICATION_DIR/pr-body.md" \
+            --label "$LABELS" \
+            --base main \
+            --head "$BRANCH"

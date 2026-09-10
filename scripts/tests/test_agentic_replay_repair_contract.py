@@ -17,31 +17,51 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
         self.matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
 
-    def test_credentials_are_captured_then_removed_before_untrusted_execution(self) -> None:
-        capture = self.repair.index('REPAIR_TOKEN="${CANARY_REPAIR_TOKEN:-}"')
-        clear = self.repair.index("unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN")
-        opencode = self.repair.index("run_untrusted opencode")
-        self.assertLess(capture, clear)
-        self.assertLess(clear, opencode)
-        self.assertIn("export -n REPAIR_TOKEN", self.repair)
-        self.assertIn("env -u CANARY_REPAIR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN -u REPAIR_TOKEN", self.repair)
+    def test_persistent_repair_only_emits_publication_data(self) -> None:
+        self.assertIn("unset CANARY_REPAIR_TOKEN GH_TOKEN GITHUB_TOKEN", self.repair)
+        self.assertIn("run_untrusted opencode", self.repair)
         self.assertIn("run_untrusted python3 evals/agentic-replay.py", self.repair)
         self.assertIn("run_untrusted python3 scripts/agentic-replay-history.py", self.repair)
-        self.assertNotIn("${GH_TOKEN:-}", self.repair)
+        self.assertIn('PUBLICATION_DIR="$OUTPUT_DIR/repair-publication"', self.repair)
+        self.assertIn("git format-patch -1 --binary --stdout HEAD", self.repair)
+        self.assertIn('"patch_sha256"', self.repair)
+        self.assertIn('"body_sha256"', self.repair)
+        self.assertNotIn('REPAIR_TOKEN="', self.repair)
+        self.assertNotIn("GIT_ASKPASS", self.repair)
+        self.assertNotIn("gh_repair", self.repair)
+        self.assertNotIn("gh pr create", self.repair)
+        self.assertNotIn("git push", self.repair)
+        self.assertIn("git -c core.hooksPath=/dev/null commit", self.repair)
+        self.assertIn('BASE_SHA=$(git rev-parse HEAD)', self.repair)
+        self.assertIn('git add -A\ngit reset --soft "$BASE_SHA"', self.repair)
+        self.assertIn("git -c core.hooksPath=/dev/null commit --no-gpg-sign", self.repair)
 
-    def test_push_and_github_api_use_narrow_credential_scopes(self) -> None:
-        self.assertIn('CANARY_REPAIR_TOKEN="$REPAIR_TOKEN"', self.repair)
-        self.assertIn('GIT_ASKPASS="$ASKPASS_SCRIPT"', self.repair)
-        self.assertIn('GIT_TERMINAL_PROMPT=0', self.repair)
-        self.assertIn('git -c core.hooksPath=/dev/null -c credential.helper=', self.repair)
-        self.assertIn('push "https://github.com/${GITHUB_REPOSITORY:-Mesh-LLM/mesh-llm}.git"', self.repair)
-        self.assertNotIn("x-access-token:${", self.repair)
-        self.assertNotIn("PUSH_REMOTE=", self.repair)
-        self.assertIn('GH_TOKEN="$REPAIR_TOKEN" gh "$@"', self.repair)
-        self.assertIn("gh_repair pr create", self.repair)
-        self.assertIn('REDACTION_TOKEN="$REPAIR_TOKEN"', self.repair)
-        self.assertIn('.replace(os.environ["REDACTION_TOKEN"]', self.repair)
-        self.assertIn('trap cleanup EXIT', self.repair)
+    def test_hosted_publication_job_owns_secret_and_publication(self) -> None:
+        repair_step = self.workflow.split(
+            "      - name: Prepare repair PR artifact on regression (opencode loop)", 1
+        )[1].split("      - uses: actions/upload-artifact@", 1)[0]
+        publication = self.workflow.split("  publish-repair:", 1)[1]
+        self.assertNotIn("CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", repair_step)
+        self.assertNotIn("git push", repair_step)
+        self.assertNotIn("gh pr create", repair_step)
+        self.assertIn("needs: replay", publication)
+        self.assertIn("!cancelled()", publication)
+        self.assertNotIn("always()", publication)
+        self.assertIn("needs.replay.result == 'failure'", publication)
+        self.assertIn("runs-on: ubuntu-latest", publication)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", publication)
+        self.assertIn("ref: ${{ github.sha }}", publication)
+        replay_workflow = self.workflow.split("  publish-repair:", 1)[0]
+        self.assertIn(
+            'with:\n          ref: ${{ github.sha }}\n          persist-credentials: false',
+            replay_workflow,
+        )
+        self.assertIn("CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", publication)
+        self.assertIn("git -c core.hooksPath=/dev/null", publication)
+        self.assertIn("push \"https://github.com/${GITHUB_REPOSITORY}.git\"", publication)
+        self.assertIn("gh pr create", publication)
+        self.assertIn("--body-file \"$PUBLICATION_DIR/pr-body.md\"", publication)
+        self.assertIn("git -c core.hooksPath=/dev/null commit --no-gpg-sign", publication)
 
     def test_repair_rerun_uses_all_matrix_replay_parameters(self) -> None:
         for argument, variable in (
@@ -70,8 +90,6 @@ class AgenticReplayRepairContractTests(unittest.TestCase):
         self.assertIn('--passes "$PASSES"', self.workflow)
         self.assertIn('--warmup-turns "$WARMUP"', self.workflow)
         self.assertIn('LEVEL_ARGS+=(--concurrency "$level")', self.workflow)
-        self.assertIn("CANARY_REPAIR_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", self.workflow)
-        self.assertNotIn("GH_TOKEN: ${{ secrets.CANARY_REPAIR_TOKEN }}", self.workflow)
         self.assertIn('json.dumps(replay, sort_keys=True)', self.workflow)
         self.assertIn('--replay "$RUNNER_TEMP/agentic-replay-params.json"', self.workflow)
         self.assertEqual(self.matrix["replay"]["mode"], "checkpoint")
