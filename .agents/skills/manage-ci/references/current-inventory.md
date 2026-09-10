@@ -141,12 +141,23 @@ Merge settings observed on 2026-09-10: `allow_merge_commit=false`,
 `squash_merge_commit_message=COMMIT_MESSAGES`. The `COMMIT_MESSAGES` setting
 composes the squash body from the branch commit messages, which is how agent
 and bot `Co-authored-by:` trailers reach `main` even when the PR title is
-clean. `.githooks/commit-msg` rejects those trailers locally;
-`squash_merge_commit_message=PR_BODY` plus a negated `commit_message_pattern`
-rule on the active `main` ruleset (id 20090642, which currently carries
-`deletion`, `non_fast_forward`, `required_linear_history`,
-`required_status_checks`, and `pull_request`) is the repository-side
-enforcement. Neither repository setting has been changed.
+clean. `.githooks/commit-msg` rejects those trailers locally.
+
+The active `main` ruleset (id 20090642) carries `deletion`,
+`non_fast_forward`, `required_linear_history`, `required_status_checks`,
+`pull_request`, and, added 2026-09-10, a negated `commit_message_pattern`
+rule named "No agent, bot, or relay attribution trailers". Its regex rejects
+`noreply@anthropic.com`, any `buzz.xyz` address, `[bot]` accounts, and
+`*-by:` trailers naming an agent. Dry-run evidence: over the last 800 `main`
+commits the pattern matched 95, every one a genuine agent, bot, or relay
+trailer, with no false positive.
+
+That rule does not cover the four ruleset bypass actors
+(`michaelneale`, `i386`, `ndizazzo`, `micspiral`), all of whom hold
+`bypass_mode: always` and therefore skip the ruleset when they merge.
+`squash_merge_commit_message` remains `COMMIT_MESSAGES` and is not
+bypassable, so changing it to `PR_BODY` is the control that covers
+maintainer merges. That setting has not been changed.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
