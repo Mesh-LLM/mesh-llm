@@ -623,3 +623,59 @@ fn zero_ghost_capacity_is_a_real_zero_bound() {
     policy.remove(1);
     assert_eq!(policy.ghost_count(), 0, "zero capacity must retain nothing");
 }
+
+#[test]
+fn cap_victim_selection_covers_recomputed_shared_shares() {
+    // Removing shared references raises survivors' shares: the selected set
+    // must actually bring the class under cap once committed.
+    let mut policy = BenefitPolicy::new(PolicyConfig {
+        probation_byte_budget: 9 << 20,
+        grace_observations: 0,
+        ..PolicyConfig::default()
+    });
+    // Three no-hit probationers, each 1 MiB exclusive + a shared 9 MiB
+    // segment (3 MiB share each → class charge 3*(1+3) = 12 MiB > 9 MiB).
+    for key in 1..=3u64 {
+        let decision =
+            policy.consider_admission(key, 1 << 20, vec![(7u64, 9 << 20)], cost(400.0, 100.0));
+        for v in decision.probation_cap_victims {
+            policy.remove(v);
+        }
+    }
+    assert!(
+        policy.probation_bytes() <= 9 << 20,
+        "committed class charge {} over cap",
+        policy.probation_bytes()
+    );
+    // Removal must have happened through the decision path.
+    assert!(policy.len() < 3);
+}
+
+#[test]
+fn duplicate_segment_references_are_rejected() {
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    let decision =
+        policy.consider_admission(1, 0, vec![(42u64, 100), (42u64, 100)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert!(
+        decision
+            .reasons
+            .contains(&"duplicate-segment-reference".to_string())
+    );
+    assert!(policy.is_empty());
+    // Conflicting size for a known segment is also rejected.
+    let mut policy = BenefitPolicy::new(PolicyConfig::default());
+    policy.consider_admission(1, 0, vec![(42u64, 100)], cost(400.0, 100.0));
+    let decision = policy.consider_admission(2, 0, vec![(42u64, 200)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Reject);
+    assert!(
+        decision
+            .reasons
+            .contains(&"segment-size-conflict".to_string())
+    );
+    // Same size for a known segment is fine.
+    let decision = policy.consider_admission(3, 0, vec![(42u64, 100)], cost(400.0, 100.0));
+    assert_eq!(decision.verdict, AdmissionVerdict::Admit);
+    // One 100-byte segment: class charge is exactly 100.
+    assert_eq!(policy.probation_bytes(), 100);
+}

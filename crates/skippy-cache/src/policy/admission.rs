@@ -67,11 +67,16 @@ pub(crate) fn consider(
     let reasons: Vec<String>;
     let kind;
 
+    let mut seen = std::collections::BTreeSet::new();
+    let duplicate_segment = shared.iter().any(|(s, _)| !seen.insert(*s));
     if !cost.is_valid() {
         // Invalid measured costs (NaN/infinite/negative) are rejected before
         // any mutation: they must never enter entry state.
         kind = AdmissionDecisionKind::Reject;
         reasons = vec!["invalid-cost-sample".into()];
+    } else if duplicate_segment {
+        kind = AdmissionDecisionKind::Reject;
+        reasons = vec!["duplicate-segment-reference".into()];
     } else if cost.net_benefit() <= 0.0 {
         kind = AdmissionDecisionKind::Reject;
         reasons = vec!["no-net-benefit".into()];
@@ -126,6 +131,18 @@ pub(crate) fn consider(
     };
     let segment_ids: Vec<SegmentId> = shared.iter().map(|(s, _)| *s).collect();
     for (segment, size) in &shared {
+        if let Some(record) = policy.segments.segment_record(*segment)
+            && !record.references.contains(&key)
+            && record.size != *size
+        {
+            // Conflicting physical size for the same segment identity.
+            return AdmissionDecision {
+                kind: AdmissionDecisionKind::Reject,
+                verdict: AdmissionVerdict::Reject,
+                reasons: vec!["segment-size-conflict".into()],
+                probation_cap_victims: Vec::new(),
+            };
+        }
         policy.segments.add(*segment, *size, key);
     }
     policy.entries.insert(
