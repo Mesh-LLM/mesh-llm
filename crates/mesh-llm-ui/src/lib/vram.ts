@@ -133,10 +133,3 @@ export function meshAdvertisedVramGB(mesh: VramMeshInput): number {
   const local = nodeAdvertisedVramGB(mesh) ?? 0
   return (mesh.peers ?? []).reduce((sum, peer) => sum + (nodeAdvertisedVramGB(peer) ?? 0), local)
 }
-
-/** Rated capacity of the local node plus every peer, or null when no inventory is known. */
-export function meshRatedVramGB(mesh: VramMeshInput): number | null {
-  const nodes = [mesh, ...(mesh.peers ?? [])]
-  const total = nodes.reduce((sum, node) => sum + (nodeRatedVramGB(node) ?? 0), 0)
-  return total > 0 ? total : null
-}

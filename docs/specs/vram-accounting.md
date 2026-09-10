@@ -17,14 +17,13 @@ Node and mesh totals are a different case. A node advertises one capacity to
 the mesh (`PeerAnnouncement.vram_bytes`, reported by `/api/status` as
 `my_vram_gb` and `peers[].vram_gb`), and that is the number the scheduler,
 `doctor split` (`aggregate_capacity_bytes`), and model-target advice sum. Any
-surface that presents a node or mesh total (the dashboard `Mesh VRAM` tile, the
+surface that presents a node or mesh total (the dashboard `Mesh Capacity` tile, the
 peer table `VRAM` column, the chat header) must use that advertised figure so
 the console, the CLI, and the API agree. Summing rated classes across GPUs is
 display-only and overstates schedulable capacity (see #1656 for the itemized
-total / reserved / usable breakdown that will replace the single value). The
-`Mesh VRAM` tile shows the rated sum as secondary text when it differs.
+total / reserved / usable breakdown that will replace the single value).
 
-![Dashboard showing Mesh VRAM 115.4 GB, usable of 128 GB rated](assets/vram-dashboard-advertised.png)
+![Dashboard showing Mesh Capacity 115.4 GB from the advertised capacity](assets/vram-dashboard-advertised.png)
 
 ![Chat header showing 1 node and 115.4 GB from live status](assets/vram-chat-advertised.png)
 
@@ -43,8 +42,8 @@ total / reserved / usable breakdown that will replace the single value). The
 | `crates/mesh-llm-host-runtime/src/runtime/context_planning.rs` | local/split capacity bytes | internal | Computes KV/context budget from capacity after model bytes. |
 | `crates/mesh-llm-host-runtime/src/api/model_target_capacity.rs` | local and peer `vram_bytes` | internal/API advice | Computes fit summaries and capacity advice. |
 | `crates/mesh-llm-host-runtime/src/runtime_data/collector.rs` | peer `vram_bytes` | API/user-facing aggregate | Produces mesh and peer VRAM summaries for status views. |
-| `crates/mesh-llm-ui/src/lib/vram.ts` | status GPU and node fields | shared UI semantic utility | Computes rated, system-reported, reserved, and allocatable values per GPU, and advertised (`nodeAdvertisedVramGB`, `meshAdvertisedVramGB`) versus rated (`meshRatedVramGB`) node and mesh totals. |
-| `crates/mesh-llm-ui/src/features/network/api/status-adapter.ts` | `/api/status` | user-facing dashboard | Node rows and the `Mesh VRAM` tile use advertised capacity (`my_vram_gb` / `vram_gb`), falling back to allocatable then rated inventory only when nothing is advertised; the tile carries the rated sum as secondary text. |
+| `crates/mesh-llm-ui/src/lib/vram.ts` | status GPU and node fields | shared UI semantic utility | Computes rated, system-reported, reserved, and allocatable values per GPU, and advertised node and mesh totals (`nodeAdvertisedVramGB`, `meshAdvertisedVramGB`). |
+| `crates/mesh-llm-ui/src/features/network/api/status-adapter.ts` | `/api/status` | user-facing dashboard | Node rows and the `Mesh Capacity` tile use advertised capacity (`my_vram_gb` / `vram_gb`), falling back to allocatable then rated inventory only when nothing is advertised. |
 | `crates/mesh-llm-ui/src/features/app-shell/lib/status-helpers.ts` | `/api/status` and topology data | user-facing dashboard helpers | Formats GPU inventory with rated capacity; node and mesh totals (`displayVramGb`, `meshGpuVram`) use advertised capacity. |
 | `crates/mesh-llm-ui/src/features/chat/lib/live-chat-metrics.ts` | `/api/status` | user-facing chat header | Node count and advertised mesh capacity badges, from the same helper as the dashboard so both tabs agree. |
 | `crates/mesh-llm-ui/src/features/configuration/api/config-adapter.ts` | `/api/status.gpus[]` | bridge from API to UI math | Maps rated total, system total, reserved, and allocatable fields into config nodes. |

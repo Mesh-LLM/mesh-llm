@@ -211,8 +211,9 @@ describe('adaptStatusToDashboard', () => {
 
     // 115.4 + 44.0 advertised, not the 128 + 32 + 10 = 170 rated sum.
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
-      expect.objectContaining({ value: '159.5', unit: 'GB', meta: 'usable of 170 GB rated' })
+      expect.objectContaining({ value: '159.5', unit: 'GB' })
     )
+    expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).not.toHaveProperty('meta')
     expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(
       expect.objectContaining({ vramGB: 115.448725504 })
     )
@@ -245,7 +246,7 @@ describe('adaptStatusToDashboard', () => {
     expect(dashboard.peers.find((peer) => peer.id === '16ce0bb4de')).toEqual(expect.objectContaining({ vramGB: 31 }))
     expect(dashboard.peers.find((peer) => peer.id === 'legacy-peer')).toEqual(expect.objectContaining({ vramGB: 24 }))
     expect(dashboard.statusMetrics.find((metric) => metric.id === 'mesh-vram')).toEqual(
-      expect.objectContaining({ value: '55.0', unit: 'GB', meta: 'usable of 56 GB rated' })
+      expect.objectContaining({ value: '55.0', unit: 'GB' })
     )
   })
 

@@ -8,7 +8,6 @@ import {
   gpuReservedVramGB,
   gpuSystemReportedVramGB,
   meshAdvertisedVramGB,
-  meshRatedVramGB,
   nodeAdvertisedVramGB,
   nodeRatedVramGB,
   ratedVramGBFromBytes
@@ -73,7 +72,7 @@ describe('VRAM accounting utilities', () => {
     expect(nodeAdvertisedVramGB({ my_vram_gb: 12.5 })).toBe(12.5)
   })
 
-  it('sums advertised and rated capacity across the local node and peers', () => {
+  it('sums advertised capacity across the local node and peers', () => {
     const mesh = {
       vram_gb: 115.448725504,
       gpus: [{ rated_vram_gb: 128, vram_bytes: 115_448_725_504 }],
@@ -81,7 +80,5 @@ describe('VRAM accounting utilities', () => {
     }
 
     expect(meshAdvertisedVramGB(mesh)).toBeCloseTo(159.478, 3)
-    expect(meshRatedVramGB(mesh)).toBe(170)
-    expect(meshRatedVramGB({ vram_gb: 5, peers: [] })).toBeNull()
   })
 })

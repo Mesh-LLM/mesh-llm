@@ -1,7 +1,7 @@
 import { DASHBOARD_HARNESS } from '@/features/app-tabs/data'
 import type { StatusPayload, PeerInfo, ServingModelEntry } from '@/lib/api/types'
 import { isPublicMesh } from '@/lib/api/mesh-visibility'
-import { meshAdvertisedVramGB, meshRatedVramGB, nodeAdvertisedVramGB } from '@/lib/vram'
+import { meshAdvertisedVramGB, nodeAdvertisedVramGB } from '@/lib/vram'
 import type {
   DashboardHarnessData,
   DashboardConnectData,
@@ -130,12 +130,6 @@ function meshVramInput(payload: StatusPayload) {
   return { vram_gb: payload.my_vram_gb, gpus: payload.gpus, peers: payload.peers }
 }
 
-function ratedVramMeta(payload: StatusPayload, advertisedGb: number): string | undefined {
-  const rated = meshRatedVramGB(meshVramInput(payload))
-  if (rated == null || Math.abs(rated - advertisedGb) < 0.05) return undefined
-  return `usable of ${rated.toFixed(0)} GB rated`
-}
-
 function resolveInflightRequests(payload: StatusPayload): number {
   return finiteMetric(payload.inflight_requests)
 }
@@ -235,7 +229,6 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
   const remoteServingModelNames = normalizeModelList(payload.peers.flatMap(resolveHostedModels))
   const activeModelNames = normalizeModelList([...localServingModelNames, ...remoteServingModelNames])
   const totalMeshVram = meshAdvertisedVramGB(meshVramInput(payload))
-  const meshVramMeta = ratedVramMeta(payload, totalMeshVram)
   const peerCount = payload.peers.length
   const inflightRequests = resolveInflightRequests(payload)
   const owner = resolveOwner(payload.owner) ?? 'Unsigned'
@@ -277,10 +270,9 @@ function adaptStatusMetrics(payload: StatusPayload): StatusMetric[] {
     },
     {
       id: 'mesh-vram',
-      label: 'Mesh VRAM',
+      label: 'Mesh Capacity',
       value: totalMeshVram.toFixed(1),
-      unit: 'GB',
-      ...(meshVramMeta ? { meta: meshVramMeta } : {})
+      unit: 'GB'
     },
     {
       id: 'inflight',
