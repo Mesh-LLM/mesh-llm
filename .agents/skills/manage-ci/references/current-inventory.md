@@ -144,20 +144,28 @@ and bot `Co-authored-by:` trailers reach `main` even when the PR title is
 clean. `.githooks/commit-msg` rejects those trailers locally.
 
 The active `main` ruleset (id 20090642) carries `deletion`,
-`non_fast_forward`, `required_linear_history`, `required_status_checks`,
-`pull_request`, and, added 2026-09-10, a negated `commit_message_pattern`
-rule named "No agent, bot, or relay attribution trailers". Its regex rejects
+`non_fast_forward`, `required_linear_history`, `required_status_checks`, and
+`pull_request`, and holds four bypass actors (`michaelneale`, `i386`,
+`ndizazzo`, `micspiral`) with `bypass_mode: always`.
+
+Attribution-trailer enforcement lives in its own ruleset, added 2026-09-10:
+`No agent attribution trailers` (id 22828226), active, targeting
+`~DEFAULT_BRANCH`, holding exactly one negated `commit_message_pattern` rule
+and **an empty bypass list**, so it applies to maintainer merges that the
+`main` ruleset's bypass actors would otherwise skip. Its regex rejects
 `noreply@anthropic.com`, any `buzz.xyz` address, `[bot]` accounts, and
 `*-by:` trailers naming an agent. Dry-run evidence: over the last 800 `main`
 commits the pattern matched 95, every one a genuine agent, bot, or relay
 trailer, with no false positive.
 
-That rule does not cover the four ruleset bypass actors
-(`michaelneale`, `i386`, `ndizazzo`, `micspiral`), all of whom hold
-`bypass_mode: always` and therefore skip the ruleset when they merge.
-`squash_merge_commit_message` remains `COMMIT_MESSAGES` and is not
-bypassable, so changing it to `PR_BODY` is the control that covers
-maintainer merges. That setting has not been changed.
+Keeping it separate from the `main` ruleset means it can be disabled or
+deleted without touching branch protection, and a misfire is recovered by
+editing the squash message before confirming the merge, or by setting that
+ruleset's enforcement to `disabled`.
+
+`squash_merge_commit_message` remains `COMMIT_MESSAGES`, which is what
+composes squash bodies from branch commit messages. It is not bypassable and
+has not been changed.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine validation entry sets. The protected sibling monitor is
