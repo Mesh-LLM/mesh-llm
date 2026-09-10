@@ -52,12 +52,9 @@ shard, and requires every shard that carries `*.block_count` and
 before compilation; Qwen4 experimental artifacts derive their wider boundary
 from `hyper_connection.count * embedding_length`. It emits
 deterministic bounded GitHub matrix shards; the current one-runner topology consumes one
-selected-family shard while retaining the plan as evidence. On a changed llama.cpp pin,
-the canary diffs the actual old and new upstream revisions inside the prepared llama.cpp
-checkout. A change limited to model implementation files named by the generated-family
-map selects their certified families plus fixed architecture sentinels. Any shared
-upstream source, unmapped model source, or unavailable diff fails closed to the full
-bump battery; non-bump runs retain their cadence-owned cohort. The runner's `.env` exports
+selected-family shard while retaining the plan as evidence. Changed llama.cpp pins
+always run the complete `llama-bump` family cohort; non-bump runs retain their
+cadence-owned cohort. The runner's `.env` exports
 `HF_CACHE` pointing at a pre-warmed HF cache that lives on the lab NFS models
 volume and `HF_HUB_OFFLINE=1` (NFS offers no `flock`, so `hf` on the runner is
 read-only; the cache is populated by a two-stage prewarm that downloads on
@@ -84,35 +81,38 @@ evidence, and logs are uploaded for 14 days even when the battery fails. Stage
 readiness uses a declared per-model override or a model-size-derived deadline,
 each complete certification has
 a portable process-group wall-clock limit, and the workflow's outer battery
-ceiling is 12 hours. On a
-patch-apply failure it hands the queue to a non-interactive `opencode` agent
-(`CANARY_AGENT_MODEL`, default `zai-coding-plan/glm-5.3-flash`, overridable
-via the `LLAMA_CANARY_AGENT_MODEL` repository variable) which rebases
-`third_party/llama.cpp/patches`, runs the supported-families certification
-battery (`scripts/skippy-family-battery.sh`), and keeps the repair local until
-the run reaches terminal success or failure. Only then does the wrapper publish
-or reuse the repair PR on `llama-canary/patch-queue-fix`. The deterministic
-wrapper writes the sole
-upstream selector, `third_party/llama.cpp/upstream.txt`, to the resolved repair
-target, prepares through the checked-in `pinned`
-selector, and verifies the prepared-upstream stamp before any repair branch is
-published or certified. The same repair loop also runs when the queue applies
-but a certification lane fails (`battery` mode). After each agent turn the
-repair script itself runs the battery and, on failure, loops certify -> agent fix ->
-recertify up to `CANARY_REPAIR_MAX_TURNS` (default 2) turns; the script only
-succeeds when the wrapper's own battery run passes. After the first green
-battery, a fresh-context semantic review runs locally; any changes it makes
-must pass the complete battery again. Every terminal outcome (battery green,
-queue still broken, battery exhausted) then publishes the branch and posts a
-status comment on the repair PR — creating the PR (or a fallback issue) itself
-if the agent did not — and an earlier agent turn writes the PR description (key
-upstream changes, patch-queue evolution, risks) with a deterministic fallback. Repair pushes and
-PR operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT;
-the canary job itself remains `contents: read`. Any repair outcome keeps the
-canary run red: the certified fix must be merged from the repair PR before
-trusted main can certify. The upstream pin commit to
-`main` is gated on the battery passing and writes the sole upstream pin from
-the validated SHA.
+ceiling is 12 hours. A changed pin runs one deterministic wrapper-owned state
+machine: `prepare -> build -> certify -> publish`. The wrapper writes the sole
+upstream selector, `third_party/llama.cpp/upstream.txt`, prepares through the
+checked-in `pinned` selector, verifies the prepared-upstream stamp, completes
+the patched llama.cpp/native-test and Rust build gates, and then runs the full
+supported-family certification. A failed phase is handed to a non-interactive
+`opencode` agent (`CANARY_AGENT_MODEL`, default
+`zai-coding-plan/glm-5.3-flash`, overridable through
+`LLAMA_CANARY_AGENT_MODEL`). The agent may run focused diagnostics and edit the
+local tree, but the wrapper restarts at prepare, reruns the complete build, and
+remains the sole authority for certification. Each phase permits
+`CANARY_REPAIR_MAX_TURNS` (default 2). The wrapper has a 690-minute internal
+work deadline inside the 720-minute Actions step and reserves 30 minutes for
+terminal publication. It publishes once to the unique
+`llama-canary/repair-<run>-<attempt>-<upstream>` branch. A certified terminal
+state opens a normal PR bound to the exact green commit; a turn- or time-bounded
+failure opens a draft PR preserving the last attempted bytes. The PR body
+includes a deterministic upstream diffstat and commit summary even though the
+unchanged-pin workflow summary path is skipped. Scheduled runs query open
+`llama-canary/repair-*` PR bodies before starting the state machine and skip an
+exact candidate SHA already under review. No agent turn runs after green, and
+changed pins are never pushed directly to `main`. Repair pushes and PR
+operations authenticate with the `CANARY_REPAIR_TOKEN` fine-grained PAT; Git
+receives it through a run-scoped askpass helper instead of a credential-bearing
+URL, and stderr redaction uses literal replacement. The wrapper validates the
+native build directory, HF cache, repository identity, and repair token before
+the first phase. The canary job itself remains `contents: read`; the dedicated
+repair PAT performs the bounded PR lookup. Changed-pin evidence uses its own
+`llama-canary-changed-pin-*` artifact namespace. Every
+changed-pin outcome keeps the canary run red until a certified PR is reviewed
+and merged. Unchanged scheduled and forced certifications stay read-only and
+never invoke the repair agent.
 
 For a non-canary manual dispatch, `release.yml` runs the checked-in
 `scripts/release-version.sh`, creates one linear release-source commit when the
