@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::l3::{
     HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadGeometry,
-    StoreLimits, StoreUsage, segment_digest,
+    SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
 };
 use crate::manager::{L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus};
 use crate::payload::{ExactStatePayload, ExactStatePayloadKind};
@@ -337,6 +337,7 @@ impl L3Tier {
                 offset,
                 bytes: len,
                 digest: stored.digest.clone(),
+                codec_identity: Some(SegmentCodecIdentity::raw(len)),
                 meta_json: (!label.is_empty()).then_some(label),
             });
             held.push(stored);

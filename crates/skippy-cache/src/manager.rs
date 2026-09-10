@@ -624,6 +624,7 @@ mod tests {
             offset: 0,
             bytes: 4,
             digest: "missing-segment".to_string(),
+            codec_identity: Some(crate::SegmentCodecIdentity::raw(4)),
             meta_json: None,
         });
         fs::write(
