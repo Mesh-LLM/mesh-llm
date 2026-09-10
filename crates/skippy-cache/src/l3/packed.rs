@@ -312,6 +312,7 @@ impl PackedSegmentStore {
         &self,
         requests: &[PackedReadRequest<'_>],
         output: &mut Vec<u8>,
+        mut payload_hasher: Option<&mut blake3::Hasher>,
     ) -> Result<(), PackedReadError> {
         let mut files = HashMap::<String, File>::new();
         let mut first = 0usize;
@@ -411,6 +412,9 @@ impl PackedSegmentStore {
                             request.digest
                         );
                     }
+                }
+                if let Some(hasher) = payload_hasher.as_deref_mut() {
+                    hasher.update(&output[output_end - run_bytes..output_end]);
                 }
                 Ok(())
             })();

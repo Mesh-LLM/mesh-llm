@@ -938,7 +938,7 @@ impl HandoffSegmentStore {
             }];
             let len = usize::try_from(location.bytes).context("segment exceeds usize")?;
             let mut bytes = Vec::with_capacity(len);
-            return match self.packed.append_many(&requests, &mut bytes) {
+            return match self.packed.append_many(&requests, &mut bytes, None) {
                 Ok(()) => Ok(bytes),
                 Err(failure) => {
                     let path = self.packed.pack_path(&failure.pack_digest);
@@ -1146,6 +1146,7 @@ impl HandoffSegmentStore {
     pub fn assemble(&self, manifest: &HandoffManifest) -> Result<Vec<u8>> {
         let total = usize::try_from(manifest.total_bytes).context("payload exceeds usize")?;
         let mut payload = Vec::with_capacity(total);
+        let mut payload_hasher = blake3::Hasher::new();
         let locations = self
             .packed
             .load_manifest_index(&manifest.payload_digest, manifest.segments.len())?;
@@ -1178,20 +1179,21 @@ impl HandoffSegmentStore {
                     output_offset: segment.offset,
                 });
             } else {
-                self.append_packed(&packed_requests, &mut payload)?;
+                self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
                 packed_requests.clear();
                 let bytes = self.read_segment(&segment.digest)?;
+                payload_hasher.update(&bytes);
                 payload.extend_from_slice(&bytes);
             }
         }
-        self.append_packed(&packed_requests, &mut payload)?;
+        self.append_packed(&packed_requests, &mut payload, &mut payload_hasher)?;
         if payload.len() != total {
             bail!(
                 "assembled {} bytes but manifest records {total}",
                 payload.len()
             );
         }
-        if segment_digest(&payload) != manifest.payload_digest {
+        if payload_hasher.finalize().to_hex().as_str() != manifest.payload_digest {
             bail!("assembled payload failed manifest digest verification");
         }
         Ok(payload)
@@ -1201,8 +1203,12 @@ impl HandoffSegmentStore {
         &self,
         requests: &[PackedReadRequest<'_>],
         payload: &mut Vec<u8>,
+        payload_hasher: &mut blake3::Hasher,
     ) -> Result<()> {
-        match self.packed.append_many(requests, payload) {
+        match self
+            .packed
+            .append_many(requests, payload, Some(payload_hasher))
+        {
             Ok(()) => Ok(()),
             Err(failure) => {
                 let path = self.packed.pack_path(&failure.pack_digest);
