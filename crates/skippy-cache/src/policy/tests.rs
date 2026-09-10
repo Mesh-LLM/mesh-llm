@@ -161,14 +161,18 @@ fn compare(trace: &[traces::TraceAccess], capacity_bytes: u64) -> Comparison {
             );
             policy_saved += (access.cold_prefill_cost - access.restore_cost).max(0.0);
             // Promotion is the persistence event for a probational entry:
-            // the bytes are written when the policy commits to persisting
-            // it, not at probation admission.
+            // the bytes written are the resident entry's retained size at
+            // admission, not the current access's (re-sampled) size.
             if let Some(AdmissionDecision {
                 kind: AdmissionDecisionKind::Promote,
                 ..
             }) = &decision
             {
-                policy_written += access.exclusive_bytes;
+                let persisted = policy
+                    .entry(access.entry)
+                    .map(|e| e.exclusive_bytes)
+                    .expect("promoted entry resident");
+                policy_written += persisted;
             }
         } else {
             // Re-offer a rejected/evicted entry each time it recurs;
@@ -1118,16 +1122,29 @@ fn grace_expires_under_repeated_misses() {
     });
     policy.consider_admission(1, 1 << 20, vec![], cost(400.0, 100.0), &[]);
     policy.consider_admission(2, 1 << 20, vec![], cost(400.0, 100.0), &[]);
-    // Miss key 1 repeatedly (each miss advances the clock); the clock at
-    // admission was 2, so after `grace` misses key 1 is out of grace
-    // while key 2 (admitted later) stays in grace.
+    // Miss key 1 seven times (each miss advances the clock): the clock at
+    // admission was 2, so key 1's age becomes 8 (out of grace) while key
+    // 2's age becomes 7 (still in grace) — exactly one observation on
+    // either side of the grace boundary, not an ordering artifact.
     let clock_at_admission = policy.clock_debug();
-    for _ in 0..grace {
+    for _ in 0..grace - 1 {
         policy.record_miss(1);
     }
     assert!(
-        policy.clock_debug() >= clock_at_admission + grace,
+        policy.clock_debug() == clock_at_admission + grace - 1,
         "misses must advance the clock"
+    );
+    let e1 = policy.entry(1).unwrap();
+    let e2 = policy.entry(2).unwrap();
+    assert_eq!(
+        policy.clock_debug().saturating_sub(e1.last_observation),
+        grace,
+        "key 1 exactly out of grace"
+    );
+    assert_eq!(
+        policy.clock_debug().saturating_sub(e2.last_observation),
+        grace - 1,
+        "key 2 exactly one observation inside grace"
     );
     // Out-of-grace entry 1 is now evictable in pass 1 (grace honored);
     // requesting only its bytes must never touch in-grace entry 2.
@@ -1143,8 +1160,6 @@ fn grace_expires_under_repeated_misses() {
         "in-grace entry must not be evicted first, victims {:?}",
         evictable
     );
-    // And a miss-only stream cannot hold grace forever: entry 1's grace
-    // age equals clock - last_observation >= grace.
-    let e1 = policy.entry(1).unwrap();
-    assert!(policy.clock_debug().saturating_sub(e1.last_observation) >= grace);
+    // A miss-only stream cannot hold grace forever — already asserted above:
+    // entry 1's age is exactly `grace` (evictable) after only misses.
 }
