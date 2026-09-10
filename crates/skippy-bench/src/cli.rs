@@ -35,6 +35,8 @@ pub enum CommandKind {
     LocalSplitChainBinary(LocalSplitChainBinaryArgs),
     #[command(name = "verify-window-local")]
     VerifyWindowLocal(VerifyWindowLocalArgs),
+    #[command(name = "l2-tier")]
+    L2Tier(L2TierArgs),
     #[command(name = "chat-corpus")]
     ChatCorpus(ChatCorpusArgs),
     #[command(name = "token-lengths")]
@@ -43,6 +45,33 @@ pub enum CommandKind {
     FocusedRuntime(FocusedRuntimeArgs),
     Eval(EvalArgs),
     Run(RunArgs),
+}
+
+#[derive(Parser)]
+pub struct L2TierArgs {
+    /// Working directory for the temporary L3 store. Created and removed by
+    /// the run unless `--keep-store` is set.
+    #[arg(long, default_value = "/tmp/skippy-l2-tier-bench")]
+    pub store_root: PathBuf,
+    /// Number of timed L3-cold / L2-warm matched pairs after warmup.
+    #[arg(long, default_value_t = 50)]
+    pub pairs: usize,
+    /// Recorded prefix length in tokens (the synthetic conversation length).
+    #[arg(long, default_value_t = 1_893)]
+    pub tokens: usize,
+    /// Bytes of KV payload per token — sized to mimic a real dense model's
+    /// per-token KV footprint at the target dtype.
+    #[arg(long, default_value_t = 512)]
+    pub kv_bytes_per_token: usize,
+    /// L2 budget in MiB. Defaults to four times one entry.
+    #[arg(long)]
+    pub l2_budget_mib: Option<u64>,
+    /// Keep the L3 store directory after the run for inspection.
+    #[arg(long, default_value_t = false)]
+    pub keep_store: bool,
+    /// Model identity stamped into the L3 tier and L2 keys.
+    #[arg(long, default_value = "bench-model")]
+    pub model_identity: String,
 }
 
 #[derive(Parser)]
