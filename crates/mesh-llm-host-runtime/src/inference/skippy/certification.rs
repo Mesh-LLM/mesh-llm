@@ -358,7 +358,7 @@ async fn runtime_smoke_gates(
         }
     };
     vec![
-        smoke_v1_models(&client, api_base, &package.model_id).await,
+        smoke_v1_models(&client, api_base, &package.package_ref).await,
         smoke_chat_completions(&client, api_base, package, request).await,
         smoke_responses(&client, api_base, package, request).await,
     ]
@@ -367,21 +367,25 @@ async fn runtime_smoke_gates(
 async fn smoke_v1_models(
     client: &reqwest::Client,
     api_base: &str,
-    model_id: &str,
+    served_model_id: &str,
 ) -> CertificationGate {
     let url = format!("{}/v1/models", api_base.trim_end_matches('/'));
     match client.get(url).send().await {
         Ok(response) if response.status() == StatusCode::OK => {
             match response.json::<serde_json::Value>().await {
-                Ok(value) if models_response_contains(&value, model_id) => CertificationGate {
-                    name: "v1_models".to_string(),
-                    status: CertificationGateStatus::Passed,
-                    details: None,
-                },
+                Ok(value) if models_response_contains(&value, served_model_id) => {
+                    CertificationGate {
+                        name: "v1_models".to_string(),
+                        status: CertificationGateStatus::Passed,
+                        details: None,
+                    }
+                }
                 Ok(_) => CertificationGate {
                     name: "v1_models".to_string(),
                     status: CertificationGateStatus::Failed,
-                    details: Some(format!("model {model_id:?} was not present in /v1/models")),
+                    details: Some(format!(
+                        "model {served_model_id:?} was not present in /v1/models"
+                    )),
                 },
                 Err(error) => failed_gate("v1_models", error),
             }
@@ -399,7 +403,7 @@ async fn smoke_chat_completions(
 ) -> CertificationGate {
     let url = format!("{}/v1/chat/completions", api_base.trim_end_matches('/'));
     let body = json!({
-        "model": package.model_id,
+        "model": package.package_ref,
         "messages": [{ "role": "user", "content": request.prompt }],
         "max_tokens": request.max_tokens,
         "stream": false
@@ -423,7 +427,7 @@ async fn smoke_responses(
 ) -> CertificationGate {
     let url = format!("{}/v1/responses", api_base.trim_end_matches('/'));
     let body = json!({
-        "model": package.model_id,
+        "model": package.package_ref,
         "input": request.prompt,
         "max_output_tokens": request.max_tokens
     });
@@ -569,8 +573,8 @@ mod tests {
     use super::{
         CertificationGateStatus, aggregate_certification_status, certification_stage_ranges,
         materialize_package_v2_certification_stages, models_response_contains,
-        response_has_chat_choice_content, response_has_responses_output, smoke_chat_completions,
-        smoke_responses,
+        response_has_chat_choice_content, response_has_responses_output, runtime_smoke_gates,
+        smoke_chat_completions, smoke_responses,
     };
     use crate::inference::skippy::materialization::{StagePackageInfo, StagePackageLayerInfo};
     use serde_json::json;
@@ -829,5 +833,71 @@ mod tests {
             stream.write_all(response.as_bytes()).await.unwrap();
         });
         format!("http://{addr}")
+    }
+
+    /// Mimics a node that only recognizes `served_model_id` — anything else 404s,
+    /// the same way a real host does when a client asks for a model name it
+    /// doesn't advertise.
+    async fn spawn_certification_stub_server(served_model_id: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let response = if request.starts_with("GET") {
+                    let body = json!({
+                        "object": "list",
+                        "data": [{ "id": served_model_id }]
+                    })
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else if request.contains(&format!("\"model\":\"{served_model_id}\"")) {
+                    let body = if request.contains("/v1/chat/completions") {
+                        json!({"choices": [{"message": {"content": "ok"}}]})
+                    } else {
+                        json!({"output_text": "ok"})
+                    }
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn runtime_smoke_gates_certify_against_served_package_ref() {
+        // A package's `model_id` is the *source* model recorded in the manifest
+        // (e.g. an upstream HF ref). The node advertises and routes on
+        // `package_ref` instead — the ref it was actually started with. The
+        // fake package below has both, and differs deliberately.
+        let package = fake_package_info();
+        assert_ne!(package.model_id, package.package_ref);
+
+        let api_base = spawn_certification_stub_server(package.package_ref.clone()).await;
+        let request = super::SkippyCertificationRequest {
+            api_base: Some(api_base),
+            ..fake_certification_request()
+        };
+
+        let gates = runtime_smoke_gates(&request, &package).await;
+
+        for gate in &gates {
+            assert_eq!(gate.status, CertificationGateStatus::Passed, "{gate:?}");
+        }
     }
 }
