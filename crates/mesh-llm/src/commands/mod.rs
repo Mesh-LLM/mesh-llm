@@ -93,7 +93,13 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         ),
         Command::Config { command } => dispatch_config_command(cli, command),
         Command::Doctor { command, json } => {
-            dispatch_doctor_command(command.as_ref(), cli.config.as_deref(), *json).await
+            dispatch_doctor_command(
+                command.as_ref(),
+                cli.config.as_deref(),
+                cli.llama_flavor,
+                *json,
+            )
+            .await
         }
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
