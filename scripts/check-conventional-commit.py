@@ -168,6 +168,7 @@ def report(subject, problems, stream=sys.stderr):
         "The type decides which release-notes section the change lands in.\n"
         "Add a 'Release-Notes: <Section>' trailer to override, or\n"
         "'BREAKING CHANGE: <what>' for a breaking change.\n"
+        "\nCatch this at commit time instead of in CI:  just hooks-install\n"
         "Agent, bot, and relay attribution trailers are not kept in this\n"
         "history. GitHub re-adds them when squashing a PR whose commits carry\n"
         "them, so remove them from the branch commits.\n"

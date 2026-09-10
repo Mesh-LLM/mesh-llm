@@ -209,6 +209,13 @@ just hooks-install          # sets core.hooksPath to scripts/hooks
 just check-commits          # validates origin/main..HEAD
 ```
 
+Git cannot activate a committed hook on clone — that would make `git clone` of
+any repository arbitrary code execution — so the hook needs one local opt-in.
+`just build` enables it for you on the first local development build, on every
+platform, unless you have already pointed `core.hooksPath` somewhere yourself.
+CI enforces the same rules regardless, so a clone that never builds is still
+covered.
+
 Valid types are `feat`, `fix`, `perf`, `security`, `revert`, `refactor`,
 `style`, `test`, `build`, `deps`, `ci`, `chore`, and `docs`. This is not
 bookkeeping: the release-notes job classifies each release entry from these

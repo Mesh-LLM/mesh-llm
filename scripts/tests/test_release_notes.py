@@ -599,32 +599,42 @@ class CommitConventionEnforcementTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        cls.job = cls.slice["jobs"]["commit_convention"]
         cls.step = next(
-            s
-            for s in cls.slice["jobs"]["quality_contracts"]["steps"]
-            if s.get("name") == "Check commit convention"
+            s for s in cls.job["steps"] if s.get("name") == "Check commit convention"
         )
 
-    def test_runs_in_an_unconditional_quality_job(self):
-        job = self.slice["jobs"]["quality_contracts"]
-        # No `if:` on the job means every PR reaches this step.
-        self.assertNotIn("if", job)
+    def test_starts_before_any_other_quality_work(self):
+        # No `needs`, so it does not wait for runner selection or a toolchain.
+        self.assertNotIn("needs", self.job)
+        self.assertEqual(list(self.slice["jobs"])[0], "commit_convention")
+        self.assertLessEqual(self.job["timeout-minutes"], 5)
 
     def test_only_runs_for_pull_requests(self):
-        self.assertIn("pull_request", self.step["if"])
+        self.assertIn("pull_request", self.job["if"])
 
     def test_validates_the_pr_title_because_squash_uses_it_as_the_subject(self):
-        self.assertEqual(self.step["env"]["PR_TITLE"], "${{ github.event.pull_request.title }}")
-        self.assertIn("--message \"$PR_TITLE\"", self.step["run"])
+        self.assertEqual(
+            self.step["env"]["PR_TITLE"], "${{ github.event.pull_request.title }}"
+        )
+        self.assertIn('--message "$PR_TITLE"', self.step["run"])
 
     def test_validates_branch_commit_trailers(self):
         self.assertIn("--trailers-only", self.step["run"])
         self.assertIn("/commits", self.step["run"])
 
     def test_untrusted_text_is_never_interpolated_into_the_shell(self):
-        # PR-authored text reaches the script through the environment only.
         self.assertNotIn("${{ github.event.pull_request.title }}", self.step["run"])
         self.assertNotIn("${{ github.event.pull_request.body }}", self.step["run"])
+
+    def test_failure_output_points_at_the_local_hook(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "check-conventional-commit.py"),
+             "--message", "Not conventional"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("just hooks-install", result.stderr)
 
     def test_trailers_only_mode_ignores_subject_format(self):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
@@ -648,6 +658,30 @@ class CommitConventionEnforcementTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn("agent attribution address", result.stderr)
+
+
+class LocalHookActivationTest(unittest.TestCase):
+    """Git cannot activate a committed hook on clone, so builds do it."""
+
+    UNIX = ROOT / "scripts" / "build-development-product.sh"
+    WINDOWS = ROOT / "scripts" / "build-windows.ps1"
+
+    def test_every_platform_build_entry_point_enables_hooks(self):
+        self.assertIn("core.hooksPath scripts/hooks", self.UNIX.read_text(encoding="utf-8"))
+        self.assertIn("core.hooksPath scripts/hooks", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_activation_is_skipped_in_ci(self):
+        self.assertIn('[[ -z "${CI:-}" ]] || return 0', self.UNIX.read_text(encoding="utf-8"))
+        self.assertIn("if ($env:CI) { return }", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_activation_never_overrides_a_developer_choice(self):
+        unix = self.UNIX.read_text(encoding="utf-8")
+        self.assertIn("--get core.hooksPath", unix)
+        self.assertIn('[[ -z "$current" ]] || return 0', unix)
+        self.assertIn("--get core.hooksPath", self.WINDOWS.read_text(encoding="utf-8"))
+
+    def test_agents_are_told_to_install_the_hook(self):
+        self.assertIn("just hooks-install", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

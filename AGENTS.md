@@ -560,7 +560,7 @@ you want quiet output, use `--log-format json` and parse what you need.
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
 
-Commit subjects must follow Conventional Commits v1.0.0; install the hook with `just hooks-install` and validate a range with `just check-commits`. The type decides which release-notes section the change lands in, and the PR title becomes the squash-merge subject, so give the PR a conventional title too. See `.agents/skills/release-notes/SKILL.md`.
+Run `just hooks-install` once per clone before your first commit; git cannot activate a committed hook on clone, so nothing else enables it, and `just build` only enables it after a local build. Commit subjects must follow Conventional Commits v1.0.0, and `just check-commits` validates a range. The type decides which release-notes section the change lands in, and the PR title becomes the squash-merge subject, so give the PR a conventional title too. See `.agents/skills/release-notes/SKILL.md`.
 
 ### Minimum validation by change type
 
