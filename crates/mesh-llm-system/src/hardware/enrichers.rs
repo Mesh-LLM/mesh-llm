@@ -6,7 +6,7 @@ mod linux {
     use libc::{c_char, c_int, c_uint, c_void};
     use std::ffi::CStr;
 
-    #[derive(Clone, Debug, Default)]
+    #[derive(Clone, Debug, Default, PartialEq)]
     struct NvidiaDeviceInfo {
         name: Option<String>,
         pci_bdf: Option<String>,
@@ -61,6 +61,8 @@ mod linux {
     type NvmlDeviceGetCount = unsafe extern "C" fn(*mut c_uint) -> NvmlReturn;
     type NvmlDeviceGetHandleByIndex = unsafe extern "C" fn(c_uint, *mut NvmlDevice) -> NvmlReturn;
     type NvmlDeviceGetUuid = unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
+    type NvmlDeviceGetName = unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> NvmlReturn;
+    type NvmlDeviceGetPciInfo = unsafe extern "C" fn(NvmlDevice, *mut NvmlPciInfo) -> NvmlReturn;
     type NvmlDeviceGetMemoryInfo = unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> NvmlReturn;
     type NvmlDeviceGetMemoryInfoV2 =
         unsafe extern "C" fn(NvmlDevice, *mut NvmlMemoryV2) -> NvmlReturn;
@@ -83,20 +85,52 @@ mod linux {
         used: u64,
     }
 
+    /// `nvmlPciInfo_t` as `nvmlDeviceGetPciInfo_v3` writes it. `_reserved` is
+    /// slack, not a field: a driver whose struct grew past the v3 layout still
+    /// writes inside this allocation instead of past the end of it.
+    #[repr(C)]
+    struct NvmlPciInfo {
+        bus_id_legacy: [c_char; 16],
+        domain: c_uint,
+        bus: c_uint,
+        device: c_uint,
+        pci_device_id: c_uint,
+        pci_sub_system_id: c_uint,
+        bus_id: [c_char; 32],
+        _reserved: [u8; 64],
+    }
+
     const NVML_SUCCESS: NvmlReturn = 0;
     const CUDA_SUCCESS: CuResult = 0;
 
     pub(crate) fn enrich_gpu_facts(gpus: &mut [GpuFacts]) {
         let mut infos = cuda_device_infos();
-        merge_nvml_device_infos(&mut infos);
-        if !infos.is_empty() {
-            enrich_nvidia_gpu_facts(gpus, &infos);
+        merge_device_infos(&mut infos, &nvml_device_infos());
+        if infos.is_empty() {
+            return;
+        }
+
+        let unidentified = enrich_nvidia_gpu_facts(gpus, &infos);
+        if !unidentified.is_empty() {
+            tracing::warn!(
+                devices = ?unidentified,
+                "no NVIDIA driver device matched by PCI address or UUID; \
+                 reporting backend VRAM without driver enrichment"
+            );
         }
     }
 
-    fn enrich_nvidia_gpu_facts(gpus: &mut [GpuFacts], infos: &[NvidiaDeviceInfo]) {
+    /// Applies driver facts to every GPU whose identity is present in `infos`.
+    /// Returns the display names of the NVIDIA GPUs that matched nothing, so
+    /// the caller can report a survey that degraded rather than one that
+    /// silently borrowed another device's numbers.
+    fn enrich_nvidia_gpu_facts(gpus: &mut [GpuFacts], infos: &[NvidiaDeviceInfo]) -> Vec<String> {
+        let mut unidentified = Vec::new();
         for gpu in gpus {
             let Some(info) = match_nvidia_device(gpu, infos) else {
+                if looks_like_nvidia(gpu) {
+                    unidentified.push(gpu.display_name.clone());
+                }
                 continue;
             };
             if let Some(total_bytes) = info.total_bytes {
@@ -122,19 +156,30 @@ mod linux {
                 }
             }
         }
+        unidentified
     }
 
+    fn looks_like_nvidia(gpu: &GpuFacts) -> bool {
+        gpu.display_name.to_ascii_lowercase().contains("nvidia")
+            || gpu.vendor_uuid.is_some()
+            || gpu
+                .backend_device
+                .as_deref()
+                .is_some_and(|name| name.starts_with("CUDA") || name.starts_with("Vulkan"))
+    }
+
+    /// Resolves a GPU to a driver device by identity alone.
+    ///
+    /// There is deliberately no positional fallback. The backend device list
+    /// and the driver device list are produced by separate enumerations with
+    /// different visibility rules, so equal indices do not imply the same
+    /// card: under `CUDA_VISIBLE_DEVICES=1` the only visible backend device
+    /// sits at index 0 while the driver still reports the hidden card there.
     fn match_nvidia_device<'a>(
         gpu: &GpuFacts,
         infos: &'a [NvidiaDeviceInfo],
     ) -> Option<&'a NvidiaDeviceInfo> {
-        if !gpu.display_name.to_ascii_lowercase().contains("nvidia")
-            && gpu.vendor_uuid.is_none()
-            && !gpu
-                .backend_device
-                .as_deref()
-                .is_some_and(|name| name.starts_with("CUDA") || name.starts_with("Vulkan"))
-        {
+        if !looks_like_nvidia(gpu) {
             return None;
         }
 
@@ -147,17 +192,13 @@ mod linux {
                     .iter()
                     .find(|info| info.pci_bdf.as_deref() == Some(pci_bdf.as_str()))
             });
-        if let Some(info) = pci_match {
-            return Some(info);
+        if pci_match.is_some() {
+            return pci_match;
         }
 
-        infos.get(gpu.index).or_else(|| {
-            if infos.len() == 1 {
-                infos.first()
-            } else {
-                None
-            }
-        })
+        gpu.vendor_uuid
+            .as_deref()
+            .and_then(|uuid| infos.iter().find(|info| info.uuid.as_deref() == Some(uuid)))
     }
 
     fn cuda_device_infos() -> Vec<NvidiaDeviceInfo> {
@@ -228,35 +269,90 @@ mod linux {
         infos
     }
 
-    fn merge_nvml_device_infos(infos: &mut Vec<NvidiaDeviceInfo>) {
+    /// Joins driver facts onto the CUDA-visible device list by identity.
+    ///
+    /// NVML ignores `CUDA_VISIBLE_DEVICES` and libcuda honours it, so the two
+    /// lists have neither the same length nor the same order. Matching on PCI
+    /// address (or UUID, when only that is available) keeps a hidden card's
+    /// memory out of a visible card's slot. An NVML device that matches nothing
+    /// is appended, which is what keeps hosts with NVML but no usable libcuda
+    /// enumerating at all.
+    fn merge_device_infos(cuda: &mut Vec<NvidiaDeviceInfo>, nvml: &[NvidiaDeviceInfo]) {
+        for info in nvml {
+            match cuda.iter_mut().find(|visible| same_device(visible, info)) {
+                Some(visible) => apply_nvml_facts(visible, info),
+                None => cuda.push(info.clone()),
+            }
+        }
+    }
+
+    /// PCI address decides identity when both sides report one; it is stable
+    /// across driver restarts and is the key the backend device list also
+    /// carries. UUID is the fallback for devices that report no address.
+    fn same_device(left: &NvidiaDeviceInfo, right: &NvidiaDeviceInfo) -> bool {
+        if let (Some(left_bdf), Some(right_bdf)) =
+            (left.pci_bdf.as_deref(), right.pci_bdf.as_deref())
+        {
+            return left_bdf == right_bdf;
+        }
+        match (left.uuid.as_deref(), right.uuid.as_deref()) {
+            (Some(left_uuid), Some(right_uuid)) => left_uuid == right_uuid,
+            _ => false,
+        }
+    }
+
+    fn apply_nvml_facts(target: &mut NvidiaDeviceInfo, source: &NvidiaDeviceInfo) {
+        if source.uuid.is_some() {
+            target.uuid = source.uuid.clone();
+        }
+        if source.total_bytes.is_some() {
+            target.total_bytes = source.total_bytes;
+        }
+        if source.reserved_bytes.is_some() {
+            target.reserved_bytes = source.reserved_bytes;
+        }
+        if target.name.is_none() {
+            target.name = source.name.clone();
+        }
+        if target.pci_bdf.is_none() {
+            target.pci_bdf = source.pci_bdf.clone();
+        }
+    }
+
+    fn nvml_device_infos() -> Vec<NvidiaDeviceInfo> {
         let Some(lib) = DlLibrary::open(b"libnvidia-ml.so.1\0") else {
-            return;
+            return Vec::new();
         };
         let Some(nvml_init) = (unsafe { lib.symbol::<NvmlInit>(b"nvmlInit_v2\0") }) else {
-            return;
+            return Vec::new();
         };
         let Some(nvml_device_get_count) =
             (unsafe { lib.symbol::<NvmlDeviceGetCount>(b"nvmlDeviceGetCount_v2\0") })
         else {
-            return;
+            return Vec::new();
         };
         let Some(nvml_device_get_handle_by_index) = (unsafe {
             lib.symbol::<NvmlDeviceGetHandleByIndex>(b"nvmlDeviceGetHandleByIndex_v2\0")
         }) else {
-            return;
+            return Vec::new();
         };
         let nvml_shutdown = unsafe { lib.symbol::<NvmlShutdown>(b"nvmlShutdown\0") };
         let nvml_device_get_uuid =
             unsafe { lib.symbol::<NvmlDeviceGetUuid>(b"nvmlDeviceGetUUID\0") };
+        let nvml_device_get_name =
+            unsafe { lib.symbol::<NvmlDeviceGetName>(b"nvmlDeviceGetName\0") };
+        let nvml_device_get_pci_info =
+            unsafe { lib.symbol::<NvmlDeviceGetPciInfo>(b"nvmlDeviceGetPciInfo_v3\0") };
         let nvml_device_get_memory_info =
             unsafe { lib.symbol::<NvmlDeviceGetMemoryInfo>(b"nvmlDeviceGetMemoryInfo\0") };
         let nvml_device_get_memory_info_v2 =
             unsafe { lib.symbol::<NvmlDeviceGetMemoryInfoV2>(b"nvmlDeviceGetMemoryInfo_v2\0") };
 
         if unsafe { nvml_init() } != NVML_SUCCESS {
-            return;
+            return Vec::new();
         }
 
+        let mut infos = Vec::new();
         let mut count = 0;
         if unsafe { nvml_device_get_count(&mut count) } == NVML_SUCCESS {
             for index in 0..count {
@@ -265,16 +361,30 @@ mod linux {
                     continue;
                 }
 
-                let mut info = infos
-                    .get(index as usize)
-                    .cloned()
-                    .unwrap_or_else(NvidiaDeviceInfo::default);
+                let mut info = NvidiaDeviceInfo::default();
                 if let Some(get_uuid) = nvml_device_get_uuid {
                     let mut buf = [0 as c_char; 96];
                     if unsafe { get_uuid(device, buf.as_mut_ptr(), buf.len() as c_uint) }
                         == NVML_SUCCESS
                     {
                         info.uuid = unsafe { c_string(buf.as_ptr()) };
+                    }
+                }
+                if let Some(get_name) = nvml_device_get_name {
+                    let mut buf = [0 as c_char; 96];
+                    if unsafe { get_name(device, buf.as_mut_ptr(), buf.len() as c_uint) }
+                        == NVML_SUCCESS
+                    {
+                        info.name = unsafe { c_string(buf.as_ptr()) };
+                    }
+                }
+                if let Some(get_pci_info) = nvml_device_get_pci_info {
+                    let mut pci: NvmlPciInfo = unsafe { std::mem::zeroed() };
+                    if unsafe { get_pci_info(device, &mut pci) } == NVML_SUCCESS {
+                        info.pci_bdf = unsafe { c_string(pci.bus_id.as_ptr()) }
+                            .or_else(|| unsafe { c_string(pci.bus_id_legacy.as_ptr()) })
+                            .as_deref()
+                            .and_then(normalize_pci_bdf);
                     }
                 }
                 if let Some(get_memory_v2) = nvml_device_get_memory_info_v2 {
@@ -293,11 +403,7 @@ mod linux {
                     }
                 }
 
-                if index as usize >= infos.len() {
-                    infos.push(info);
-                } else {
-                    infos[index as usize] = info;
-                }
+                infos.push(info);
             }
         }
 
@@ -306,6 +412,8 @@ mod linux {
                 shutdown();
             }
         }
+
+        infos
     }
 
     unsafe fn c_string(ptr: *const c_char) -> Option<String> {
@@ -334,6 +442,218 @@ mod linux {
     fn round_up_to_mib(bytes: u64) -> u64 {
         const MIB: u64 = 1024 * 1024;
         bytes.div_ceil(MIB) * MIB
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // The numbers below are the real carrack readings behind #1755: an
+        // RTX 5090 at 00000000:01:00.0 and an RTX 3080 at 00000000:06:00.0,
+        // captured with CUDA_VISIBLE_DEVICES unset, 0, 1, and 1,0.
+        const RTX_5090_BDF: &str = "00000000:01:00.0";
+        const RTX_5090_UUID: &str = "GPU-80ded6bd-1a89-2628-3d94-902187dbab1d";
+        const RTX_5090_NVML_TOTAL: u64 = 34_190_917_632;
+        const RTX_5090_NVML_RESERVED: u64 = 514_850_816;
+        const RTX_3080_BDF: &str = "00000000:06:00.0";
+        const RTX_3080_UUID: &str = "GPU-6b7fe24c-5f15-4ac5-88d6-c8934135a4ea";
+        const RTX_3080_CUDA_TOTAL: u64 = 10_354_032_640;
+        const RTX_3080_NVML_TOTAL: u64 = 10_737_418_240;
+        const RTX_3080_NVML_RESERVED: u64 = 383_778_816;
+
+        fn gpu(display_name: &str, index: usize, vram_bytes: u64) -> GpuFacts {
+            GpuFacts {
+                index,
+                display_name: display_name.to_string(),
+                backend_device: Some(format!("CUDA{index}")),
+                vram_bytes,
+                stable_id: Some(format!("cuda{index}")),
+                ..GpuFacts::default()
+            }
+        }
+
+        fn visible_3080() -> GpuFacts {
+            GpuFacts {
+                pci_bdf: Some(RTX_3080_BDF.to_string()),
+                stable_id: Some(format!("pci:{RTX_3080_BDF}")),
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }
+        }
+
+        fn info(
+            bdf: Option<&str>,
+            uuid: Option<&str>,
+            total: u64,
+            reserved: u64,
+        ) -> NvidiaDeviceInfo {
+            NvidiaDeviceInfo {
+                name: None,
+                pci_bdf: bdf.map(str::to_string),
+                total_bytes: Some(total),
+                reserved_bytes: Some(reserved),
+                uuid: uuid.map(str::to_string),
+            }
+        }
+
+        fn info_5090() -> NvidiaDeviceInfo {
+            info(
+                Some(RTX_5090_BDF),
+                Some(RTX_5090_UUID),
+                RTX_5090_NVML_TOTAL,
+                RTX_5090_NVML_RESERVED,
+            )
+        }
+
+        fn info_3080() -> NvidiaDeviceInfo {
+            info(
+                Some(RTX_3080_BDF),
+                Some(RTX_3080_UUID),
+                RTX_3080_NVML_TOTAL,
+                RTX_3080_NVML_RESERVED,
+            )
+        }
+
+        #[test]
+        fn index_fallback_does_not_borrow_memory_from_a_different_device() {
+            let mut gpus = vec![GpuFacts {
+                pci_bdf: None,
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }];
+
+            enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
+
+            assert_eq!(gpus[0].vram_bytes, RTX_3080_CUDA_TOTAL);
+        }
+
+        #[test]
+        fn enrichment_declines_when_no_identity_matches() {
+            let mut gpus = vec![GpuFacts {
+                pci_bdf: None,
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }];
+
+            let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
+
+            assert_eq!(gpus[0].reserved_bytes, None);
+            assert_eq!(gpus[0].vendor_uuid, None);
+            assert_eq!(gpus[0].stable_id.as_deref(), Some("cuda0"));
+            assert_eq!(unidentified, vec!["NVIDIA GeForce RTX 3080".to_string()]);
+        }
+
+        #[test]
+        fn pci_bdf_match_wins_over_index_position() {
+            let mut gpus = vec![visible_3080()];
+
+            let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090(), info_3080()]);
+
+            assert_eq!(gpus[0].vram_bytes, RTX_3080_NVML_TOTAL);
+            assert_eq!(gpus[0].reserved_bytes, Some(RTX_3080_NVML_RESERVED));
+            assert_eq!(gpus[0].vendor_uuid.as_deref(), Some(RTX_3080_UUID));
+            assert!(unidentified.is_empty());
+        }
+
+        #[test]
+        fn uuid_match_used_when_pci_bdf_is_a_placeholder() {
+            let mut gpus = vec![GpuFacts {
+                pci_bdf: Some("0".to_string()),
+                vendor_uuid: Some(RTX_3080_UUID.to_string()),
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }];
+
+            enrich_nvidia_gpu_facts(&mut gpus, &[info_5090(), info_3080()]);
+
+            assert_eq!(gpus[0].vram_bytes, RTX_3080_NVML_TOTAL);
+            assert_eq!(gpus[0].pci_bdf.as_deref(), Some(RTX_3080_BDF));
+        }
+
+        #[test]
+        fn single_visible_device_still_requires_identity_agreement() {
+            let mut gpus = vec![GpuFacts {
+                pci_bdf: None,
+                ..gpu("NVIDIA GeForce RTX 3080", 0, RTX_3080_CUDA_TOTAL)
+            }];
+
+            enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
+
+            assert_eq!(gpus[0].vram_bytes, RTX_3080_CUDA_TOTAL);
+            assert_eq!(gpus[0].vendor_uuid, None);
+        }
+
+        #[test]
+        fn nvml_merge_keys_by_identity_not_position() {
+            // CUDA_VISIBLE_DEVICES=1: libcuda sees only the 3080, NVML still
+            // reports both with the 5090 first.
+            let mut cuda = vec![info(Some(RTX_3080_BDF), None, RTX_3080_CUDA_TOTAL, 0)];
+            cuda[0].reserved_bytes = None;
+
+            merge_device_infos(&mut cuda, &[info_5090(), info_3080()]);
+
+            let matched = cuda
+                .iter()
+                .find(|entry| entry.pci_bdf.as_deref() == Some(RTX_3080_BDF))
+                .expect("the visible 3080 survives the merge");
+            assert_eq!(matched.total_bytes, Some(RTX_3080_NVML_TOTAL));
+            assert_eq!(matched.uuid.as_deref(), Some(RTX_3080_UUID));
+            assert!(
+                cuda.iter()
+                    .all(|entry| entry.pci_bdf.as_deref() != Some(RTX_3080_BDF)
+                        || entry.total_bytes != Some(RTX_5090_NVML_TOTAL)),
+                "the hidden 5090's memory must not land in the 3080's slot"
+            );
+        }
+
+        #[test]
+        fn nvml_only_hosts_still_enumerate_when_libcuda_is_unavailable() {
+            let mut cuda = Vec::new();
+
+            merge_device_infos(&mut cuda, &[info_5090(), info_3080()]);
+
+            assert_eq!(cuda.len(), 2);
+            assert_eq!(cuda[0].total_bytes, Some(RTX_5090_NVML_TOTAL));
+            assert_eq!(cuda[1].total_bytes, Some(RTX_3080_NVML_TOTAL));
+        }
+
+        #[test]
+        fn mismatched_list_lengths_never_resolve_positionally() {
+            let visible = visible_3080();
+
+            // One visible device, two driver devices, and the driver list is
+            // ordered so position 0 is the wrong card. This is the invariant
+            // that broke in #1755.
+            assert!(match_nvidia_device(&visible, &[info_5090()]).is_none());
+
+            let both = [info_5090(), info_3080()];
+            let matched =
+                match_nvidia_device(&visible, &both).expect("identity match still resolves");
+            assert_eq!(matched.total_bytes, Some(RTX_3080_NVML_TOTAL));
+        }
+
+        #[test]
+        fn non_nvidia_gpus_are_left_alone_and_not_reported_as_unidentified() {
+            let mut gpus = vec![GpuFacts {
+                backend_device: Some("ROCm0".to_string()),
+                stable_id: Some("pci:00000000:65:00.0".to_string()),
+                ..gpu("AMD Instinct MI300X", 0, 206_158_430_208)
+            }];
+
+            let unidentified = enrich_nvidia_gpu_facts(&mut gpus, &[info_5090()]);
+
+            assert_eq!(gpus[0].vram_bytes, 206_158_430_208);
+            assert!(unidentified.is_empty());
+        }
+
+        #[test]
+        fn four_digit_and_eight_digit_pci_domains_normalize_to_one_form() {
+            assert_eq!(
+                normalize_pci_bdf("0000:06:00.0").as_deref(),
+                Some(RTX_3080_BDF)
+            );
+            assert_eq!(
+                normalize_pci_bdf("00000000:06:00.0").as_deref(),
+                Some(RTX_3080_BDF)
+            );
+            assert_eq!(normalize_pci_bdf("0"), None);
+        }
     }
 }
 
