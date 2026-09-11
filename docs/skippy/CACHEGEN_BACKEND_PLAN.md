@@ -1,18 +1,19 @@
 # CacheGen Backend Qualification (#1652)
 
-Status: **LMCache-compatible CPU reference passes quality and fails restore
-latency; native passthrough remains the promoted path**. Owner: jian yang.
+Status: **LMCache-compatible direct Metal restore passes correctness and quality
+but fails the local-tier latency gate; native passthrough remains the promoted
+path**. Owner: jian yang.
 Reviewed against: #1652 scope, scama's directives of 2026-09-10 (v4
 contract, CPU+Metal parity, six measurements, stop rule).
 
 ## Where each backend stands
 
-| Backend | CubeCL runtime | Status | Evidence |
+| Backend | Kernel | Status | Evidence |
 |---|---|---|---|
 | CPU (reference) | scalar Rust | **Correctness reference only** — passes the 19K quality threshold but is too slow for promotion | Python/Rust fixtures pin LMCache revision `b5d109e`; 19K gate below |
-| Metal (Apple GPU) | `cubecl/wgpu` | **Prototype-only spike** — its affine+delta path is not the LMCache algorithm and is not eligible for promotion | Historical spike parity on M2 Max only |
-| CUDA (NVIDIA) | `cubecl/cuda` | **Not implemented** — compile-only gate where a toolchain exists | No CUDA hardware in the fleet lane; no runtime claim is made |
-| HIP/ROCm (AMD) | `cubecl/hip` | **Not implemented** — compile-only gate where a toolchain exists | No AMD hardware in the fleet lane; no runtime claim is made |
+| Metal (Apple GPU) | native MSL | **Implemented, not promoted** — exact single/multi-tile fixture parity and 64/64 continuation agreement; local 19K TTFT is 604.84 ms versus 385.41 ms native | Apple M1 Ultra device gate below |
+| CUDA (NVIDIA) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | CUDA 12.9.2 native runtime and product packaging pass; real NVIDIA fixture and 19K gates remain |
+| HIP/ROCm (AMD) | shared native CUDA/HIP source | **Compile/package qualified only** — no runtime claim yet | ROCm gfx1100 native runtime and product packaging pass; real AMD fixture and 19K gates remain |
 
 Nothing may be marked implemented until it runs on real hardware and
 matches the CPU reference bit-for-bit. Compile-only checks prove the
@@ -117,24 +118,23 @@ request path. The matched 19K result below proves the reference recovers
 continuation quality, while also proving that scalar arithmetic decode cannot
 meet the restore-to-first-token gate.
 
-## Sequencing after this slice
+## Sequencing after the direct Metal gate
 
 1. Preserve the scalar implementation and its pinned fixtures as the
    deterministic oracle for device kernels.
-2. Add a Skippy-owned compressed-page import/export contract at the native KV
-   boundary. Skippy keeps ownership of cell allocation, rollback, tensor
-   layout, and session-position commit.
-3. Expose one optional backend-registry codec hook from Metal and CUDA/HIP.
-   Import passes validated compressed records plus tensor/cell-run
-   destinations; it never exposes backend-specific device pointers through the
-   public Rust or C ABI.
-4. Implement the parallel arithmetic path on Metal and decode directly into
-   resident K/V storage, including transposed-V destination addressing. Prove
-   fixture parity before another 19K gate.
+2. Keep the completed Skippy-owned compressed-page transaction and optional
+   backend-registry hook as the integration boundary. Metal and CUDA/HIP decode
+   validated records directly into allocated resident cells; capability or
+   execution failure rolls back without a scalar fallback.
+3. Qualify the shared CUDA/HIP decoder against the scalar fixtures and matched
+   19K gate on real NVIDIA and AMD hardware.
+4. Add independently decodable substreams or an equivalent parallel entropy
+   layout before retrying local-tier Metal promotion. Preserve the current
+   scalar stream as the compatibility oracle for the new revision.
 5. Add encode from resident K/V storage and copy only the compact archive back
    to the persistence layer.
-6. Compile the same CUDA-family source through CUDA and HIP/ROCm, then qualify
-   each backend on real hardware before marking it implemented.
+6. Add typed F32, Q8_0, Q4_0, and mixed K/V adapters over the shared codec core,
+   with a separate quality and latency gate for every claimed combination.
 
 ## Native runtime integration boundary
 
@@ -171,6 +171,42 @@ batches many 256-token arithmetic streams: one thread serially decodes at most
 streams run in parallel. Destination metadata maps each stream to a K/V tensor,
 allocated cell run, row stride, and optional transposed-V stride. This avoids a
 launch per tile and permits dequantization and final layout writes in one pass.
+
+## 19K direct Metal result (2026-09-11): QUALITY PASS, LOCAL LATENCY STOP
+
+The direct-device gate was run from exact commit
+`c86cf848b0fa183f2c2e594fe1e51bf1024d7185` on an Apple M1 Ultra (128 GiB,
+Metal) with the same pinned Qwen3 0.6B Q8_0 model and 19,000-token workload as
+the scalar result below. Native and CacheGen continuations run in isolated
+sessions. The scalar decoder still runs as an independently timed correctness
+oracle, but its 41.44 seconds are excluded from the direct-device TTFT. The
+compact result is
+[`cachegen-metal-device-qwen3-0.6b-19k-summary.json`](cachegen-metal-device-qwen3-0.6b-19k-summary.json).
+
+| Metric | Native | Direct Metal CacheGen | Decision |
+|---|---:|---:|---|
+| Persisted bytes | 2,179,072,000 | 446,903,003 | 20.51% of native (4.88x smaller) |
+| Persist path | 424.19 ms | 21,332.42 ms including encode | Fail for synchronous persistence |
+| Read | 296.25 ms | 54.21 ms | CacheGen saves 242.04 ms |
+| Resident import | 56.69 ms | 540.74 ms | CacheGen spends 484.05 ms more reconstructing K/V |
+| Restore to first token | 385.41 ms | 604.84 ms | Fail (1.57x slower) |
+| Scalar oracle decode | — | 41,436.07 ms, excluded from device TTFT | Correctness-only reference |
+| Continuation throughput | 122.34 tok/s | 128.07 tok/s | No steady-state regression |
+| p99 decode | 32.47 ms | 9.88 ms | Within the 5% regression budget |
+| Greedy-token agreement | 64/64 control | 64/64 (100%) | Pass versus 95% gate |
+| Estimated codec working bytes | — | 2,627,965,638 | Reported; no memory cap was supplied |
+
+The Metal decoder is correct after aligning every staged tile before typed
+metadata reads; the regression test covers two differently sized consecutive
+tiles. Replacing the 64-bit arithmetic division with a float reciprocal estimate
+and exact integer correction, plus a binary CDF search, reduced the same 19K
+resident import from 744.95 ms to 540.74 ms. It still loses the local gate
+because every restore reconstructs about 1.09 billion F16 values through
+per-channel arithmetic streams of up to 256 symbols. On unified-memory M1 Ultra,
+the native 2.18 GB copy is unusually fast: CacheGen's 242.04 ms read saving does
+not recover its 484.05 ms reconstruction penalty. The result does not decide a
+remote tier, where transfer time and pipelining differ; that tier needs its own
+matched end-to-end gate under #1427.
 
 ## 19K LMCache-compatible CPU result (2026-09-11): QUALITY PASS, LATENCY STOP
 
