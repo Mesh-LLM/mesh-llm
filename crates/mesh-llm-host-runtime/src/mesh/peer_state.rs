@@ -166,6 +166,26 @@ pub struct PeerAnnouncement {
     pub(crate) latency_age_ms: Option<u64>,
     pub(crate) latency_observer_id: Option<EndpointId>,
     pub(crate) inference_admission_state: Option<crate::proto::node::InferenceAdmissionState>,
+    /// An optional, self-reported claim this peer MAY advertise about the
+    /// head of its own append-only history. Carried opaquely; never verified
+    /// by mesh-llm.
+    pub(crate) claimed_log_head: Option<ClaimedLogHead>,
+}
+
+/// A peer's latest self-reported claim about the head of its append-only log
+/// — see `ClaimedLogHead` in `node.proto` for the wire shape and the
+/// signing-scope note. Carried opaquely: mesh-llm never verifies
+/// `claimed_signature` itself, hence the name — a consumer that does verify
+/// it may define its own `VerifiedLogHead` type; none exists here. `pub(crate)`
+/// to match `PeerAnnouncement::claimed_log_head`, which is also `pub(crate)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaimedLogHead {
+    pub(crate) log_id: String,
+    pub(crate) size: u64,
+    pub(crate) root: Vec<u8>,
+    pub(crate) timestamp_unix_ms: u64,
+    pub(crate) claimed_signature: Vec<u8>,
+    pub(crate) signature_algorithm: String,
 }
 
 /// A single direct RTT measurement (e.g. from gossip exchange).
