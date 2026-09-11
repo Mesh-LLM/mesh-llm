@@ -89,6 +89,29 @@ pub enum FlashAttentionArg {
     Enabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CacheTypeArg {
+    #[value(name = "f16")]
+    F16,
+    #[value(name = "f32")]
+    F32,
+    #[value(name = "q8_0")]
+    Q8Zero,
+    #[value(name = "q4_0")]
+    Q4Zero,
+}
+
+impl CacheTypeArg {
+    pub(crate) const fn ggml_type(self) -> u32 {
+        match self {
+            Self::F16 => skippy_runtime::GGML_TYPE_F16,
+            Self::F32 => skippy_runtime::GGML_TYPE_F32,
+            Self::Q8Zero => skippy_runtime::GGML_TYPE_Q8_0,
+            Self::Q4Zero => skippy_runtime::GGML_TYPE_Q4_0,
+        }
+    }
+}
+
 #[derive(Args, Clone)]
 pub struct ServerArgs {
     #[arg(long, default_value = "target/debug/skippy-server")]
@@ -216,6 +239,12 @@ pub struct StateHandoffArgs {
     /// scalar restore fallback.
     #[arg(long)]
     pub cachegen_gate: bool,
+    /// Native K cache type used by the state-handoff and CacheGen control arms.
+    #[arg(long, value_enum, default_value = "f16")]
+    pub cache_type_k: CacheTypeArg,
+    /// Native V cache type used by the state-handoff and CacheGen control arms.
+    #[arg(long, value_enum, default_value = "f16")]
+    pub cache_type_v: CacheTypeArg,
     /// Teacher-forced continuation steps used for CacheGen quality and
     /// steady-state decode measurements.
     #[arg(long, default_value_t = 64)]

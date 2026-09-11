@@ -100,6 +100,8 @@ pub(in crate::runner) struct BinaryStateHandoffConfig {
     pub(in crate::runner) synthetic_input_activation: bool,
     pub(in crate::runner) binary_control: bool,
     pub(in crate::runner) cachegen_gate: bool,
+    pub(in crate::runner) cache_type_k: u32,
+    pub(in crate::runner) cache_type_v: u32,
     pub(in crate::runner) cachegen_continuation_steps: usize,
     pub(in crate::runner) cachegen_min_token_agreement: f64,
     pub(in crate::runner) cachegen_max_p99_decode_regression: f64,
