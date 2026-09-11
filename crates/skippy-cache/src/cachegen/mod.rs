@@ -1,11 +1,11 @@
-//! Pure-Rust CPU CacheGen reference (#1652): the deterministic golden
-//! encoder/decoder later GPU implementations must match bit-for-bit.
+//! CacheGen experiments and the pinned LMCache-compatible CPU reference
+//! used by the acceptance gate in #1652.
 //!
-//! Layout follows the crate's semantic-ownership rules:
-//! [`reference`] owns quantization/calibration/delta math,
-//! [`rans`] owns the entropy coder, and [`cachegen`] owns the segment
-//! container and the identity surface the L3 manifest consumes.
+//! [`lmcache`] owns the active reference algorithm. [`container`], [`reference`],
+//! and [`rans`] retain the earlier simplified prototype and its historical
+//! fixtures; production and acceptance-gate code must not select that path.
 
 pub mod container;
+pub mod lmcache;
 pub mod rans;
 pub mod reference;

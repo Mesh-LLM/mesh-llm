@@ -8,7 +8,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use skippy_cache::cachegen::container::{decode_f16_segment, encode_f16_segment};
+use skippy_cache::cachegen::lmcache::{
+    MAX_TOKENS_PER_CHUNK, bins_for_layer, decode_f16_segment, encode_f16_segment,
+};
 use skippy_runtime::{
     GGML_TYPE_F16, KV_PAGE_FLAG_V_TRANSPOSED, RuntimeKvPageDesc, StageModel, StageSession,
 };
@@ -23,7 +25,7 @@ use super::{
 const ARCHIVE_MAGIC: [u8; 4] = *b"CKG1";
 const ARCHIVE_HEADER_BYTES: usize = 16;
 const RECORD_HEADER_BYTES: usize = 52;
-const CACHEGEN_ROWS_PER_TILE: usize = 4096;
+const CACHEGEN_ROWS_PER_TILE: usize = MAX_TOKENS_PER_CHUNK;
 const RECORD_CACHEGEN: u8 = 0;
 const RECORD_EXACT: u8 = 1;
 const RECORD_CACHEGEN_TRANSPOSED: u8 = 2;
@@ -458,7 +460,11 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start: 0,
                 total_tokens: 0,
-                payload: encode_f16_segment(tile, k_row / 2)?,
+                payload: encode_f16_segment(
+                    tile,
+                    k_row / 2,
+                    bins_for_layer(layer, layer_count, true),
+                )?,
             });
         }
     }
@@ -506,7 +512,11 @@ fn encode_component(
                 token_count: rows as u64,
                 token_start,
                 total_tokens,
-                payload: encode_f16_segment(&encoded_input, v_row / 2)?,
+                payload: encode_f16_segment(
+                    &encoded_input,
+                    v_row / 2,
+                    bins_for_layer(layer, layer_count, false),
+                )?,
             });
         }
     }
