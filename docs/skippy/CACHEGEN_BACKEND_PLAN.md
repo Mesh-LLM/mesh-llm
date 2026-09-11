@@ -10,8 +10,8 @@ contract, CPU+Metal parity, six measurements, stop rule).
 
 | Backend | Kernel | Status | Evidence |
 |---|---|---|---|
-| CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented; only F16 has passed the 19K quality gate | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
-| Metal (Apple GPU) | native MSL | **All typed restores implemented, not promoted** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; the F16 local 19K gate has 64/64 continuation agreement but 604.84 ms TTFT versus 385.41 ms native | Apple M1 Ultra device fixture and F16 gate below; quantized 19K gates remain |
+| CPU (reference) | scalar Rust | **Correctness reference only** — portable F32, F16, Q8_0, Q4_0, and mixed K/V adapters are implemented | Python/Rust fixtures pin LMCache revision `b5d109e`; typed archive fixtures cover every current user-selectable runtime K/V type |
+| Metal (Apple GPU) | native MSL | **All typed restores implemented, not promoted** — F16, F32, Q8_0, and Q4_0 match native fixture layouts; representative 19K F16, Q8_0, Q4_0, and mixed gates meet the 95% quality floor but all lose the local latency gate, and Q4_0/Q4_0 is larger than native | Apple M1 Ultra device fixture and typed 19K gates below |
 | CUDA (NVIDIA) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real NVIDIA fixture and typed 19K gates remain |
 | HIP/ROCm (AMD) | shared native CUDA/HIP source | **All typed restores implemented, compile/package qualification pending** — no runtime claim yet | Real AMD fixture and typed 19K gates remain |
 
@@ -231,6 +231,32 @@ the native 2.18 GB copy is unusually fast: CacheGen's 242.04 ms read saving does
 not recover its 484.05 ms reconstruction penalty. The result does not decide a
 remote tier, where transfer time and pipelining differ; that tier needs its own
 matched end-to-end gate under #1427.
+
+## 19K typed Metal matrix (2026-09-11): QUALITY FLOOR PASS, LOCAL PROMOTION STOP
+
+The typed gate was run from exact commit
+`2e26d46ea87e1b8ee783460998e703f669513f91` on the same Apple M1 Ultra,
+pinned Qwen3 0.6B Q8_0 model, 19,000-token prefix, and 64-step continuation.
+The gate now accepts independent `--cache-type-k` and `--cache-type-v` values
+and records them in its report. The compact matrix is
+[`cachegen-metal-typed-qwen3-0.6b-19k-summary.json`](cachegen-metal-typed-qwen3-0.6b-19k-summary.json).
+
+| K/V type | Native bytes | CacheGen bytes | CacheGen/native | Agreement | Native TTFT | CacheGen TTFT | Decision |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Q8_0/Q8_0 | 1,157,632,000 | 589,803,358 | 50.95% | 64/64 (100%) | 333.36 ms | 650.64 ms | Quality and size pass; local latency fails |
+| Q4_0/Q4_0 | 612,864,000 | 635,037,607 | 103.62% | 61/64 (95.31%) | 189.84 ms | 699.35 ms | Quality floor passes; size and local latency fail |
+| Q8_0/F16 | 1,668,352,000 | 565,441,003 | 33.89% | 64/64 (100%) | 558.28 ms | 792.05 ms | Quality and size pass; local latency fails |
+| Q4_0/F16 | 1,395,968,000 | 610,269,862 | 43.72% | 61/64 (95.31%) | 483.98 ms | 807.03 ms | Quality and size pass; local latency fails |
+
+These are representative homogeneous and mixed layouts, not qualification of
+all 16 pairings. The quantized K cases expose a consistent quality split:
+Q8_0 preserves all 64 greedy continuation tokens, while Q4_0 first diverges at
+step 15 and finishes at 61/64, barely above the declared 95% floor. All four
+CacheGen continuations stay within the p99 decode-regression budget after
+restore. None may be promoted for the local tier because end-to-end restore is
+slower than native; Q4_0/Q4_0 also has no storage benefit. F32 and the remaining
+mixed permutations retain fixture-level coverage and need separate 19K runs
+before any broader typed qualification claim.
 
 ## 19K LMCache-compatible CPU result (2026-09-11): QUALITY PASS, LATENCY STOP
 
