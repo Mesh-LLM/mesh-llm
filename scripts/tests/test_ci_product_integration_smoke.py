@@ -33,6 +33,7 @@ class ProductIntegrationSmokeTests(unittest.TestCase):
                 """#!/usr/bin/env bash
 set -euo pipefail
 phase="${MESH_PRODUCT_INTEGRATION_PHASE:?missing phase}"
+[[ "${MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL:-}" == "http://127.0.0.1:9/native-runtimes.json" ]]
 if [[ "${STUB_FAIL_PHASE:-}" == "$phase" ]]; then
     exit 42
 fi
@@ -92,6 +93,7 @@ esac
             """#!/usr/bin/env bash
 set -euo pipefail
 phase="${MESH_PRODUCT_INTEGRATION_PHASE:?missing phase}"
+[[ "${MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL:-}" == "http://127.0.0.1:9/native-runtimes.json" ]]
 for log_path in "${MESH_CI_LOG:-}" "${MESH_CI_HEADLESS_LOG:-}" "${MESH_COMPAT_LOG:-}"; do
     if [[ -n "$log_path" ]]; then
         mkdir -p "$(dirname "$log_path")"

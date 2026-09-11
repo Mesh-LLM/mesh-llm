@@ -24,6 +24,11 @@ PHASE_RECORDS="$PHASE_ROOT/.phase-results.jsonl"
 SUITE_STARTED_AT_UNIX_NS=""
 SUITE_FINALIZED=0
 
+# This suite qualifies the runtime bundled in the product assembled by the
+# current workflow. A same-version published catalog may describe an older
+# artifact, so force the resolver onto its documented bundle fallback path.
+export MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL="http://127.0.0.1:9/native-runtimes.json"
+
 readonly -a REQUIRED_PHASES=(
     dense-standalone
     dense-openai-sdk
