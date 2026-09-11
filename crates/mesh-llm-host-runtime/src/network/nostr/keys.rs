@@ -4,13 +4,12 @@ use anyhow::Result;
 use nostr_sdk::prelude::*;
 
 // ---------------------------------------------------------------------------
-// Keys — stored in ~/.mesh-llm/nostr.nsec
+// Keys — stored in ~/.mesh-llm/nostr.nsec for the default node key, or in the
+// active key's private identity namespace when MESH_LLM_NODE_KEY_PATH is set.
 // ---------------------------------------------------------------------------
 
 fn nostr_key_path() -> Result<std::path::PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".mesh-llm").join("nostr.nsec"))
+    Ok(crate::mesh::identity_state_dir().join("nostr.nsec"))
 }
 
 /// Load or generate a Nostr keypair for publishing.
@@ -81,10 +80,6 @@ fn ensure_private_nostr_key_file(_path: &std::path::Path) -> Result<()> {
 /// Delete the Nostr key and node identity key.  After rotation the
 /// node gets a fresh identity on next start.
 pub fn rotate_keys() -> Result<()> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let mesh_dir = home.join(".mesh-llm");
-
     let nostr_path = nostr_key_path()?;
     if nostr_path.exists() {
         std::fs::remove_file(&nostr_path)?;
@@ -93,7 +88,7 @@ pub fn rotate_keys() -> Result<()> {
         eprintln!("No Nostr key to rotate (none exists yet).");
     }
 
-    let node_key_path = mesh_dir.join("key");
+    let node_key_path = crate::mesh::default_node_key_path()?;
     if node_key_path.exists() {
         std::fs::remove_file(&node_key_path)?;
         eprintln!("🔑 Deleted {}", node_key_path.display());
@@ -114,22 +109,48 @@ mod rotate_key_tests {
     use std::fs;
 
     struct HomeEnvGuard {
-        previous: Option<OsString>,
+        previous_home: Option<OsString>,
+        previous_node_key_path: Option<OsString>,
     }
 
     impl HomeEnvGuard {
         fn set(path: &std::path::Path) -> Self {
-            let previous = std::env::var_os("HOME");
-            unsafe { std::env::set_var("HOME", path) };
-            Self { previous }
+            let previous_home = std::env::var_os("HOME");
+            let previous_node_key_path = std::env::var_os("MESH_LLM_NODE_KEY_PATH");
+            unsafe {
+                // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                std::env::set_var("HOME", path);
+                // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                std::env::remove_var("MESH_LLM_NODE_KEY_PATH");
+            }
+            Self {
+                previous_home,
+                previous_node_key_path,
+            }
         }
     }
 
     impl Drop for HomeEnvGuard {
         fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => unsafe { std::env::set_var("HOME", value) },
-                None => unsafe { std::env::remove_var("HOME") },
+            match self.previous_home.take() {
+                Some(value) => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                    unsafe { std::env::set_var("HOME", value) }
+                }
+                None => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                    unsafe { std::env::remove_var("HOME") }
+                }
+            }
+            match self.previous_node_key_path.take() {
+                Some(value) => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                    unsafe { std::env::set_var("MESH_LLM_NODE_KEY_PATH", value) }
+                }
+                None => {
+                    // SAFETY: this guard is used only by #[serial] tests and restores both values.
+                    unsafe { std::env::remove_var("MESH_LLM_NODE_KEY_PATH") }
+                }
             }
         }
     }
@@ -139,7 +160,11 @@ mod rotate_key_tests {
     fn rotate_deletes_both_keys_and_handles_missing() {
         let temp = tempfile::tempdir().expect("temp home");
         let _home = HomeEnvGuard::set(temp.path());
-        let dir = dirs::home_dir().unwrap().join(".mesh-llm");
+        assert!(
+            std::env::var_os("MESH_LLM_NODE_KEY_PATH").is_none(),
+            "rotate test must use the isolated default key namespace"
+        );
+        let dir = crate::mesh::identity_home_dir().join(".mesh-llm");
         fs::create_dir_all(&dir).ok();
 
         let key_path = dir.join("key");
@@ -158,6 +183,35 @@ mod rotate_key_tests {
         // (files were just deleted above, so the directory is clean)
         let result = rotate_keys();
         assert!(result.is_ok(), "rotate should succeed even with no keys");
+    }
+
+    #[test]
+    #[serial]
+    fn rotate_deletes_active_custom_keys_without_touching_default_state() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let _home = HomeEnvGuard::set(temp.path());
+        let custom_key_path = temp.path().join("custom-node.key");
+        // SAFETY: this #[serial] test owns the process environment and _home restores it.
+        unsafe { std::env::set_var("MESH_LLM_NODE_KEY_PATH", &custom_key_path) };
+
+        let default_dir = crate::mesh::identity_home_dir().join(".mesh-llm");
+        fs::create_dir_all(&default_dir).unwrap();
+        let default_key_path = default_dir.join("key");
+        let default_nostr_path = default_dir.join("nostr.nsec");
+        fs::write(&default_key_path, b"default-node-key").unwrap();
+        fs::write(&default_nostr_path, b"default-nostr-nsec").unwrap();
+
+        let custom_nostr_path = nostr_key_path().unwrap();
+        fs::write(&custom_key_path, b"custom-node-key").unwrap();
+        fs::create_dir_all(custom_nostr_path.parent().unwrap()).unwrap();
+        fs::write(&custom_nostr_path, b"custom-nostr-nsec").unwrap();
+
+        rotate_keys().expect("rotate custom keys");
+
+        assert!(!custom_key_path.exists());
+        assert!(!custom_nostr_path.exists());
+        assert!(default_key_path.exists());
+        assert!(default_nostr_path.exists());
     }
 }
 

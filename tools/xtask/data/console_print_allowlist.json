@@ -1831,11 +1831,19 @@
   ],
   "crates/mesh-llm-host-runtime/src/network/nostr/keys.rs": [
     {
-      "line": 91,
+      "line": 86,
       "macro_name": "eprintln!"
     },
     {
-      "line": 93,
+      "line": 88,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 94,
+      "macro_name": "eprintln!"
+    },
+    {
+      "line": 96,
       "macro_name": "eprintln!"
     },
     {
@@ -1843,15 +1851,7 @@
       "macro_name": "eprintln!"
     },
     {
-      "line": 101,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 104,
-      "macro_name": "eprintln!"
-    },
-    {
-      "line": 105,
+      "line": 100,
       "macro_name": "eprintln!"
     }
   ],
