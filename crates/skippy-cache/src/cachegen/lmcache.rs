@@ -96,8 +96,8 @@ pub fn encode_f16_segment(raw: &[u8], channels: usize, bins: u8) -> Result<Vec<u
     let cdfs = calculate_cdfs(&symbols, rows, channels)?;
     let mut lengths = Vec::with_capacity(channels);
     let mut streams = Vec::new();
-    for channel in 0..channels {
-        let stream = arithmetic_encode_channel(&symbols, rows, channels, channel, &cdfs[channel]);
+    for (channel, cdf) in cdfs.iter().enumerate() {
+        let stream = arithmetic_encode_channel(&symbols, rows, channels, channel, cdf);
         let length = u16::try_from(stream.len())
             .map_err(|_| anyhow!("LMCache channel stream exceeds u16 envelope field"))?;
         lengths.push(length);
