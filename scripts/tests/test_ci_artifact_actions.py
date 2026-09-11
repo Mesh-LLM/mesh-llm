@@ -19,6 +19,7 @@ ACTIONS = ROOT / ".github" / "actions"
 COMPOSE_SCRIPT = ROOT / "scripts" / "ci-compose-product-input.sh"
 RELEASE_FOOTER_MANIFEST = ROOT / "crates" / "mesh-llm-release-footer" / "Cargo.toml"
 XTASK_MANIFEST = ROOT / "tools" / "xtask" / "Cargo.toml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 class CiArtifactActionTests(unittest.TestCase):
@@ -509,6 +510,28 @@ class CiArtifactActionTests(unittest.TestCase):
         )
         self.assertNotIn("package-native-runtime.sh", action)
         self.assertNotIn("compose-product", action)
+
+    def test_release_stamps_refuse_to_guess_the_source_commit(self) -> None:
+        """A published binary has to say what it was built from (#1596)."""
+        for name in ("prepare-host-input", "prepare-windows-host-input"):
+            action = self.read_action(name)
+            with self.subTest(action=name):
+                self.assertIn("--require-source-commit", action)
+                self.assertIn("--commit", action)
+                self.assertIn("INPUT_COMMIT", action)
+
+    def test_release_workflow_stamps_the_immutable_source_revision(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        attest_steps = workflow.count(
+            "attestation_signing_key_file: ${{ runner.temp }}"
+            "/mesh-release-attestation-private-key.json"
+        )
+        stamped_commits = workflow.count(
+            "commit: ${{ needs.metadata.outputs.source_sha }}"
+        )
+
+        self.assertGreater(attest_steps, 0)
+        self.assertEqual(attest_steps, stamped_commits)
 
     def test_windows_attestation_verifier_stays_native_abi_free(self) -> None:
         xtask = tomllib.loads(XTASK_MANIFEST.read_text(encoding="utf-8"))
