@@ -70,12 +70,21 @@ pub const LEGACY_MANIFEST_VERSION: u32 = 2;
 /// compatibility, never written. New manifests stamp identity per segment.
 pub const LEGACY_PAYLOAD_CODEC_MANIFEST_VERSION: u32 = 3;
 
-/// Identity of the only implemented payload codec: raw, uncompressed exact
-/// state. Its bytes are the segments verbatim.
+/// Identity of the payload envelope: raw, uncompressed exact state. Its bytes
+/// are the segments verbatim, including segments whose representation is the
+/// runtime's native KV page layout.
 pub const CODEC_RAW: &str = "raw";
 /// Version of the raw codec's on-disk representation. Bumped only if the raw
 /// byte layout itself changes; an unknown version is rejected, never migrated.
 pub const CODEC_RAW_VERSION: u32 = 1;
+
+/// Exact KV bytes exported by the active native runtime and restored directly
+/// into that runtime without a storage transcode.
+pub const CODEC_NATIVE_KV_PAGE: &str = "native-kv-page";
+/// Version of the native KV segment contract. The concrete runtime ABI,
+/// tensor types, geometry, and platform are bound by the exact-state identity
+/// and the serialized runtime page descriptor carried by the manifest.
+pub const CODEC_NATIVE_KV_PAGE_VERSION: u32 = 1;
 
 /// The codec used to encode a payload's segment bytes, stamped into the
 /// manifest so representations are explicit and negotiable.
@@ -186,12 +195,37 @@ impl SegmentCodecIdentity {
         }
     }
 
+    /// Identity for a runtime-native KV page segment stored verbatim. The
+    /// store performs no encode/decode step; restore imports these same bytes
+    /// through the runtime page descriptor associated with the manifest.
+    pub fn native_kv_page(encoded_len: u64) -> Self {
+        Self {
+            name: CODEC_NATIVE_KV_PAGE.to_string(),
+            version: CODEC_NATIVE_KV_PAGE_VERSION,
+            class: CodecClass::Exact,
+            decoded_len: encoded_len,
+            calibration_digest: None,
+        }
+    }
+
+    /// Whether this identity names the supported native KV passthrough
+    /// representation. This is stricter than a name check: an identity with
+    /// the wrong version, class, or calibration is not native passthrough.
+    pub fn is_native_kv_page(&self) -> bool {
+        self.name == CODEC_NATIVE_KV_PAGE
+            && self.version == CODEC_NATIVE_KV_PAGE_VERSION
+            && self.class == CodecClass::Exact
+            && self.calibration_digest.is_none()
+    }
+
     /// Whether this build can assemble a segment encoded with this identity.
-    /// Only the exact raw codec is implemented; anything else is unknown and
-    /// must be refused before assembly.
+    /// Exact raw and native KV passthrough are implemented. Both assemble
+    /// verbatim; anything else is unknown and must be refused before assembly.
     pub fn is_supported(&self) -> bool {
-        self.name == CODEC_RAW
-            && self.version == CODEC_RAW_VERSION
+        let supported_representation = (self.name == CODEC_RAW
+            && self.version == CODEC_RAW_VERSION)
+            || self.is_native_kv_page();
+        supported_representation
             && self.class == CodecClass::Exact
             && self.calibration_digest.is_none()
     }
@@ -293,6 +327,16 @@ impl HandoffManifest {
             continuation_token: 0,
             expected_tokens: Vec::new(),
         }
+    }
+
+    /// Whether this manifest contains runtime-native KV page segments.
+    pub fn uses_native_kv_passthrough(&self) -> bool {
+        self.segments.iter().any(|segment| {
+            segment
+                .codec_identity
+                .as_ref()
+                .is_some_and(SegmentCodecIdentity::is_native_kv_page)
+        })
     }
 }
 
@@ -1844,6 +1888,24 @@ fn manifest_version_is_supported(version: u32) -> bool {
 /// codec that describes the assembled whole. Positional errors name the
 /// segment index so the offending ref is identifiable in the message.
 fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
+    let has_native_kv = manifest.uses_native_kv_passthrough();
+    let has_runtime_descriptor = manifest
+        .kv_desc_json
+        .as_deref()
+        .is_some_and(|descriptor| serde_json::from_str::<serde_json::Value>(descriptor).is_ok());
+    if has_native_kv
+        && (manifest.version != MANIFEST_VERSION
+            || manifest.payload_kind != "kv-recurrent"
+            || manifest.kv_bytes == 0
+            || !has_runtime_descriptor
+            || manifest.kv_bytes.checked_add(manifest.recurrent_bytes)
+                != Some(manifest.total_bytes))
+    {
+        bail!(
+            "manifest {} names native KV segments without a current, complete kv-recurrent payload and runtime page descriptor",
+            manifest.payload_digest
+        );
+    }
     for segment in &manifest.segments {
         let Some(identity) = segment.codec_identity.as_ref() else {
             // Legacy formats carry no per-segment identity by construction;
@@ -1852,13 +1914,15 @@ fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
         };
         if !identity.is_supported() {
             bail!(
-                "manifest {} segment {} uses unsupported codec {}/{}; this build assembles only {}/{}",
+                "manifest {} segment {} uses unsupported codec {}/{}; this build assembles only {}/{} and {}/{}",
                 manifest.payload_digest,
                 segment.index,
                 identity.name,
                 identity.version,
                 CODEC_RAW,
-                CODEC_RAW_VERSION
+                CODEC_RAW_VERSION,
+                CODEC_NATIVE_KV_PAGE,
+                CODEC_NATIVE_KV_PAGE_VERSION
             );
         }
         if !identity.is_self_consistent(segment.bytes) {
@@ -1872,10 +1936,33 @@ fn reject_unsupported_segment_codecs(manifest: &HandoffManifest) -> Result<()> {
                 segment.bytes
             );
         }
-        // Contract note for the compressed-codec slices: the payload codec
-        // describes the assembled whole. Once any segment stops being raw,
-        // the payload codec must be upgraded to name the mixed encoding —
-        // never left claiming raw while per-segment identities disagree.
+        if has_native_kv {
+            let end = segment
+                .offset
+                .checked_add(segment.bytes)
+                .context("segment range overflows")?;
+            let covers_kv = segment.offset < manifest.kv_bytes;
+            if covers_kv && end > manifest.kv_bytes {
+                bail!(
+                    "manifest {} segment {} crosses the native KV boundary at byte {}",
+                    manifest.payload_digest,
+                    segment.index,
+                    manifest.kv_bytes
+                );
+            }
+            if covers_kv != identity.is_native_kv_page() {
+                bail!(
+                    "manifest {} segment {} representation disagrees with the native KV boundary at byte {}",
+                    manifest.payload_digest,
+                    segment.index,
+                    manifest.kv_bytes
+                );
+            }
+        }
+        // The payload codec describes the assembled envelope. Exact native KV
+        // segments remain byte-for-byte members of the raw envelope; a future
+        // codec that transforms stored bytes must upgrade that envelope rather
+        // than leave it claiming raw.
     }
     Ok(())
 }

@@ -71,6 +71,17 @@ workload. Per the agreed stop rule this evidence comes back before any
 expansion: CubeCL is **not** a committed dependency, the spike lives
 behind the `cachegen-spike` feature, and nothing in the library links it.
 
+## Native exact control
+
+The exact control arm uses `native-kv-page/1` per-segment identity. KV bytes
+exported by the active runtime are written and restored verbatim, including
+F32, F16, Q8_0, and Q4_0 layouts supported by that runtime; there is no storage
+transcode. Mixed KV plus recurrent payloads cut at the representation boundary,
+so auxiliary continuation state remains exact `raw/1`. Runtime page metadata is
+validated before segment reads, while the existing exact-state identity binds
+the runtime ABI, platform, model, layer range, and KV configuration. This is the
+baseline every CacheGen result must beat end to end.
+
 ## Capability failure policy
 
 A backend that cannot run a codec fails explicitly through the v4
@@ -84,9 +95,7 @@ lookup.
 
 ## Sequencing after this slice
 
-1. Native runtime-format passthrough remains the exact control arm
-   (unchanged #1652 scope).
-2. CacheGen quality/performance gate versus native on the ~19K acceptance
+1. CacheGen quality/performance gate versus native on the ~19K acceptance
    workload, matched release builds, before any wiring.
-3. Only then: CUDA and HIP/ROCm on real hardware, each proven against
+2. Only then: CUDA and HIP/ROCm on real hardware, each proven against
    the CPU reference bit-for-bit before either is marked implemented.

@@ -1151,6 +1151,69 @@ fn v4_rejects_unsupported_segment_codecs_naming_the_segment() {
 }
 
 #[test]
+fn v4_rejects_unknown_native_kv_version_before_assembly() {
+    let root = temp_root("codec-v4-native-future");
+    let store = store(&root, 0);
+    let payload = vec![15u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut future = manifest.clone();
+    future.payload_kind = "kv-recurrent".to_string();
+    future.kv_bytes = future.total_bytes;
+    future.kv_desc_json = Some("{\"runtime\":\"native\"}".to_string());
+    for segment in &mut future.segments {
+        let mut identity = SegmentCodecIdentity::native_kv_page(segment.bytes);
+        identity.version = CODEC_NATIVE_KV_PAGE_VERSION + 1;
+        segment.codec_identity = Some(identity);
+    }
+
+    let error = store
+        .assemble(&future)
+        .expect_err("a future native KV representation must not assemble");
+    let message = error.to_string();
+    assert!(
+        message.contains(CODEC_NATIVE_KV_PAGE) && message.contains("unsupported codec"),
+        "error should name the unsupported native representation: {message}"
+    );
+    assert!(
+        store.commit(&future).is_err(),
+        "a future native KV representation must not commit"
+    );
+}
+
+#[test]
+fn v4_native_kv_segments_must_tile_exactly_to_the_kv_boundary() {
+    let root = temp_root("codec-v4-native-boundary");
+    let store = store(&root, 0);
+    let payload = vec![16u8; 8192];
+    let manifest = commit_payload(&store, &payload, 4096);
+    let mut mixed = manifest.clone();
+    mixed.payload_kind = "kv-recurrent".to_string();
+    mixed.kv_bytes = 4096;
+    mixed.recurrent_bytes = 4096;
+    mixed.kv_desc_json = Some("{\"runtime\":\"native\"}".to_string());
+    mixed.segments[0].codec_identity = Some(SegmentCodecIdentity::native_kv_page(4096));
+    assert_eq!(
+        store.assemble(&mixed).expect("valid mixed manifest"),
+        payload
+    );
+
+    let mut crossing = mixed.clone();
+    crossing.kv_bytes = 5000;
+    crossing.recurrent_bytes = 3192;
+    let error = store
+        .assemble(&crossing)
+        .expect_err("a segment crossing the KV boundary must not assemble");
+    assert!(error.to_string().contains("crosses the native KV boundary"));
+
+    let mut native_auxiliary = mixed;
+    native_auxiliary.segments[1].codec_identity = Some(SegmentCodecIdentity::native_kv_page(4096));
+    let error = store
+        .assemble(&native_auxiliary)
+        .expect_err("auxiliary bytes cannot claim the native KV representation");
+    assert!(error.to_string().contains("representation disagrees"));
+}
+
+#[test]
 fn v4_segment_identity_length_mismatch_is_refused() {
     let root = temp_root("codec-v4-length");
     let store = store(&root, 0);

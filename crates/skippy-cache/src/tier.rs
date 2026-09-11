@@ -68,6 +68,11 @@ pub struct L3Location {
     /// Manifest key (payload digest) — the identity of the physical entry;
     /// the correct single-flight claim key.
     pub manifest_key: String,
+    /// Metadata copied from the located manifest so the runtime can reject an
+    /// incompatible native page descriptor before reading segment bytes.
+    pub kv_desc_json: Option<String>,
+    pub kv_bytes: u64,
+    pub native_kv_passthrough: bool,
 }
 
 /// A successful fill from the tier.
@@ -86,6 +91,50 @@ pub struct L3Tier {
     model_identity: String,
     state_identity: String,
     segment_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentRepresentation {
+    Raw,
+    NativeKvPage,
+}
+
+impl SegmentRepresentation {
+    fn identity(self, encoded_len: u64) -> SegmentCodecIdentity {
+        match self {
+            Self::Raw => SegmentCodecIdentity::raw(encoded_len),
+            Self::NativeKvPage => SegmentCodecIdentity::native_kv_page(encoded_len),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SegmentCut {
+    offset: u64,
+    len: u64,
+    label: String,
+    representation: SegmentRepresentation,
+}
+
+fn append_fixed_cuts(
+    cuts: &mut Vec<SegmentCut>,
+    offset: &mut u64,
+    bytes: u64,
+    segment_bytes: u64,
+    representation: SegmentRepresentation,
+) {
+    let mut remaining = bytes;
+    while remaining > 0 {
+        let len = segment_bytes.max(1).min(remaining);
+        cuts.push(SegmentCut {
+            offset: *offset,
+            len,
+            label: String::new(),
+            representation,
+        });
+        *offset = offset.saturating_add(len);
+        remaining -= len;
+    }
 }
 
 impl L3Tier {
@@ -270,6 +319,11 @@ impl L3Tier {
         manifest.payload_digest = payload_digest.clone();
         manifest.kv_bytes = kv_bytes;
         manifest.recurrent_bytes = recurrent_bytes;
+        let native_kv_passthrough = payload.kind() == ExactStatePayloadKind::KvRecurrent
+            && kv_bytes > 0
+            && kv_desc_json
+                .as_deref()
+                .is_some_and(|descriptor| !descriptor.trim().is_empty());
         manifest.kv_desc_json = kv_desc_json;
         manifest.token_count = token_count;
         // Cut on the payload's own geometry when the caller knows it, so a
@@ -278,7 +332,9 @@ impl L3Tier {
         // than trusted: mis-cutting would still reassemble, but silently write
         // the whole payload again every turn.
         let geometry = geometry.filter(|geometry| {
-            let matches = geometry.matches(wire.len() as u64);
+            let geometry_kv_bytes = geometry.total_bytes().saturating_sub(geometry.tail_bytes);
+            let matches = geometry.matches(wire.len() as u64)
+                && (!native_kv_passthrough || geometry_kv_bytes == kv_bytes);
             if !matches {
                 self.manager
                     .activity_counters()
@@ -288,24 +344,56 @@ impl L3Tier {
             matches
         });
         let cuts = match geometry {
-            Some(geometry) => geometry.plan(self.segment_bytes as u64),
+            Some(geometry) => geometry
+                .plan(self.segment_bytes as u64)
+                .into_iter()
+                .map(|(offset, len, label)| SegmentCut {
+                    offset,
+                    len,
+                    representation: if native_kv_passthrough && offset < kv_bytes {
+                        SegmentRepresentation::NativeKvPage
+                    } else {
+                        SegmentRepresentation::Raw
+                    },
+                    label,
+                })
+                .collect(),
             None => {
                 let mut cuts = Vec::new();
                 let mut offset = 0u64;
-                while (offset as usize) < wire.len() {
-                    let len = self.segment_bytes.min(wire.len() - offset as usize) as u64;
-                    cuts.push((offset, len, String::new()));
-                    offset += len;
+                if native_kv_passthrough {
+                    append_fixed_cuts(
+                        &mut cuts,
+                        &mut offset,
+                        kv_bytes,
+                        self.segment_bytes as u64,
+                        SegmentRepresentation::NativeKvPage,
+                    );
+                    append_fixed_cuts(
+                        &mut cuts,
+                        &mut offset,
+                        recurrent_bytes,
+                        self.segment_bytes as u64,
+                        SegmentRepresentation::Raw,
+                    );
+                } else {
+                    append_fixed_cuts(
+                        &mut cuts,
+                        &mut offset,
+                        wire.len() as u64,
+                        self.segment_bytes as u64,
+                        SegmentRepresentation::Raw,
+                    );
                 }
                 cuts
             }
         };
         let segment_slices = cuts
             .iter()
-            .map(|(offset, len, _)| {
-                let start = usize::try_from(*offset).context("segment offset exceeds usize")?;
+            .map(|cut| {
+                let start = usize::try_from(cut.offset).context("segment offset exceeds usize")?;
                 let end = start
-                    .checked_add(usize::try_from(*len).context("segment length exceeds usize")?)
+                    .checked_add(usize::try_from(cut.len).context("segment length exceeds usize")?)
                     .context("segment range overflows")?;
                 Ok(&wire[start..end])
             })
@@ -326,19 +414,17 @@ impl L3Tier {
         // these segments are unreferenced, and an eviction triggered by
         // another writer would collect them mid-build.
         let mut held = Vec::with_capacity(stored_segments.len());
-        for ((index, (offset, len, label)), stored) in
-            cuts.into_iter().enumerate().zip(stored_segments)
-        {
+        for ((index, cut), stored) in cuts.into_iter().enumerate().zip(stored_segments) {
             if stored.put.new {
                 new_bytes = new_bytes.saturating_add(stored.put.bytes);
             }
             manifest.segments.push(HandoffSegmentRef {
                 index: index as u32,
-                offset,
-                bytes: len,
+                offset: cut.offset,
+                bytes: cut.len,
                 digest: stored.digest.clone(),
-                codec_identity: Some(SegmentCodecIdentity::raw(len)),
-                meta_json: (!label.is_empty()).then_some(label),
+                codec_identity: Some(cut.representation.identity(cut.len)),
+                meta_json: (!cut.label.is_empty()).then_some(cut.label),
             });
             held.push(stored);
         }
@@ -450,11 +536,15 @@ impl L3Tier {
                     manifest.token_count
                 );
             }
+            let native_kv_passthrough = manifest.uses_native_kv_passthrough();
             return Ok(Some(L3Location {
                 namespace_key,
                 prefix_key,
                 token_count: length,
                 manifest_key: manifest.payload_digest,
+                kv_desc_json: manifest.kv_desc_json.clone(),
+                kv_bytes: manifest.kv_bytes,
+                native_kv_passthrough,
             }));
         }
         Ok(None)
@@ -566,7 +656,9 @@ impl L3Tier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::l3::{GeometryBlock, GeometryKind};
+    use crate::l3::{
+        CODEC_NATIVE_KV_PAGE, CODEC_NATIVE_KV_PAGE_VERSION, GeometryBlock, GeometryKind,
+    };
 
     fn temp_root(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir()
@@ -642,6 +734,156 @@ mod tests {
             }
         }
         ExactStatePayload::kv_recurrent(wire, Vec::new())
+    }
+
+    fn runtime_kv_desc(kv_type: u32, token_count: u64, payload_bytes: u64) -> String {
+        serde_json::json!({
+            "version": 1,
+            "layer_start": 0,
+            "layer_end": 1,
+            "token_start": 0,
+            "token_count": token_count,
+            "layer_count": 1,
+            "k_type": kv_type,
+            "v_type": kv_type,
+            "k_row_bytes": 16,
+            "v_row_bytes": 16,
+            "v_element_bytes": 2,
+            "k_idx_row_bytes": 0,
+            "payload_bytes": payload_bytes,
+            "flags": 0,
+            "codec": 0,
+            "component_count": 0
+        })
+        .to_string()
+    }
+
+    fn assert_native_kv_identity(segment: &HandoffSegmentRef) {
+        let identity = segment.codec_identity.as_ref().expect("segment identity");
+        assert_eq!(identity.name, CODEC_NATIVE_KV_PAGE);
+        assert_eq!(identity.version, CODEC_NATIVE_KV_PAGE_VERSION);
+        assert_eq!(identity.class, crate::l3::CodecClass::Exact);
+        assert_eq!(identity.decoded_len, segment.bytes);
+        assert_eq!(identity.calibration_digest, None);
+    }
+
+    #[test]
+    fn native_passthrough_preserves_supported_runtime_kv_representations() {
+        // ggml type ids used by the runtime: F32, F16, Q8_0 and Q4_0. The
+        // store treats all four as opaque native bytes and never transcodes.
+        for (name, kv_type) in [("f32", 0u32), ("f16", 1), ("q8_0", 8), ("q4_0", 2)] {
+            let tier = tier(&format!("native-{name}"), "blake3:native");
+            let kv = vec![kv_type as u8; 5_000];
+            let desc = runtime_kv_desc(kv_type, 4, kv.len() as u64);
+            let digest = tier
+                .spill(
+                    "ns",
+                    &tokens(4),
+                    &ExactStatePayload::kv_recurrent(kv.clone(), Vec::new()),
+                    Some(desc.clone()),
+                    None,
+                )
+                .expect("spill native KV");
+            let manifest = tier.store().load_manifest(&digest).expect("load manifest");
+            assert!(manifest.uses_native_kv_passthrough());
+            assert_eq!(manifest.kv_desc_json.as_deref(), Some(desc.as_str()));
+            assert!(
+                manifest
+                    .segments
+                    .iter()
+                    .all(|segment| segment.offset + segment.bytes <= manifest.kv_bytes)
+            );
+            for segment in &manifest.segments {
+                assert_native_kv_identity(segment);
+            }
+
+            let fill = tier
+                .fill_longest("ns", &tokens(4), 8)
+                .expect("fill")
+                .expect("native entry");
+            assert_eq!(
+                fill.payload.kv_bytes().unwrap().unwrap().as_ref(),
+                kv.as_slice(),
+                "{name} bytes changed during the storage round trip"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_native_and_recurrent_segments_do_not_cross_representation_boundary() {
+        let tier = tier("native-fixed-boundary", "blake3:native");
+        let kv = vec![1u8; 5_000];
+        let recurrent = vec![2u8; 5_000];
+        let digest = tier
+            .spill(
+                "ns",
+                &tokens(4),
+                &ExactStatePayload::kv_recurrent(kv.clone(), recurrent.clone()),
+                Some(runtime_kv_desc(1, 4, kv.len() as u64)),
+                None,
+            )
+            .expect("spill mixed exact state");
+        let manifest = tier.store().load_manifest(&digest).expect("load manifest");
+        assert_eq!(manifest.kv_bytes, 5_000);
+        assert_eq!(manifest.recurrent_bytes, 5_000);
+        assert_eq!(
+            manifest.segments[1].offset + manifest.segments[1].bytes,
+            5_000
+        );
+        for segment in &manifest.segments {
+            let end = segment.offset + segment.bytes;
+            assert!(end <= manifest.kv_bytes || segment.offset >= manifest.kv_bytes);
+            if segment.offset < manifest.kv_bytes {
+                assert_native_kv_identity(segment);
+            } else {
+                assert_eq!(
+                    segment.codec_identity,
+                    Some(SegmentCodecIdentity::raw(segment.bytes))
+                );
+            }
+        }
+        let fill = tier
+            .fill_longest("ns", &tokens(4), 8)
+            .expect("fill")
+            .expect("mixed entry");
+        assert_eq!(fill.payload.kv_bytes().unwrap().unwrap().as_ref(), kv);
+        assert_eq!(
+            fill.payload.recurrent_state_bytes().unwrap().as_ref(),
+            recurrent
+        );
+    }
+
+    #[test]
+    fn geometry_marks_kv_windows_native_and_recurrent_tail_raw() {
+        let tier = tier("native-geometry-boundary", "blake3:native");
+        let geometry = PayloadGeometry {
+            tail_bytes: 50,
+            ..kv_geometry(1, 8, 16, 16, 4)
+        };
+        let kv = vec![3u8; 256];
+        let recurrent = vec![4u8; 50];
+        let digest = tier
+            .spill(
+                "ns",
+                &tokens(8),
+                &ExactStatePayload::kv_recurrent(kv, recurrent),
+                Some(runtime_kv_desc(1, 8, 256)),
+                Some(&geometry),
+            )
+            .expect("spill geometry-native state");
+        let manifest = tier.store().load_manifest(&digest).expect("load manifest");
+        for segment in &manifest.segments {
+            if segment.meta_json.as_deref() == Some("tail") {
+                assert_eq!(
+                    segment.codec_identity,
+                    Some(SegmentCodecIdentity::raw(segment.bytes))
+                );
+                assert!(segment.offset >= manifest.kv_bytes);
+            } else {
+                assert_native_kv_identity(segment);
+                assert!(segment.offset + segment.bytes <= manifest.kv_bytes);
+            }
+        }
     }
 
     #[test]
@@ -799,14 +1041,15 @@ mod tests {
             ),
         ];
         for (namespace, payload) in cases {
-            tier.spill(
-                namespace,
-                &tokens(512),
-                &payload,
-                Some("{\"desc\":1}".to_string()),
-                None,
-            )
-            .expect("spill");
+            let digest = tier
+                .spill(
+                    namespace,
+                    &tokens(512),
+                    &payload,
+                    Some("{\"desc\":1}".to_string()),
+                    None,
+                )
+                .expect("spill");
             let fill = tier
                 .fill_longest(namespace, &tokens(512), 64)
                 .expect("fill")
@@ -814,6 +1057,19 @@ mod tests {
             assert_eq!(fill.token_count, 512);
             assert_eq!(fill.kv_desc_json.as_deref(), Some("{\"desc\":1}"));
             assert_eq!(fill.payload.kind(), payload.kind());
+            let manifest = tier
+                .store()
+                .load_manifest(&digest)
+                .expect("load roundtrip manifest");
+            if payload.kind() != ExactStatePayloadKind::KvRecurrent {
+                assert!(
+                    manifest
+                        .segments
+                        .iter()
+                        .all(|segment| segment.codec_identity
+                            == Some(SegmentCodecIdentity::raw(segment.bytes)))
+                );
+            }
             match payload.kind() {
                 ExactStatePayloadKind::KvRecurrent => {
                     assert_eq!(
