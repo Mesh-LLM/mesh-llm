@@ -1308,6 +1308,33 @@ fn claimed_log_head_claimed_signature_over_limit_decodes_as_absent() {
     assert_eq!(roundtripped.claimed_log_head, None);
 }
 
+/// `MAX_CLAIMED_LOG_SIGNATURE_BYTES` (128) does **not** admit a real
+/// post-quantum signature: an ML-DSA-65 signature (3,309 bytes, NIST FIPS
+/// 204) must decode as absent, the same as any other oversized claim. This
+/// pins down the corrected rationale on the constant's doc comment — the
+/// bound is sized for Ed25519/classical schemes only, not "wide enough for
+/// post-quantum signatures" as an earlier (incorrect) comment claimed.
+#[test]
+fn claimed_log_head_claimed_signature_rejects_ml_dsa_65_size() {
+    const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+    let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xDB; 32]).public());
+    let head = crate::proto::node::ClaimedLogHead {
+        log_id: "log-abc".to_string(),
+        size: 1,
+        root: vec![0xAA; 32],
+        timestamp_unix_ms: 1,
+        claimed_signature: vec![0xBB; ML_DSA_65_SIGNATURE_BYTES],
+        signature_algorithm: "ml-dsa-65".to_string(),
+    };
+    let proto_pa = proto_announcement_with_claimed_log_head(peer_id, head);
+    let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+    assert_eq!(
+        roundtripped.claimed_log_head, None,
+        "an ML-DSA-65-sized signature must decode as absent: the 128-byte \
+         bound does not admit post-quantum schemes"
+    );
+}
+
 /// `ClaimedLogHead.signature_algorithm` is bounded at 32 bytes: exactly at
 /// the bound must still decode as present.
 #[test]
