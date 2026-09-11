@@ -1,6 +1,6 @@
 # CacheGen Backend Plan (#1652)
 
-Status: proposal backed by the spike in this slice. Owner: jian yang.
+Status: **stopped at the acceptance gate**; native passthrough remains the promoted path. Owner: jian yang.
 Reviewed against: #1652 scope, scama's directives of 2026-09-10 (v4
 contract, CPU+Metal parity, six measurements, stop rule).
 
@@ -99,3 +99,40 @@ lookup.
    workload, matched release builds, before any wiring.
 2. Only then: CUDA and HIP/ROCm on real hardware, each proven against
    the CPU reference bit-for-bit before either is marked implemented.
+
+
+## 19K acceptance result (2026-09-11): STOP
+
+The opt-in gate in `skippy-correctness state-handoff --cachegen-gate` was run
+from exact commit `2677ad62e5295f6da2ac72ae7b8c978f87753d11` on an Apple M1 Ultra
+(128 GiB, Metal) with the Qwen3 0.6B Q8_0 model
+(`sha256:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031`),
+a 19,000-token prefix, F16 K/V, 4,096-row codec tiles, and 64
+teacher-forced continuation steps. The compact machine-readable result is
+[`cachegen-quality-gate-qwen3-0.6b-19k-summary.json`](cachegen-quality-gate-qwen3-0.6b-19k-summary.json).
+
+| Metric | Native | CacheGen | Decision |
+|---|---:|---:|---|
+| Persisted bytes | 2,179,072,000 | 202,373,739 | CacheGen is 9.287% of native (10.77x smaller) |
+| Persist path | 1,369.84 ms | 15,508.82 ms including encode | Fail |
+| Read | 239.14 ms | 22.29 ms | CacheGen wins bytes/read time |
+| Decode codec | — | 23,521.69 ms | Fail |
+| Restore to first token | 311.61 ms | 23,604.40 ms | Fail (75.75x slower) |
+| Continuation throughput | 120.23 tok/s | 121.25 tok/s | No steady-state regression |
+| p99 decode | 18.86 ms | 9.30 ms | Within the 5% regression budget |
+| Greedy-token agreement | 64/64 control | 12/64 (18.75%) | Fail versus 95% gate |
+| First mismatch | — | step 1 | Fail |
+| Estimated codec working bytes | — | 2,412,371,750 | Reported; no memory cap was supplied |
+
+Writes call `sync_all`; the same-run reads may still be page-cache warm, so the
+read figures are not a cold-device bandwidth claim. That limitation cannot
+reverse this decision: CacheGen's 23.52-second CPU decode alone is more than
+75 times the complete native restore-to-first-token path, and continuation
+quality fails independently.
+
+Per the issue's stop rule, this result ends production CacheGen work for this
+tier and workload. Do not add request-path wiring, promote the CubeCL spike,
+or implement CUDA/HIP backend variants on this branch. The pure-Rust reference,
+capability namespace, and reproducible gate remain as evidence for a future
+codec revision with materially different quality and decode cost. Native exact
+`native-kv-page/1` remains the selected representation.
