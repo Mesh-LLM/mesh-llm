@@ -131,11 +131,12 @@ fn read_gguf_catalog_with_mode(
 
     let mut tensors = Vec::with_capacity(tensor_count);
     for index in 0..tensor_count {
-        tensors.push(
-            reader
-                .read_tensor()
-                .with_context(|| format!("read GGUF tensor {index}"))?,
-        );
+        if let Some(tensor) = reader
+            .read_tensor()
+            .with_context(|| format!("read GGUF tensor {index}"))?
+        {
+            tensors.push(tensor);
+        }
     }
     let tensor_table_end = reader.position()?;
     let data_start = align_to(tensor_table_end, alignment).context("GGUF data offset overflow")?;
@@ -211,7 +212,7 @@ impl CatalogReader {
         usize::try_from(count).with_context(|| format!("GGUF {kind} count exceeds usize"))
     }
 
-    fn read_tensor(&mut self) -> Result<GgufTensor> {
+    fn read_tensor(&mut self) -> Result<Option<GgufTensor>> {
         let name = self.read_string()?;
         ensure!(!name.is_empty(), "GGUF tensor name is empty");
         let dimension_count = self.read_u32()?;
@@ -226,18 +227,22 @@ impl CatalogReader {
         let dimensions = (0..dimension_count)
             .map(|_| self.read_u64())
             .collect::<Result<Vec<_>>>()?;
-        ensure!(
-            dimensions.iter().all(|dimension| *dimension > 0),
-            "GGUF tensor {name:?} has a zero dimension"
-        );
         let ggml_type = self.read_u32()?;
         let data_offset = self.read_u64()?;
-        Ok(GgufTensor {
+        // A tensor with a zero dimension holds zero elements and zero payload
+        // bytes. Converter-emitted placeholder tensors use this shape (e.g.
+        // Unsloth diffusion GGUFs carry `__index_timestep_zero__` with dims
+        // `[0]`), so skip the entry instead of rejecting the whole catalog;
+        // its table entry has already been consumed above.
+        if dimensions.iter().any(|dimension| *dimension == 0) {
+            return Ok(None);
+        }
+        Ok(Some(GgufTensor {
             name,
             dimensions,
             ggml_type,
             data_offset,
-        })
+        }))
     }
 
     fn read_value(&mut self, value_type: u32) -> Result<Value> {
@@ -459,6 +464,47 @@ mod tests {
 
         let error = read_gguf_catalog(&path).unwrap_err();
         assert!(error.to_string().contains("starts beyond the artifact"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn tensor_catalog_skips_zero_dimension_placeholders() {
+        let path = temp_path("tensor-catalog-zero-dim");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(GGUF_MAGIC);
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes()); // tensor count
+        bytes.extend_from_slice(&1_u64.to_le_bytes()); // kv pair count
+        write_string(&mut bytes, GGUF_GENERAL_ALIGNMENT);
+        bytes.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+        bytes.extend_from_slice(&32_u32.to_le_bytes());
+        write_string(&mut bytes, "weight");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // F32
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        // Zero-dimension placeholder, as emitted by Unsloth diffusion
+        // converters (`__index_timestep_zero__`, dims `[0]`).
+        write_string(&mut bytes, "__index_timestep_zero__");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes()); // dims [0]
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // F32
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        while !bytes.len().is_multiple_of(32) {
+            bytes.push(0);
+        }
+        bytes.extend_from_slice(&0_f32.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+
+        // Both modes must tolerate the placeholder and keep the real tensor.
+        for catalog in [
+            read_gguf_tensor_catalog(&path).unwrap(),
+            read_gguf_metadata_catalog(&path).unwrap(),
+        ] {
+            assert_eq!(catalog.tensors.len(), 1);
+            assert_eq!(catalog.tensors[0].name, "weight");
+        }
+
         fs::remove_file(path).unwrap();
     }
 
