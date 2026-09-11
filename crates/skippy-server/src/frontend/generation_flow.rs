@@ -2,6 +2,7 @@ mod text_generation;
 
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::write_stage_message_conditioned;
+use crate::frontend::GenerationStart;
 use crate::frontend::generation::GeneratedText;
 use crate::frontend::generation::GenerationCacheStats;
 use crate::frontend::generation::GenerationTokenLimit;
@@ -14,6 +15,7 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::TextGenerationCollector;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::emulation_generation_active;
+use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 use crate::frontend::generation_receipt::GenerationLifecycleState;
 use crate::frontend::generation_receipt::complete_generation_before_cleanup;
 use crate::frontend::local_generation::LocalGenerationReceiptFinalization;
@@ -26,7 +28,6 @@ use crate::frontend::wire_messages::ReusableDecodeMessage;
 use crate::frontend::wire_messages::ReusableDecodeMessageArgs;
 use crate::frontend::wire_messages::generation_config_message;
 use crate::frontend::wire_messages::multimodal_prefill_message;
-use crate::frontend::{GenerationCommit, GenerationStart};
 use crate::kv_integration::proactive_eviction_attrs;
 use anyhow::anyhow;
 use openai_frontend::ChatCompletionRequest;
@@ -339,6 +340,15 @@ impl StageOpenAiBackend {
                 }
 
                 let decode_timer = PhaseTimer::start();
+                // Batches canonical tokens to the progress cadence instead
+                // of submitting one observation per decoded token. Holds the
+                // receipt config for its whole life so an early `?` return
+                // out of this loop still flushes.
+                let mut commit_batcher = GenerationCommitBatcher::new(
+                    self.generation_receipt.as_ref(),
+                    ids.request_id,
+                    ids.session_id,
+                );
                 let mut decoded_tokens = 0usize;
                 let mut current = prefill.first_token;
                 let mut runtime_lock_wait_ms = 0.0;
@@ -374,14 +384,7 @@ impl StageOpenAiBackend {
                     if let Some(observation) = receipt_observation.as_mut() {
                         observation.record_token(current, ids.request_started_at.elapsed());
                     }
-                    if let Some(config) = self.generation_receipt.as_ref() {
-                        config.committed(GenerationCommit {
-                            request_id: ids.request_id,
-                            session_id: ids.session_id,
-                            generated_token_count: decoded_tokens.saturating_add(1),
-                            token_ids: vec![current].into_boxed_slice(),
-                        });
-                    }
+                    commit_batcher.commit(current, ids.request_started_at.elapsed());
                     lifecycle.commit(current, ids.request_started_at.elapsed());
                     if collector.push_token(current)? == TokenControl::Stop {
                         if let Some(observation) = receipt_observation.as_mut() {
@@ -469,6 +472,10 @@ impl StageOpenAiBackend {
                         .insert("llama_stage.message_kind".to_string(), json!("DecodeToken"));
                     self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
                 }
+                // Before any terminal, so the final partial batch publishes
+                // ahead of `finished`/`abort` rather than being rejected as
+                // settled behind it.
+                commit_batcher.flush();
                 let mut attrs = self.openai_attrs(&ids);
                 attrs.insert(
                     "llama_stage.decode_token_count".to_string(),
@@ -796,6 +803,13 @@ impl StageOpenAiBackend {
             );
 
             let decode_timer = PhaseTimer::start();
+            // See the batcher in the streaming loop above: progress-cadence
+            // commits instead of one observation per decoded token.
+            let mut commit_batcher = GenerationCommitBatcher::new(
+                self.generation_receipt.as_ref(),
+                request_id,
+                session_id,
+            );
             let mut decoded_tokens = 0usize;
             let mut current = reply.predicted;
             let mut decode_stage0_compute_ms = 0.0;
@@ -828,14 +842,7 @@ impl StageOpenAiBackend {
                 if let Some(observation) = receipt_observation.as_mut() {
                     observation.record_token(current, request.ids.request_started_at.elapsed());
                 }
-                if let Some(config) = self.generation_receipt.as_ref() {
-                    config.committed(GenerationCommit {
-                        request_id,
-                        session_id,
-                        generated_token_count: decoded_tokens.saturating_add(1),
-                        token_ids: vec![current].into_boxed_slice(),
-                    });
-                }
+                commit_batcher.commit(current, request.ids.request_started_at.elapsed());
                 lifecycle.commit(current, request.ids.request_started_at.elapsed());
                 if collector.push_token(current)? == TokenControl::Stop {
                     if let Some(observation) = receipt_observation.as_mut() {
@@ -947,6 +954,8 @@ impl StageOpenAiBackend {
                 }
             }
 
+            // Before any terminal -- see the streaming loop's flush above.
+            commit_batcher.flush();
             let mut decode_attrs = self.openai_attrs(&request.ids);
             decode_attrs.insert(
                 "llama_stage.decode_token_count".to_string(),

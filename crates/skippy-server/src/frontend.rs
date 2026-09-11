@@ -6,6 +6,7 @@ mod decode_scheduler;
 mod embedded_execution;
 mod embedded_generation;
 mod generation;
+mod generation_commit_batcher;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;

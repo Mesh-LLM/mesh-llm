@@ -37,8 +37,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::receipt_lifecycle::{begin_generation_receipt, commit_local_generation_token};
+use super::receipt_lifecycle::begin_generation_receipt;
 use super::{LocalGenerationReceiptFinalization, prompt_fits_single_prefill_sample};
+use crate::frontend::generation_commit_batcher::GenerationCommitBatcher;
 
 mod exact_state_recording;
 mod kv_restore;
@@ -383,20 +384,22 @@ impl StageOpenAiBackend {
         let mut receipt_cancelled = false;
         let mut receipt_model_generation_elapsed = None;
         let mut cache_stats = GenerationCacheStats::default();
-        let mut lifecycle_committed_token_count = 0usize;
+        // Batches canonical tokens to the progress cadence instead of one
+        // observation per generated token. Holds the receipt config for its
+        // whole life, so an early `?` out of the generation loop still
+        // flushes what it accumulated.
+        let mut commit_batcher = GenerationCommitBatcher::new(
+            self.generation_receipt.as_ref(),
+            receipt_request_id,
+            receipt_session_id,
+        );
         let mut emit_token = |token_id| {
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
                 observation.record_token(token_id, request.ids.request_started_at.elapsed());
             }
-            commit_local_generation_token(
-                self.generation_receipt.as_ref(),
-                receipt_request_id,
-                receipt_session_id,
-                &mut lifecycle_committed_token_count,
-                token_id,
-            );
+            commit_batcher.commit(token_id, request.ids.request_started_at.elapsed());
             lifecycle.commit(token_id, request.ids.request_started_at.elapsed());
             let control = on_token(token_id)?;
             if control == TokenControl::Stop
@@ -444,6 +447,11 @@ impl StageOpenAiBackend {
             receipt_model_generation_elapsed = Some(model_generation_elapsed);
             Ok(())
         })();
+        // `emit_token`'s mutable borrow of the batcher ends at its last use
+        // above. Flush before any terminal so the final partial batch
+        // publishes ahead of `finished`/`abort` rather than being rejected
+        // as settled behind it.
+        commit_batcher.flush();
         let receipt_observation = receipt_observation
             .as_ref()
             .and_then(|observation| observation.borrow_mut().take());

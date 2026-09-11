@@ -2,16 +2,16 @@
 //! call.
 //!
 //! Finalization (`finalize_generation_receipt`) lives in the parent
-//! `local_generation` module; this module owns the two lifecycle hooks that
-//! fire during the decode loop itself: [`begin_generation_receipt`] marks a
-//! generation as started once, before decode begins, and
-//! [`commit_local_generation_token`] records each canonical token as it is
-//! emitted.
+//! `local_generation` module; this module owns the start hook:
+//! [`begin_generation_receipt`] marks a generation as started once, before
+//! decode begins. Canonical tokens are recorded by
+//! `generation_commit_batcher::GenerationCommitBatcher`, which the decode
+//! loop owns directly so it can batch them to the progress cadence.
 
 use std::sync::Arc;
 
 use crate::frontend::generation::OpenAiGenerationIds;
-use crate::frontend::generation_receipt::{GenerationCommit, GenerationStart};
+use crate::frontend::generation_receipt::GenerationStart;
 
 /// Marks a generation as started with the receipt sink, when a receipt
 /// config is configured. Returns the prompt token ids captured for the
@@ -37,25 +37,4 @@ pub(super) fn begin_generation_receipt(
         });
     }
     receipt_prompt_token_ids
-}
-
-/// Records one canonical generated token against the receipt sink, when a
-/// receipt config is configured.
-pub(super) fn commit_local_generation_token(
-    config: Option<&crate::frontend::GenerationReceiptConfig>,
-    request_id: u64,
-    session_id: u64,
-    generated_token_count: &mut usize,
-    token_id: i32,
-) {
-    let Some(config) = config else {
-        return;
-    };
-    *generated_token_count = generated_token_count.saturating_add(1);
-    config.committed(GenerationCommit {
-        request_id,
-        session_id,
-        generated_token_count: *generated_token_count,
-        token_ids: vec![token_id].into_boxed_slice(),
-    });
 }
