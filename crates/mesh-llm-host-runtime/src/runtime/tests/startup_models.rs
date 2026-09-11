@@ -420,6 +420,8 @@ async fn bare_direct_gguf_startup_identity_is_full_content_hash_across_paths() {
     assert_eq!(first_package.source_model_sha256.len(), 64);
     assert_eq!(first_package.package_ref, second_package.package_ref);
     assert_ne!(first.resolved_path, second.resolved_path);
+    assert!(first.local_source_required);
+    assert!(second.local_source_required);
 }
 
 #[tokio::test]
@@ -448,6 +450,8 @@ async fn direct_gguf_explicit_alias_wins_without_changing_content_identity() {
 
     assert_eq!(first.declared_ref, "shared/model");
     assert_eq!(second.declared_ref, "shared/model");
+    assert!(first.local_source_required);
+    assert!(second.local_source_required);
     assert_eq!(
         first.preindexed_split_package.unwrap().package_ref,
         second.preindexed_split_package.unwrap().package_ref
