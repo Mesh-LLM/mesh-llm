@@ -13,6 +13,7 @@ pub const FEATURE_INKLING_MTP_MM: u64 = 1 << 27;
 pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
 pub const FEATURE_ACTIVATION_BOUNDARY: u64 = 1 << 29;
 pub const FEATURE_MODEL_SOURCE: u64 = 1 << 30;
+pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 31;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 
 pub type ModelReadTensorF32Callback = Option<

@@ -1,10 +1,35 @@
 use std::ptr;
 
 use anyhow::{Result, ensure};
-use skippy_ffi::KvPageDesc as RawKvPageDesc;
+use skippy_cache::cachegen::archive::{RecordKind, ValidatedArchive, validate_archive};
+use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
 
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
+
+fn cachegen_records(validated: &ValidatedArchive<'_>) -> Vec<CacheGenRecordV1> {
+    validated
+        .records
+        .iter()
+        .map(|record| CacheGenRecordV1 {
+            abi_version: skippy_ffi::CACHEGEN_RECORD_V1_ABI_VERSION,
+            kind: match record.kind {
+                RecordKind::CacheGen => skippy_ffi::CACHEGEN_RECORD_F16,
+                RecordKind::Exact => skippy_ffi::CACHEGEN_RECORD_EXACT,
+                RecordKind::CacheGenTransposed => skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED,
+            },
+            element_bytes: record.element_bytes as u32,
+            reserved0: 0,
+            output_offset: record.output_offset as u64,
+            decoded_bytes: record.decoded_len as u64,
+            token_count: record.token_count as u64,
+            token_start: record.token_start as u64,
+            total_tokens: record.total_tokens as u64,
+            payload: record.payload.as_ptr().cast(),
+            payload_bytes: record.payload.len(),
+        })
+        .collect()
+}
 use crate::{RuntimeKvPage, RuntimeKvPageDesc, Status};
 
 impl StageSession {
@@ -259,6 +284,36 @@ impl StageSession {
         Ok(())
     }
 
+    pub fn import_cachegen_kv_page(
+        &mut self,
+        desc: &RuntimeKvPageDesc,
+        archive: &[u8],
+    ) -> Result<()> {
+        let raw_len = usize::try_from(desc.payload_bytes)?;
+        desc.validate_payload(raw_len)?;
+        if desc.codec == skippy_ffi::KV_PAGE_CODEC_ISWA_COMPOSITE_V1 && self.token_count != 0 {
+            anyhow::bail!("composite ISWA CacheGen page import requires a fresh session");
+        }
+        let validated = validate_archive(archive, raw_len)?;
+        let records = cachegen_records(&validated);
+        let raw = desc.as_raw();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_import_cachegen_kv_page_v1(
+                self.raw,
+                &raw,
+                records.as_ptr(),
+                records.len(),
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        self.token_count = self
+            .token_count
+            .max(desc.token_start.saturating_add(desc.token_count));
+        Ok(())
+    }
+
     pub fn export_recurrent_state(&mut self) -> Result<Vec<u8>> {
         let mut bytes = 0usize;
         let mut error = ptr::null_mut();
@@ -327,7 +382,42 @@ fn validate_imported_full_state_position(expected: u64, actual: u64) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_imported_full_state_position;
+    use skippy_cache::cachegen::archive::{Record, RecordKind, ValidatedArchive};
+
+    use super::{cachegen_records, validate_imported_full_state_position};
+
+    #[test]
+    fn maps_validated_cachegen_records_to_the_native_abi() {
+        let payload = [1_u8, 2, 3, 4];
+        let validated = ValidatedArchive {
+            raw_len: 16,
+            records: vec![Record {
+                kind: RecordKind::CacheGenTransposed,
+                element_bytes: 2,
+                output_offset: 8,
+                decoded_len: 8,
+                token_count: 2,
+                token_start: 3,
+                total_tokens: 5,
+                payload: &payload,
+            }],
+        };
+
+        let records = cachegen_records(&validated);
+        assert_eq!(records.len(), 1);
+        let record = records[0];
+        assert_eq!(record.abi_version, 1);
+        assert_eq!(record.kind, skippy_ffi::CACHEGEN_RECORD_F16_TRANSPOSED);
+        assert_eq!(record.element_bytes, 2);
+        assert_eq!(record.reserved0, 0);
+        assert_eq!(record.output_offset, 8);
+        assert_eq!(record.decoded_bytes, 8);
+        assert_eq!(record.token_count, 2);
+        assert_eq!(record.token_start, 3);
+        assert_eq!(record.total_tokens, 5);
+        assert_eq!(record.payload, payload.as_ptr().cast());
+        assert_eq!(record.payload_bytes, payload.len());
+    }
 
     #[test]
     fn full_state_import_accepts_the_position_carried_by_native_state() {
