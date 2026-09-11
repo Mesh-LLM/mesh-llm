@@ -332,3 +332,48 @@ describe('NodeDrawer runtime section', () => {
     expect(screen.queryByText('Client')).not.toBeInTheDocument()
   })
 })
+
+describe('NodeDrawer advertised memory', () => {
+  const memory = {
+    totalGB: 12,
+    reservedGB: 0.5,
+    platformReserveGB: 0,
+    configuredReserveGB: 2,
+    usableGB: 9.5,
+    systemRamGB: 32,
+    ramOffloadGB: 18
+  }
+
+  it('itemizes the memory a peer advertises', () => {
+    render(<NodeDrawer open node={PEER_NODE} peer={{ ...PEER, vramGB: 9.5, memory }} onClose={() => {}} />)
+
+    expect(screen.getByText('Memory')).toBeInTheDocument()
+    expect(screen.getByText('12.0 GB')).toBeInTheDocument()
+    expect(screen.getAllByText('9.5 GB').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Driver reserved')).toBeInTheDocument()
+    expect(screen.getByText('Configured reserve')).toBeInTheDocument()
+    expect(screen.getByText('System RAM')).toBeInTheDocument()
+    expect(screen.getByText('RAM-backed local budget')).toBeInTheDocument()
+    expect(screen.queryByText('Platform reserve')).not.toBeInTheDocument()
+  })
+
+  it('shows the platform reserve only when the node reports one', () => {
+    render(
+      <NodeDrawer
+        open
+        node={PEER_NODE}
+        peer={{ ...PEER, vramGB: 55, memory: { ...memory, totalGB: 64, platformReserveGB: 6.4, usableGB: 55 } }}
+        onClose={() => {}}
+      />
+    )
+
+    expect(screen.getByText('Platform reserve')).toBeInTheDocument()
+    expect(screen.getByText('6.4 GB')).toBeInTheDocument()
+  })
+
+  it('renders no memory section for peers without a breakdown', () => {
+    render(<NodeDrawer open node={PEER_NODE} peer={PEER} onClose={() => {}} />)
+
+    expect(screen.queryByText('Configured reserve')).not.toBeInTheDocument()
+  })
+})
