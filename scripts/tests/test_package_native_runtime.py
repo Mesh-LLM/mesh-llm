@@ -21,7 +21,7 @@ def write_failing_nvcc(path: Path) -> None:
 class PackageNativeRuntimeTests(unittest.TestCase):
     def test_linux_gnu_cuda_target_collects_runtime_dependencies(self) -> None:
         script = SCRIPT.read_text(encoding="utf-8")
-        start = script.index("collect_linux_cuda_dependencies() {")
+        start = script.index("linux_cuda_redistributable_present() {")
         end = script.index("rewrite_macos_runtime_paths() {", start)
         function = script[start:end]
         harness = (
@@ -57,6 +57,100 @@ class PackageNativeRuntimeTests(unittest.TestCase):
             env = os.environ.copy()
             env["CALL_LOG"] = str(Path(directory) / "calls.log")
             env["FAKE_PYTHON"] = str(fake_python)
+            result = subprocess.run(
+                ["/bin/bash", "-s"],
+                input=harness,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_linux_cuda_target_bundles_license_for_prepopulated_closure(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("linux_cuda_redistributable_present() {")
+        end = script.index("rewrite_macos_runtime_paths() {", start)
+        function = script[start:end]
+        harness = (
+            "set -euo pipefail\n"
+            + function
+            + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
+            + 'BACKEND="cuda"\n'
+            + 'runtime_arch="x86_64"\n'
+            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-license-test"\n'
+            + 'SCRIPT_DIR="/unused"\n'
+            + 'primary_name="libllama.so"\n'
+            + 'library_paths=("lib/libcudart.so.12" "lib/libcublas.so.12" "lib/libcublasLt.so.12" "lib/libllama.so")\n'
+            + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
+            + 'linux_cuda_dependency_search_dirs() { :; }\n'
+            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
+            + 'bundle_cuda_distribution_license() { printf "%s\\n" bundled >"$LICENSE_CALL"; }\n'
+            + 'collect_linux_cuda_dependencies\n'
+            + '[[ -s "$LICENSE_CALL" ]]\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_python = Path(directory) / "fake-python"
+            fake_python.write_text(
+                "#!/bin/bash\n"
+                'if [[ "$*" == *" order "* ]]; then\n'
+                '  printf "%s\\n" "libcudart.so.12" "libcublas.so.12" "libcublasLt.so.12" "libllama.so"\n'
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["FAKE_PYTHON"] = str(fake_python)
+            env["LICENSE_CALL"] = str(Path(directory) / "license-call.log")
+            result = subprocess.run(
+                ["/bin/bash", "-s"],
+                input=harness,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_linux_cuda_target_skips_license_without_cuda_library(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        start = script.index("linux_cuda_redistributable_present() {")
+        end = script.index("rewrite_macos_runtime_paths() {", start)
+        function = script[start:end]
+        harness = (
+            "set -euo pipefail\n"
+            + function
+            + 'TARGET_TRIPLE="x86_64-unknown-linux-gnu"\n'
+            + 'BACKEND="cuda"\n'
+            + 'runtime_arch="x86_64"\n'
+            + 'stage_dir="${TMPDIR:-/tmp}/mesh-linux-cuda-placeholder-test"\n'
+            + 'SCRIPT_DIR="/unused"\n'
+            + 'primary_name="libllama.so"\n'
+            + 'library_paths=("lib/libllama.so")\n'
+            + 'mkdir -p "$stage_dir/lib" "$stage_dir/tools"\n'
+            + 'linux_cuda_dependency_search_dirs() { :; }\n'
+            + 'python_bin() { printf "%s\\n" "$FAKE_PYTHON"; }\n'
+            + 'cuda_toolkit_major() { printf "%s\\n" "12"; }\n'
+            + 'bundle_cuda_distribution_license() { printf "%s\\n" bundled >"$LICENSE_CALL"; }\n'
+            + 'collect_linux_cuda_dependencies\n'
+            + '[[ ! -e "$LICENSE_CALL" ]]\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fake_python = Path(directory) / "fake-python"
+            fake_python.write_text(
+                "#!/bin/bash\n"
+                'if [[ "$*" == *" order "* ]]; then\n'
+                '  printf "%s\\n" "libllama.so"\n'
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["FAKE_PYTHON"] = str(fake_python)
+            env["LICENSE_CALL"] = str(Path(directory) / "license-call.log")
             result = subprocess.run(
                 ["/bin/bash", "-s"],
                 input=harness,

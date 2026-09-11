@@ -517,6 +517,20 @@ bundle_cuda_distribution_license() {
     license_paths+=("licenses/NVIDIA-CUDA-LICENSE.txt")
 }
 
+linux_cuda_redistributable_present() {
+    local rel_path library_name
+    for rel_path in "${library_paths[@]}"; do
+        library_name="$(basename "$rel_path")"
+        case "$library_name" in
+            libcudart.so|libcudart.so.*|libcublas.so|libcublas.so.*|\
+            libcublasLt.so|libcublasLt.so.*|libnvJitLink.so|libnvJitLink.so.*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 collect_linux_cuda_dependencies() {
     case "$TARGET_TRIPLE/$BACKEND" in
         *linux*/cuda|*linux*/cuda-blackwell) ;;
@@ -524,8 +538,7 @@ collect_linux_cuda_dependencies() {
     esac
 
     local -a dependency_args=()
-    local dependency_dir original_library_count
-    original_library_count="${#library_paths[@]}"
+    local dependency_dir
     while IFS= read -r dependency_dir; do
         [[ -n "$dependency_dir" ]] && dependency_args+=(--search-dir "$dependency_dir")
     done < <(linux_cuda_dependency_search_dirs | awk '!seen[$0]++')
@@ -547,7 +560,7 @@ collect_linux_cuda_dependencies() {
             --arch "$runtime_arch" \
             --primary "$primary_name"
     )
-    if (( ${#library_paths[@]} > original_library_count )); then
+    if linux_cuda_redistributable_present; then
         bundle_cuda_distribution_license
     fi
 }
